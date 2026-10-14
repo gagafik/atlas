@@ -62,6 +62,13 @@ export interface JournalEntry {
   publishedVersion: number | null;
   publishedAt: string | null;
   canWithdraw: boolean;
+  periodLocks?: {
+    id: string;
+    name: string;
+    start: string;
+    end: string;
+    version: number;
+  }[];
   attendanceApprovals?: Record<string, { id: string; version: number }>;
 }
 export interface JournalRow {

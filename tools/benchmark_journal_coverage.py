@@ -1,5 +1,6 @@
 """Read-load probe of expected lessons and synthetic saved journal documents."""
 import argparse,asyncio,csv,io,json,os,sqlite3,tempfile,time
+from contextlib import closing
 from datetime import date,timedelta
 from pathlib import Path
 import httpx
@@ -34,7 +35,7 @@ def seed(path,state,days):
                 doc=json.dumps(dict(lesson=lesson,content=dict(topic='Synthetic topic',homework='',dueDate=None,assessments=[],records=[dict(studentId=s['id'],attendance='present',lateMinutes=0,comment='',grades=[]) for s in lesson['students']])),ensure_ascii=False)
                 count+=1
                 yield ('school',key_for(current),1,day.isoformat(),'Synthetic teacher',doc,doc,1,day.isoformat())
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db,db:
         db.executemany('INSERT INTO journal_entries VALUES (?,?,?,?,?,?,?,?,?)',entries())
         populate(db)
         coverage_populate(db)

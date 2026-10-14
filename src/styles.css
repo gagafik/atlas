@@ -4536,4 +4536,9 @@ main {
 .attendance-cards .absence-card { margin: 0; }
 .attendance-panel h4 { margin: 0 0 8px; }
 .coverage-panel .absence-card > button { margin: 8px 8px 0 0; }
+.period-panel button { margin: 8px 8px 0 0; }
+.period-panel article { padding:8px 0; border-bottom:1px solid var(--line, #ddd); }
+.period-ack { display:flex; align-items:flex-start; gap:8px; margin:12px 0; }
+.period-ack input { flex:0 0 auto; width:auto; margin-top:4px; }
+.period-archive { margin-top:16px; padding:12px; background:var(--surface, #fff); }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }
