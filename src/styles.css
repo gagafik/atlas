@@ -3727,7 +3727,11 @@ main {
     justify-content: flex-end;
   }
   .topbar .account-controls {
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 }
 @media print {
@@ -4493,3 +4497,15 @@ main {
   flex: 1 1 180px;
   min-width: 0;
 }
+.message-moderation, .message-report {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #dce3ea;
+  border-radius: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.message-moderation summary, .message-report summary { cursor: pointer; font-weight: 600; }
+.message-case { border-top: 1px solid #dce3ea; padding: 14px 0; min-width: 0; }
+.message-case-link { display: block; text-align: left; white-space: normal; margin: 6px 0; }
+.message-moderation fieldset, .message-report fieldset { min-width: 0; }

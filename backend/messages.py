@@ -106,6 +106,10 @@ class Messages:
         self.drafts=MessageDrafts(self)
         from .message_groups import MessageGroups
         self.groups=MessageGroups(self)
+        from .message_moderation import MessageModeration
+        self.moderation=MessageModeration(self)
+        from .message_recovery import MessageRecovery
+        self.recovery=MessageRecovery(self)
 
     def tables(self,db):
         self.access.tables(db)
@@ -124,6 +128,7 @@ class Messages:
         db.execute('CREATE TABLE IF NOT EXISTS message_group_scopes (thread_id TEXT PRIMARY KEY,kind TEXT,group_ids TEXT)')
         db.execute('CREATE TABLE IF NOT EXISTS message_exclusions (thread_id TEXT,user_id TEXT,action TEXT,created TEXT,PRIMARY KEY(thread_id,user_id))')
         db.execute('CREATE TABLE IF NOT EXISTS message_group_managers (thread_id TEXT PRIMARY KEY,manager_id TEXT)')
+        self.moderation.tables(db)
 
     def context(self,request,workspace):
         user=request.state.user
@@ -323,7 +328,8 @@ class Messages:
                 db.create_function('casefold',1,lambda value:value.casefold(),deterministic=True)
                 rows=db.execute('''SELECT t.* FROM message_threads t JOIN message_members m ON m.thread_id=t.id AND m.user_id=?
                     WHERE t.workspace=? AND (? IS NULL OR t.latest_id<?) AND (?=0 OR t.latest_id>m.read_id)
-                    AND (instr(casefold(t.title),?)>0 OR EXISTS(SELECT 1 FROM message_posts p WHERE p.thread_id=t.id AND instr(casefold(p.body),?)>0))
+                    AND (instr(casefold(t.title),?)>0 OR EXISTS(SELECT 1 FROM message_posts p WHERE p.thread_id=t.id AND instr(casefold(p.body),?)>0
+                        AND NOT EXISTS(SELECT 1 FROM message_moderation h WHERE h.post_id=p.id AND h.hidden=1)))
                     ORDER BY t.latest_id DESC LIMIT 101''',(user['id'],workspace,before,before,int(unreadOnly),q.casefold(),q.casefold())).fetchall()
                 accounts=self.accounts(db,thread_ids=[r[0] for r in rows[:100] if r[2] in ['direct','group']])
                 items=[]
@@ -345,8 +351,9 @@ class Messages:
                         if uid!=user['id'] and (peer:=accounts.get(uid)) and self.member(db,thread,peer,directory,accounts):
                             peers.append(dict(id=uid,name=peer['name'],read=read_id>=thread['latestId'],acknowledged=ack==thread['version']))
                 attachments=self.files.for_posts(db,[r[0] for r in posts[:50]])
+                hidden={r[0] for r in db.execute('SELECT post_id FROM message_moderation WHERE hidden=1 AND post_id IN (SELECT value FROM json_each(?))',(encoded([r[0] for r in posts[:50]]),))}
                 return thread|dict(userId=user['id'],canReply=thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=thread['managerId']==user['id'],
-                    acknowledged=member[3]==thread['version'],participants=peers,posts=[dict(zip(['id','authorId','author','created','text'],row))|dict(files=attachments[row[0]]) for row in reversed(posts[:50])],
+                    acknowledged=member[3]==thread['version'],participants=peers,posts=[dict(zip(['id','authorId','author','created','text'],row))|dict(text='Сообщение скрыто администратором.' if row[0] in hidden else row[4],hidden=row[0] in hidden,files=[] if row[0] in hidden else attachments[row[0]]) for row in reversed(posts[:50])],
                     nextBefore=posts[49][0] if len(posts)>50 else None)
 
         @app.post('/api/messages/threads/{id}/reply')

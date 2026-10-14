@@ -19,6 +19,8 @@ interface Inbox {
 }
 const titles: Record<string, string> = {
   "message.received": "Новое сообщение",
+  "message.reported": "Получена жалоба на сообщение",
+  "message.moderated": "Изменилось решение по жалобе на сообщение",
   "journal.updated": "Обновлён учебный журнал",
   "journal.withdrawn": "Запись журнала скрыта",
   "homework.submitted": "Домашняя работа отправлена на проверку",

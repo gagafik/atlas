@@ -3,6 +3,7 @@ import { api } from "./api";
 import MessageAttachments, { messageFileUrl } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 import MessageGroupManagement from "./MessageGroupManagement";
+import MessageModeration, { ReportMessage } from "./MessageModeration";
 
 type Person = { id: string; name: string; role: string };
 type Draft = {
@@ -35,6 +36,7 @@ type Thread = {
 };
 type Post = {
   id: number;
+  hidden: boolean;
   authorId: string;
   author: string;
   created: string;
@@ -450,6 +452,10 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         Личная переписка доступна её участникам. Объявления получают выбранные
         аккаунты; список других семей им не показывается.
       </p>
+      <MessageModeration
+        workspace={workspace}
+        admin={options.role === "admin"}
+      />
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -941,6 +947,13 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   {new Date(p.created).toLocaleString("ru-RU")}
                 </time>
                 <p className="journal-text">{p.text}</p>
+                {!p.hidden && p.authorId !== detail.userId && (
+                  <ReportMessage
+                    key={p.id}
+                    workspace={workspace}
+                    postId={p.id}
+                  />
+                )}
                 {!!p.files?.length && (
                   <ul className="homework-files">
                     {p.files.map((f) => (
