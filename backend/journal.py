@@ -254,11 +254,13 @@ class Journal:
             current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
         return self.resolved_entry(state,workspace,user,key,existing,current,sync=sync)
 
-    def resolved_entry(self, state, workspace, user, key, existing, current, sync=False):
+    def resolved_entry(self, state, workspace, user, key, existing, current, sync=False, *, db=None):
         """Describe a journal against an already resolved, immutable school snapshot.
 
         This does not authorize a later write: callers must still recheck account,
         school/journal versions and period locks inside their write transaction.
+        An optional initialized connection keeps restriction reads in the caller's
+        snapshot; ownership and closing remain with that caller.
         """
         if not current and not existing: raise HTTPException(404,'Урок не найден.')
         if not (current and staff_read(user,workspace,current) or existing and staff_read(user,workspace,existing['document']['lesson'])):
@@ -280,9 +282,15 @@ class Journal:
                           document=dict(lesson=lesson,content=Content(records=[PupilRecord(studentId=s['id']) for s in lesson['students']]).model_dump(mode='json')))
         from .absences import approvals
         from .journal_periods import locks
-        with self.access.lock,self.access.connect() as db:
+        def restrictions(db):
             excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
             closed=locks(db,workspace,lesson,result['document']['lesson'],existing['published']['lesson'] if existing and existing['published'] else None)
+            return excuses,closed
+        if db is None:
+            with self.access.lock,self.access.connect() as connection:
+                excuses,closed=restrictions(connection)
+        else:
+            excuses,closed=restrictions(db)
         return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,existing['document']['lesson'])))
 

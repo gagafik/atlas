@@ -14,14 +14,14 @@ def register(app,quizzes,Workspace):
     def listing(request:Request,workspace:Workspace='school',history:bool=False,search:str=Query(default='',max_length=120),
                 cursor:str|None=Query(default=None,max_length=64),limit:int=Query(default=30,ge=1,le=50)):
         user=quizzes.journal.scope(request,workspace);snap=quizzes.snapshots.get(workspace);staff=user['role'] in ['admin','teacher']
-        with quizzes.access.lock,quizzes.access.connect() as db:
-            quizzes.tables(db);db.execute('BEGIN');quizzes.journal.recheck_account(db,user)
+        def read(db):
+            quizzes.journal.recheck_account(db,user)
             if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(snap.state.revision,):raise HTTPException(409,'Расписание изменилось. Обновите тесты.')
             generation=db.execute('SELECT version FROM quiz_catalog_versions WHERE workspace=?',(workspace,)).fetchone()
             token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),snap.state.revision,generation,history,search]).encode()).hexdigest()
             after=None
             if cursor:
-                found=quizzes.cursors.get(cursor)
+                with quizzes.cursor_lock:found=quizzes.cursors.get(cursor)
                 if not found or monotonic()-found[0]>900 or found[1]!=token:raise HTTPException(409,'Список тестов изменился. Откройте первую страницу.')
                 after=found[2]
             clauses=['q.workspace=?'];args=[workspace]
@@ -53,6 +53,9 @@ def register(app,quizzes,Workspace):
                 if len(items)>=limit:break
             next_cursor=None
             if last and processed<len(rows):
-                next_cursor=secrets.token_hex(32);quizzes.cursors[next_cursor]=(monotonic(),token,last)
-                while len(quizzes.cursors)>4096:quizzes.cursors.popitem(last=False)
+                next_cursor=secrets.token_hex(32)
+                with quizzes.cursor_lock:
+                    quizzes.cursors[next_cursor]=(monotonic(),token,last)
+                    while len(quizzes.cursors)>4096:quizzes.cursors.popitem(last=False)
             return dict(items=items,nextCursor=next_cursor,staff=staff,serverNow=now().isoformat())
+        return quizzes.read_only(read)

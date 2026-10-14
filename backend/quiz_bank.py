@@ -11,8 +11,8 @@ def register(app,quizzes,Workspace):
     def listing(request:Request,workspace:Workspace='school',search:str=Query(default='',max_length=120),
                 archived:bool=False,after:str=Query(default='',max_length=80),limit:int=Query(default=30,ge=1,le=50)):
         user=quizzes.journal.scope(request,workspace,staff=True)
-        with quizzes.access.lock,quizzes.access.connect() as db:
-            quizzes.tables(db);db.execute('BEGIN');quizzes.journal.recheck_account(db,user)
+        def read(db):
+            quizzes.journal.recheck_account(db,user)
             db.create_function('atlas_fold',1,str.casefold)
             clauses=['workspace=?','archived=?','id>?'];args=[workspace,int(archived),after]
             if user['role']!='admin':clauses.append('owner_id=?');args.append(user['id'])
@@ -20,6 +20,7 @@ def register(app,quizzes,Workspace):
             rows=db.execute(f"SELECT id,version,owner_id,updated,subject,archived,document FROM quiz_questions WHERE {' AND '.join(clauses)} ORDER BY id LIMIT ?",(*args,limit+1)).fetchall()
             return dict(items=[dict(id=r[0],version=r[1],ownerId=r[2],updated=r[3],subject=r[4],archived=bool(r[5]),**json.loads(r[6])) for r in rows[:limit]],
                         nextAfter=rows[limit-1][0] if len(rows)>limit else None)
+        return quizzes.read_only(read)
 
     @app.put('/api/journal/quiz-bank/{id}')
     def save(id:str,body:BankWrite,request:Request,workspace:Workspace='school'):

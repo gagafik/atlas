@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import json
 import secrets
 from uuid import uuid4
+from threading import RLock
 
 from fastapi import HTTPException, Query, Request
 
@@ -19,9 +20,31 @@ class Quizzes:
     def __init__(self, journal, snapshots):
         self.journal=journal;self.access=journal.access;self.snapshots=snapshots
         self.cursors=OrderedDict()
+        self.cursor_lock=RLock()
 
     def tables(self,db):
         self.journal.tables(db);self.access.tables(db);store.tables(db)
+
+    def read_only(self,operation):
+        from .quiz_reads import read
+        return read(self,operation)
+
+    def read_attempts(self,ctx,project):
+        """Ordinary views use WAL; only expired attempts need a write phase."""
+        expired=object()
+        def read(db):
+            self.recheck(db,ctx)
+            query="SELECT 1 FROM quiz_attempts WHERE workspace=? AND quiz_id=? AND status='active' AND deadline<=?"
+            args=[ctx['workspace'],ctx['quiz']['id'],now().isoformat()]
+            if ctx['student']:query+=' AND student_id=?';args.append(ctx['student'])
+            if db.execute(query+' LIMIT 1',args).fetchone():return expired
+            return project(db)
+        result=self.read_only(read)
+        if result is not expired:return result
+        with self.access.lock,self.access.connect() as db:
+            self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
+            self.expire(db,ctx,ctx['student'])
+            return project(db)
 
     def recheck(self,db,ctx):
         self.journal.recheck_account(db,ctx['user'])
@@ -48,13 +71,18 @@ class Quizzes:
 
     def context(self,request,workspace,id,student=None,attempt_id=None):
         user=self.journal.scope(request,workspace);snap=self.snapshots.get(workspace)
-        with self.access.lock,self.access.connect() as db:
-            self.tables(db)
+        def load(db):
+            selected=student
+            self.journal.recheck_account(db,user)
+            if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(snap.state.revision,):
+                raise HTTPException(409,'Расписание или учебные связи изменились. Обновите тест.')
             if attempt_id is not None:
                 member=db.execute('SELECT student_id FROM quiz_attempts WHERE workspace=? AND quiz_id=? AND id=?',(workspace,id,attempt_id)).fetchone()
                 if not member:raise HTTPException(404,'Попытка не найдена.')
-                student=member[0]
+                selected=member[0]
             row=db.execute('SELECT * FROM quizzes WHERE workspace=? AND id=?',(workspace,id)).fetchone()
+            return row,selected
+        row,student=self.read_only(load)
         if not row:raise HTTPException(404,'Тест не найден.')
         return self.resolve(user,snap,store.unpack(row),student)
 
@@ -132,7 +160,6 @@ class Quizzes:
                     timeLimitMinutes=definition['timeLimitMinutes'],maxAttempts=definition['maxAttempts'],serverNow=now().isoformat())
         if ctx['staff']:result.update(document=quiz['document'],revision=ctx['revision'])
         if ctx['student']:
-            self.expire(db,ctx,ctx['student'])
             rows=db.execute('SELECT id,number,status,started,deadline,submitted,score,max_score FROM quiz_attempts WHERE workspace=? AND quiz_id=? AND student_id=? ORDER BY number DESC',
                         (ctx['workspace'],quiz['id'],ctx['student'])).fetchall()
             attempts=[]
@@ -144,7 +171,6 @@ class Quizzes:
             current=now();window=datetime.fromisoformat(definition['opensAt'])<=current<datetime.fromisoformat(definition['closesAt'])
             result['canStart']=bool(ctx['canAnswer'] and quiz['status']=='published' and window and (any(a['status']=='active' for a in attempts) or len(attempts)<definition['maxAttempts']))
         elif ctx['staff']:
-            self.expire(db,ctx)
             rows=db.execute('SELECT student_id,id,number,status,started,deadline,submitted,score,max_score FROM quiz_attempts WHERE workspace=? AND quiz_id=? ORDER BY student_id,number',
                             (ctx['workspace'],quiz['id'])).fetchall()
             grouped={id:[] for id in document['studentIds']}
@@ -226,8 +252,7 @@ class Quizzes:
         @app.get('/api/journal/quizzes/{id}')
         def detail(id:str,request:Request,workspace:Workspace='school',studentId:str|None=None):
             ctx=self.context(request,workspace,id,studentId)
-            with self.access.lock,self.access.connect() as db:
-                self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx);return self.view(db,ctx)
+            return self.read_attempts(ctx,lambda db:self.view(db,ctx))
 
         @app.post('/api/journal/quizzes/{id}/actions')
         def action(id:str,body:models.QuizAction,request:Request,workspace:Workspace='school'):
