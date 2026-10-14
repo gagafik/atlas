@@ -1,8 +1,9 @@
 """Bounded queue reads. Index candidates never replace current lesson/account checks."""
-import base64
+from collections import OrderedDict
 from datetime import date
 import hashlib
-import json
+import secrets
+from time import monotonic
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -17,20 +18,27 @@ SCAN=100
 Filter=Literal['all','todo','submitted','returned','accepted','overdue']
 
 
-def cursor_read(value):
-    try:
-        result=json.loads(base64.urlsafe_b64decode(value.encode()).decode())
-        if not isinstance(result,list) or len(result)!=4 or not all(isinstance(x,str) for x in result):raise ValueError()
-        date.fromisoformat(result[1])
-        if len(result[0])!=64 or len(result[2])!=64 or not 0<len(result[3])<=100:raise ValueError()
-        return result
-    except (ValueError,UnicodeError):
-        raise HTTPException(422,'Неверная страница очереди.')
-
-
 class HomeworkQueue:
     def __init__(self,homework):
         self.homework=homework;self.journal=homework.journal;self.access=homework.access
+        self.cursors=OrderedDict()
+
+    def cursor_read(self,value):
+        if len(value)!=64 or any(c not in '0123456789abcdef' for c in value):
+            raise HTTPException(422,'Неверная страница очереди.')
+        entry=self.cursors.get(value)
+        if not entry or monotonic()-entry[0]>900:
+            self.cursors.pop(value,None)
+            raise HTTPException(409,'Страница устарела. Обновите очередь.')
+        return entry[1]
+
+    def cursor_save(self,position):
+        # Candidates can fail authorization. Never expose their lesson/student IDs
+        # in a client-decodable cursor, even for an otherwise empty result page.
+        key=secrets.token_hex(32)
+        self.cursors[key]=(monotonic(),position)
+        while len(self.cursors)>4096:self.cursors.popitem(last=False)
+        return key
 
     def read(self,request,workspace,start,end,selected,history,search,cursor,limit):
         user=self.journal.scope(request,workspace)
@@ -62,14 +70,14 @@ class HomeworkQueue:
         if selected=='overdue':clauses.append('q.due_date<?');args.append(today)
         if search:
             clauses.append("instr(atlas_fold(q.subject||' '||q.group_name||' '||m.name),?)>0");args.append(search.casefold())
-        after=cursor_read(cursor) if cursor else None
         with self.access.lock,self.access.connect() as db:
             self.homework.tables(db);db.execute('BEGIN')
             self.journal.recheck_account(db,user)
             if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(state.revision,):
                 raise HTTPException(409,'Расписание изменилось. Обновите очередь.')
             version=db.execute('SELECT version FROM homework_queue_versions WHERE workspace=?',(workspace,)).fetchone()
-            token=hashlib.sha256(encoded([workspace,permission_key(user),state.revision,version,today,start.isoformat(),end.isoformat(),selected,history,search]).encode()).hexdigest()
+            token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),state.revision,version,today,start.isoformat(),end.isoformat(),selected,history,search]).encode()).hexdigest()
+            after=self.cursor_read(cursor) if cursor else None
             if after:
                 if after[0]!=token:raise HTTPException(409,'Очередь изменилась. Обновите список перед загрузкой следующей страницы.')
                 clauses.append('(q.sort_date,q.lesson_key,m.student_id)>(?,?,?)');args.extend(after[1:])
@@ -101,7 +109,7 @@ class HomeworkQueue:
                     canReview=bool(ctx['canReview'] and r[15]=='submitted' and not is_changed),
                     canSubmit=bool(user['role']=='student' and enrolled and needs_answer and not closed)))
                 if len(items)>=limit:break
-            next_cursor=base64.urlsafe_b64encode(encoded([token,*last]).encode()).decode() if last and processed<len(rows) else None
+            next_cursor=self.cursor_save([token,*last]) if last and processed<len(rows) else None
             return dict(items=items,nextCursor=next_cursor,staff=staff,filter=selected,start=start.isoformat(),end=end.isoformat(),schoolToday=today)
 
     def register(self,app,Workspace):

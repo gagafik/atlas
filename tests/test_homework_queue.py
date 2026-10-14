@@ -184,3 +184,23 @@ def test_parent_grants_change_and_failed_review_leave_no_false_status(client):
     assert client.put('/api/access/users/'+account['id'],json=body).status_code==200
     assert queue(parent).status_code==401
     rows=items(signed('parent'),filter='all');assert rows and all(r['studentId']=='s2' for r in rows)
+
+
+def test_opaque_cursor_hides_rejected_candidates_and_expires(client,monkeypatch):
+    record,_,_,_=setup(client)
+    publish(client,'2026-08-24','2026-08-25')
+    state=api.read('demo');state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate='2026-08-24',onDate='2026-08-24',teacherIds=['t1'])]
+    api.save('demo',state);replacement=signed('unrelated');monkeypatch.setattr(homework_queue,'SCAN',1)
+    result=queue(replacement,filter='all').json()
+    assert result['items']==[]
+    cursor=result['nextCursor'];assert len(cursor)==64 and all(c in '0123456789abcdef' for c in cursor)
+    assert record['lessonKey'] not in str(result) and 'Ученик' not in str(result)
+    assert queue(client,filter='all',cursor=cursor).status_code==409
+    first_cursor=cursor;found=[]
+    for _ in range(10):
+        result=queue(replacement,filter='all',cursor=cursor).json();found.extend(result['items']);cursor=result['nextCursor']
+        if not cursor:break
+    assert found and all(r['lessonDate']=='2026-08-24' for r in found)
+    clock=homework_queue.monotonic
+    monkeypatch.setattr(homework_queue,'monotonic',lambda:clock()+901)
+    assert queue(replacement,filter='all',cursor=first_cursor).status_code==409
