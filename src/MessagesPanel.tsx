@@ -4,6 +4,14 @@ import MessageAttachments, { messageFileUrl } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 
 type Person = { id: string; name: string; role: string };
+type Draft = {
+  id: string;
+  version: number;
+  threadId: string | null;
+  title: string;
+  kind: string;
+  updated: string;
+};
 type Options = {
   userId: string;
   role: string;
@@ -111,6 +119,14 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       byRole: Record<string, number>;
     } | null>(null);
   const [reply, setReply] = useState("");
+  const [drafts, setDrafts] = useState<Draft[]>([]),
+    [showDrafts, setShowDrafts] = useState(false),
+    [composeVersion, setComposeVersion] = useState(0),
+    [replyVersion, setReplyVersion] = useState(0),
+    [savedCompose, setSavedCompose] = useState(""),
+    [savedReply, setSavedReply] = useState("");
+  const restoring = useRef(false),
+    restoringReply = useRef(false);
   const nonce = useRef(crypto.randomUUID()),
     replyNonce = useRef(crypto.randomUUID()),
     alive = useRef(true);
@@ -128,6 +144,29 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     selectedPeople,
     composeFiles,
   });
+  const replyForm = JSON.stringify({ reply, replyFiles });
+  const composeDirty =
+    composing &&
+    (composeVersion > 0
+      ? form !== savedCompose
+      : !!(text || title || composeFiles.length));
+  const replyDirty =
+    !composing &&
+    (replyVersion > 0
+      ? replyForm !== savedReply
+      : !!(reply || replyFiles.length));
+  useEffect(() => {
+    if (restoring.current) {
+      setSavedCompose(form);
+      restoring.current = false;
+    }
+  }, [form, composeDraft, composeVersion]);
+  useEffect(() => {
+    if (restoringReply.current) {
+      setSavedReply(replyForm);
+      restoringReply.current = false;
+    }
+  }, [replyForm, replyDraft, replyVersion]);
   useEffect(() => {
     nonce.current = crypto.randomUUID();
     setPreview(null);
@@ -136,9 +175,6 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     replyNonce.current = crypto.randomUUID();
   }, [replyFiles]);
   useEffect(() => {
-    setSelectedPeople([]);
-  }, [student]);
-  useEffect(() => {
     alive.current = true;
     let live = true;
     api("messages/options", workspace)
@@ -146,6 +182,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         if (live) {
           setOptions(r);
           setStudent(r.students[0]?.id || "");
+          void loadDrafts().catch((e) => {
+            if (live) setError(e.message);
+          });
         }
       })
       .catch((e) => {
@@ -181,7 +220,6 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     let live = true;
     setContactLoading(true);
     setContacts([]);
-    setRecipient("");
     const params = new URLSearchParams({ q: contactSearch });
     if (student) params.set("studentId", student);
     api(`messages/contacts?${params}`, workspace)
@@ -189,11 +227,6 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         if (live) {
           setContacts(r.items);
           setContactNext(r.nextOffset);
-          setRecipient((old) =>
-            r.items.some((p: Person) => p.id === old)
-              ? old
-              : r.items[0]?.id || "",
-          );
         }
       })
       .catch((e) => {
@@ -207,15 +240,14 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     };
   }, [options, composing, student, usingContacts, contactSearch, workspace]);
   useEffect(() => {
-    if (!reply && !text && !title && !composeFiles.length && !replyFiles.length)
-      return;
+    if (!composeDirty && !replyDirty) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [reply, text, title, composeFiles, replyFiles]);
+  }, [composeDirty, replyDirty]);
   async function run(fn: () => Promise<void>) {
     if (busy) return;
     setBusy(true);
@@ -240,6 +272,82 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       setNext(r.nextBefore);
     }
   }
+  async function loadDrafts() {
+    const r = await api("messages/drafts", workspace);
+    if (alive.current) setDrafts(r.items);
+  }
+  async function saveDraft(isReply = false) {
+    const id = isReply ? replyDraft : composeDraft;
+    const content = isReply
+      ? {
+          requestId: replyNonce.current,
+          kind: "direct",
+          title: detail?.title || "Ответ",
+          text: reply,
+          fileIds: replyFiles.map((f) => f.id),
+          draftId: id,
+        }
+      : { ...body(), groupMode };
+    const r = await api(`messages/drafts/${id}`, workspace, "PUT", {
+      version: isReply ? replyVersion : composeVersion,
+      threadId: isReply ? detail?.id : null,
+      content,
+    });
+    if (!alive.current) return;
+    if (isReply) {
+      setReplyVersion(r.version);
+      setSavedReply(replyForm);
+    } else {
+      setComposeVersion(r.version);
+      setSavedCompose(form);
+    }
+    await loadDrafts();
+  }
+  async function openDraft(id: string) {
+    const r = await api(`messages/drafts/${id}`, workspace);
+    if (!alive.current) return;
+    if (r.threadId) {
+      await open(r.threadId);
+      if (!alive.current) return;
+      restoringReply.current = true;
+      setReply(r.content.text);
+      setReplyFiles(r.files);
+      setReplyDraft(r.id);
+      setReplyVersion(r.version);
+    } else {
+      const c = r.content;
+      restoring.current = true;
+      setKind(c.kind);
+      setTitle(c.title);
+      setText(c.text);
+      setStudent(c.studentId || "");
+      setRecipient(c.recipientId || "");
+      setContactQuery("");
+      setContacts(r.people);
+      setSelectedPeople(
+        c.recipientIds.map(
+          (id: string) =>
+            r.people.find((p: Person) => p.id === id) || {
+              id,
+              name: "Собеседник недоступен",
+              role: "",
+            },
+        ),
+      );
+      setGroupMode(c.groupMode);
+      setGroups(c.groupIds);
+      setAudience(c.kind === "direct" ? ["parent", "student"] : c.roles);
+      setSchoolwide(c.schoolwide);
+      setAck(c.requireAck);
+      setComposeDraft(r.id);
+      setComposeVersion(r.version);
+      setComposeFiles(r.files);
+      setSelected("");
+      setDetail(null);
+      setComposing(true);
+    }
+    setShowDrafts(false);
+  }
   async function open(id: string, before?: number) {
     const r: Detail = await api(
       `messages/threads/${id}${before ? `?before=${before}` : ""}`,
@@ -250,12 +358,15 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       setReply("");
       setReplyFiles([]);
       setReplyDraft(crypto.randomUUID());
+      setReplyVersion(0);
+      setSavedReply("");
     }
     setDetail((old) =>
       before && old ? { ...r, posts: [...r.posts, ...old.posts] } : r,
     );
     setSelected(id);
     setComposing(false);
+    setShowDrafts(false);
     if (!before) {
       await api(`messages/threads/${id}/read`, workspace, "PUT", {
         throughId: r.latestId,
@@ -266,8 +377,10 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
   function leave() {
     if (busy) return false;
     if (
-      (reply || text || title || composeFiles.length || replyFiles.length) &&
-      !window.confirm("Закрыть неотправленное сообщение и его вложения?")
+      (composeDirty || replyDirty) &&
+      !window.confirm(
+        "В форме есть несохранённые изменения. Закрыть её? Сохранённый ранее черновик останется в списке.",
+      )
     )
       return false;
     setReply("");
@@ -278,6 +391,12 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     setComposeDraft(crypto.randomUUID());
     setReplyDraft(crypto.randomUUID());
     setSelectedPeople([]);
+    setComposeVersion(0);
+    setReplyVersion(0);
+    setSavedCompose("");
+    setSavedReply("");
+    setRecipient("");
+    setContactQuery("");
     return true;
   }
   function body() {
@@ -287,6 +406,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       title,
       text,
       draftId: composeDraft,
+      draftVersion: composeVersion || null,
       fileIds: composeFiles.map((f) => f.id),
       ...(kind === "direct"
         ? { recipientId: recipient, studentId: student || null }
@@ -341,6 +461,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               setSelected("");
               setDetail(null);
               setComposing(false);
+              setShowDrafts(false);
               void run(() => list());
             }
           }}
@@ -355,6 +476,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               setSelected("");
               setDetail(null);
               setComposing(true);
+              setShowDrafts(false);
             }
           }}
         >
@@ -362,12 +484,77 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         </button>
         <button
           disabled={busy}
-          onClick={() => void run(() => (selected ? open(selected) : list()))}
+          onClick={() => {
+            if (!leave()) return;
+            setComposing(false);
+            setSelected("");
+            setDetail(null);
+            setShowDrafts(true);
+            void run(loadDrafts);
+          }}
+        >
+          Черновики · {drafts.length}
+        </button>
+        <button
+          disabled={busy}
+          onClick={() =>
+            void run(() =>
+              showDrafts ? loadDrafts() : selected ? open(selected) : list(),
+            )
+          }
         >
           Обновить сообщения
         </button>
       </div>
-      {composing ? (
+      {showDrafts ? (
+        <div className="message-drafts">
+          <h3>Личные черновики</h3>
+          <p>
+            До 50 черновиков в этом пространстве. Сохранённые текст, получатели
+            и выбранные вложения доступны с другого устройства. Получатели их не
+            видят.
+          </p>
+          {!drafts.length && <p>Сохранённых черновиков пока нет.</p>}
+          {drafts.map((d) => (
+            <article key={d.id} className="message-draft-item">
+              <div>
+                <strong>{d.title || "Без темы"}</strong>
+                <p>
+                  {d.threadId ? "Ответ" : kinds[d.kind]} ·{" "}
+                  {new Date(d.updated).toLocaleString("ru-RU")}
+                </p>
+              </div>
+              <button
+                disabled={busy}
+                onClick={() => void run(() => openDraft(d.id))}
+              >
+                Продолжить
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "Удалить этот черновик? Неотправленные файлы будут очищены автоматически.",
+                    )
+                  )
+                    return;
+                  void run(async () => {
+                    await api(
+                      `messages/drafts/${d.id}?version=${d.version}`,
+                      workspace,
+                      "DELETE",
+                    );
+                    await loadDrafts();
+                  });
+                }}
+              >
+                Удалить черновик
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : composing ? (
         <fieldset className="access-fields message-compose" disabled={busy}>
           <h3>Новое сообщение</h3>
           {
@@ -408,7 +595,11 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                 <span>По поводу ученика</span>
                 <select
                   value={student}
-                  onChange={(e) => setStudent(e.target.value)}
+                  onChange={(e) => {
+                    setStudent(e.target.value);
+                    setSelectedPeople([]);
+                    setRecipient("");
+                  }}
                 >
                   {!["parent", "student"].includes(options.role) && (
                     <option value="">Переписка сотрудников</option>
@@ -438,6 +629,11 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                     onChange={(e) => setRecipient(e.target.value)}
                   >
                     <option value="">Выберите собеседника</option>
+                    {recipient && !contacts.some((p) => p.id === recipient) && (
+                      <option value={recipient}>
+                        Ранее выбранный собеседник · проверьте выбор
+                      </option>
+                    )}
                     {contacts.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name} · {roles[p.role]}
@@ -619,6 +815,16 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             </p>
           )}
           <div className="dated-toolbar">
+            <button onClick={() => void run(() => saveDraft())}>
+              Сохранить черновик
+            </button>
+            <span role="status">
+              {composeVersion
+                ? composeDirty
+                  ? "Есть несохранённые изменения"
+                  : "Черновик сохранён на сервере"
+                : "Черновик ещё не сохранён"}
+            </span>
             {kind !== "direct" && (
               <button
                 disabled={
@@ -655,7 +861,10 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   setTitle("");
                   setComposeFiles([]);
                   setComposeDraft(crypto.randomUUID());
+                  setComposeVersion(0);
+                  setSavedCompose("");
                   nonce.current = crypto.randomUUID();
+                  await loadDrafts();
                   await open(r.id);
                 })
               }
@@ -767,8 +976,11 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               )}
             </p>
           )}
-          {detail.canReply && (
+          {(detail.canReply || replyVersion > 0) && (
             <fieldset className="access-fields message-reply" disabled={busy}>
+              {!detail.canReply && (
+                <p>Ответы закрыты. Черновик можно редактировать и сохранять.</p>
+              )}
               <label className="field">
                 <span>Ваш ответ</span>
                 <textarea
@@ -788,12 +1000,24 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                 threadId={detail.id}
                 items={replyFiles}
                 setItems={setReplyFiles}
-                busy={busy}
+                busy={busy || !detail.canReply}
                 run={run}
               />
+              <button onClick={() => void run(() => saveDraft(true))}>
+                Сохранить черновик ответа
+              </button>
+              <p role="status">
+                {replyVersion
+                  ? replyDirty
+                    ? "Есть несохранённые изменения"
+                    : "Черновик ответа сохранён на сервере"
+                  : "Черновик ответа ещё не сохранён"}
+              </p>
               <button
                 className="primary"
-                disabled={!reply.trim() && !replyFiles.length}
+                disabled={
+                  !detail.canReply || (!reply.trim() && !replyFiles.length)
+                }
                 onClick={() =>
                   void run(async () => {
                     await api(
@@ -805,6 +1029,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                         version: detail.version,
                         text: reply,
                         draftId: replyDraft,
+                        draftVersion: replyVersion || null,
                         fileIds: replyFiles.map((f) => f.id),
                       },
                     );
@@ -812,7 +1037,10 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                       setReply("");
                       setReplyFiles([]);
                       setReplyDraft(crypto.randomUUID());
+                      setReplyVersion(0);
+                      setSavedReply("");
                       replyNonce.current = crypto.randomUUID();
+                      await loadDrafts();
                       await open(detail.id);
                     }
                   })

@@ -373,6 +373,7 @@ from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)
 messages.register(app, Workspace)
 messages.files.register(app, Workspace)
+messages.drafts.register(app, Workspace)
 from .portal import register_portal
 register_portal(app, Workspace, read, portal_stamp)
 from .assistant import register_assistant
