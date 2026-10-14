@@ -3624,6 +3624,15 @@ main {
   margin: 0;
   min-width: 0;
 }
+.access-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+.access-panel > * {
+  min-width: 0;
+}
+.access-audit {
+  overflow-wrap: anywhere;
+}
 .access-grant,
 .access-audit article {
   padding: 12px 0;
@@ -4508,4 +4517,9 @@ main {
 .message-moderation summary, .message-report summary { cursor: pointer; font-weight: 600; }
 .message-case { border-top: 1px solid #dce3ea; padding: 14px 0; min-width: 0; }
 .message-case-link { display: block; text-align: left; white-space: normal; margin: 6px 0; }
+.family-panel { border: 1px solid #dce3ea; border-radius: 10px; padding: 14px; margin: 14px 0; min-width: 0; overflow-wrap: anywhere; }
+.family-panel summary { cursor: pointer; font-weight: 600; }
+.family-card { border: 1px solid #dce3ea; border-radius: 10px; padding: 14px; margin: 10px 0; min-width: 0; background: white; }
+.family-history { border-top: 1px solid #dce3ea; padding: 8px 0; }
+.family-panel fieldset { min-width: 0; }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }

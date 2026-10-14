@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { Multi } from "./DatedSchedule";
 import InvitationPanel from "./InvitationPanel";
+import FamilyPanel from "./FamilyPanel";
 import type { State } from "./types";
 import {
   roleNames,
@@ -270,6 +271,13 @@ export default function AccessPanel({
             state={state}
             workspace={workspace}
             onChange={reload}
+          />
+          <FamilyPanel
+            key={`family:${workspace}`}
+            workspace={workspace}
+            state={state}
+            users={users}
+            onChanged={reload}
           />
           <p className="info-line">
             Администратор управляет доступом и всей базой. Составитель
@@ -599,6 +607,12 @@ export default function AccessPanel({
                   {(
                     {
                       "state.saved": "Сохранено расписание",
+                      "family.updated":
+                        "Изменены семейная связь и доступ к ребёнку",
+                      "family.history_read":
+                        "Просмотрена история семейной связи",
+                      "family.evidence_read":
+                        "Просмотрены основания семейной связи",
                       "message.reported": "Отправлена жалоба на сообщение",
                       "message.evidence_read": "Просмотрены материалы жалобы",
                       "message.evidence_file_read": "Скачано вложение жалобы",

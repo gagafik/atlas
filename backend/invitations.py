@@ -103,8 +103,13 @@ def register_invitations(app, access):
                                  (client,hashed,now().isoformat())).lastrowid
         return hashed, attempt
 
-    def finish(db, invitation, account_id, attempt, response, request):
+    def finish(db, invitation, account_id, attempt, response, request, previous=None):
         # The write transaction serializes revoke, acceptance and permission changes.
+        from .families import sync_account
+        row=db.execute('SELECT * FROM accounts WHERE id=?',(account_id,)).fetchone()
+        creator=db.execute('SELECT id,name FROM accounts WHERE id=?',(invitation[7],)).fetchone()
+        permissions=sync_account(db,account_id,row[3],json.loads(row[7]),source=f'invitation:{invitation[0]}',principal=dict(id=invitation[7],name=creator[1] if creator else 'Администратор'),previous=previous)
+        db.execute('UPDATE accounts SET permissions=? WHERE id=?',(json.dumps(permissions),account_id))
         db.execute('UPDATE access_invitations SET accepted=?,account_id=? WHERE id=?',
                    (now().isoformat(), account_id, invitation[0]))
         db.execute('DELETE FROM invitation_attempts WHERE id=?', (attempt,))
@@ -206,4 +211,4 @@ def register_invitations(app, access):
                 raise HTTPException(422, 'Приглашение нельзя объединить с текущим доступом. Обратитесь к администратору.') from None
             db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',
                        (json.dumps(permissions),user['id']))
-            return finish(db, invitation, user['id'], attempt, response, request)
+            return finish(db, invitation, user['id'], attempt, response, request,previous=row)

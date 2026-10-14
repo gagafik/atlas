@@ -146,9 +146,9 @@ class Messages:
         return {row[0]:self.access.public(row) for row in db.execute('SELECT * FROM accounts WHERE '+clause,params)}
 
     def recheck(self,db,user,directory):
-        row=db.execute('SELECT version,active FROM accounts WHERE id=?',(user['id'],)).fetchone()
+        row=db.execute('SELECT * FROM accounts WHERE id=?',(user['id'],)).fetchone()
         revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(directory.workspace,)).fetchone()
-        if not row or not row[1] or row[0]!=user['version'] or not revision or revision[0]!=directory.state.revision:
+        if not row or not row[4] or self.access.public(row)!=user or not revision or revision[0]!=directory.state.revision:
             raise HTTPException(409,'Права или школьные данные изменились. Обновите сообщения.')
 
     def recipient_accounts(self,db,body,user,directory):
