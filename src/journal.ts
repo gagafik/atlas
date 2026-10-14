@@ -62,6 +62,7 @@ export interface JournalEntry {
   publishedVersion: number | null;
   publishedAt: string | null;
   canWithdraw: boolean;
+  attendanceApprovals?: Record<string, { id: string; version: number }>;
 }
 export interface JournalRow {
   lessonKey: string;
@@ -71,6 +72,7 @@ export interface JournalRow {
   record: PupilRecord;
   version: number;
   publishedAt: string;
+  absenceApproval?: { id: string; version: number };
 }
 export interface JournalReport {
   rows: JournalRow[];
@@ -167,6 +169,7 @@ export function documentRows(
   document: JournalDocument,
   lessonKey: string,
   version: number,
+  approvals: Record<string, { id: string; version: number }> = {},
 ): JournalRow[] {
   return document.content.records.map((record) => ({
     lessonKey,
@@ -174,7 +177,10 @@ export function documentRows(
     publishedAt: "",
     lesson: document.lesson,
     content: document.content,
-    record,
+    record:
+      approvals[record.studentId] && record.attendance === "absent"
+        ? { ...record, attendance: "excused" }
+        : record,
     student: {
       id: record.studentId,
       name:

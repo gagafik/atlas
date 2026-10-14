@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
+import AbsencePanel from "./AbsencePanel";
 import {
   attendanceNames,
   gradeLabel,
@@ -19,6 +20,7 @@ import {
 
 interface Options {
   staff: boolean;
+  absenceNotices?: boolean;
   yearStart: string;
   yearEnd: string;
   students: { id: string; name: string }[];
@@ -62,6 +64,7 @@ function PublishedRows({
             <strong>{attendanceNames[row.record.attendance]}</strong>
             {row.record.lateMinutes > 0 && ` · ${row.record.lateMinutes} мин`}
             {row.record.comment && ` · ${row.record.comment}`}
+            {row.absenceApproval && " · объяснительная принята школой"}
           </p>
           {row.content.topic && (
             <p className="journal-text">
@@ -330,6 +333,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const editable = !!entry?.writable && !entry.needsSync && !busy;
   return (
     <section className="journal-panel">
+      {options?.absenceNotices && (
+        <AbsencePanel key={workspace} workspace={workspace} />
+      )}
       <p>
         Посещаемость, оценки, темы и домашние задания. Записи журнала
         сохраняются отдельно от расписания; переносы и правки групп не удаляют
@@ -766,6 +772,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         )!;
                         return (
                           <article className="journal-pupil" key={s.id}>
+                            {entry.attendanceApprovals?.[s.id] && (
+                              <p className="info-line">
+                                На этот урок принята объяснительная. Отметка
+                                «Отсутствует» учитывается как уважительная
+                                причина; исходная отметка сохраняется.
+                              </p>
+                            )}
                             <h4>
                               {s.name}{" "}
                               <small>
@@ -945,6 +958,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                             entry.document,
                             entry.lessonKey,
                             entry.version,
+                            entry.attendanceApprovals,
                           ),
                         )
                       }

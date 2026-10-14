@@ -47,6 +47,24 @@ const document: JournalDocument = {
   },
 };
 describe("journal export", () => {
+  it("exports an approved excuse without overwriting the teacher's raw observation", () => {
+    const d = structuredClone(document);
+    d.content.records[0].attendance = "absent";
+    d.content.records[0].lateMinutes = 0;
+    const approvals = { s1: { id: "notice", version: 2 } };
+    const rows = documentRows(d, "key", 1, approvals);
+    expect(rows[0].record.attendance).toBe("excused");
+    expect(d.content.records[0].attendance).toBe("absent");
+    journalCsv(rows);
+    expect(vi.mocked(download).mock.lastCall![1]).toContain(
+      "Уважительная причина",
+    );
+    expect(documentRows(d, "key", 1)[0].record.attendance).toBe("absent");
+    d.content.records[0].attendance = "present";
+    expect(documentRows(d, "key", 1, approvals)[0].record.attendance).toBe(
+      "present",
+    );
+  });
   it("retains zero scores, text labels, absence marks and CSV escaping", () => {
     journalCsv(documentRows(document, "key", 2));
     const csv = vi.mocked(download).mock.lastCall![1];
