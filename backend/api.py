@@ -362,6 +362,9 @@ register_invitations(app, access)
 from .notifications import Notifications
 notifications = Notifications(access)
 notifications.register(app)
+from .families import Families
+families = Families(access, notifications)
+families.register(app, Workspace)
 from .journal import Journal
 journal = Journal(access, notifications)
 journal.register(app, Workspace)

@@ -70,7 +70,7 @@ class Account(Credentials):
             if self.grants: raise ValueError('Администратор и составитель используют доступ к пространствам.')
             if not self.workspaces: raise ValueError('Выберите рабочее пространство.')
         else:
-            if not self.grants: raise ValueError('Выберите разрешённые расписания.')
+            if not self.grants and self.role!='parent': raise ValueError('Выберите разрешённые расписания.')
             keys = [(g.workspace,g.view) for g in self.grants]
             if len(set(keys)) != len(keys): raise ValueError('Объедините одинаковые области доступа.')
             for g in self.grants:
@@ -122,9 +122,14 @@ class Access:
                    (now().isoformat(),user['id'],user['name'],action,workspace,revision,detail))
         db.execute('DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 10000)')
 
-    def public(self, row):
+    def public(self, row, *, configured=False):
         id, login, name, role, active, version, _, permissions = row
-        return dict(id=id,login=login,name=name,role=role,active=bool(active),version=version,**json.loads(permissions))
+        permissions=json.loads(permissions)
+        grants=permissions['grants']
+        if role=='parent' and not configured:
+            from .families import effective_grants
+            grants=effective_grants(permissions)
+        return dict(id=id,login=login,name=name,role=role,active=bool(active),version=version,workspaces=permissions['workspaces'],grants=grants)
 
     def identify(self, request):
         raw = request.cookies.get(COOKIE, '')
@@ -268,7 +273,7 @@ class Access:
         @app.get('/api/access/users')
         def users():
             with self.lock,self.connect() as db:
-                return [self.public(row) for row in db.execute('SELECT * FROM accounts ORDER BY name').fetchall()]
+                return [self.public(row,configured=True) for row in db.execute('SELECT * FROM accounts ORDER BY name').fetchall()]
 
         def write_user(body,id=None):
             self.validate_grants(body)
@@ -285,11 +290,13 @@ class Access:
                         raise HTTPException(422,'Нельзя отключить или понизить последнего администратора.')
                 id=id or str(uuid4())
                 version=old[5]+1 if old else 0
-                permissions=json.dumps(dict(workspaces=WORKSPACES if body.role=='admin' else body.workspaces,grants=[g.model_dump() for g in body.grants]),ensure_ascii=False)
+                from .families import sync_account
+                permissions=sync_account(db,id,body.role,dict(workspaces=WORKSPACES if body.role=='admin' else body.workspaces,grants=[g.model_dump() for g in body.grants]),source='account.assignment',previous=old)
+                permissions=json.dumps(permissions,ensure_ascii=False)
                 db.execute('INSERT OR REPLACE INTO accounts VALUES (?,?,?,?,?,?,?,?)',(id,body.login,body.name,body.role,int(body.active),version,encoded or old[6],permissions))
                 db.execute('DELETE FROM sessions WHERE user_id=?',(id,))
                 self.record(db,'account.updated' if old else 'account.created',detail=body.login+' · '+body.role)
-                return self.public(db.execute('SELECT * FROM accounts WHERE id=?',(id,)).fetchone())
+                return self.public(db.execute('SELECT * FROM accounts WHERE id=?',(id,)).fetchone(),configured=True)
 
         @app.post('/api/access/users')
         def create_user(body: Account): return write_user(body)

@@ -5,6 +5,7 @@ import { csvCell, download } from "./utils";
 import JournalPanel from "./JournalPanel";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
+import { FamilyPortal } from "./FamilyPanel";
 interface Space {
   id: string;
   name: string;
@@ -155,13 +156,15 @@ export default function Portal({
         <div>
           <strong>атлас•</strong>
           <h1>
-            {section === "messages"
-              ? "Сообщения"
-              : section === "journal"
-                ? "Учебный журнал"
-                : section === "courses"
-                  ? "Выбор курсов"
-                  : "Моё расписание"}
+            {section === "family"
+              ? "Мои дети и доступ"
+              : section === "messages"
+                ? "Сообщения"
+                : section === "journal"
+                  ? "Учебный журнал"
+                  : section === "courses"
+                    ? "Выбор курсов"
+                    : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -169,6 +172,14 @@ export default function Portal({
       </header>
       {
         <div className="dated-toolbar portal-tabs">
+          {session.user!.role === "parent" && (
+            <button
+              aria-pressed={section === "family"}
+              onClick={() => setSection("family")}
+            >
+              Мои дети и доступ
+            </button>
+          )}
           <button
             aria-pressed={section === "schedule"}
             onClick={() => setSection("schedule")}
@@ -199,7 +210,9 @@ export default function Portal({
           )}
         </div>
       }
-      {section === "messages" ? (
+      {section === "family" ? (
+        <FamilyPortal />
+      ) : section === "messages" ? (
         <>
           <label className="field">
             <span>Пространство сообщений</span>
