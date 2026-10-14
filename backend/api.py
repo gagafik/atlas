@@ -387,6 +387,8 @@ journal_periods.register(app, Workspace)
 from .final_grades import FinalGrades
 final_grades = FinalGrades(journal_periods)
 final_grades.register(app, Workspace)
+from .gradebook_jobs import register_jobs as register_gradebook_jobs
+shutdown_gradebook_jobs = register_gradebook_jobs(app, final_grades, Workspace, lambda: DB, solve_lock)
 
 from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)

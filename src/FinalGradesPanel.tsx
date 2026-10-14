@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api } from "./api";
+import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import { csvCell } from "./utils";
 
 type Named = { id: string; name: string };
@@ -569,56 +570,26 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                     })
                   }
                 />
-                <div className="dated-toolbar">
-                  <Select
-                    label="Закрытый период"
-                    value={periodId}
-                    onChange={(id) => {
-                      setPeriodId(id);
-                      setReport(null);
-                    }}
-                    items={options.periods.filter((p) => p.status === "closed")}
-                  />
-                  <button
-                    disabled={!periodId}
-                    onClick={() => {
-                      if (leave())
-                        void run(async () => {
-                          const p = options.periods.find(
-                            (p) => p.id === periodId,
-                          )!;
-                          const b = await api(
-                            `final-grades/periods/${p.id}/prepare`,
-                            workspace,
-                            "POST",
-                            { version: p.version },
-                          );
-                          clearRow();
-                          setFilter({
-                            classId: "",
-                            subjectId: "",
-                            status: "all",
-                          });
-                          await loadOptions();
-                          await loadSheet(b.id, 0, {
-                            classId: "",
-                            subjectId: "",
-                            status: "all",
-                          });
-                          setNotice(
-                            "Ведомость подготовлена. Назначьте ответственных учителей.",
-                          );
-                        });
-                    }}
-                  >
-                    Подготовить ведомость
-                  </button>
-                </div>
-                <p>
-                  Подготовка большого периода может занять время. Ведомость
-                  содержит учеников из известного состава; неполные списки
-                  класса нужно проверить в контроле журналов.
-                </p>
+                <GradebookPreparationPanel
+                  workspace={workspace}
+                  periods={options.periods}
+                  onOpen={async (id) => {
+                    if (!leave()) return;
+                    await run(async () => {
+                      clearRow();
+                      setFilter({ classId: "", subjectId: "", status: "all" });
+                      await loadOptions();
+                      await loadSheet(id, 0, {
+                        classId: "",
+                        subjectId: "",
+                        status: "all",
+                      });
+                      setNotice(
+                        "Ведомость готова. Назначьте ответственных учителей.",
+                      );
+                    });
+                  }}
+                />
               </>
             )}
             {options?.staff && (

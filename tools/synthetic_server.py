@@ -12,7 +12,7 @@ from .benchmark_portal import fixture,stop_child
 
 
 @contextmanager
-def synthetic_server():
+def synthetic_server(*,server_log=None):
     with tempfile.TemporaryDirectory(prefix='atlas-message-load-') as directory:
         root=Path(directory);previous=os.environ.get('TIMETABLE_DB')
         os.environ['TIMETABLE_DB']=str(root/'synthetic.db')
@@ -40,5 +40,8 @@ def synthetic_server():
                 if process.poll() is None:process.terminate()
                 try:process.wait(timeout=10)
                 except subprocess.TimeoutExpired:process.kill();process.wait(timeout=10)
+                if server_log is not None:
+                    target=Path(server_log);target.parent.mkdir(parents=True,exist_ok=True)
+                    log.flush();target.write_bytes((root/'server.log').read_bytes())
                 if previous is None:os.environ.pop('TIMETABLE_DB',None)
                 else:os.environ['TIMETABLE_DB']=previous

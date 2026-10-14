@@ -50,7 +50,12 @@ def main():
             p=call('period','PUT',base,json=dict(version=0,name='Synthetic term',start=period['start'],end=period['end'],reason='Synthetic grade measurement'))
             preview=call('preview','POST',base+'/preview-close',json=dict(version=p['version']))
             p=call('close','POST',base+'/close',json=dict(version=p['version'],previewId=preview['previewId'],acknowledgeIssues=True,reason='Synthetic grade measurement'))
-            b=call('prepare','POST',f'/api/final-grades/periods/{id}/prepare',json=dict(version=p['version']))
+            began=time.perf_counter();job=call('enqueue','POST',f'/api/final-grades/periods/{id}/prepare',json=dict(version=p['version']))
+            while job['status'] in ['queued','running','cancelling']:
+                if time.perf_counter()-began>240:raise TimeoutError('Synthetic preparation timed out; inspect the same job.')
+                time.sleep(.25);response=c.get('/api/final-grades/preparations/'+job['id']);response.raise_for_status();job=response.json()
+            assert job['status']=='succeeded',job
+            timings.setdefault('prepare',[]).append((time.perf_counter()-began)*1000);b=dict(id=job['bookId'])
             s=call('scale','PUT','/api/final-grades/scales/'+uuid4().hex,json=dict(version=0,name='Synthetic scale',bands=[dict(label='Low',minPercent=0),dict(label='High',minPercent=75)]))
             page=call('sheet','GET','/api/final-grades/books/'+b['id']);assert page['total']>=1100
             submitted=[]
@@ -61,9 +66,9 @@ def main():
             first=page['items'][0];evidence=call('evidence','GET',f'/api/final-grades/rows/{first["id"]}/evidence');assert evidence['items'] and evidence['recommendations']
             asyncio.run(read_reports(url,identities,id,sorted({r['studentId'] for r in reviewed}),timings));assert c.get('/api/state').json()==state
             with closing(sqlite3.connect(os.environ['TIMETABLE_DB'])) as db:
-                stored=db.execute('SELECT count(*) FROM grading_marks').fetchone()[0];assert stored==marks
-                size=db.execute('SELECT sum(length(cast(document AS BLOB))) FROM grading_marks').fetchone()[0]
-            result=dict(synthetic=True,stateUnchanged=True,accounts=accounts,seed=seeded,marks=marks,gradeRows=page['total'],sourceMiB=round(size/1024**2,1),concurrentReaders=20,endpoints={k:summary(v) for k,v in timings.items()},limitations='40 teaching days, two marks per pupil/lesson, 50 published results, 100 personal requests with ready sessions. Not annual history, full school publication, concurrent writers/generator, internet/TLS, login storm or sustained load. Preparation holds the single SQLite write transaction.')
+                stored=db.execute('SELECT sum(json_array_length(works)) FROM grading_facts').fetchone()[0];assert stored==marks
+                size=db.execute('SELECT sum(length(cast(summary AS BLOB))+length(cast(works AS BLOB))) FROM grading_facts').fetchone()[0]
+            result=dict(synthetic=True,stateUnchanged=True,accounts=accounts,seed=seeded,marks=marks,gradeRows=page['total'],sourceMiB=round(size/1024**2,1),concurrentReaders=20,endpoints={k:summary(v) for k,v in timings.items()},limitations='40 teaching days, two marks per pupil/lesson, 50 published results, 100 personal requests with ready sessions. Not annual history, full school publication, concurrent writers/generator, internet/TLS, login storm or sustained load. Background preparation copies shared facts in bounded transactions.')
             print(json.dumps(dict(phase='measured',**result)),flush=True)
     args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(result,indent=2),encoding='utf-8')
 

@@ -15,6 +15,7 @@ data/
 *.sqlite
 *.sqlite3
 *.files/
+*.grading/
 *.pem
 *.key
 *.p12

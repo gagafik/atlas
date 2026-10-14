@@ -659,6 +659,18 @@ export default function AccessPanel({
                       "journal.final_scale": "Изменена шкала итоговых оценок",
                       "journal.final_prepared":
                         "Подготовлена итоговая ведомость",
+                      "journal.gradebook_queued":
+                        "Подготовка ведомости поставлена в очередь",
+                      "journal.gradebook_cancel_requested":
+                        "Запрошена отмена подготовки ведомости",
+                      "journal.gradebook_cancelled":
+                        "Подготовка ведомости отменена",
+                      "journal.gradebook_failed":
+                        "Подготовка ведомости не завершена",
+                      "journal.gradebook_stale":
+                        "Изменился источник или доступ к подготовке ведомости",
+                      "journal.gradebook_prepared":
+                        "Подготовлена итоговая ведомость",
                       "journal.final_assign": "Назначен ответственный за итоги",
                       "journal.final_saved": "Сохранён черновик итога",
                       "journal.final_submitted":
