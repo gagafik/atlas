@@ -109,6 +109,7 @@ class Notifications:
     def tables(self, db):
         db.execute('CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_owner ON notifications(user_id,permissions,id)')
+        db.execute('CREATE INDEX IF NOT EXISTS notification_age ON notifications(created)')
         db.execute('CREATE TABLE IF NOT EXISTS notification_preferences (user_id TEXT PRIMARY KEY,enabled INTEGER)')
 
     def capture(self, db, workspace, before, after, action='saved'):
@@ -134,6 +135,28 @@ class Notifications:
             if not changed: continue
             recipients.append(user)
         self.deliver(db,recipients,workspace,after.revision,action)
+
+    def granted_users(self, db, workspace, view, entity_ids, roles):
+        """Select candidates in SQL, then enforce effective grants without caching them.
+
+        Stored parent grants may have expired or not started yet. Access.public
+        remains authoritative; the SQL predicate only narrows the candidate set.
+        """
+        ids=set(entity_ids)
+        if not ids:return []
+        rows=db.execute('''SELECT a.* FROM accounts a WHERE a.active=1
+            AND a.role IN (SELECT value FROM json_each(?)) AND EXISTS (
+                SELECT 1 FROM json_each(a.permissions,'$.grants') g,
+                              json_each(g.value,'$.entityIds') entity
+                WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')=?
+                  AND entity.value IN (SELECT value FROM json_each(?)))''',
+            (encoded(roles),workspace,view,encoded(sorted(ids))))
+        result=[]
+        for row in rows:
+            user=self.access.public(row)
+            if any(g['workspace']==workspace and g['view']==view and ids.intersection(g['entityIds']) for g in user['grants']):
+                result.append(user)
+        return result
 
     def deliver(self, db, users, workspace, revision, action):
         self.tables(db)

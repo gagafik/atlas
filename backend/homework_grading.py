@@ -51,10 +51,9 @@ class HomeworkGrading:
 
     def prepare(self, ctx):
         if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет действующий учитель урока или администратор.')
-        day=date.fromisoformat(ctx['current']['date'])
-        record=self.journal.entry(ctx['state'],ctx['workspace'],ctx['user'],ctx['key'],day)
-        if record['version']!=ctx['record']['version']:raise HTTPException(409,'Журнал изменился. Обновите параметры оценки.')
-        return record
+        # Homework.context already resolved this lesson against its cached state.
+        # recheck() validates that state, account and journal again in the transaction.
+        return self.journal.resolved_entry(ctx['state'],ctx['workspace'],ctx['user'],ctx['key'],ctx['record'],ctx['current'])
 
     def reason(self, db, ctx, record):
         closed=locks(db,ctx['workspace'],record['document']['lesson'],ctx['published']['lesson'],ctx['current'])
