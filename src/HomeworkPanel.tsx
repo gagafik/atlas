@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { MaterialLinks, type Material } from "./AssignmentFilesPanel";
+import HomeworkDeadlinePanel, {
+  type HomeworkDeadline,
+} from "./HomeworkDeadlinePanel";
 import HomeworkGradeForm, {
   RecordedHomeworkGrade,
   type ReviewGrade,
@@ -14,6 +17,7 @@ interface Attachment {
   created: string;
 }
 interface Submitted {
+  deadlineVersion?: number;
   grading?: GradingEvidence;
   assignmentFiles: Material[];
   latePolicy: "allow" | "block";
@@ -33,6 +37,7 @@ interface Submitted {
   } | null;
 }
 interface Work {
+  deadline: HomeworkDeadline;
   assignmentFiles: Material[];
   latePolicy: "allow" | "block";
   deadlineClosed: boolean;
@@ -126,8 +131,15 @@ function StudentWork({
 }) {
   const [work, setWork] = useState<Work | null>(null),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
+    [operationBusy, setBusy] = useState(false),
     [dirty, setDirty] = useState(false);
+  const [deadlineActivity, setDeadlineActivity] = useState({
+    dirty: false,
+    busy: false,
+  });
+  const [deadlineEpoch, setDeadlineEpoch] = useState(0);
+  const busy = operationBusy || deadlineActivity.busy;
+  const unsaved = dirty || deadlineActivity.dirty;
   const [text, setText] = useState(""),
     [fileIds, setFileIds] = useState<string[]>([]),
     [comment, setComment] = useState("");
@@ -141,6 +153,8 @@ function StudentWork({
   const endpoint = `journal/homework/${encodeURIComponent(lessonKey)}`;
   const target = `studentId=${encodeURIComponent(studentId)}`;
   function receive(value: Work) {
+    setDeadlineEpoch((v) => v + 1);
+    setDeadlineActivity({ dirty: false, busy: false });
     setWork(value);
     setText(value.draft?.text || "");
     setFileIds(value.draft?.fileIds || []);
@@ -169,18 +183,18 @@ function StudentWork({
     };
   }, [workspace, lessonKey, studentId]);
   useEffect(() => {
-    if (!dirty) return;
+    if (!unsaved) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, [unsaved]);
   useEffect(() => {
-    onActivity({ dirty, busy });
+    onActivity({ dirty: unsaved, busy });
     return () => onActivity({ dirty: false, busy: false });
-  }, [dirty, busy, onActivity]);
+  }, [unsaved, busy, onActivity]);
   async function run(fn: () => Promise<void>) {
     if (busy) return;
     setBusy(true);
@@ -199,6 +213,7 @@ function StudentWork({
       studentId,
       version: work.version,
       assignment: work.assignment,
+      deadlineVersion: work.deadline.version,
       action,
       text,
       fileIds,
@@ -258,9 +273,9 @@ function StudentWork({
           disabled={busy}
           onClick={() => {
             if (
-              dirty &&
+              unsaved &&
               !window.confirm(
-                "Заменить несохранённый ответ последней сохранённой версией?",
+                "Заменить несохранённые изменения работы и срока последней сохранённой версией?",
               )
             )
               return;
@@ -287,6 +302,29 @@ function StudentWork({
           ? `Срок: ${work.dueDate}, до конца дня по времени школы (Кызылорда). ${work.latePolicy === "block" ? "После срока приём закрывается." : "Поздние отправки принимаются с отметкой."}`
           : "Срок не указан."}
       </p>
+      <HomeworkDeadlinePanel
+        key={deadlineEpoch}
+        workspace={workspace}
+        endpoint={endpoint}
+        studentId={studentId}
+        assignment={work.assignment}
+        value={work.deadline}
+        disabled={operationBusy}
+        onActivity={setDeadlineActivity}
+        onUpdated={(deadline) => {
+          setWork((old) =>
+            old
+              ? {
+                  ...old,
+                  deadline,
+                  dueDate: deadline.effectiveDueDate,
+                  deadlineClosed: deadline.deadlineClosed,
+                }
+              : old,
+          );
+          changed();
+        }}
+      />
       <MaterialLinks
         items={work.assignmentFiles}
         workspace={workspace}
@@ -314,7 +352,10 @@ function StudentWork({
           </h4>
           <p className="journal-text">{work.submitted.text}</p>
           <RecordedHomeworkGrade value={work.submitted.grading} />
-          {work.assignmentChanged && (
+          {(work.assignmentChanged ||
+            work.submitted.dueDate !== work.dueDate ||
+            (work.submitted.deadlineVersion || 0) !==
+              work.deadline.version) && (
             <details>
               <summary>Условия на момент отправки</summary>
               <p className="journal-text">{work.submitted.homework}</p>
@@ -494,7 +535,10 @@ function StudentWork({
         </div>
       )}
       {work.canReview && work.submitted && work.status !== "returned" && (
-        <fieldset className="access-fields homework-review" disabled={busy}>
+        <fieldset
+          className="access-fields homework-review"
+          disabled={busy || deadlineActivity.dirty}
+        >
           <label className="field">
             <span>Комментарий учителя</span>
             <textarea
@@ -550,6 +594,12 @@ function StudentWork({
             на доработку не меняет уже записанную оценку.
           </small>
         </fieldset>
+      )}
+      {deadlineActivity.dirty && (
+        <p className="muted">
+          Сначала сохраните или закройте изменение срока, затем продолжите
+          проверку работы.
+        </p>
       )}
       <div className="dated-toolbar">
         <button disabled={busy} onClick={() => void run(() => historyPage())}>

@@ -47,11 +47,16 @@ async def probe(url, identities, tasks, concurrency, size):
                 queued=(await request('queue_student','GET','/api/journal/homework-queue',cookie)).json()
                 assert any(r['lessonKey']==key and r['studentId']==student and r['canSubmit'] for r in queued['items'])
                 current=(await request('open','GET',path,cookie,params=dict(studentId=student))).json()
+                deadline=(await request('extend_deadline','PUT',path+'/deadline',teacher,json=dict(
+                    studentId=student,assignment=current['assignment'],version=current['deadline']['version'],
+                    action='extend',dueDate='2026-10-21',reason='Synthetic individual extension'))).json()
+                queued=(await request('queue_extended','GET','/api/journal/homework-queue',cookie,params=dict(start='2026-10-21',end='2026-10-21'))).json()
+                assert any(r['lessonKey']==key and r['studentId']==student and r['extended'] and r['dueDate']=='2026-10-21' for r in queued['items'])
                 assert len(current['assignmentFiles'])==1
                 material=current['assignmentFiles'][0]
                 content=await request('material_student','GET','/api/journal/assignment-files/'+material['id'],cookie,params=dict(studentId=student))
                 assert content.content==b'M'*size
-                data=dict(studentId=student,version=current['version'],assignment=current['assignment'],action='draft',text='Synthetic answer',fileIds=[])
+                data=dict(studentId=student,version=current['version'],assignment=current['assignment'],deadlineVersion=deadline['version'],action='draft',text='Synthetic answer',fileIds=[])
                 draft=(await request('draft','PUT',path,cookie,json=data)).json()
                 # Upload concurrency limits intentionally return 429 under a burst;
                 # retry briefly as a real client must, and count those responses.
@@ -93,6 +98,9 @@ async def probe(url, identities, tasks, concurrency, size):
                 assert result['status']=='accepted' and result['draft'] is None
                 assert result['submitted']['assignmentFiles']==[material]
                 assert result['submitted']['grading']['grade']['score']==9
+                assert result['submitted']['dueDate']=='2026-10-21' and result['dueDate']=='2026-10-21'
+                deadline_history=(await request('deadline_history','GET',path+'/deadline-history',parent_cookie,params=dict(studentId=student))).json()
+                assert len(deadline_history['items'])==1 and deadline_history['items'][0]['action']=='extend'
                 journal=(await request('parent_grade','GET','/api/journal/report',parent_cookie,params=dict(studentId=student,start='2026-10-13',end='2026-10-13'))).json()
                 row=next(r for r in journal['rows'] if r['lessonKey']==key)
                 assert next(g for g in row['record']['grades'] if g['assessmentId']=='homework')['score']==9

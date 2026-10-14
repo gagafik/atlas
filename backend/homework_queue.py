@@ -48,7 +48,7 @@ class HomeworkQueue:
         if end<start or (end-start).days>366:raise HTTPException(422,'Выберите период не длиннее 367 дней, с началом до окончания.')
         selected=selected or ('submitted' if staff else 'todo')
         today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date().isoformat()
-        clauses=['q.workspace=?','q.sort_date BETWEEN ? AND ?'];args=[workspace,start.isoformat(),end.isoformat()]
+        clauses=['q.workspace=?','{sort} BETWEEN ? AND ?'];args=[workspace,start.isoformat(),end.isoformat()]
         if user['role']=='teacher':
             own=user_ids(user,workspace,'teacher')
             loads={w.id for w in state.workloads if own&set(teacher_ids(w))}
@@ -67,7 +67,7 @@ class HomeworkQueue:
         if selected in ['todo','overdue']:clauses.append(todo)
         elif selected!='all':
             clauses.extend([f'{status}=?',f'NOT {changed}']);args.append(selected)
-        if selected=='overdue':clauses.append('q.due_date<?');args.append(today)
+        if selected=='overdue':clauses.append('{due}<?');args.append(today)
         if search:
             clauses.append("instr(atlas_fold(q.subject||' '||q.group_name||' '||m.name),?)>0");args.append(search.casefold())
         with self.access.lock,self.access.connect() as db:
@@ -80,12 +80,27 @@ class HomeworkQueue:
             after=self.cursor_read(cursor) if cursor else None
             if after:
                 if after[0]!=token:raise HTTPException(409,'Очередь изменилась. Обновите список перед загрузкой следующей страницы.')
-                clauses.append('(q.sort_date,q.lesson_key,m.student_id)>(?,?,?)');args.extend(after[1:])
+                clauses.append('({sort},q.lesson_key,m.student_id)>(?,?,?)');args.extend(after[1:])
             db.create_function('atlas_fold',1,str.casefold)
-            rows=db.execute(f'''SELECT q.*,m.student_id,m.name,{status},a.submitted_at,coalesce(a.late,0),{changed}
-                FROM homework_queue_tasks q JOIN journal_members m ON m.workspace=q.workspace AND m.lesson_key=q.lesson_key AND m.kind='published'
-                LEFT JOIN homework_queue_answers a ON a.workspace=q.workspace AND a.lesson_key=q.lesson_key AND a.student_id=m.student_id
-                WHERE {' AND '.join(clauses)} ORDER BY q.sort_date,q.lesson_key,m.student_id LIMIT ?''',(*args,SCAN+1)).fetchall()
+            rows=[]
+            # Two disjoint, bounded index ranges: an extension may be inside the
+            # requested window even when the shared deadline is far outside it.
+            for extended in [False,True]:
+                sort='x.due_date' if extended else 'q.sort_date'
+                due='x.due_date' if extended else 'q.due_date'
+                source='''homework_extensions x INDEXED BY homework_extension_due
+                    JOIN homework_queue_tasks q ON q.workspace=x.workspace AND q.lesson_key=x.lesson_key''' if extended else 'homework_queue_tasks q'
+                extra="x.due_date IS NOT NULL AND x.assignment=q.assignment AND x.student_id=m.student_id" if extended else '''NOT EXISTS (
+                    SELECT 1 FROM homework_extensions x WHERE x.workspace=q.workspace AND x.lesson_key=q.lesson_key
+                    AND x.student_id=m.student_id AND x.assignment=q.assignment AND x.due_date IS NOT NULL)'''
+                where=' AND '.join(clauses).format(sort=sort,due=due)
+                rows.extend(db.execute(f'''SELECT q.workspace,q.lesson_key,{sort},q.lesson_date,{due},q.subject,q.group_name,q.preview,
+                    q.assignment,q.source_kind,q.source_id,q.draft_teachers,q.late_policy,
+                    m.student_id,m.name,{status},a.submitted_at,coalesce(a.late,0),{changed},q.due_date,{int(extended)}
+                    FROM {source} JOIN journal_members m ON m.workspace=q.workspace AND m.lesson_key=q.lesson_key AND m.kind='published'
+                    LEFT JOIN homework_queue_answers a ON a.workspace=q.workspace AND a.lesson_key=q.lesson_key AND a.student_id=m.student_id
+                    WHERE {where} AND {extra} ORDER BY {sort},q.lesson_key,m.student_id LIMIT ?''',(*args,SCAN+1)).fetchall())
+            rows=sorted(rows,key=lambda r:(r[2],r[1],r[13]))[:SCAN+1]
             contexts={};items=[];last=None;processed=0
             for r in rows[:SCAN]:
                 key,student=r[1],r[13];last=[r[2],key,student];processed+=1
@@ -104,7 +119,7 @@ class HomeworkQueue:
                 is_changed=bool(r[18]);needs_answer=r[15] in ['not_submitted','returned'] or is_changed
                 closed=bool(r[12]=='block' and r[4] and r[4]<today)
                 items.append(dict(lessonKey=key,studentId=student,student=r[14],subject=r[5],group=r[6],preview=r[7],
-                    lessonDate=r[3],dueDate=r[4],status=r[15],submittedAt=r[16],late=bool(r[17]),assignmentChanged=is_changed,
+                    lessonDate=r[3],dueDate=r[4],baseDueDate=r[19],extended=bool(r[20]),status=r[15],submittedAt=r[16],late=bool(r[17]),assignmentChanged=is_changed,
                     overdue=bool(needs_answer and r[4] and r[4]<today),deadlineClosed=closed,readOnly=not active,
                     canReview=bool(ctx['canReview'] and r[15]=='submitted' and not is_changed),
                     canSubmit=bool(user['role']=='student' and enrolled and needs_answer and not closed)))
