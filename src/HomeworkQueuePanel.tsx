@@ -12,6 +12,8 @@ interface Item {
   preview: string;
   lessonDate: string;
   dueDate: string | null;
+  baseDueDate: string | null;
+  extended: boolean;
   status: string;
   submittedAt: string | null;
   late: boolean;
@@ -275,6 +277,7 @@ export default function HomeworkQueuePanel({
                   Срок:{" "}
                   <strong>
                     {item.dueDate ? dateLabel(item.dueDate) : "не указан"}
+                    {item.extended ? " · индивидуальный" : ""}
                   </strong>{" "}
                   · урок {dateLabel(item.lessonDate)}
                 </p>

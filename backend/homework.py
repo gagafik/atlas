@@ -22,6 +22,7 @@ from .notifications import encoded
 from . import homework_files as files
 from . import assignment_files as materials
 from .homework_grading import HomeworkGrading, ReviewGrade
+from . import homework_deadlines as deadlines
 
 
 class Answer(Model):
@@ -31,6 +32,7 @@ class Answer(Model):
     action: Literal['draft','submit','withdraw']
     text: str = Field(default='',max_length=10000)
     fileIds: list[str] = Field(default_factory=list,max_length=5)
+    deadlineVersion: int | None = Field(default=None,ge=0)
 
 
 class Review(Model):
@@ -156,6 +158,7 @@ class Homework:
                     version,document=self.load(db,ctx,id)
                     sent=document['submitted']
                     summaries.append(dict(studentId=id,name=pupil['name'],version=version,status=status(document),
+                                          dueDate=deadlines.effective(db,ctx,id)[0]['dueDate'],
                                           submittedAt=sent['submittedAt'] if sent else None,late=sent['late'] if sent else False,
                                           assignmentChanged=bool(sent and sent['assignment']!=ctx['assignment'])))
                 return answer | dict(students=summaries)
@@ -165,6 +168,8 @@ class Homework:
             ready=db.execute("SELECT * FROM homework_files WHERE workspace=? AND lesson_key=? AND student_id=? AND status='ready' ORDER BY created,id",
                              (ctx['workspace'],ctx['key'],ctx['student'])).fetchall() if personal else []
             sent=document['submitted']
+            deadline=deadlines.view(db,ctx)
+            answer.update(deadline=deadline,dueDate=deadline['effectiveDueDate'],deadlineClosed=deadline['deadlineClosed'])
             return answer | dict(student=dict(id=ctx['student'],name=pupil['name']),version=version,status=status(document),
                                  canSaveDraft=self.editable(ctx,document),canSubmit=self.editable(ctx,document) and not answer['deadlineClosed'],
                                  canWithdraw=bool(ctx['canSubmit'] and sent and not sent.get('review')),
@@ -197,6 +202,7 @@ class Homework:
     def register(self,app,Workspace):
         from .homework_queue import HomeworkQueue
         HomeworkQueue(self).register(app,Workspace)
+        deadlines.HomeworkDeadlines(self).register(app,Workspace)
         materials.AssignmentFiles(self).register(app,Workspace)
         grading=HomeworkGrading(self)
 
@@ -226,13 +232,16 @@ class Homework:
                     document['draft']=dict(text=body.text,fileIds=body.fileIds)
                     if body.action=='submit':
                         instant=now()
-                        content=ctx['published']['content']
+                        content,extension,_=deadlines.effective(db,ctx)
+                        if body.deadlineVersion is not None and body.deadlineVersion!=(extension[0] if extension else 0):
+                            raise HTTPException(409,'Срок сдачи изменился. Обновите работу перед отправкой.')
                         if deadline_closed(content,instant): raise HTTPException(409,'Приём работ закрыт. Черновик можно сохранить; для отправки учитель должен продлить срок или разрешить позднюю сдачу.')
                         if not body.text and not body.fileIds: raise HTTPException(422,'Напишите ответ или приложите файл.')
-                        due=ctx['published']['content']['dueDate']
+                        due=content['dueDate']
                         document['attempts']+=1
                         document['submitted']=dict(**document['draft'],assignment=ctx['assignment'],homework=ctx['published']['content']['homework'],
                             dueDate=due,submittedAt=instant.isoformat(),attempt=document['attempts'],review=None,
+                            baseDueDate=ctx['published']['content']['dueDate'],deadlineVersion=extension[0] if extension else 0,
                             assignmentFileIds=content.get('homeworkFiles',[]),latePolicy=content.get('homeworkLatePolicy','allow'),late=overdue(content,instant))
                 action={'draft':'homework.draft','submit':'homework.submitted','withdraw':'homework.withdrawn'}[body.action]
                 self.persist(db,ctx,version+1,document,action)

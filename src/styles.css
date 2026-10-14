@@ -4569,3 +4569,6 @@ main {
 .homework-queue-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .homework-queue-tags span { border-radius: 6px; padding: 4px 8px; background: #edf3f8; color: #334d63; font-size: 12px; }
 .homework-queue-detail .dated-toolbar { justify-content: space-between; }
+.homework-deadline { display: grid; gap: 12px; min-width: 0; }
+.homework-deadline .info-line { display: block; overflow-wrap: anywhere; }
+.homework-deadline .info-line p { margin: 8px 0; }
