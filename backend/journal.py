@@ -166,6 +166,8 @@ class Journal:
         if not exists:
             for field,kind in [('document','draft'),('published_document','published')]:
                 db.execute(f"INSERT OR IGNORE INTO journal_members SELECT e.workspace,e.lesson_key,json_extract(s.value,'$.id'),json_extract(s.value,'$.name'),? FROM journal_entries e,json_each(e.{field},'$.lesson.students') s",(kind,))
+        from .attendance_projection import tables
+        tables(db)
 
     def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
         with self.access.lock,self.access.connect() as db:
@@ -185,6 +187,9 @@ class Journal:
         db.execute('DELETE FROM journal_members WHERE workspace=? AND lesson_key=? AND kind=?',(workspace,key,kind))
         if document:
             db.executemany('INSERT INTO journal_members VALUES (?,?,?,?,?)',[(workspace,key,s['id'],s['name'],kind) for s in document['lesson']['students']])
+        if kind=='published':
+            from .attendance_projection import replace
+            replace(db,workspace,key)
 
     def historical_students(self, workspace, user):
         with self.access.lock,self.access.connect() as db:

@@ -375,6 +375,9 @@ from .absences import Absences
 absences = Absences(journal, homework.snapshots)
 absences.register(app, Workspace)
 absences.files.register(app, Workspace)
+from .attendance_reports import AttendanceReports
+attendance_reports = AttendanceReports(absences)
+attendance_reports.register(app, Workspace)
 
 from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)

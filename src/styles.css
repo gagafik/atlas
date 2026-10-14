@@ -4531,4 +4531,8 @@ main {
 .absence-file { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .absence-preview { max-height: 320px; overflow: auto; }
 .absence-bulk-preview { max-height: 520px; overflow: auto; }
+.attendance-counts { display: flex; gap: 6px 16px; flex-wrap: wrap; margin: 10px 0; }
+.attendance-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr)); gap: 10px; }
+.attendance-cards .absence-card { margin: 0; }
+.attendance-panel h4 { margin: 0 0 8px; }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }

@@ -613,6 +613,11 @@ export default function AccessPanel({
                       "absence.revoked": "Отменено решение по объяснительной",
                       "absence.withdrawn": "Родитель отозвал объяснительную",
                       "absence.read": "Просмотрена причина отсутствия",
+                      "attendance.summary_read":
+                        "Просмотрена сводная посещаемость",
+                      "attendance.details_read":
+                        "Просмотрена посещаемость уроков ученика",
+                      "attendance.exported": "Выгружена посещаемость",
                       "absence.bulk_preview":
                         "Подготовлено общее решение по объяснительным",
                       "absence.bulk_applied":
