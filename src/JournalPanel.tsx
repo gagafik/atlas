@@ -3,6 +3,7 @@ import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import AbsencePanel from "./AbsencePanel";
 import AttendancePanel from "./AttendancePanel";
+import JournalCoveragePanel from "./JournalCoveragePanel";
 import {
   attendanceNames,
   gradeLabel,
@@ -109,6 +110,8 @@ function PublishedRows({
 }
 
 export default function JournalPanel({ workspace }: { workspace: string }) {
+  const coverageOpened = useRef(false),
+    editorPanel = useRef<HTMLElement | null>(null);
   const [options, setOptions] = useState<Options | null>(null),
     [mode, setMode] = useState("day");
   const [day, setDay] = useState(""),
@@ -120,6 +123,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const [entry, setEntry] = useState<JournalEntry | null>(null),
     [syncRoster, setSyncRoster] = useState(false),
     [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (entry && coverageOpened.current) {
+      coverageOpened.current = false;
+      editorPanel.current?.focus({ preventScroll: true });
+      editorPanel.current?.scrollIntoView({ block: "start" });
+    }
+  }, [entry]);
   const [report, setReport] = useState<JournalReport | null>(null),
     [history, setHistory] = useState<History[]>([]),
     [historical, setHistorical] = useState<History | null>(null);
@@ -225,14 +235,14 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     setHistorical(null);
     setMessage("");
   }
-  async function openEntry(key: string, sync = false) {
+  async function openEntry(key: string, sync = false, entryDay = day) {
     const current = ++sequence.current;
     setBusy(true);
     setError("");
     setMessage("");
     try {
       const r = await api(
-        `journal/entry?${new URLSearchParams({ lessonKey: key, day, syncRoster: String(sync) })}`,
+        `journal/entry?${new URLSearchParams({ lessonKey: key, day: entryDay, syncRoster: String(sync) })}`,
         workspace,
       );
       if (sequence.current !== current) return;
@@ -336,6 +346,20 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     <section className="journal-panel">
       {options?.absenceNotices && (
         <AbsencePanel key={workspace} workspace={workspace} />
+      )}
+      {options?.staff && (
+        <JournalCoveragePanel
+          key={`coverage-${workspace}`}
+          workspace={workspace}
+          onOpen={(key, date) => {
+            if (!canLeave()) return;
+            coverageOpened.current = true;
+            clearEditor();
+            setMode("day");
+            setDay(date);
+            void openEntry(key, false, date);
+          }}
+        />
       )}
       {options?.staff && (
         <AttendancePanel
@@ -470,7 +494,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                   ))}
               </div>
               {entry && (
-                <section className="journal-editor">
+                <section
+                  className="journal-editor"
+                  ref={editorPanel}
+                  tabIndex={-1}
+                  aria-label="Редактор журнала урока"
+                >
                   <header>
                     <div>
                       <h2>

@@ -378,6 +378,9 @@ absences.files.register(app, Workspace)
 from .attendance_reports import AttendanceReports
 attendance_reports = AttendanceReports(absences)
 attendance_reports.register(app, Workspace)
+from .journal_coverage import JournalCoverage
+journal_coverage = JournalCoverage(attendance_reports)
+journal_coverage.register(app, Workspace)
 
 from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)
