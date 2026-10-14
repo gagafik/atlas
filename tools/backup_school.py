@@ -38,7 +38,7 @@ def create_backup(source: Path, destination: Path):
                 reader.backup(copy)
                 if copy.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
                     raise RuntimeError('Database integrity check failed; backup is incomplete.')
-                for table,folder in [('homework_files','homework'),('message_files','messages'),('absence_files','absences')]:
+                for table,folder in [('homework_files','homework'),('message_files','messages'),('absence_files','absences'),('assignment_files','assignments')]:
                     if not copy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():continue
                     rows = copy.execute(f"SELECT id,size,sha256 FROM {table} WHERE status='ready' ORDER BY id").fetchall()
                     file_root = source.with_suffix('.files') / folder

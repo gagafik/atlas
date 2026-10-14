@@ -38,6 +38,8 @@ class Content(Model):
     topic: str = Field(default='', max_length=2000)
     homework: str = Field(default='', max_length=4000)
     dueDate: date | None = None
+    homeworkFiles: list[str] = Field(default_factory=list, max_length=5)
+    homeworkLatePolicy: Literal['allow','block'] = 'allow'
     assessments: list[Assessment] = Field(default_factory=list, max_length=10)
     records: list[PupilRecord] = Field(default_factory=list, max_length=1000)
 
@@ -56,6 +58,9 @@ class Content(Model):
                     raise ValueError('Баллы должны быть от нуля до максимума работы, без текстовой оценки.')
                 if assessment.kind == 'label' and grade.score is not None: raise ValueError('Для текстовой оценки не задаются баллы.')
         if self.dueDate and not self.homework: raise ValueError('Срок относится к домашнему заданию.')
+        if self.homeworkFiles and not self.homework.strip(): raise ValueError('Добавьте описание задания к материалам.')
+        if self.homeworkLatePolicy=='block' and (not self.dueDate or not self.homework.strip()):
+            raise ValueError('Для закрытия приёма укажите задание и срок.')
         return self
 
 
@@ -128,7 +133,9 @@ def pupil_projection(document, student_id):
     student = next(s for s in lesson['students'] if s['id']==student_id)
     return dict(student=dict(id=student_id,name=student['name']),
                 lesson={k:lesson[k] for k in ['date','start','end','subjectId','subject','group','teachers','rooms']},
-                content={k:document['content'][k] for k in ['topic','homework','dueDate','assessments']},record=record)
+                content={k:document['content'][k] for k in ['topic','homework','dueDate','assessments']} | dict(
+                    homeworkFiles=document['content'].get('homeworkFiles',[]),
+                    homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow')),record=record)
 
 
 def summary(rows):
@@ -173,6 +180,8 @@ class Journal:
         coverage_tables(db)
         from .journal_periods import tables as period_tables
         period_tables(db)
+        from .assignment_files import tables as assignment_tables
+        assignment_tables(db)
 
     def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
         with self.access.lock,self.access.connect() as db:
@@ -342,6 +351,8 @@ class Journal:
                 old_public = previous['published'] if previous else None
                 from .journal_periods import require_open
                 require_open(db,workspace,document['lesson'],previous['document']['lesson'] if previous else None,old_public['lesson'] if old_public else None)
+                from .assignment_files import bind
+                bind(db,body.content.homeworkFiles,workspace,body.lessonKey,user['id'])
                 published = document if body.publish else old_public
                 published_version = version if body.publish else previous['publishedVersion'] if previous else None
                 published_at = created if body.publish else previous['publishedAt'] if previous else None

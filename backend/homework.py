@@ -20,6 +20,7 @@ from .journal import staff_read, user_ids
 from .portal_cache import PortalSnapshots
 from .notifications import encoded
 from . import homework_files as files
+from . import assignment_files as materials
 
 
 class Answer(Model):
@@ -41,7 +42,19 @@ class Review(Model):
 
 def fingerprint(document):
     content=document['content']
-    return hashlib.sha256(encoded([content['homework'],content['dueDate']]).encode()).hexdigest()
+    fields=[content['homework'],content['dueDate']]
+    # Keep old submissions comparable when the new settings retain their defaults.
+    if content.get('homeworkFiles') or content.get('homeworkLatePolicy','allow')!='allow':
+        fields.extend([content.get('homeworkFiles',[]),content.get('homeworkLatePolicy','allow')])
+    return hashlib.sha256(encoded(fields).encode()).hexdigest()
+
+
+def overdue(content, instant=None):
+    return bool(content['dueDate'] and (instant or now()).astimezone(ZoneInfo('Asia/Qyzylorda')).date()>date.fromisoformat(content['dueDate']))
+
+
+def deadline_closed(content, instant=None):
+    return content.get('homeworkLatePolicy','allow')=='block' and overdue(content,instant)
 
 
 def status(document):
@@ -116,14 +129,18 @@ class Homework:
 
     def sent_projection(self,db,sent):
         if not sent: return None
-        return {k:v for k,v in sent.items() if k!='fileIds'} | dict(files=self.attachment_list(db,sent['fileIds']))
+        return {k:v for k,v in sent.items() if k not in ['fileIds','assignmentFileIds']} | dict(
+            files=self.attachment_list(db,sent['fileIds']),assignmentFiles=materials.attachments(db,sent.get('assignmentFileIds',[])),
+            latePolicy=sent.get('latePolicy','allow'))
 
     def view(self,ctx):
         with self.access.lock,self.access.connect() as db:
-            self.tables(db)
+            self.tables(db);db.execute('BEGIN');self.recheck(db,ctx)
+            content=ctx['published']['content']
             answer=dict(assignment=ctx['assignment'],homework=ctx['published']['content']['homework'],dueDate=ctx['published']['content']['dueDate'],
                         timezone='Asia/Qyzylorda',subject=ctx['published']['lesson']['subject'],staff=ctx['staff'],canReview=ctx['canReview'],
-                        maxFileBytes=files.MAX_FILE,maxFiles=5)
+                        maxFileBytes=files.MAX_FILE,maxFiles=5,assignmentFiles=materials.attachments(db,content.get('homeworkFiles',[])),
+                        latePolicy=content.get('homeworkLatePolicy','allow'),deadlineClosed=deadline_closed(content))
             if ctx['student'] is None:
                 summaries=[]
                 for id,pupil in ctx['roster'].items():
@@ -140,7 +157,8 @@ class Homework:
                              (ctx['workspace'],ctx['key'],ctx['student'])).fetchall() if personal else []
             sent=document['submitted']
             return answer | dict(student=dict(id=ctx['student'],name=pupil['name']),version=version,status=status(document),
-                                 canSubmit=self.editable(ctx,document),canWithdraw=bool(ctx['canSubmit'] and sent and not sent.get('review')),
+                                 canSaveDraft=self.editable(ctx,document),canSubmit=self.editable(ctx,document) and not answer['deadlineClosed'],
+                                 canWithdraw=bool(ctx['canSubmit'] and sent and not sent.get('review')),
                                  draft=document['draft'] if personal else None,availableFiles=[files.meta(r) for r in ready],
                                  submitted=self.sent_projection(db,sent),assignmentChanged=bool(sent and sent['assignment']!=ctx['assignment']))
 
@@ -161,10 +179,13 @@ class Homework:
             sent=document['submitted']
             id=db.execute('INSERT INTO homework_history (workspace,lesson_key,student_id,version,created,actor_name,action,document) VALUES (?,?,?,?,?,?,?,?)',
                           (ctx['workspace'],ctx['key'],ctx['student'],version,now().isoformat(),ctx['user']['name'],action,encoded(sent))).lastrowid
-            if sent: db.executemany('INSERT INTO homework_file_links VALUES (?,?)',[(file,id) for file in sent['fileIds']])
+            if sent:
+                db.executemany('INSERT INTO homework_file_links VALUES (?,?)',[(file,id) for file in sent['fileIds']])
+                db.executemany('INSERT OR IGNORE INTO assignment_submission_links VALUES (?,?)',[(file,ctx['student']) for file in sent.get('assignmentFileIds',[])])
             self.notify(db,ctx,ctx['student'],version,action)
 
     def register(self,app,Workspace):
+        materials.AssignmentFiles(self).register(app,Workspace)
         @app.get('/api/journal/homework/{key}')
         def get(key:str,request:Request,workspace:Workspace='school',studentId:str|None=None):
             return self.view(self.context(request,workspace,key,studentId))
@@ -187,12 +208,15 @@ class Homework:
                     files.check_files(db,body.fileIds,workspace,key,body.studentId)
                     document['draft']=dict(text=body.text,fileIds=body.fileIds)
                     if body.action=='submit':
+                        instant=now()
+                        content=ctx['published']['content']
+                        if deadline_closed(content,instant): raise HTTPException(409,'Приём работ закрыт. Черновик можно сохранить; для отправки учитель должен продлить срок или разрешить позднюю сдачу.')
                         if not body.text and not body.fileIds: raise HTTPException(422,'Напишите ответ или приложите файл.')
                         due=ctx['published']['content']['dueDate']
                         document['attempts']+=1
                         document['submitted']=dict(**document['draft'],assignment=ctx['assignment'],homework=ctx['published']['content']['homework'],
-                            dueDate=due,submittedAt=now().isoformat(),attempt=document['attempts'],review=None,
-                            late=bool(due and now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()>date.fromisoformat(due)))
+                            dueDate=due,submittedAt=instant.isoformat(),attempt=document['attempts'],review=None,
+                            assignmentFileIds=content.get('homeworkFiles',[]),latePolicy=content.get('homeworkLatePolicy','allow'),late=overdue(content,instant))
                 action={'draft':'homework.draft','submit':'homework.submitted','withdraw':'homework.withdrawn'}[body.action]
                 self.persist(db,ctx,version+1,document,action)
             return self.view(ctx)
@@ -220,7 +244,7 @@ class Homework:
         def history(key:str,studentId:str,request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
             ctx=self.context(request,workspace,key,studentId)
             with self.access.lock,self.access.connect() as db:
-                self.tables(db)
+                self.tables(db);db.execute('BEGIN');self.recheck(db,ctx)
                 rows=db.execute('SELECT id,version,created,actor_name,action,document FROM homework_history WHERE workspace=? AND lesson_key=? AND student_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 21',
                                 (workspace,key,studentId,before,before)).fetchall()
                 items=[dict(id=r[0],version=r[1],created=r[2],actor=r[3],action=r[4],submitted=self.sent_projection(db,json.loads(r[5]))) for r in rows[:20]]
@@ -295,7 +319,7 @@ class Homework:
         def download(key:str,id:str,studentId:str,request:Request,workspace:Workspace='school'):
             ctx=self.context(request,workspace,key,studentId)
             with self.access.lock,self.access.connect() as db:
-                self.tables(db)
+                self.tables(db);db.execute('BEGIN');self.recheck(db,ctx)
                 row=db.execute("SELECT * FROM homework_files WHERE id=? AND workspace=? AND lesson_key=? AND student_id=? AND status='ready'",(id,workspace,key,studentId)).fetchone()
                 visible=ctx['user']['role']=='student' or db.execute('SELECT 1 FROM homework_file_links WHERE file_id=? LIMIT 1',(id,)).fetchone()
                 if not row or not visible: raise HTTPException(404,'Файл не найден.')

@@ -22,6 +22,8 @@ export interface PupilRecord {
 export interface JournalContent {
   topic: string;
   homework: string;
+  homeworkFiles?: string[];
+  homeworkLatePolicy?: "allow" | "block";
   dueDate: string | null;
   assessments: Assessment[];
   records: PupilRecord[];

@@ -45,6 +45,10 @@ async def probe(url, identities, tasks, concurrency, size):
                 cookie=identities[pupil][0];student=f's{pupil}'
                 path=f'/api/journal/homework/{key}'
                 current=(await request('open','GET',path,cookie,params=dict(studentId=student))).json()
+                assert len(current['assignmentFiles'])==1
+                material=current['assignmentFiles'][0]
+                content=await request('material_student','GET','/api/journal/assignment-files/'+material['id'],cookie,params=dict(studentId=student))
+                assert content.content==b'M'*size
                 data=dict(studentId=student,version=current['version'],assignment=current['assignment'],action='draft',text='Synthetic answer',fileIds=[])
                 draft=(await request('draft','PUT',path,cookie,json=data)).json()
                 # Upload concurrency limits intentionally return 429 under a burst;
@@ -65,6 +69,9 @@ async def probe(url, identities, tasks, concurrency, size):
                 parent_cookie=identities[1100+pupil][0]
                 result=(await request('parent','GET',path,parent_cookie,params=dict(studentId=student))).json()
                 assert result['status']=='accepted' and result['draft'] is None
+                assert result['submitted']['assignmentFiles']==[material]
+                content=await request('material_parent','GET','/api/journal/assignment-files/'+material['id'],parent_cookie,params=dict(studentId=student))
+                assert content.content==b'M'*size
                 content=await request('download','GET',path+'/files/'+file_id,parent_cookie,params=dict(studentId=student))
                 assert content.content==b'x'*size
                 finished+=1
@@ -112,7 +119,9 @@ def main():
                             row=next(r for r in lessons if r['lesson']['group']==f'Class {pupil//20}' and r['lesson']['subject']=='Subject 0')
                             key=row['lessonKey']
                             entry=admin.get('/api/journal/entry',params=dict(lessonKey=key,day=day)).json()
-                            content=entry['document']['content']|dict(homework='Synthetic homework',dueDate='2026-10-14')
+                            material=admin.post('/api/journal/assignment-files',params=dict(lessonKey=key,day=day,revision=0,version=0,filename='material.txt'),content=b'M'*(args.file_kib*1024))
+                            material.raise_for_status()
+                            content=entry['document']['content']|dict(homework='Synthetic homework',dueDate='2026-10-14',homeworkFiles=[material.json()['id']])
                             response=admin.put('/api/journal/entry',json=dict(lessonKey=key,day=day,revision=0,version=0,content=content,publish=True))
                             response.raise_for_status()
                             teacher=next(cookie for cookie,view,entity in identities if view=='teacher' and entity==entry['document']['lesson']['teacherIds'][0])
@@ -121,7 +130,7 @@ def main():
                     print(json.dumps(dict(prepared_assignments=len(prepared),pupils=len(tasks))),flush=True)
                     result=asyncio.run(probe(url,identities,tasks,args.concurrency,args.file_kib*1024))
                     assert admin.get('/api/state').json()==before
-                    report=dict(created=datetime.now(timezone.utc).isoformat(),synthetic=True,state_unchanged=True,data=counts,
+                    report=dict(created=datetime.now(timezone.utc).isoformat(),synthetic=True,state_unchanged=True,data=counts,shared_materials=len(prepared),
                                 platform=platform.platform(),run=result,
                                 limitations='Existing sessions; synthetic published assignments; no login storm, solver, TLS, Internet latency, large files or multi-server load. Upload 429 retries included. Client and server share a laptop; not a school capacity claim.')
                     args.output.parent.mkdir(parents=True,exist_ok=True)
