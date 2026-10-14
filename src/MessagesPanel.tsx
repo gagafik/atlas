@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import MessageAttachments, { messageFileUrl } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
+import MessageGroupManagement from "./MessageGroupManagement";
 
 type Person = { id: string; name: string; role: string };
 type Draft = {
@@ -30,6 +31,7 @@ type Thread = {
   acknowledged: boolean;
   latestId: number;
   authorId: string;
+  managerId: string;
 };
 type Post = {
   id: number;
@@ -893,37 +895,30 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   {detail.requireAck
                     ? ` · ${p.acknowledged ? "Ознакомление подтверждено" : "Ожидается подтверждение"}`
                     : ""}
-                  {detail.kind === "group" && detail.canManage && (
-                    <button
-                      disabled={busy}
-                      onClick={() => {
-                        if (
-                          !window.confirm(
-                            `Исключить ${p.name} из обсуждения? Доступ к сообщениям и вложениям закроется.`,
-                          )
-                        )
-                          return;
-                        void run(async () => {
-                          await api(
-                            `messages/threads/${detail.id}/participants`,
-                            workspace,
-                            "POST",
-                            {
-                              version: detail.version,
-                              userId: p.id,
-                              action: "remove",
-                            },
-                          );
-                          await open(detail.id);
-                        });
-                      }}
-                    >
-                      Исключить
-                    </button>
-                  )}
                 </p>
               ))}
             </details>
+          )}
+          {detail.kind === "group" && (
+            <p>
+              Управляет обсуждением:{" "}
+              {detail.canManage
+                ? "вы"
+                : detail.participants.find((p) => p.id === detail.managerId)
+                    ?.name || "участник обсуждения"}
+              .
+            </p>
+          )}
+          {detail.kind === "group" && detail.canManage && (
+            <MessageGroupManagement
+              key={detail.id}
+              workspace={workspace}
+              threadId={detail.id}
+              version={detail.version}
+              busy={busy}
+              run={run}
+              onChanged={() => open(detail.id)}
+            />
           )}
           {detail.nextBefore !== null && (
             <button

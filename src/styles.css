@@ -4466,3 +4466,30 @@ main {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.message-group-management {
+  margin: 16px 0;
+  border: 1px solid #dce3ea;
+  border-radius: 12px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+.message-group-management summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.message-management-roster {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.message-management-roster > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid #dce3ea;
+}
+.message-management-roster span {
+  flex: 1 1 180px;
+  min-width: 0;
+}
