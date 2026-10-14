@@ -375,6 +375,8 @@ messages.register(app, Workspace)
 messages.files.register(app, Workspace)
 messages.drafts.register(app, Workspace)
 messages.groups.register(app, Workspace)
+messages.moderation.register(app, Workspace)
+messages.recovery.register(app, Workspace)
 from .portal import register_portal
 register_portal(app, Workspace, read, portal_stamp)
 from .assistant import register_assistant

@@ -599,6 +599,14 @@ export default function AccessPanel({
                   {(
                     {
                       "state.saved": "Сохранено расписание",
+                      "message.reported": "Отправлена жалоба на сообщение",
+                      "message.evidence_read": "Просмотрены материалы жалобы",
+                      "message.evidence_file_read": "Скачано вложение жалобы",
+                      "message.moderation_hide": "Сообщение скрыто по жалобе",
+                      "message.moderation_restore": "Сообщение восстановлено",
+                      "message.moderation_dismiss": "Жалоба отклонена",
+                      "message.manager_recovered":
+                        "Восстановлено управление обсуждением",
                       "state.undo": "Отмена изменения",
                       "state.redo": "Повтор изменения",
                       "journal.draft_saved":
