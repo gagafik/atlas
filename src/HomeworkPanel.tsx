@@ -619,18 +619,28 @@ export default function HomeworkPanel({
   lessonKey,
   studentId,
   onGraded,
+  onChanged,
+  onActivity,
+  initiallyOpen = false,
 }: {
   workspace: string;
   lessonKey: string;
   studentId?: string;
   onGraded?: () => void;
+  onChanged?: () => void;
+  onActivity?: (value: { dirty: boolean; busy: boolean }) => void;
+  initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false),
+  const [open, setOpen] = useState(initiallyOpen),
     [overview, setOverview] = useState<Overview | null>(null),
     [selected, setSelected] = useState(""),
     [error, setError] = useState(""),
     [epoch, setEpoch] = useState(0);
   const [activity, setActivity] = useState({ dirty: false, busy: false });
+  useEffect(() => {
+    onActivity?.(activity);
+    return () => onActivity?.({ dirty: false, busy: false });
+  }, [activity, onActivity]);
   function canLeave() {
     return (
       !activity.busy &&
@@ -719,7 +729,10 @@ export default function HomeworkPanel({
               workspace={workspace}
               lessonKey={lessonKey}
               studentId={studentId || selected}
-              changed={() => setEpoch((e) => e + 1)}
+              changed={() => {
+                setEpoch((e) => e + 1);
+                onChanged?.();
+              }}
               onActivity={setActivity}
               onGraded={onGraded}
             />

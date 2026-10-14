@@ -249,6 +249,7 @@ export type Page =
   | "messages"
   | "assistant"
   | "journal"
+  | "homework"
   | "access"
   | "publications"
   | "commitments"
