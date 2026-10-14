@@ -4530,4 +4530,5 @@ main {
 .absence-panel input, .absence-panel select, .absence-panel textarea { max-width: 100%; min-width: 0; }
 .absence-file { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .absence-preview { max-height: 320px; overflow: auto; }
+.absence-bulk-preview { max-height: 520px; overflow: auto; }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }
