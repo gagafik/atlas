@@ -44,6 +44,8 @@ async def probe(url, identities, tasks, concurrency, size):
                 pupil,key,teacher=task
                 cookie=identities[pupil][0];student=f's{pupil}'
                 path=f'/api/journal/homework/{key}'
+                queued=(await request('queue_student','GET','/api/journal/homework-queue',cookie)).json()
+                assert any(r['lessonKey']==key and r['studentId']==student and r['canSubmit'] for r in queued['items'])
                 current=(await request('open','GET',path,cookie,params=dict(studentId=student))).json()
                 assert len(current['assignmentFiles'])==1
                 material=current['assignmentFiles'][0]
@@ -65,6 +67,8 @@ async def probe(url, identities, tasks, concurrency, size):
                 else: raise RuntimeError('Upload remained busy after retries.')
                 file_id=response.json()['id']
                 sent=(await request('submit','PUT',path,cookie,json=data|dict(version=draft['version'],action='submit',fileIds=[file_id]))).json()
+                queued=(await request('queue_teacher','GET','/api/journal/homework-queue',teacher)).json()
+                assert any(r['lessonKey']==key and r['studentId']==student and r['canReview'] for r in queued['items'])
                 for attempt in range(60):
                     selection=await request('grading_options','GET',path+'/grading',teacher,expected=(200,409),params=dict(studentId=student))
                     if selection.status_code==409:
@@ -83,6 +87,8 @@ async def probe(url, identities, tasks, concurrency, size):
                     await asyncio.sleep(.05+(pupil%7)*.02)
                 else:raise RuntimeError('Journal remained busy after grading retries.')
                 parent_cookie=identities[1100+pupil][0]
+                queued=(await request('queue_parent','GET','/api/journal/homework-queue',parent_cookie,params=dict(filter='accepted'))).json()
+                assert any(r['lessonKey']==key and r['studentId']==student and r['status']=='accepted' for r in queued['items'])
                 result=(await request('parent','GET',path,parent_cookie,params=dict(studentId=student))).json()
                 assert result['status']=='accepted' and result['draft'] is None
                 assert result['submitted']['assignmentFiles']==[material]

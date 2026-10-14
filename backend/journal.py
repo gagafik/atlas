@@ -182,6 +182,8 @@ class Journal:
         period_tables(db)
         from .assignment_files import tables as assignment_tables
         assignment_tables(db)
+        from .homework_queue_projection import tables as homework_queue_tables
+        homework_queue_tables(db)
 
     def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
         with self.access.lock,self.access.connect() as db:
@@ -200,6 +202,8 @@ class Journal:
     def members(self, db, workspace, key, document, kind):
         from .coverage_projection import replace as coverage_replace
         coverage_replace(db,workspace,key)
+        from .homework_queue_projection import replace as homework_queue_replace
+        homework_queue_replace(db,workspace,key)
         db.execute('DELETE FROM journal_members WHERE workspace=? AND lesson_key=? AND kind=?',(workspace,key,kind))
         if document:
             db.executemany('INSERT INTO journal_members VALUES (?,?,?,?,?)',[(workspace,key,s['id'],s['name'],kind) for s in document['lesson']['students']])

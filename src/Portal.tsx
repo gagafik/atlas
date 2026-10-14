@@ -3,6 +3,8 @@ import { api } from "./api";
 import { roleNames, type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
 import JournalPanel from "./JournalPanel";
+import HomeworkQueuePanel from "./HomeworkQueuePanel";
+import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
@@ -50,9 +52,15 @@ export default function Portal({
   session: AuthStatus;
   controls: ReactNode;
 }) {
-  const [section, setSection] = useState("schedule");
+  const [section, setSectionValue] = useState("schedule");
+  function setSection(value: string) {
+    if (canLeaveHomework()) setSectionValue(value);
+  }
   const [spaces, setSpaces] = useState<Space[]>([]),
-    [workspace, setWorkspace] = useState("");
+    [workspace, setWorkspaceValue] = useState("");
+  function setWorkspace(value: string) {
+    if (canLeaveHomework()) setWorkspaceValue(value);
+  }
   const [record, setRecord] = useState(""),
     [cycle, setCycle] = useState(""),
     [day, setDay] = useState("");
@@ -160,11 +168,13 @@ export default function Portal({
               ? "Мои дети и доступ"
               : section === "messages"
                 ? "Сообщения"
-                : section === "journal"
-                  ? "Учебный журнал"
-                  : section === "courses"
-                    ? "Выбор курсов"
-                    : "Моё расписание"}
+                : section === "homework"
+                  ? "Домашние задания"
+                  : section === "journal"
+                    ? "Учебный журнал"
+                    : section === "courses"
+                      ? "Выбор курсов"
+                      : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -192,6 +202,14 @@ export default function Portal({
           >
             Сообщения
           </button>
+          {["teacher", "student", "parent"].includes(session.user!.role) && (
+            <button
+              aria-pressed={section === "homework"}
+              onClick={() => setSection("homework")}
+            >
+              Домашние задания
+            </button>
+          )}
           {["teacher", "student", "parent"].includes(session.user!.role) && (
             <button
               aria-pressed={section === "journal"}
@@ -246,10 +264,10 @@ export default function Portal({
           </label>
           {workspace && <IntakePortal key={workspace} workspace={workspace} />}
         </>
-      ) : section === "journal" ? (
+      ) : section === "journal" || section === "homework" ? (
         <>
           <label className="field">
-            <span>Пространство журнала</span>
+            <span>Рабочее пространство</span>
             <select
               value={workspace}
               onChange={(e) => setWorkspace(e.target.value)}
@@ -261,7 +279,12 @@ export default function Portal({
               ))}
             </select>
           </label>
-          {workspace && <JournalPanel key={workspace} workspace={workspace} />}
+          {workspace &&
+            (section === "homework" ? (
+              <HomeworkQueuePanel key={workspace} workspace={workspace} />
+            ) : (
+              <JournalPanel key={workspace} workspace={workspace} />
+            ))}
         </>
       ) : (
         <>

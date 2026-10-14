@@ -15,6 +15,8 @@ import CommitmentsPanel from "./CommitmentsPanel";
 import PublicationsPanel from "./PublicationsPanel";
 import AccessPanel from "./AccessPanel";
 import JournalPanel from "./JournalPanel";
+import HomeworkQueuePanel from "./HomeworkQueuePanel";
+import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import AssistantPanel from "./AssistantPanel";
 import { roleNames, type AuthStatus } from "./auth";
@@ -100,6 +102,7 @@ const NAV: { id: Page; label: string; icon: typeof CalendarDays }[] = [
   { id: "calendar", label: "Учебный календарь", icon: CalendarDays },
   { id: "dated", label: "Замены и даты", icon: Clock3 },
   { id: "journal", label: "Учебный журнал", icon: BookOpen },
+  { id: "homework", label: "Домашние задания", icon: ListChecks },
   { id: "messages", label: "Сообщения", icon: BookOpen },
   { id: "commitments", label: "Бронирования и дежурства", icon: DoorOpen },
   { id: "exchange", label: "Обмен и печать", icon: Printer },
@@ -198,12 +201,18 @@ export default function App({
 }) {
   const [activeCycle, setActiveCycle] = useState("weekly");
   const [cycleDate, setCycleDate] = useState("");
-  const [workspace, setWorkspace] = useState(
+  const [workspace, setWorkspaceValue] = useState(
     session.user?.workspaces[0] || "school",
   );
   const [state, setState] = useState<State | null>(null);
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
-  const [page, setPage] = useState<Page>("schedule");
+  const [page, setPageValue] = useState<Page>("schedule");
+  function setPage(value: Page) {
+    if (canLeaveHomework()) setPageValue(value);
+  }
+  function setWorkspace(value: string) {
+    if (canLeaveHomework()) setWorkspaceValue(value);
+  }
   const [commitmentId, setCommitmentId] = useState<string | undefined>();
   const [datedDate, setDatedDate] = useState<string | undefined>();
   const [loading, setLoading] = useState(true),
@@ -1259,7 +1268,7 @@ export default function App({
         <nav>
           {NAV.filter(
             (n) =>
-              !["access", "journal"].includes(n.id) ||
+              !["access", "journal", "homework"].includes(n.id) ||
               !session.enabled ||
               session.user?.role === "admin",
           ).map(({ id, label, icon: Icon }, i) => (
@@ -1428,13 +1437,15 @@ export default function App({
                                         ? "Проверенные снимки расписания для получателей."
                                         : page === "messages"
                                           ? "Личные диалоги и объявления школы."
-                                          : page === "journal"
-                                            ? "Посещаемость, оценки, темы и домашние задания по датам."
-                                            : page === "access"
-                                              ? "Учётные записи, разрешённые расписания и журнал действий."
-                                              : page === "settings"
-                                                ? "Параметры школы, звонки и резервные копии."
-                                                : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
+                                          : page === "homework"
+                                            ? "Задания по срокам, отправленные ответы и проверка работ."
+                                            : page === "journal"
+                                              ? "Посещаемость, оценки, темы и домашние задания по датам."
+                                              : page === "access"
+                                                ? "Учётные записи, разрешённые расписания и журнал действий."
+                                                : page === "settings"
+                                                  ? "Параметры школы, звонки и резервные копии."
+                                                  : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
               </p>
             </div>
             <div className="heading-actions">
@@ -1472,6 +1483,7 @@ export default function App({
                   "access",
                   "assistant",
                   "journal",
+                  "homework",
                   "messages",
                 ].includes(page) ? null : page !== "settings" ? (
                 entityButtons
@@ -1490,6 +1502,7 @@ export default function App({
             "access",
             "assistant",
             "journal",
+            "homework",
             "messages",
           ].includes(page) && (
             <div className="cycle-switcher">
@@ -1603,6 +1616,9 @@ export default function App({
           )}
           {page === "journal" && (
             <JournalPanel key={workspace} workspace={workspace} />
+          )}
+          {page === "homework" && (
+            <HomeworkQueuePanel key={workspace} workspace={workspace} />
           )}
           {page === "messages" && (
             <MessagesPanel key={workspace} workspace={workspace} />
@@ -2123,6 +2139,7 @@ export default function App({
             "access",
             "assistant",
             "journal",
+            "homework",
             "calendar",
             "messages",
             "settings",

@@ -88,8 +88,15 @@ class Homework:
         if not staff and (student is None or student not in user_ids(user,workspace,'student')):
             raise HTTPException(403,'Нет доступа к работе этого ученика.')
         snapshot=self.snapshots.get(workspace)
-        state=snapshot.state
         record=self.journal.find(workspace,key)
+        return self.resolved_context(user,snapshot,record,workspace,key,student)
+
+    def resolved_context(self,user,snapshot,record,workspace,key,student=None):
+        """Shared queue/detail authorization; caller supplies a consistent snapshot."""
+        staff=user['role'] in ['admin','teacher']
+        if not staff and (student is None or student not in user_ids(user,workspace,'student')):
+            raise HTTPException(403,'Нет доступа к работе этого ученика.')
+        state=snapshot.state
         if not record: raise HTTPException(404,'Домашнее задание не найдено.')
         published=record['published']
         current=snapshot.current_lesson(record['document']['lesson'])
@@ -173,6 +180,8 @@ class Homework:
     def persist(self,db,ctx,version,document,action):
         db.execute('INSERT INTO homework_submissions VALUES (?,?,?,?,?) ON CONFLICT(workspace,lesson_key,student_id) DO UPDATE SET version=excluded.version,document=excluded.document',
                    (ctx['workspace'],ctx['key'],ctx['student'],version,encoded(document)))
+        from .homework_queue_projection import answer as queue_answer
+        queue_answer(db,ctx['workspace'],ctx['key'],ctx['student'],document)
         db.execute('DELETE FROM homework_draft_files WHERE workspace=? AND lesson_key=? AND student_id=?',(ctx['workspace'],ctx['key'],ctx['student']))
         db.executemany('INSERT INTO homework_draft_files VALUES (?,?,?,?)',[(id,ctx['workspace'],ctx['key'],ctx['student']) for id in document['draft']['fileIds']])
         self.access.record(db,action,ctx['workspace'],ctx['revision'],detail=f"{ctx['key']} · {ctx['student']} · редакция {version}")
@@ -186,6 +195,8 @@ class Homework:
             self.notify(db,ctx,ctx['student'],version,action)
 
     def register(self,app,Workspace):
+        from .homework_queue import HomeworkQueue
+        HomeworkQueue(self).register(app,Workspace)
         materials.AssignmentFiles(self).register(app,Workspace)
         grading=HomeworkGrading(self)
 
