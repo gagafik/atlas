@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import AbsencePanel from "./AbsencePanel";
+import AttendancePanel from "./AttendancePanel";
 import {
   attendanceNames,
   gradeLabel,
@@ -335,6 +336,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     <section className="journal-panel">
       {options?.absenceNotices && (
         <AbsencePanel key={workspace} workspace={workspace} />
+      )}
+      {options?.staff && (
+        <AttendancePanel
+          key={`attendance-${workspace}`}
+          workspace={workspace}
+        />
       )}
       <p>
         Посещаемость, оценки, темы и домашние задания. Записи журнала
