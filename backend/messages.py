@@ -33,6 +33,7 @@ class NewThread(Model):
     requireAck: bool = False
     draftId: str | None = Field(default=None,pattern=r'^[a-f0-9-]{36}$')
     fileIds: list[str] = Field(default_factory=list,max_length=5)
+    draftVersion: int | None = Field(default=None,ge=1)
 
 
 class Reply(Model):
@@ -41,6 +42,7 @@ class Reply(Model):
     text: str = Field(default='',max_length=10000)
     draftId: str | None = Field(default=None,pattern=r'^[a-f0-9-]{36}$')
     fileIds: list[str] = Field(default_factory=list,max_length=5)
+    draftVersion: int | None = Field(default=None,ge=1)
 
 
 class ParticipantChange(Model):
@@ -100,6 +102,8 @@ class Messages:
         self.snapshots=PortalSnapshots(access.read,stamp)
         from .message_files import MessageFiles
         self.files=MessageFiles(self)
+        from .message_drafts import MessageDrafts
+        self.drafts=MessageDrafts(self)
 
     def tables(self,db):
         self.access.tables(db)
@@ -294,11 +298,12 @@ class Messages:
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
                 accounts=self.recipient_accounts(db,body,user,directory)
-                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,body=body.model_dump()))
+                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,body=body.model_dump(exclude={'draftVersion'} if body.draftVersion is None else set())))
                 if prior:
                     self.find(db,prior,user,directory,accounts)
                     return dict(id=prior)
                 recipients=self.recipients(body,user,directory,accounts)
+                self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,None)
                 self.rate(db,user)
                 id=uuid4().hex;created=now().isoformat()
                 db.execute('INSERT INTO message_threads VALUES (?,?,?,?,?,?,1,?,?,?,0)',(id,workspace,body.kind,body.title,user['id'],body.studentId,'open',int(body.requireAck),created))
@@ -354,10 +359,11 @@ class Messages:
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
                 accounts=self.thread_accounts(db,id,user);thread,_=self.find(db,id,user,directory,accounts)
-                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,id=id,body=body.model_dump()))
+                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,id=id,body=body.model_dump(exclude={'draftVersion'} if body.draftVersion is None else set())))
                 if prior: return dict(id=prior)
                 if thread['version']!=body.version: raise HTTPException(409,'В переписке появились изменения. Обновите её; текст ответа сохранён в поле ввода.')
                 if thread['kind'] not in ['direct','group'] or thread['status']!='open': raise HTTPException(409,'Ответы в этой переписке закрыты.')
+                self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,id)
                 post=self.post(db,thread,user,body.text)
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post)
                 db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))

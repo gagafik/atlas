@@ -33,8 +33,14 @@ def meta(row):return dict(id=row[0],filename=row[5],size=row[6],created=row[7])
 
 
 def collect_unused(db):
+    from .message_drafts import tables as draft_tables
+    draft_tables(db)
     rows=db.execute('''SELECT id FROM message_files WHERE post_id IS NULL AND
         ((status='uploading' AND created<?) OR (status='ready' AND created<?))
+        AND NOT EXISTS (SELECT 1 FROM message_drafts d
+            WHERE d.workspace=message_files.workspace AND d.owner_id=message_files.owner_id
+            AND d.id=message_files.draft_id AND d.status='active'
+            AND EXISTS(SELECT 1 FROM json_each(d.content,'$.fileIds') WHERE value=message_files.id))
         ORDER BY created LIMIT 20''',((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
     root=root_for(db)
     for (id,) in rows:
@@ -145,6 +151,8 @@ class MessageFiles:
                 row=db.execute('SELECT status,post_id FROM message_files WHERE id=? AND workspace=? AND owner_id=?',(id,workspace,user['id'])).fetchone()
                 if not row:raise HTTPException(404,'Файл не найден.')
                 if row[0]!='ready' or row[1] is not None:raise HTTPException(409,'Можно удалить только своё неотправленное вложение.')
+                from .message_drafts import protects_file
+                if protects_file(db,id):raise HTTPException(409,'Файл сохранён в черновике. Снимите его выбор и сохраните черновик перед удалением.')
                 storage.file_path(root_for(db),id).unlink(missing_ok=True)
                 db.execute('DELETE FROM message_files WHERE id=?',(id,))
             return dict(ok=True)
