@@ -5,6 +5,7 @@ import AbsencePanel from "./AbsencePanel";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
+import FinalGradesPanel from "./FinalGradesPanel";
 import {
   attendanceNames,
   gradeLabel,
@@ -345,6 +346,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const editable = !!entry?.writable && !entry.needsSync && !busy;
   return (
     <section className="journal-panel">
+      {options && (
+        <FinalGradesPanel
+          key={`final-grades-${workspace}`}
+          workspace={workspace}
+        />
+      )}
       {options?.absenceNotices && (
         <AbsencePanel key={workspace} workspace={workspace} />
       )}

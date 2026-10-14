@@ -656,6 +656,18 @@ export default function AccessPanel({
                       "state.redo": "Повтор изменения",
                       "journal.draft_saved":
                         "Сохранён черновик учебного журнала",
+                      "journal.final_scale": "Изменена шкала итоговых оценок",
+                      "journal.final_prepared":
+                        "Подготовлена итоговая ведомость",
+                      "journal.final_assign": "Назначен ответственный за итоги",
+                      "journal.final_saved": "Сохранён черновик итога",
+                      "journal.final_submitted":
+                        "Итог отправлен на утверждение",
+                      "journal.final_approve": "Утверждён итог",
+                      "journal.final_return": "Итог возвращён на исправление",
+                      "journal.final_publish": "Опубликован итог",
+                      "journal.final_reopen": "Открыто исправление итога",
+                      "journal.final_withdraw": "Отозван итог",
                       "journal.published":
                         "Опубликована запись учебного журнала",
                       "journal.withdrawn": "Отозвана запись учебного журнала",

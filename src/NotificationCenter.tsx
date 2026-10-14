@@ -25,6 +25,8 @@ const titles: Record<string, string> = {
   "message.moderated": "Изменилось решение по жалобе на сообщение",
   "family.updated": "Изменились сведения или доступ к ребёнку",
   "journal.updated": "Обновлён учебный журнал",
+  "journal.finals_published": "Опубликованы итоговые оценки",
+  "journal.finals_withdrawn": "Отозваны итоговые оценки",
   "journal.withdrawn": "Запись журнала скрыта",
   "homework.submitted": "Домашняя работа отправлена на проверку",
   "homework.withdrawn": "Ученик отозвал домашнюю работу",
