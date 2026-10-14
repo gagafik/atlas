@@ -45,9 +45,12 @@ def test_backup_restores_database_and_files_and_blocks_writes_during_copy(tmp_pa
             with pytest.raises(sqlite3.OperationalError, match='locked'):
                 writer.execute('UPDATE workspaces SET revision=12')
         return original_copy(src, dst)
-    monkeypatch.setattr(backup_school.shutil, 'copyfile', checked_copy)
     target = tmp_path / 'snapshot'
-    manifest = backup_school.create_backup(source, target)
+    # Inspect the writer lock only while the backup is being created. On Linux,
+    # copytree/copy2 also calls copyfile; restoring is outside that reservation.
+    with monkeypatch.context() as patch:
+        patch.setattr(backup_school.shutil, 'copyfile', checked_copy)
+        manifest = backup_school.create_backup(source, target)
     assert json.loads((target/'manifest.json').read_text()) == manifest
     assert manifest['incompleteUploadsExcluded'] == 2
     assert len(manifest['files']) == 2
