@@ -21,6 +21,7 @@ from .portal_cache import PortalSnapshots
 from .notifications import encoded
 from . import homework_files as files
 from . import assignment_files as materials
+from .homework_grading import HomeworkGrading, ReviewGrade
 
 
 class Answer(Model):
@@ -38,6 +39,7 @@ class Review(Model):
     assignment: str = Field(pattern=r'^[a-f0-9]{64}$')
     decision: Literal['accepted','returned']
     comment: str = Field(default='',max_length=4000)
+    grading: ReviewGrade | None = None
 
 
 def fingerprint(document):
@@ -186,6 +188,11 @@ class Homework:
 
     def register(self,app,Workspace):
         materials.AssignmentFiles(self).register(app,Workspace)
+        grading=HomeworkGrading(self)
+
+        @app.get('/api/journal/homework/{key}/grading')
+        def grade_options(key:str,studentId:str,request:Request,workspace:Workspace='school'):
+            return grading.options(self.context(request,workspace,key,studentId))
         @app.get('/api/journal/homework/{key}')
         def get(key:str,request:Request,workspace:Workspace='school',studentId:str|None=None):
             return self.view(self.context(request,workspace,key,studentId))
@@ -227,6 +234,8 @@ class Homework:
             if not ctx['canReview']: raise HTTPException(403,'Проверка доступна действующему учителю урока или администратору.')
             if body.assignment!=ctx['assignment']: raise HTTPException(409,'Задание изменилось. Обновите его перед проверкой.')
             if body.decision=='returned' and not body.comment: raise HTTPException(422,'Укажите, что нужно доработать.')
+            if body.grading and body.decision!='accepted':raise HTTPException(422,'Оценка записывается при принятии работы. Возврат не меняет оценку.')
+            grade_record=grading.prepare(ctx) if body.grading else None
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
                 version,document=self.load(db,ctx,body.studentId)
@@ -236,7 +245,9 @@ class Homework:
                 if status(document)=='returned': raise HTTPException(409,'Дождитесь новой отправки ученика.')
                 if sent['assignment']!=ctx['assignment'] and body.decision=='accepted':
                     raise HTTPException(409,'Условия задания изменились. Верните работу для новой отправки.')
-                sent['review']=dict(decision=body.decision,comment=body.comment,reviewedAt=now().isoformat(),reviewer=ctx['user']['name'])
+                created=now().isoformat()
+                if body.grading:sent['grading']=grading.apply(db,ctx,grade_record,body.grading,created)
+                sent['review']=dict(decision=body.decision,comment=body.comment,reviewedAt=created,reviewer=ctx['user']['name'])
                 self.persist(db,ctx,version+1,document,'homework.reviewed')
             return self.view(ctx)
 

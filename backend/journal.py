@@ -283,6 +283,25 @@ class Journal:
         targets = [u for u in users if u['role'] in ['student','parent'] and changed & user_ids(u,workspace,'student')]
         self.notifications.deliver(db,targets,workspace,version,'journal.updated' if after else 'journal.withdrawn')
 
+    def store_revision(self, db, workspace, key, user, revision, version, document, previous, *, publish=False, created=None):
+        """Store one authorized, validated revision inside the caller's write transaction."""
+        if not db.in_transaction: raise RuntimeError('Journal revisions require a transaction.')
+        created=created or now().isoformat()
+        old_public=previous['published'] if previous else None
+        published=document if publish else old_public
+        published_version=version if publish else previous['publishedVersion'] if previous else None
+        published_at=created if publish else previous['publishedAt'] if previous else None
+        row=(workspace,key,version,created,user['name'],encoded(document),encoded(published) if published else None,published_version,published_at)
+        db.execute('INSERT INTO journal_entries VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,lesson_key) DO UPDATE SET version=excluded.version,updated=excluded.updated,actor_name=excluded.actor_name,document=excluded.document,published_document=excluded.published_document,published_version=excluded.published_version,published_at=excluded.published_at',row)
+        action='journal.published' if publish else 'journal.draft_saved'
+        self.members(db,workspace,key,document,'draft')
+        if publish:self.members(db,workspace,key,published,'published')
+        db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',
+                   (workspace,key,version,created,user['name'],action,encoded(document)))
+        self.access.record(db,action,workspace,revision,detail=f'{key}: редакция {version}')
+        if publish:self.notify(db,workspace,version,old_public,published)
+        return self.unpack(row)
+
     def register(self, app, Workspace):
         @app.get('/api/journal/options')
         def options(request: Request,workspace: Workspace='school'):
@@ -353,17 +372,7 @@ class Journal:
                 require_open(db,workspace,document['lesson'],previous['document']['lesson'] if previous else None,old_public['lesson'] if old_public else None)
                 from .assignment_files import bind
                 bind(db,body.content.homeworkFiles,workspace,body.lessonKey,user['id'])
-                published = document if body.publish else old_public
-                published_version = version if body.publish else previous['publishedVersion'] if previous else None
-                published_at = created if body.publish else previous['publishedAt'] if previous else None
-                db.execute('INSERT INTO journal_entries VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,lesson_key) DO UPDATE SET version=excluded.version,updated=excluded.updated,actor_name=excluded.actor_name,document=excluded.document,published_document=excluded.published_document,published_version=excluded.published_version,published_at=excluded.published_at',
-                           (workspace,body.lessonKey,version,created,user['name'],encoded(document),encoded(published) if published else None,published_version,published_at))
-                action = 'journal.published' if body.publish else 'journal.draft_saved'
-                self.members(db,workspace,body.lessonKey,document,'draft')
-                if body.publish: self.members(db,workspace,body.lessonKey,published,'published')
-                db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',(workspace,body.lessonKey,version,created,user['name'],action,encoded(document)))
-                self.access.record(db,action,workspace,state.revision,detail=f'{body.lessonKey}: редакция {version}')
-                if body.publish: self.notify(db,workspace,version,old_public,published)
+                self.store_revision(db,workspace,body.lessonKey,user,state.revision,version,document,previous,publish=body.publish,created=created)
             return self.entry(state,workspace,user,body.lessonKey,body.day)
 
         @app.post('/api/journal/withdraw')

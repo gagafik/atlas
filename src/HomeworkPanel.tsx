@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { MaterialLinks, type Material } from "./AssignmentFilesPanel";
+import HomeworkGradeForm, {
+  RecordedHomeworkGrade,
+  type ReviewGrade,
+  type GradingEvidence,
+} from "./HomeworkGradeForm";
 
 interface Attachment {
   id: string;
@@ -9,6 +14,7 @@ interface Attachment {
   created: string;
 }
 interface Submitted {
+  grading?: GradingEvidence;
   assignmentFiles: Material[];
   latePolicy: "allow" | "block";
   text: string;
@@ -109,12 +115,14 @@ function StudentWork({
   studentId,
   changed,
   onActivity,
+  onGraded,
 }: {
   workspace: string;
   lessonKey: string;
   studentId: string;
   changed: () => void;
   onActivity: (value: { dirty: boolean; busy: boolean }) => void;
+  onGraded?: () => void;
 }) {
   const [work, setWork] = useState<Work | null>(null),
     [error, setError] = useState(""),
@@ -123,6 +131,8 @@ function StudentWork({
   const [text, setText] = useState(""),
     [fileIds, setFileIds] = useState<string[]>([]),
     [comment, setComment] = useState("");
+  const [withGrade, setWithGrade] = useState(false),
+    [grade, setGrade] = useState<ReviewGrade | null>(null);
   const [history, setHistory] = useState<History[]>([]),
     [next, setNext] = useState<number | null>(null),
     [historyOpen, setHistoryOpen] = useState(false);
@@ -135,6 +145,8 @@ function StudentWork({
     setText(value.draft?.text || "");
     setFileIds(value.draft?.fileIds || []);
     setComment("");
+    setWithGrade(false);
+    setGrade(null);
     setDirty(false);
     setHistory([]);
     setHistoryOpen(false);
@@ -198,16 +210,19 @@ function StudentWork({
   }
   async function check(decision: string) {
     if (!work) return;
+    if (decision === "accepted" && withGrade && !grade) return;
     const r = await api(`${endpoint}/review`, workspace, "POST", {
       studentId,
       version: work.version,
       assignment: work.assignment,
       decision,
       comment,
+      ...(decision === "accepted" && withGrade ? { grading: grade } : {}),
     });
     if (alive.current) {
       receive(r);
       changed();
+      if (decision === "accepted" && withGrade) onGraded?.();
     }
   }
   async function historyPage(before?: number) {
@@ -298,6 +313,7 @@ function StudentWork({
             {work.submitted.late ? " · после срока" : ""}
           </h4>
           <p className="journal-text">{work.submitted.text}</p>
+          <RecordedHomeworkGrade value={work.submitted.grading} />
           {work.assignmentChanged && (
             <details>
               <summary>Условия на момент отправки</summary>
@@ -491,13 +507,36 @@ function StudentWork({
               }}
             />
           </label>
+          <label className="check-line">
+            <input
+              type="checkbox"
+              checked={withGrade}
+              disabled={work.assignmentChanged}
+              onChange={(e) => {
+                setWithGrade(e.target.checked);
+                setGrade(null);
+                setDirty(true);
+              }}
+            />
+            Выставить и опубликовать оценку при принятии
+          </label>
+          {withGrade && (
+            <HomeworkGradeForm
+              key={work.version + work.assignment}
+              workspace={workspace}
+              lessonKey={lessonKey}
+              studentId={studentId}
+              onChange={setGrade}
+              onEdited={() => setDirty(true)}
+            />
+          )}
           <div className="dated-toolbar">
             <button
               className="primary"
-              disabled={work.assignmentChanged}
+              disabled={work.assignmentChanged || (withGrade && !grade)}
               onClick={() => void run(() => check("accepted"))}
             >
-              Принять работу
+              {withGrade ? "Принять и опубликовать оценку" : "Принять работу"}
             </button>
             <button
               disabled={!comment.trim()}
@@ -507,8 +546,8 @@ function StudentWork({
             </button>
           </div>
           <small>
-            Принятие подтверждает проверку. Оценка выставляется отдельно в
-            журнале урока.
+            Без выбранной оценки принятие подтверждает только проверку. Возврат
+            на доработку не меняет уже записанную оценку.
           </small>
         </fieldset>
       )}
@@ -544,6 +583,7 @@ function StudentWork({
                     studentId={studentId}
                   />
                   <p className="journal-text">{h.submitted.text}</p>
+                  <RecordedHomeworkGrade value={h.submitted.grading} />
                   <Files
                     items={h.submitted.files}
                     workspace={workspace}
@@ -578,10 +618,12 @@ export default function HomeworkPanel({
   workspace,
   lessonKey,
   studentId,
+  onGraded,
 }: {
   workspace: string;
   lessonKey: string;
   studentId?: string;
+  onGraded?: () => void;
 }) {
   const [open, setOpen] = useState(false),
     [overview, setOverview] = useState<Overview | null>(null),
@@ -679,6 +721,7 @@ export default function HomeworkPanel({
               studentId={studentId || selected}
               changed={() => setEpoch((e) => e + 1)}
               onActivity={setActivity}
+              onGraded={onGraded}
             />
           )}
         </>
