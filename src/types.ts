@@ -250,6 +250,7 @@ export type Page =
   | "assistant"
   | "journal"
   | "homework"
+  | "quizzes"
   | "access"
   | "publications"
   | "commitments"

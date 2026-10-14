@@ -32,6 +32,12 @@ const titles: Record<string, string> = {
   "homework.withdrawn": "Ученик отозвал домашнюю работу",
   "homework.reviewed": "Обновлён результат проверки домашней работы",
   "homework.deadline_changed": "Изменён индивидуальный срок домашней работы",
+  "quiz.published": "Назначен новый тест",
+  "quiz.submitted": "Тест отправлен на проверку",
+  "quiz.close": "Приём ответов на тест завершён",
+  "quiz.withdraw": "Назначение теста отозвано",
+  "quiz.release": "Открыт разбор теста",
+  "quiz.results_updated": "Исправлен результат теста",
   saved: "Расписание обновлено",
   undo: "Изменение расписания отменено",
   redo: "Изменение расписания повторено",
@@ -299,6 +305,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.workspace === "school" ? "Школа" : "Демонстрация"} ·{" "}
                     {item.action.startsWith("journal.") ||
                     item.action.startsWith("homework.") ||
+                    item.action.startsWith("quiz.") ||
                     item.action.startsWith("message.")
                       ? "редакция записи"
                       : "версия"}{" "}
@@ -311,11 +318,13 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                         ? "Откройте «Мои дети и доступ» в личном кабинете."
                         : item.action.startsWith("message.")
                           ? "Откройте раздел сообщений в личном кабинете."
-                          : item.action.startsWith("homework.")
-                            ? "Откройте домашнюю работу в учебном журнале."
-                            : item.action.startsWith("journal.")
-                              ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                              : "Проверьте доступное вам расписание, включая занятия по датам."}
+                          : item.action.startsWith("quiz.")
+                            ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                            : item.action.startsWith("homework.")
+                              ? "Откройте домашнюю работу в учебном журнале."
+                              : item.action.startsWith("journal.")
+                                ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}

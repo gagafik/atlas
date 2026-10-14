@@ -4,6 +4,7 @@ import { roleNames, type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
 import JournalPanel from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
+import QuizzesPanel from "./QuizzesLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
@@ -168,13 +169,15 @@ export default function Portal({
               ? "Мои дети и доступ"
               : section === "messages"
                 ? "Сообщения"
-                : section === "homework"
-                  ? "Домашние задания"
-                  : section === "journal"
-                    ? "Учебный журнал"
-                    : section === "courses"
-                      ? "Выбор курсов"
-                      : "Моё расписание"}
+                : section === "quizzes"
+                  ? "Контрольные и тесты"
+                  : section === "homework"
+                    ? "Домашние задания"
+                    : section === "journal"
+                      ? "Учебный журнал"
+                      : section === "courses"
+                        ? "Выбор курсов"
+                        : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -202,6 +205,14 @@ export default function Portal({
           >
             Сообщения
           </button>
+          {["teacher", "student", "parent"].includes(session.user!.role) && (
+            <button
+              aria-pressed={section === "quizzes"}
+              onClick={() => setSection("quizzes")}
+            >
+              Контрольные и тесты
+            </button>
+          )}
           {["teacher", "student", "parent"].includes(session.user!.role) && (
             <button
               aria-pressed={section === "homework"}
@@ -264,7 +275,9 @@ export default function Portal({
           </label>
           {workspace && <IntakePortal key={workspace} workspace={workspace} />}
         </>
-      ) : section === "journal" || section === "homework" ? (
+      ) : section === "journal" ||
+        section === "homework" ||
+        section === "quizzes" ? (
         <>
           <label className="field">
             <span>Рабочее пространство</span>
@@ -280,7 +293,9 @@ export default function Portal({
             </select>
           </label>
           {workspace &&
-            (section === "homework" ? (
+            (section === "quizzes" ? (
+              <QuizzesPanel key={workspace} workspace={workspace} />
+            ) : section === "homework" ? (
               <HomeworkQueuePanel key={workspace} workspace={workspace} />
             ) : (
               <JournalPanel key={workspace} workspace={workspace} />

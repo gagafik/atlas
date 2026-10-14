@@ -22,12 +22,15 @@ export async function api(
     if (response.status === 401 && !path.startsWith("auth/"))
       window.dispatchEvent(new Event("atlas-auth-required"));
     const detail = result.detail;
-    throw new Error(
-      typeof detail === "string"
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map((x: any) => x.msg).join("\n")
-          : "Не удалось выполнить действие.",
+    throw Object.assign(
+      new Error(
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((x: any) => x.msg).join("\n")
+            : "Не удалось выполнить действие.",
+      ),
+      { status: response.status },
     );
   }
   return result;

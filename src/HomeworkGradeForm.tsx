@@ -72,18 +72,24 @@ export default function HomeworkGradeForm({
   studentId,
   onChange,
   onEdited,
+  endpoint,
+  defaultName = "Домашняя работа",
+  scoreLabel = "Оценка за домашнюю работу",
 }: {
   workspace: string;
   lessonKey: string;
   studentId: string;
   onChange: (grade: ReviewGrade | null) => void;
   onEdited: () => void;
+  endpoint?: string;
+  defaultName?: string;
+  scoreLabel?: string;
 }) {
   const [options, setOptions] = useState<Options | null>(null),
     [error, setError] = useState(""),
     [epoch, setEpoch] = useState(0);
   const [selection, setSelection] = useState(""),
-    [name, setName] = useState("Домашняя работа"),
+    [name, setName] = useState(defaultName),
     [kind, setKind] = useState<"points" | "label">("points");
   const [maxScore, setMaxScore] = useState("10"),
     [weight, setWeight] = useState("1"),
@@ -98,7 +104,7 @@ export default function HomeworkGradeForm({
     setError("");
     setReplace(false);
     api(
-      `journal/homework/${encodeURIComponent(lessonKey)}/grading?${new URLSearchParams({ studentId })}`,
+      `${endpoint || `journal/homework/${encodeURIComponent(lessonKey)}/grading`}?${new URLSearchParams({ studentId })}`,
       workspace,
     )
       .then((r) => {
@@ -110,7 +116,7 @@ export default function HomeworkGradeForm({
     return () => {
       live = false;
     };
-  }, [workspace, lessonKey, studentId, epoch]);
+  }, [workspace, lessonKey, studentId, epoch, endpoint]);
   const chosen = options?.assessments.find((a) => a.id === selection);
   const isNew = selection === "new";
   const activeKind = isNew ? kind : chosen?.kind;
@@ -198,9 +204,7 @@ export default function HomeworkGradeForm({
         <p role="status">Проверяю журнал и доступные работы…</p>
       )}
       {options && !options.allowed && (
-        <p className="info-line">
-          {options.reason} Работу можно принять без оценки.
-        </p>
+        <p className="info-line">{options.reason}</p>
       )}
       <button
         type="button"
@@ -214,8 +218,8 @@ export default function HomeworkGradeForm({
       {options?.allowed && (
         <>
           <p className="muted">
-            При принятии оценка сразу появится у ученика и родителей. Остальные
-            неопубликованные поля журнала сохранятся в черновике.
+            При сохранении оценка сразу появится у ученика и родителей.
+            Остальные неопубликованные поля журнала сохранятся в черновике.
           </p>
           {options.hasDraftChanges && (
             <p className="info-line">
@@ -326,7 +330,9 @@ export default function HomeworkGradeForm({
           )}
           {activeKind === "points" && (
             <label className="field">
-              <span>Оценка за домашнюю работу (из {maximum})</span>
+              <span>
+                {scoreLabel} (из {maximum})
+              </span>
               <input
                 type="number"
                 min={0}

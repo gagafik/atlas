@@ -16,6 +16,7 @@ import PublicationsPanel from "./PublicationsPanel";
 import AccessPanel from "./AccessPanel";
 import JournalPanel from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
+import QuizzesPanel from "./QuizzesLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import AssistantPanel from "./AssistantPanel";
@@ -103,6 +104,7 @@ const NAV: { id: Page; label: string; icon: typeof CalendarDays }[] = [
   { id: "dated", label: "Замены и даты", icon: Clock3 },
   { id: "journal", label: "Учебный журнал", icon: BookOpen },
   { id: "homework", label: "Домашние задания", icon: ListChecks },
+  { id: "quizzes", label: "Контрольные и тесты", icon: ListChecks },
   { id: "messages", label: "Сообщения", icon: BookOpen },
   { id: "commitments", label: "Бронирования и дежурства", icon: DoorOpen },
   { id: "exchange", label: "Обмен и печать", icon: Printer },
@@ -1268,7 +1270,7 @@ export default function App({
         <nav>
           {NAV.filter(
             (n) =>
-              !["access", "journal", "homework"].includes(n.id) ||
+              !["access", "journal", "homework", "quizzes"].includes(n.id) ||
               !session.enabled ||
               session.user?.role === "admin",
           ).map(({ id, label, icon: Icon }, i) => (
@@ -1437,15 +1439,17 @@ export default function App({
                                         ? "Проверенные снимки расписания для получателей."
                                         : page === "messages"
                                           ? "Личные диалоги и объявления школы."
-                                          : page === "homework"
-                                            ? "Задания по срокам, отправленные ответы и проверка работ."
-                                            : page === "journal"
-                                              ? "Посещаемость, оценки, темы и домашние задания по датам."
-                                              : page === "access"
-                                                ? "Учётные записи, разрешённые расписания и журнал действий."
-                                                : page === "settings"
-                                                  ? "Параметры школы, звонки и резервные копии."
-                                                  : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
+                                          : page === "quizzes"
+                                            ? "Банк вопросов, назначение тестов и проверка результатов"
+                                            : page === "homework"
+                                              ? "Задания по срокам, отправленные ответы и проверка работ."
+                                              : page === "journal"
+                                                ? "Посещаемость, оценки, темы и домашние задания по датам."
+                                                : page === "access"
+                                                  ? "Учётные записи, разрешённые расписания и журнал действий."
+                                                  : page === "settings"
+                                                    ? "Параметры школы, звонки и резервные копии."
+                                                    : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
               </p>
             </div>
             <div className="heading-actions">
@@ -1484,6 +1488,7 @@ export default function App({
                   "assistant",
                   "journal",
                   "homework",
+                  "quizzes",
                   "messages",
                 ].includes(page) ? null : page !== "settings" ? (
                 entityButtons
@@ -1503,6 +1508,7 @@ export default function App({
             "assistant",
             "journal",
             "homework",
+            "quizzes",
             "messages",
           ].includes(page) && (
             <div className="cycle-switcher">
@@ -1619,6 +1625,9 @@ export default function App({
           )}
           {page === "homework" && (
             <HomeworkQueuePanel key={workspace} workspace={workspace} />
+          )}
+          {page === "quizzes" && (
+            <QuizzesPanel key={workspace} workspace={workspace} />
           )}
           {page === "messages" && (
             <MessagesPanel key={workspace} workspace={workspace} />
@@ -2140,6 +2149,7 @@ export default function App({
             "assistant",
             "journal",
             "homework",
+            "quizzes",
             "calendar",
             "messages",
             "settings",
