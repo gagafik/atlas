@@ -166,9 +166,8 @@ class Homework:
 
     def notify(self,db,ctx,student,version,action):
         role='teacher' if action in ['homework.submitted','homework.withdrawn'] else 'family'
-        query="SELECT * FROM accounts WHERE active=1 AND role='teacher'" if role=='teacher' else "SELECT * FROM accounts WHERE active=1 AND role IN ('parent','student')"
-        users=[self.access.public(row) for row in db.execute(query)]
-        targets=[u for u in users if (bool(user_ids(u,ctx['workspace'],'teacher') & set(ctx['current']['teacherIds'])) if role=='teacher' else student in user_ids(u,ctx['workspace'],'student'))]
+        targets=self.journal.notifications.granted_users(db,ctx['workspace'],'teacher' if role=='teacher' else 'student',
+            ctx['current']['teacherIds'] if role=='teacher' else [student],['teacher'] if role=='teacher' else ['parent','student'])
         self.journal.notifications.deliver(db,targets,ctx['workspace'],version,action)
 
     def persist(self,db,ctx,version,document,action):

@@ -239,10 +239,19 @@ class Journal:
 
     def entry(self, state, workspace, user, key, day, sync=False):
         existing = self.find(workspace,key)
-        rows,_ = resolve_day(state,day)
-        current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
         if existing:
             current = current_lesson(state,existing['document']['lesson'])
+        else:
+            rows,_ = resolve_day(state,day)
+            current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
+        return self.resolved_entry(state,workspace,user,key,existing,current,sync=sync)
+
+    def resolved_entry(self, state, workspace, user, key, existing, current, sync=False):
+        """Describe a journal against an already resolved, immutable school snapshot.
+
+        This does not authorize a later write: callers must still recheck account,
+        school/journal versions and period locks inside their write transaction.
+        """
         if not current and not existing: raise HTTPException(404,'Урок не найден.')
         if not (current and staff_read(user,workspace,current) or existing and staff_read(user,workspace,existing['document']['lesson'])):
             raise HTTPException(403,'Этот урок не назначен вашей учётной записи.')
@@ -279,8 +288,7 @@ class Journal:
     def notify(self, db, workspace, version, before, after):
         ids = {r['studentId'] for d in [before,after] if d for r in d['content']['records']}
         changed = {id for id in ids if (pupil_projection(before,id) if before else None) != (pupil_projection(after,id) if after else None)}
-        users = [self.access.public(r) for r in db.execute('SELECT * FROM accounts WHERE active=1')]
-        targets = [u for u in users if u['role'] in ['student','parent'] and changed & user_ids(u,workspace,'student')]
+        targets = self.notifications.granted_users(db,workspace,'student',changed,['student','parent'])
         self.notifications.deliver(db,targets,workspace,version,'journal.updated' if after else 'journal.withdrawn')
 
     def store_revision(self, db, workspace, key, user, revision, version, document, previous, *, publish=False, created=None):
