@@ -128,6 +128,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const [entry, setEntry] = useState<JournalEntry | null>(null),
     [syncRoster, setSyncRoster] = useState(false),
     [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
   useEffect(() => {
     if (entry && coverageOpened.current) {
       coverageOpened.current = false;
@@ -1153,6 +1155,18 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       key={workspace + entry.lessonKey + entry.publishedVersion}
                       workspace={workspace}
                       lessonKey={entry.lessonKey}
+                      onGraded={() => {
+                        setEpoch((n) => n + 1);
+                        if (dirtyRef.current) {
+                          setMessage(
+                            "Оценка опубликована. Ваши несохранённые поля оставлены на экране; перед сохранением откройте актуальную редакцию журнала.",
+                          );
+                        } else {
+                          void openEntry(entry.lessonKey).then(() =>
+                            setMessage("Оценка опубликована, журнал обновлён."),
+                          );
+                        }
+                      }}
                     />
                   )}
                   {historical?.document && (

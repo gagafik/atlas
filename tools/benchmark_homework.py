@@ -27,15 +27,15 @@ def summary(values):
 async def probe(url, identities, tasks, concurrency, size):
     latencies=[];by_endpoint={};statuses=Counter();finished=0
     semaphore=asyncio.Semaphore(concurrency)
-    # Every worker represents a different pupil; no intentional revision clashes.
+    # Pupils have independent answers but may share a journal revision.
     async with httpx.AsyncClient(base_url=url,timeout=120,trust_env=False,
                                  limits=httpx.Limits(max_connections=concurrency,max_keepalive_connections=concurrency)) as client:
-        async def request(label, method, path, cookie, **kwargs):
+        async def request(label, method, path, cookie, expected=(200,), **kwargs):
             began=time.perf_counter()
             response=await client.request(method,path,headers={'Cookie':cookie,'X-Atlas-Request':'1'},**kwargs)
             elapsed=(time.perf_counter()-began)*1000
             latencies.append(elapsed);by_endpoint.setdefault(label,[]).append(elapsed);statuses[str(response.status_code)]+=1
-            if response.status_code!=200:
+            if response.status_code not in expected:
                 raise RuntimeError(f'{label}: HTTP {response.status_code}: {response.text[:200]}')
             return response
         async def work(task):
@@ -65,11 +65,31 @@ async def probe(url, identities, tasks, concurrency, size):
                 else: raise RuntimeError('Upload remained busy after retries.')
                 file_id=response.json()['id']
                 sent=(await request('submit','PUT',path,cookie,json=data|dict(version=draft['version'],action='submit',fileIds=[file_id]))).json()
-                await request('review','POST',path+'/review',teacher,json=dict(studentId=student,version=sent['version'],assignment=current['assignment'],decision='accepted',comment='Checked'))
+                for attempt in range(60):
+                    selection=await request('grading_options','GET',path+'/grading',teacher,expected=(200,409),params=dict(studentId=student))
+                    if selection.status_code==409:
+                        assert selection.json()['detail'].startswith('Журнал изменился.'),selection.text
+                        await asyncio.sleep(.05+(pupil%7)*.02)
+                        continue
+                    options=selection.json()
+                    choice=next(a for a in options['assessments'] if a['id']=='homework')
+                    assert options['allowed'] and choice['selectable'] and choice['publishedGrade'] is None and choice['draftGrade'] is None
+                    marked=await request('review_grade','POST',path+'/review',teacher,expected=(200,409),json=dict(
+                        studentId=student,version=sent['version'],assignment=current['assignment'],decision='accepted',comment='Checked',
+                        grading=dict(journalVersion=options['journalVersion'],revision=options['revision'],assessmentId='homework',score=9)))
+                    if marked.status_code==200:break
+                    # Retry only an optimistic journal collision; never overwrite a grade.
+                    assert marked.json()['detail'].startswith(('Журнал изменился.','Журнал или расписание изменились.')),marked.text
+                    await asyncio.sleep(.05+(pupil%7)*.02)
+                else:raise RuntimeError('Journal remained busy after grading retries.')
                 parent_cookie=identities[1100+pupil][0]
                 result=(await request('parent','GET',path,parent_cookie,params=dict(studentId=student))).json()
                 assert result['status']=='accepted' and result['draft'] is None
                 assert result['submitted']['assignmentFiles']==[material]
+                assert result['submitted']['grading']['grade']['score']==9
+                journal=(await request('parent_grade','GET','/api/journal/report',parent_cookie,params=dict(studentId=student,start='2026-10-13',end='2026-10-13'))).json()
+                row=next(r for r in journal['rows'] if r['lessonKey']==key)
+                assert next(g for g in row['record']['grades'] if g['assessmentId']=='homework')['score']==9
                 content=await request('material_parent','GET','/api/journal/assignment-files/'+material['id'],parent_cookie,params=dict(studentId=student))
                 assert content.content==b'M'*size
                 content=await request('download','GET',path+'/files/'+file_id,parent_cookie,params=dict(studentId=student))
@@ -121,7 +141,8 @@ def main():
                             entry=admin.get('/api/journal/entry',params=dict(lessonKey=key,day=day)).json()
                             material=admin.post('/api/journal/assignment-files',params=dict(lessonKey=key,day=day,revision=0,version=0,filename='material.txt'),content=b'M'*(args.file_kib*1024))
                             material.raise_for_status()
-                            content=entry['document']['content']|dict(homework='Synthetic homework',dueDate='2026-10-14',homeworkFiles=[material.json()['id']])
+                            content=entry['document']['content']|dict(homework='Synthetic homework',dueDate='2026-10-14',homeworkFiles=[material.json()['id']],
+                                assessments=[dict(id='homework',name='Homework',kind='points',maxScore=10,weight=1)])
                             response=admin.put('/api/journal/entry',json=dict(lessonKey=key,day=day,revision=0,version=0,content=content,publish=True))
                             response.raise_for_status()
                             teacher=next(cookie for cookie,view,entity in identities if view=='teacher' and entity==entry['document']['lesson']['teacherIds'][0])
@@ -132,7 +153,7 @@ def main():
                     assert admin.get('/api/state').json()==before
                     report=dict(created=datetime.now(timezone.utc).isoformat(),synthetic=True,state_unchanged=True,data=counts,shared_materials=len(prepared),
                                 platform=platform.platform(),run=result,
-                                limitations='Existing sessions; synthetic published assignments; no login storm, solver, TLS, Internet latency, large files or multi-server load. Upload 429 retries included. Client and server share a laptop; not a school capacity claim.')
+                                limitations='Existing sessions; synthetic published assignments; no login storm, solver, TLS, Internet latency, large files or multi-server load. Upload 429 and optimistic journal 409 retries included. Client and server share a laptop; not a school capacity claim.')
                     args.output.parent.mkdir(parents=True,exist_ok=True)
                     args.output.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
                     print(json.dumps(result),flush=True)
