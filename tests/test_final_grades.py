@@ -1,6 +1,7 @@
 from decimal import Decimal
 from uuid import uuid4
 import json
+import time
 import pytest
 from backend import api
 from backend.final_grades import recommendation, Scale
@@ -10,6 +11,11 @@ from test_journal_periods import period,close,action,period_clock
 
 BASE='/api/final-grades'
 
+@pytest.fixture(autouse=True)
+def stop_gradebook_jobs():
+    yield
+    api.shutdown_gradebook_jobs()
+
 def opts(c):return c.get(BASE+'/options?workspace=demo').json()
 def scale(c,**extra):
     r=c.put(BASE+'/scales/'+uuid4().hex+'?workspace=demo',json=dict(version=0,name='Тестовая шкала',bands=[dict(label='Ниже',minPercent=0),dict(label='Выше',minPercent=75)])|extra)
@@ -17,8 +23,13 @@ def scale(c,**extra):
     return r.json()
 def prepare(c,p):
     r=c.post(BASE+'/periods/'+p['id']+'/prepare?workspace=demo',json=dict(version=p['version']))
-    assert r.status_code==200,r.text
-    return r.json()
+    assert r.status_code==202,r.text
+    job=r.json();deadline=time.monotonic()+25
+    while job['status'] in ['queued','running','cancelling'] and time.monotonic()<deadline:
+        time.sleep(.03);response=c.get(BASE+'/preparations/'+job['id']+'?workspace=demo');response.raise_for_status();job=response.json()
+    assert job['status']=='succeeded',job
+    response=c.get(BASE+'/books/'+job['bookId']+'?workspace=demo');response.raise_for_status()
+    return response.json()['book']
 def sheet(c,b,**params):return c.get(BASE+'/books/'+b['id'],params=dict(workspace='demo')|params)
 def batch(c,rows,op,**extra):return c.post(BASE+'/actions?workspace=demo',json=dict(rows=[dict(id=r['id'],version=r['version']) for r in rows],action=op)|extra)
 def propose(c,r,s,**extra):
@@ -163,7 +174,11 @@ def test_report_read_does_not_wait_for_writer_and_family_revocation(client):
 
 def test_evidence_pagination_and_atomic_publication_rollback(client):
     p,b,s,r,_=seeded(client);r=propose(client,r,s).json();r=batch(client,[r],'approve').json()['items'][0]
+    original=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json()['items'][0]
     with api.connect() as db:
+        # A pre-upgrade book retains its existing evidence and cursor contract.
+        db.execute("UPDATE grading_books SET source_kind='legacy' WHERE id=?",(b['id'],))
+        db.execute('INSERT INTO grading_marks(workspace,row_id,document) VALUES (?,?,?)',('demo',r['id'],json.dumps({k:v for k,v in original.items() if k!='id'})))
         db.executemany('INSERT INTO grading_marks(workspace,row_id,document) VALUES (?,?,?)',[('demo',r['id'],json.dumps(dict(assessment=f'Work {i}',score=i))) for i in range(60)])
         db.execute("CREATE TRIGGER reject_final_audit BEFORE INSERT ON grading_history WHEN NEW.action='publish' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
     first=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json();assert len(first['items'])==50 and first['nextAfter']

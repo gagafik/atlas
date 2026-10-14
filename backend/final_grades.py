@@ -1,15 +1,12 @@
 """School-defined final grades, pinned to immutable journal closures."""
-from datetime import date, timedelta
 from decimal import Decimal
 from fractions import Fraction
 import json
 from typing import Literal
-from uuid import uuid4
 from fastapi import HTTPException, Request, Query
 from pydantic import Field, model_validator
-from .models import Model, State
+from .models import Model
 from .access import now
-from .calendar_ops import DayContext, resolve_day
 from .journal import user_ids
 from .notifications import encoded
 
@@ -28,6 +25,8 @@ def tables(db):
     db.execute('''CREATE TABLE IF NOT EXISTS final_results(workspace TEXT,period_id TEXT,student_id TEXT,subject_id TEXT,row_id TEXT,version INTEGER,document TEXT,PRIMARY KEY(workspace,period_id,student_id,subject_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS final_pupil ON final_results(workspace,student_id,period_id)')
     db.execute('CREATE INDEX IF NOT EXISTS final_row ON final_results(workspace,row_id)')
+    from .gradebook_jobs import tables as job_tables
+    job_tables(db)
 
 
 class Band(Model):
@@ -113,7 +112,7 @@ class FinalGrades:
         if user['role']=='teacher' and not user_ids(user,workspace,'teacher') & {t.id for t in snap.state.teachers}:raise HTTPException(403,'Нет действующего назначения учителя.')
         # Ordinary readers use WAL snapshots and must not wait behind preparation.
         with self.access.read_connect() as db:
-            ready=db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='final_row'").fetchone()
+            ready=db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='grading_job_recent'").fetchone()
         if not ready:
             with self.access.lock,self.access.connect() as db:self.journal.tables(db);tables(db)
         return user,snap
@@ -125,6 +124,7 @@ class FinalGrades:
     def row(self,db,workspace,id,user,version=None):
         raw=db.execute('SELECT * FROM grading_rows WHERE workspace=? AND id=?',(workspace,id)).fetchone()
         if not raw or user['role']!='admin' and raw[6]!=user['id']:raise HTTPException(404,'Строка не найдена или не назначена вам.')
+        if not db.execute('SELECT 1 FROM grading_books WHERE workspace=? AND id=?',(workspace,raw[2])).fetchone():raise HTTPException(404,'Ведомость ещё не готова.')
         value=dict(id=raw[1],bookId=raw[2],studentId=raw[3],subjectId=raw[4],classId=raw[5],assigned=raw[6],version=raw[7],status=raw[8],source=json.loads(raw[9]),proposal=json.loads(raw[10]) if raw[10] else None)
         if version is not None and value['version']!=version:raise HTTPException(409,'Строка изменилась. Обновите ведомость.')
         public=db.execute('SELECT document FROM final_results WHERE workspace=? AND row_id=?',(workspace,id)).fetchone()
@@ -150,51 +150,6 @@ class FinalGrades:
         db.execute('UPDATE grading_rows SET assigned=?,version=?,status=?,proposal=? WHERE workspace=? AND id=?',(row['assigned'],row['version'],row['status'],encoded(row['proposal']) if row['proposal'] else None,workspace,row['id']))
         db.execute('INSERT INTO grading_history(workspace,row_id,version,action,actor,created,reason,document) VALUES (?,?,?,?,?,?,?,?)',(workspace,row['id'],row['version'],action,user['name'],now().isoformat(),reason,encoded(row)))
         self.access.record(db,'journal.final_'+action,workspace,detail=encoded(dict(rowId=row['id'],version=row['version'],reason=reason)))
-
-    def prepare(self,db,workspace,period):
-        existing=db.execute('SELECT id FROM grading_books WHERE workspace=? AND period_id=? AND closure_version=?',(workspace,period['id'],period['version'])).fetchone()
-        if existing:return self.book(db,workspace,existing[0])
-        closure=db.execute('SELECT state_document FROM journal_period_closures WHERE workspace=? AND period_id=? AND version=?',(workspace,period['id'],period['version'])).fetchone()
-        if not closure:raise HTTPException(409,'Архив закрытия отсутствует.')
-        state=State.model_validate_json(closure[0]);ctx=DayContext(state);students={s.id:s for s in state.students};classes={c.id:c.name for c in state.classes}
-        book=uuid4().hex;rows={}
-        def source(student,subject_id,subject):
-            key=(student['id'],subject_id)
-            if key not in rows:rows[key]=dict(id=uuid4().hex,student=student,subject=subject,expected=0,published=0,numeric=0,text=0,missing=0,zeroWeight=0,incompleteRoster=0,weightedSum=Fraction(0),weight=Fraction(0))
-            return rows[key]
-        day=date.fromisoformat(period['start']);end=date.fromisoformat(period['end'])
-        while day<=end:
-            for lesson in resolve_day(state,day,ctx)[0]:
-                if lesson['activity']!='lesson' or lesson['status']=='cancelled':continue
-                for sid in lesson['studentIds']:
-                    s=students[sid];target=source(dict(id=sid,name=s.name,classId=s.classId,className=classes.get(s.classId,'')),lesson['subjectId'],lesson['subject'])
-                    target['expected']+=1
-                    target['incompleteRoster']+=int(not lesson['rosterComplete'])
-            day+=timedelta(days=1)
-        # Stream one archived lesson at a time; comments and attendance never enter grade evidence.
-        cursor=db.execute('''SELECT s.lesson_key,s.published_version,d.document FROM journal_period_snapshots s JOIN journal_period_documents d
-            ON d.workspace=s.workspace AND d.lesson_key=s.lesson_key AND d.published_version=s.published_version
-            WHERE s.workspace=? AND s.period_id=? AND s.closure_version=? ORDER BY s.day,s.start,s.lesson_key''',(workspace,period['id'],period['version']))
-        for key,version,raw in cursor:
-            document=json.loads(raw);lesson=document['lesson'];records={r['studentId']:r for r in document['content']['records']};facts=[]
-            for pupil in lesson['students']:
-                target=source({k:pupil[k] for k in ['id','name','classId','className']},lesson['subjectId'],lesson['subject']);target['published']+=1
-                grades={g['assessmentId']:g for g in records.get(pupil['id'],{}).get('grades',[])}
-                for a in document['content']['assessments']:
-                    grade=grades.get(a['id'],{});score=grade.get('score');label=grade.get('label','')
-                    if score is not None and a['weight']>0:
-                        target['numeric']+=1;weight=Fraction(str(a['weight']));target['weight']+=weight
-                        target['weightedSum']+=Fraction(str(score))/Fraction(str(a['maxScore']))*100*weight
-                    elif score is not None:target['zeroWeight']+=1
-                    elif label:target['text']+=1
-                    else:target['missing']+=1
-                    facts.append((workspace,target['id'],encoded(dict(lessonKey=key,publishedVersion=version,date=lesson['date'],start=lesson['start'],assessment=a['name'],kind=a['kind'],score=score,label=label,maxScore=a['maxScore'],weight=a['weight']))))
-            db.executemany('INSERT INTO grading_marks(workspace,row_id,document) VALUES (?,?,?)',facts)
-        db.execute('INSERT INTO grading_books VALUES (?,?,?,?,?)',(workspace,book,period['id'],period['version'],now().isoformat()))
-        for (student,subject),value in rows.items():
-            id=value.pop('id');value['weightedSum']=str(value['weightedSum']);value['weight']=str(value['weight'])
-            db.execute('INSERT INTO grading_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',(workspace,id,book,student,subject,value['student']['classId'],'',1,'draft',encoded(value),None))
-        return self.book(db,workspace,book)
 
     def register(self,app,Workspace):
         @app.get('/api/final-grades/options')
@@ -228,16 +183,6 @@ class FinalGrades:
                 self.access.record(db,'journal.final_scale',workspace,detail=encoded(dict(id=id,version=value['version'])))
             return value
 
-        @app.post('/api/final-grades/periods/{id}/prepare')
-        def prepare(id:str,body:Prepare,request:Request,workspace:Workspace='school'):
-            user,snap=self.context(request,workspace,True,True)
-            with self.access.lock,self.access.connect() as db:
-                db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace);period=self.periods.find(db,workspace,id,body.version)
-                if period['status']!='closed':raise HTTPException(409,'Сначала закройте журналы периода.')
-                value=self.prepare(db,workspace,period)
-                self.access.record(db,'journal.final_prepared',workspace,detail=encoded(dict(bookId=value['id'])))
-                return value
-
         @app.get('/api/final-grades/books/{id}')
         def sheet(id:str,request:Request,workspace:Workspace='school',offset:int=Query(0,ge=0,le=10000000),classId:str='',subjectId:str='',status:Literal['all','draft','submitted','approved','published']='all'):
             user,snap=self.context(request,workspace,True);scope,args=self.scope(user)
@@ -257,9 +202,15 @@ class FinalGrades:
             user,snap=self.context(request,workspace,True)
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace);row=self.row(db,workspace,id,user)
-                marks=db.execute('SELECT id,document FROM grading_marks WHERE workspace=? AND row_id=? AND id>? ORDER BY id LIMIT 51',(workspace,id,after)).fetchall()
+                kind=db.execute('SELECT source_kind FROM grading_books WHERE workspace=? AND id=?',(workspace,row['bookId'])).fetchone()[0]
+                if kind=='shared':
+                    from .gradebook_jobs import shared_evidence
+                    page=shared_evidence(db,workspace,row,after)
+                else:
+                    marks=db.execute('SELECT id,document FROM grading_marks WHERE workspace=? AND row_id=? AND id>? ORDER BY id LIMIT 51',(workspace,id,after)).fetchall()
+                    page=dict(items=[dict(id=r[0],**json.loads(r[1])) for r in marks[:50]],nextAfter=marks[49][0] if len(marks)>50 else None)
                 scales=[json.loads(r[0]) for r in db.execute('SELECT document FROM grading_scales WHERE workspace=?',(workspace,))]
-                return dict(row=row,items=[dict(id=r[0],**json.loads(r[1])) for r in marks[:50]],nextAfter=marks[49][0] if len(marks)>50 else None,recommendations={s['id']+':'+str(s['version']):recommendation(row['source'],s) for s in scales if s['active']})
+                return dict(row=row,**page,recommendations={s['id']+':'+str(s['version']):recommendation(row['source'],s) for s in scales if s['active']})
 
         @app.get('/api/final-grades/rows/{id}/history')
         def history(id:str,request:Request,workspace:Workspace='school',before:int|None=Query(None,ge=1)):
