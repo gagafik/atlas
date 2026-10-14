@@ -18,6 +18,8 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "absence.submitted": "Поступило заявление об отсутствии",
+  "absence.updated": "Изменилось решение по объяснительной",
   "message.received": "Новое сообщение",
   "message.reported": "Получена жалоба на сообщение",
   "message.moderated": "Изменилось решение по жалобе на сообщение",
@@ -300,15 +302,17 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.revision}
                   </p>
                   <p>
-                    {item.action === "family.updated"
-                      ? "Откройте «Мои дети и доступ» в личном кабинете."
-                      : item.action.startsWith("message.")
-                        ? "Откройте раздел сообщений в личном кабинете."
-                        : item.action.startsWith("homework.")
-                          ? "Откройте домашнюю работу в учебном журнале."
-                          : item.action.startsWith("journal.")
-                            ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                            : "Проверьте доступное вам расписание, включая занятия по датам."}
+                    {item.action.startsWith("absence.")
+                      ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                      : item.action === "family.updated"
+                        ? "Откройте «Мои дети и доступ» в личном кабинете."
+                        : item.action.startsWith("message.")
+                          ? "Откройте раздел сообщений в личном кабинете."
+                          : item.action.startsWith("homework.")
+                            ? "Откройте домашнюю работу в учебном журнале."
+                            : item.action.startsWith("journal.")
+                              ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                              : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}

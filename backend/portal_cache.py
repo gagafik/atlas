@@ -24,14 +24,21 @@ class Snapshot:
         from .journal import current_lesson
         # Only schedule rows are cached. Publication, account grants, answer and
         # review versions are still read for every request; writes recheck them.
-        def rows_for_day(day):
-            with self.lock:
-                if day not in self.lesson_days:
-                    self.lesson_days[day] = resolve_day(self.state,day)[0]
-                    if len(self.lesson_days)>8: self.lesson_days.popitem(last=False)
-                self.lesson_days.move_to_end(day)
-                return self.lesson_days[day]
-        return current_lesson(self.state,lesson,rows_for_day)
+        return current_lesson(self.state,lesson,self.lesson_rows)
+
+    def lesson_rows(self, day):
+        with self.lock:
+            if day not in self.lesson_days:
+                self.lesson_days[day] = resolve_day(self.state,day)[0]
+                if len(self.lesson_days)>8: self.lesson_days.popitem(last=False)
+            self.lesson_days.move_to_end(day)
+            return self.lesson_days[day]
+
+    def student_lessons(self, day, student):
+        # Notices cover lessons the pupil actually attends, excluding partial
+        # class closures that the ordinary timetable also shows as changes.
+        return [{k:r[k] for k in ['date','start','end','subject','group','status','activity']}
+                for r in self.lesson_rows(day) if r['activity']=='lesson' and r['status']!='cancelled' and student in r['studentIds']]
 
     def day_rows(self, day, view, entity_id):
         with self.lock:

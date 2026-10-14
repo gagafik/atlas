@@ -371,6 +371,10 @@ journal.register(app, Workspace)
 from .homework import Homework
 homework = Homework(journal, portal_stamp)
 homework.register(app, Workspace)
+from .absences import Absences
+absences = Absences(journal, homework.snapshots)
+absences.register(app, Workspace)
+absences.files.register(app, Workspace)
 
 from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)

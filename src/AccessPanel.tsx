@@ -607,6 +607,18 @@ export default function AccessPanel({
                   {(
                     {
                       "state.saved": "Сохранено расписание",
+                      "absence.submitted": "Подана объяснительная",
+                      "absence.approved": "Принята объяснительная",
+                      "absence.rejected": "Отклонена объяснительная",
+                      "absence.revoked": "Отменено решение по объяснительной",
+                      "absence.withdrawn": "Родитель отозвал объяснительную",
+                      "absence.read": "Просмотрена причина отсутствия",
+                      "absence.history_read":
+                        "Просмотрена история объяснительной",
+                      "absence.file_read": "Скачан файл объяснительной",
+                      "absence.file_uploaded": "Загружен файл объяснительной",
+                      "absence.reviewers_updated":
+                        "Назначены ответственные за объяснительные",
                       "family.updated":
                         "Изменены семейная связь и доступ к ребёнку",
                       "family.history_read":

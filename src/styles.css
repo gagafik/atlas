@@ -4522,4 +4522,12 @@ main {
 .family-card { border: 1px solid #dce3ea; border-radius: 10px; padding: 14px; margin: 10px 0; min-width: 0; background: white; }
 .family-history { border-top: 1px solid #dce3ea; padding: 8px 0; }
 .family-panel fieldset { min-width: 0; }
+.absence-panel { border: 1px solid #dce3ea; border-radius: 10px; padding: 14px; margin: 14px 0; min-width: 0; overflow-wrap: anywhere; }
+.absence-panel summary { cursor: pointer; font-weight: 600; }
+.absence-card { border: 1px solid #dce3ea; border-radius: 10px; padding: 14px; margin: 10px 0; min-width: 0; }
+.absence-panel form { margin: 20px 0; }
+.absence-panel .field { margin: 12px 0; min-width: 0; }
+.absence-panel input, .absence-panel select, .absence-panel textarea { max-width: 100%; min-width: 0; }
+.absence-file { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.absence-preview { max-height: 320px; overflow: auto; }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }

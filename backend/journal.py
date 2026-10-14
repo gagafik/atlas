@@ -240,7 +240,10 @@ class Journal:
             needs_sync = False
             result = dict(lessonKey=key,version=0,updated=None,actor=None,publishedVersion=None,publishedAt=None,hasPublished=False,
                           document=dict(lesson=lesson,content=Content(records=[PupilRecord(studentId=s['id']) for s in lesson['students']]).model_dump(mode='json')))
-        return result | dict(revision=state.revision,writable=writable,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
+        from .absences import approvals
+        with self.access.lock,self.access.connect() as db:
+            excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
+        return result | dict(attendanceApprovals=excuses,revision=state.revision,writable=writable,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
                              canWithdraw=bool(existing and existing['published'] and staff_read(user,workspace,existing['document']['lesson'])))
 
     def recheck_account(self, db, user):
@@ -271,7 +274,7 @@ class Journal:
                 allowed_students = {s.id for s in state.students if any(g.id in groups and (s.classId in g.classIds if g.kind=='whole' else s.id in g.studentIds) for g in state.groups)}
             students = {s.id:dict(id=s.id,name=s.name) for s in state.students if s.id in allowed_students}
             for student in self.historical_students(workspace,user): students.setdefault(student['id'],student)
-            return dict(staff=user['role'] in ['admin','teacher'],yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))
+            return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=user['role'] in ['admin','teacher','parent'],yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))
 
         @app.get('/api/journal/day')
         def day_view(request: Request,day: date,workspace: Workspace='school'):
@@ -386,5 +389,14 @@ class Journal:
                 if user['role'] in ['admin','teacher'] and not staff_read(user,workspace,document['lesson']): continue
                 projected = pupil_projection(document,studentId)
                 if projected: rows.append(projected | dict(lessonKey=entry['lessonKey'],version=entry['publishedVersion'],publishedAt=entry['publishedAt']))
+            from .absences import approvals
+            lessons=[r['lesson']|dict(students=[dict(id=studentId)]) for r in rows]
+            with self.access.lock,self.access.connect() as db:
+                accepted=approvals(db,workspace,lessons)
+            for i,row in enumerate(rows):
+                excuse=accepted.get(i,{}).get(studentId)
+                if excuse and row['record']['attendance']=='absent':
+                    row['record']=row['record']|dict(attendance='excused')
+                    row['absenceApproval']=excuse
             rows.sort(key=lambda r:(r['lesson']['date'],r['lesson']['start'],r['lesson']['subject']))
             return dict(rows=rows,summary=summary(rows),source='published')
