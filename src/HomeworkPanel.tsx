@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { MaterialLinks, type Material } from "./AssignmentFilesPanel";
 
 interface Attachment {
   id: string;
@@ -8,6 +9,8 @@ interface Attachment {
   created: string;
 }
 interface Submitted {
+  assignmentFiles: Material[];
+  latePolicy: "allow" | "block";
   text: string;
   files: Attachment[];
   submittedAt: string;
@@ -24,6 +27,10 @@ interface Submitted {
   } | null;
 }
 interface Work {
+  assignmentFiles: Material[];
+  latePolicy: "allow" | "block";
+  deadlineClosed: boolean;
+  canSaveDraft: boolean;
   assignment: string;
   homework: string;
   dueDate: string | null;
@@ -262,13 +269,25 @@ function StudentWork({
       </p>
       <p>
         {work.dueDate
-          ? `Срок: ${work.dueDate}, до конца дня по времени школы (Кызылорда). Поздние отправки принимаются с отметкой.`
+          ? `Срок: ${work.dueDate}, до конца дня по времени школы (Кызылорда). ${work.latePolicy === "block" ? "После срока приём закрывается." : "Поздние отправки принимаются с отметкой."}`
           : "Срок не указан."}
       </p>
+      <MaterialLinks
+        items={work.assignmentFiles}
+        workspace={workspace}
+        studentId={studentId}
+      />
+      {work.deadlineClosed && (
+        <p className="info-line">
+          Приём работ закрыт. Ученик может сохранить черновик. Для отправки, в
+          том числе после возврата на доработку, учитель должен продлить срок
+          или разрешить позднюю сдачу.
+        </p>
+      )}
       {work.assignmentChanged && (
         <p className="info-line">
           После отправки условия задания изменились. Прежняя работа сохранена;
-          ученик может отправить новый ответ.
+          новый ответ отправляется по текущим условиям и сроку.
         </p>
       )}
       {work.submitted && (
@@ -279,6 +298,23 @@ function StudentWork({
             {work.submitted.late ? " · после срока" : ""}
           </h4>
           <p className="journal-text">{work.submitted.text}</p>
+          {work.assignmentChanged && (
+            <details>
+              <summary>Условия на момент отправки</summary>
+              <p className="journal-text">{work.submitted.homework}</p>
+              <p>
+                Срок: {work.submitted.dueDate || "не указан"}.{" "}
+                {work.submitted.latePolicy === "block"
+                  ? "После срока приём закрыт."
+                  : "Поздние отправки разрешены."}
+              </p>
+              <MaterialLinks
+                items={work.submitted.assignmentFiles}
+                workspace={workspace}
+                studentId={studentId}
+              />
+            </details>
+          )}
           <Files
             items={work.submitted.files}
             workspace={workspace}
@@ -299,7 +335,7 @@ function StudentWork({
           )}
         </article>
       )}
-      {work.canSubmit && (
+      {work.canSaveDraft && (
         <fieldset className="access-fields homework-draft" disabled={busy}>
           <h4>Ваш черновик {dirty ? "· есть несохранённые изменения" : ""}</h4>
           <p className="muted">
@@ -417,7 +453,7 @@ function StudentWork({
             </button>
             <button
               className="primary"
-              disabled={!text.trim() && !fileIds.length}
+              disabled={!work.canSubmit || (!text.trim() && !fileIds.length)}
               onClick={() => void run(() => save("submit"))}
             >
               Отправить работу
@@ -426,14 +462,20 @@ function StudentWork({
         </fieldset>
       )}
       {work.canWithdraw && (
-        <p>
+        <div>
+          {work.deadlineClosed && (
+            <p className="muted">
+              После отзыва повторная отправка будет недоступна до изменения
+              срока учителем.
+            </p>
+          )}
           <button
             disabled={busy}
             onClick={() => void run(() => save("withdraw"))}
           >
             Отозвать работу для изменения
           </button>
-        </p>
+        </div>
       )}
       {work.canReview && work.submitted && work.status !== "returned" && (
         <fieldset className="access-fields homework-review" disabled={busy}>
@@ -490,6 +532,17 @@ function StudentWork({
                     <strong>Условия на момент отправки: </strong>
                     {h.submitted.homework}
                   </p>
+                  <p>
+                    Срок: {h.submitted.dueDate || "не указан"}.{" "}
+                    {h.submitted.latePolicy === "block"
+                      ? "После срока приём закрыт."
+                      : "Поздние отправки разрешены."}
+                  </p>
+                  <MaterialLinks
+                    items={h.submitted.assignmentFiles}
+                    workspace={workspace}
+                    studentId={studentId}
+                  />
                   <p className="journal-text">{h.submitted.text}</p>
                   <Files
                     items={h.submitted.files}

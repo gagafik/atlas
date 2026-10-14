@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
+import AssignmentFilesPanel, {
+  SavedMaterialLinks,
+} from "./AssignmentFilesPanel";
 import AbsencePanel from "./AbsencePanel";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
@@ -212,15 +215,16 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   }, [workspace, options, student, start, end, mode, epoch]);
   useEffect(() => {
     const leave = (e: BeforeUnloadEvent) => {
-      if (dirty) {
+      if (dirty || busy) {
         e.preventDefault();
         e.returnValue = "";
       }
     };
     window.addEventListener("beforeunload", leave);
     return () => window.removeEventListener("beforeunload", leave);
-  }, [dirty]);
+  }, [dirty, busy]);
   function canLeave() {
+    if (busy || saveLock.current) return false;
     return (
       !dirty ||
       window.confirm(
@@ -625,6 +629,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                             ...c,
                             homework: e.target.value,
                             dueDate: e.target.value ? c.dueDate : null,
+                            homeworkFiles: e.target.value
+                              ? c.homeworkFiles
+                              : [],
+                            homeworkLatePolicy: e.target.value
+                              ? c.homeworkLatePolicy
+                              : "allow",
                           }))
                         }
                       />
@@ -639,10 +649,54 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           content((c) => ({
                             ...c,
                             dueDate: e.target.value || null,
+                            homeworkLatePolicy: e.target.value
+                              ? c.homeworkLatePolicy
+                              : "allow",
                           }))
                         }
                       />
                     </label>
+                    <label className="field">
+                      <span>Приём после срока</span>
+                      <select
+                        disabled={!entry.document.content.dueDate}
+                        value={
+                          entry.document.content.homeworkLatePolicy || "allow"
+                        }
+                        onChange={(e) =>
+                          content((c) => ({
+                            ...c,
+                            homeworkLatePolicy: e.target.value as
+                              "allow" | "block",
+                          }))
+                        }
+                      >
+                        <option value="allow">
+                          Разрешать с отметкой об опоздании
+                        </option>
+                        <option value="block">
+                          Закрывать приём после срока
+                        </option>
+                      </select>
+                      <small>
+                        Срок заканчивается в 23:59 по времени школы (Кызылорда).
+                        При закрытом приёме для повторной сдачи после возврата
+                        тоже потребуется продление срока.
+                      </small>
+                    </label>
+                    <AssignmentFilesPanel
+                      key={workspace + entry.lessonKey}
+                      entry={entry}
+                      workspace={workspace}
+                      disabled={!editable}
+                      change={(ids) =>
+                        content((c) => ({ ...c, homeworkFiles: ids }))
+                      }
+                      onUploading={(value) => {
+                        saveLock.current = value;
+                        setBusy(value);
+                      }}
+                    />
                     <div className="journal-assessments">
                       <h3>Проверочные работы</h3>
                       <p>
@@ -1104,6 +1158,20 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                   {historical?.document && (
                     <section className="journal-history-preview">
                       <h3>Редакция {historical.version} · только просмотр</h3>
+                      <p>
+                        Поздняя сдача:{" "}
+                        {historical.document.content.homeworkLatePolicy ===
+                        "block"
+                          ? "приём закрывается после срока"
+                          : "разрешена с отметкой"}
+                        .
+                      </p>
+                      <SavedMaterialLinks
+                        ids={historical.document.content.homeworkFiles || []}
+                        workspace={workspace}
+                        lessonKey={entry.lessonKey}
+                        day={historical.document.lesson.date}
+                      />
                       <button onClick={() => setHistorical(null)}>
                         Закрыть редакцию
                       </button>
