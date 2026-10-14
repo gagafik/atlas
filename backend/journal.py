@@ -159,6 +159,7 @@ class Journal:
         db.execute('CREATE TABLE IF NOT EXISTS journal_entries (workspace TEXT,lesson_key TEXT,version INTEGER,updated TEXT,actor_name TEXT,document TEXT,published_document TEXT,published_version INTEGER,published_at TEXT,PRIMARY KEY(workspace,lesson_key))')
         db.execute('CREATE TABLE IF NOT EXISTS journal_history (id INTEGER PRIMARY KEY,workspace TEXT,lesson_key TEXT,version INTEGER,updated TEXT,actor_name TEXT,action TEXT,document TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS journal_history_entry ON journal_history(workspace,lesson_key,version)')
+        db.execute('CREATE INDEX IF NOT EXISTS journal_versions ON journal_entries(workspace,version)')
         db.execute("CREATE INDEX IF NOT EXISTS journal_entry_day ON journal_entries(workspace,json_extract(document,'$.lesson.date'))")
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_members'").fetchone()
         db.execute('CREATE TABLE IF NOT EXISTS journal_members (workspace TEXT,lesson_key TEXT,student_id TEXT,name TEXT,kind TEXT,PRIMARY KEY(workspace,lesson_key,student_id,kind))')
@@ -168,6 +169,8 @@ class Journal:
                 db.execute(f"INSERT OR IGNORE INTO journal_members SELECT e.workspace,e.lesson_key,json_extract(s.value,'$.id'),json_extract(s.value,'$.name'),? FROM journal_entries e,json_each(e.{field},'$.lesson.students') s",(kind,))
         from .attendance_projection import tables
         tables(db)
+        from .coverage_projection import tables as coverage_tables
+        coverage_tables(db)
 
     def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
         with self.access.lock,self.access.connect() as db:
@@ -184,6 +187,8 @@ class Journal:
             return [self.unpack(row) for row in db.execute(query,params)]
 
     def members(self, db, workspace, key, document, kind):
+        from .coverage_projection import replace as coverage_replace
+        coverage_replace(db,workspace,key)
         db.execute('DELETE FROM journal_members WHERE workspace=? AND lesson_key=? AND kind=?',(workspace,key,kind))
         if document:
             db.executemany('INSERT INTO journal_members VALUES (?,?,?,?,?)',[(workspace,key,s['id'],s['name'],kind) for s in document['lesson']['students']])

@@ -618,6 +618,9 @@ export default function AccessPanel({
                       "attendance.details_read":
                         "Просмотрена посещаемость уроков ученика",
                       "attendance.exported": "Выгружена посещаемость",
+                      "journal.coverage_read": "Проверено заполнение журналов",
+                      "journal.coverage_exported":
+                        "Выгружена проверка журналов",
                       "absence.bulk_preview":
                         "Подготовлено общее решение по объяснительным",
                       "absence.bulk_applied":

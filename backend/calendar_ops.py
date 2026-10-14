@@ -22,6 +22,9 @@ class DayContext:
         self.maps = {key: {r.id: r for r in getattr(state, key)} for key in
                      ['placements', 'workloads', 'groups', 'subjects', 'teachers', 'rooms', 'profiles', 'classes', 'students']}
         self.resources = ResourceContext(state)
+        # Reuse ordered, active group membership across a multi-day report.
+        self.group_students = {g.id:[s.id for s in state.students if s.active and
+            (s.classId in g.classIds if g.kind=='whole' else s.id in g.studentIds)] for g in state.groups}
 
     def origin(self, change):
         p = self.maps['placements'].get(change.placementId)
@@ -33,7 +36,7 @@ class DayContext:
         w = self.maps['workloads'][p.workloadId] if p else None
         g = self.maps['groups'][w.groupId if w else change.groupId]
         slot = self.maps['profiles'][w.profileId].for_day(p.day)[p.period] if p else None
-        students = [s.id for s in self.state.students if s.active and (s.classId in g.classIds if g.kind == 'whole' else s.id in g.studentIds)]
+        students = self.group_students[g.id][:]
         original_students = students[:]
         original_classes = g.classIds if g.kind == 'whole' or not roster_complete(g) else sorted({self.maps['students'][s].classId for s in students})
         subjects = change.subjectId if change and change.subjectId else w.subjectId if w else None
