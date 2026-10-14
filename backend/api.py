@@ -381,6 +381,9 @@ attendance_reports.register(app, Workspace)
 from .journal_coverage import JournalCoverage
 journal_coverage = JournalCoverage(attendance_reports)
 journal_coverage.register(app, Workspace)
+from .journal_periods import JournalPeriods
+journal_periods = JournalPeriods(journal_coverage)
+journal_periods.register(app, Workspace)
 
 from .messages import Messages
 messages = Messages(access, notifications, portal_stamp)

@@ -171,6 +171,8 @@ class Journal:
         tables(db)
         from .coverage_projection import tables as coverage_tables
         coverage_tables(db)
+        from .journal_periods import tables as period_tables
+        period_tables(db)
 
     def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
         with self.access.lock,self.access.connect() as db:
@@ -251,10 +253,12 @@ class Journal:
             result = dict(lessonKey=key,version=0,updated=None,actor=None,publishedVersion=None,publishedAt=None,hasPublished=False,
                           document=dict(lesson=lesson,content=Content(records=[PupilRecord(studentId=s['id']) for s in lesson['students']]).model_dump(mode='json')))
         from .absences import approvals
+        from .journal_periods import locks
         with self.access.lock,self.access.connect() as db:
             excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
-        return result | dict(attendanceApprovals=excuses,revision=state.revision,writable=writable,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
-                             canWithdraw=bool(existing and existing['published'] and staff_read(user,workspace,existing['document']['lesson'])))
+            closed=locks(db,workspace,lesson,result['document']['lesson'],existing['published']['lesson'] if existing and existing['published'] else None)
+        return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
+                             canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,existing['document']['lesson'])))
 
     def recheck_account(self, db, user):
         if user['id']=='local':
@@ -320,7 +324,7 @@ class Journal:
             if not state.settings.yearStart <= body.day <= state.settings.yearEnd: raise HTTPException(422,'Дата вне учебного года.')
             record = self.entry(state,workspace,user,body.lessonKey,body.day,body.syncRoster)
             if record['version']!=body.version: raise HTTPException(409,'Журнал уже изменён в другом окне. Загрузите запись заново.')
-            if not record['writable']: raise HTTPException(403,'Отменённый, удалённый или чужой урок доступен только для просмотра.')
+            if not record['writable']: raise HTTPException(403,'Период закрыт или урок доступен только для просмотра. Обновите журнал для подробностей.')
             if record['currentDate']!=body.day.isoformat(): raise HTTPException(409,'Урок перенесён на другую дату. Загрузите его заново.')
             if record['needsSync']: raise HTTPException(409,'Изменилось время или состав урока. Сначала просмотрите обновление состава.')
             expected = {s['id'] for s in record['document']['lesson']['students']}
@@ -336,6 +340,8 @@ class Journal:
                 previous = self.unpack(existing) if existing else None
                 if not revision or revision[0]!=body.revision or (previous['version'] if previous else 0)!=body.version: raise HTTPException(409,'Данные изменились во время сохранения. Обновите журнал.')
                 old_public = previous['published'] if previous else None
+                from .journal_periods import require_open
+                require_open(db,workspace,document['lesson'],previous['document']['lesson'] if previous else None,old_public['lesson'] if old_public else None)
                 published = document if body.publish else old_public
                 published_version = version if body.publish else previous['publishedVersion'] if previous else None
                 published_at = created if body.publish else previous['publishedAt'] if previous else None
@@ -352,6 +358,7 @@ class Journal:
         @app.post('/api/journal/withdraw')
         def withdraw(body: Withdraw,request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace,staff=True)
+            state = self.access.read(workspace)
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);self.access.tables(db)
                 if not db.in_transaction: db.execute('BEGIN IMMEDIATE')
@@ -362,6 +369,10 @@ class Journal:
                 if not staff_read(user,workspace,record['document']['lesson']): raise HTTPException(403,'Нет доступа к этой записи.')
                 if record['version']!=body.version: raise HTTPException(409,'Запись изменилась. Обновите журнал.')
                 if not record['published']: raise HTTPException(409,'Запись уже скрыта.')
+                revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
+                if not revision or revision[0]!=state.revision:raise HTTPException(409,'Расписание изменилось. Обновите журнал.')
+                from .journal_periods import require_open
+                require_open(db,workspace,record['document']['lesson'],record['published']['lesson'],current_lesson(state,record['document']['lesson']))
                 updated,version = now().isoformat(),body.version+1
                 db.execute('UPDATE journal_entries SET version=?,updated=?,actor_name=?,published_document=NULL,published_version=NULL,published_at=NULL WHERE workspace=? AND lesson_key=?',(version,updated,user['name'],workspace,body.lessonKey))
                 db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',(workspace,body.lessonKey,version,updated,user['name'],'journal.withdrawn',encoded(record['document'])))

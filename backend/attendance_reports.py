@@ -72,6 +72,9 @@ class AttendanceReports:
     def context(self,request,workspace):
         user,snap=self.absences.context(request,workspace)
         if user['role'] not in ['admin','teacher']:raise HTTPException(403,'Сводная посещаемость доступна ответственным сотрудникам.')
+        from .journal import user_ids
+        if user['role']=='admin' and workspace not in user['workspaces'] or user['role']=='teacher' and not user_ids(user,workspace,'teacher'):
+            raise HTTPException(403,'Нет доступа к журналам этого пространства.')
         from .absences import tables
         with self.access.lock,self.access.connect() as db:self.journal.tables(db);tables(db)
         return user,snap

@@ -4,6 +4,7 @@ import HomeworkPanel from "./HomeworkPanel";
 import AbsencePanel from "./AbsencePanel";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
+import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import {
   attendanceNames,
   gradeLabel,
@@ -348,6 +349,35 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
         <AbsencePanel key={workspace} workspace={workspace} />
       )}
       {options?.staff && (
+        <JournalPeriodsPanel
+          key={`periods-${workspace}`}
+          workspace={workspace}
+          onChanged={() => {
+            setEpoch((x) => x + 1);
+            if (entry) {
+              const key = entry.lessonKey;
+              api(
+                `journal/entry?${new URLSearchParams({ lessonKey: key, day })}`,
+                workspace,
+              )
+                .then((fresh: JournalEntry) => {
+                  setEntry((old) =>
+                    old?.lessonKey === key
+                      ? {
+                          ...old,
+                          writable: fresh.writable,
+                          canWithdraw: fresh.canWithdraw,
+                          periodLocks: fresh.periodLocks,
+                        }
+                      : old,
+                  );
+                })
+                .catch((e) => setError(e.message));
+            }
+          }}
+        />
+      )}
+      {options?.staff && (
         <JournalCoveragePanel
           key={`coverage-${workspace}`}
           workspace={workspace}
@@ -536,8 +566,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                   )}
                   {!entry.writable && (
                     <p className="info-line">
-                      Запись доступна только для просмотра: урок отменён, удалён
-                      или назначен другому преподавателю.
+                      {entry.periodLocks?.length
+                        ? `Период закрыт: ${entry.periodLocks.map((p) => p.name).join(", ")}. Для исправления администратор должен открыть все закрытые периоды с указанием причины.`
+                        : "Запись доступна только для просмотра: урок отменён, удалён или назначен другому преподавателю."}
                     </p>
                   )}
                   {entry.needsSync && entry.writable && (

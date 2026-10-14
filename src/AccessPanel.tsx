@@ -619,6 +619,13 @@ export default function AccessPanel({
                         "Просмотрена посещаемость уроков ученика",
                       "attendance.exported": "Выгружена посещаемость",
                       "journal.coverage_read": "Проверено заполнение журналов",
+                      "journal.period_created": "Создан учебный период",
+                      "journal.period_updated": "Изменён учебный период",
+                      "journal.period_closed": "Журналы периода закрыты",
+                      "journal.period_reopened":
+                        "Период открыт для исправлений",
+                      "journal.period_archive_read":
+                        "Просмотрен архив журналов",
                       "journal.coverage_exported":
                         "Выгружена проверка журналов",
                       "absence.bulk_preview":
