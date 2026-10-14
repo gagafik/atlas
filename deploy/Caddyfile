@@ -1,0 +1,13 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$ATLAS_DOMAIN} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        -Server
+    }
+    reverse_proxy app:8000
+}

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#28674f" />
+    <title>Атлас · Подключение</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f3f5ef;
+        color: #213d32;
+        font:
+          17px/1.6 system-ui,
+          sans-serif;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      main {
+        max-width: 520px;
+        padding: 30px;
+        border-radius: 22px;
+        background: white;
+        border: 1px solid #dae3d9;
+      }
+      h1 {
+        font-size: 32px;
+        margin: 12px 0;
+      }
+      img {
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+      }
+      button {
+        padding: 13px 20px;
+        background: #28674f;
+        color: white;
+        border: 0;
+        border-radius: 10px;
+        font: inherit;
+        cursor: pointer;
+      }
+      p {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/atlas-192.png" alt="" />
+      <h1>Нет подключения к Атласу</h1>
+      <p>
+        Проверьте сеть и убедитесь, что сервер школы работает. Затем повторите
+        подключение.
+      </p>
+      <p>
+        Для открытия расписания нужно соединение с сервером. Школьные данные на
+        этом экране не сохраняются.
+      </p>
+      <button id="retry">Подключиться снова</button>
+    </main>
+    <script>
+      document
+        .getElementById("retry")
+        .addEventListener("click", () => location.reload());
+      window.addEventListener("online", () => location.reload());
+    </script>
+  </body>
+</html>

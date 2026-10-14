@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Атлас — школьное расписание",
+  "short_name": "Атлас",
+  "description": "Школьное расписание, личный кабинет и изменения по датам",
+  "lang": "ru",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f5ef",
+  "theme_color": "#28674f",
+  "icons": [
+    {
+      "src": "/icons/atlas-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/atlas-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

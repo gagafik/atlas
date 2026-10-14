@@ -1,0 +1,53 @@
+name: atlas
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      TIMETABLE_REQUIRE_AUTH: "1"
+      TIMETABLE_DB: /app/data/timetable.db
+      TIMETABLE_ALLOWED_ORIGINS: https://${ATLAS_DOMAIN:?Set ATLAS_DOMAIN in .env}
+      ATLAS_UPLOAD_TOTAL_MB: ${ATLAS_UPLOAD_TOTAL_MB:-2048}
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - atlas_data:/app/data
+    # Only the reverse proxy can reach this port; do not publish it to the host.
+    expose:
+      - "8000"
+    stop_grace_period: 45s
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      ATLAS_DOMAIN: ${ATLAS_DOMAIN:?Set ATLAS_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  atlas_data:
+  caddy_data:
+  caddy_config:
