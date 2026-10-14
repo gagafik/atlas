@@ -114,6 +114,10 @@ def main():
                 if server.poll() is None:server.terminate()
                 try:server.wait(timeout=10)
                 except subprocess.TimeoutExpired:server.kill();server.wait(timeout=10)
+                # Keep diagnostics when HTTP fails before a JSON report is ready.
+                # The temporary database contains only this tool's synthetic data.
+                log.flush();args.output.parent.mkdir(parents=True,exist_ok=True)
+                args.output.with_suffix('.server.log').write_text((root/'server.log').read_text(encoding='utf-8',errors='replace'),encoding='utf-8')
 
 
 if __name__=='__main__':main()

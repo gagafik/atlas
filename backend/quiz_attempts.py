@@ -72,10 +72,10 @@ def register(app,quizzes,Workspace):
     @app.get('/api/journal/quizzes/{id}/attempts/{attempt_id}')
     def detail(id:str,attempt_id:str,request:Request,workspace:Workspace='school'):
         ctx=context(quizzes,request,workspace,id,attempt_id)
-        with quizzes.access.lock,quizzes.access.connect() as db:
-            quizzes.tables(db);db.execute('BEGIN IMMEDIATE');quizzes.recheck(db,ctx)
-            quizzes.expire(db,ctx,ctx['student']);attempt=load(db,workspace,id,attempt_id)
+        def read(db):
+            attempt=load(db,workspace,id,attempt_id)
             return quizzes.attempt_view(ctx,attempt)|dict(serverNow=now().isoformat(),canAnswer=ctx['canAnswer'] and ctx['quiz']['status']=='published' and attempt['status']=='active')
+        return quizzes.read_attempts(ctx,read)
 
     @app.put('/api/journal/quizzes/{id}/attempts/{attempt_id}')
     def answer(id:str,attempt_id:str,body:models.SaveAnswers,request:Request,workspace:Workspace='school'):
@@ -124,8 +124,8 @@ def register(app,quizzes,Workspace):
     @app.get('/api/journal/quizzes/{id}/attempts/{attempt_id}/history')
     def history(id:str,attempt_id:str,request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
         ctx=context(quizzes,request,workspace,id,attempt_id)
-        with quizzes.access.lock,quizzes.access.connect() as db:
-            quizzes.tables(db);db.execute('BEGIN');quizzes.recheck(db,ctx)
+        def read(db):
+            quizzes.recheck(db,ctx)
             rows=db.execute('SELECT id,created,actor,action,document FROM quiz_history WHERE workspace=? AND quiz_id=? AND attempt_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 21',
                             (workspace,id,attempt_id,before,before)).fetchall()
             import json
@@ -135,3 +135,4 @@ def register(app,quizzes,Workspace):
                 if 'document' in document:item['attempt']=quizzes.attempt_view(ctx,document)
                 items.append(item)
             return dict(items=items,nextBefore=rows[19][0] if len(rows)>20 else None)
+        return quizzes.read_only(read)

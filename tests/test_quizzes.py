@@ -285,7 +285,7 @@ def test_rights_and_version_changes_between_context_and_write(client,monkeypatch
     with api.connect() as db:assert db.execute('SELECT version,document FROM quiz_attempts WHERE id=?',(work['id'],)).fetchone()==before
 
 
-@pytest.mark.parametrize('change',['closure','account','school'])
+@pytest.mark.parametrize('change',['closure','account','school','journal'])
 def test_journal_grade_rechecks_changes_after_preparation(client,monkeypatch,change):
     from backend.homework_grading import HomeworkGrading
     from test_journal_periods import close,period
@@ -294,10 +294,12 @@ def test_journal_grade_rechecks_changes_after_preparation(client,monkeypatch,cha
     action(teacher,action(teacher,quiz,'close').json(),'release')
     endpoint=f'/api/journal/quizzes/test-one/attempts/{sent["id"]}';o=teacher.get(endpoint+'/grading?workspace=demo').json()
     original=HomeworkGrading.prepare
-    def changed(self,ctx):
-        result=original(self,ctx)
+    def changed(self,ctx,**kwargs):
+        result=original(self,ctx,**kwargs)
         if change=='closure':close(client,period(client))
         elif change=='school':api.save('demo',api.read('demo'))
+        elif change=='journal':
+            with api.connect() as db:db.execute("UPDATE journal_entries SET version=version+1 WHERE workspace='demo'")
         else:
             with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
         return result

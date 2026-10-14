@@ -49,11 +49,11 @@ class HomeworkGrading:
         self.homework=homework
         self.journal=homework.journal
 
-    def prepare(self, ctx):
+    def prepare(self, ctx, *, db=None):
         if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет действующий учитель урока или администратор.')
         # Homework.context already resolved this lesson against its cached state.
         # recheck() validates that state, account and journal again in the transaction.
-        return self.journal.resolved_entry(ctx['state'],ctx['workspace'],ctx['user'],ctx['key'],ctx['record'],ctx['current'])
+        return self.journal.resolved_entry(ctx['state'],ctx['workspace'],ctx['user'],ctx['key'],ctx['record'],ctx['current'],db=db)
 
     def reason(self, db, ctx, record):
         closed=locks(db,ctx['workspace'],record['document']['lesson'],ctx['published']['lesson'],ctx['current'])
@@ -74,10 +74,10 @@ class HomeworkGrading:
         if not row or row[2]!=record['version']:raise HTTPException(409,'Журнал изменился. Обновите параметры оценки.')
         return self.journal.unpack(row)
 
-    def options(self, ctx):
-        record=self.prepare(ctx)
-        with self.homework.access.lock,self.homework.access.connect() as db:
-            self.homework.tables(db);db.execute('BEGIN');saved=self.recheck(db,ctx,record)
+    def options(self, ctx, *, db=None):
+        record=self.prepare(ctx) if db is None else self.prepare(ctx,db=db)
+        def read(db):
+            saved=self.recheck(db,ctx,record)
             reason=self.reason(db,ctx,record)
             draft=assessment_map(saved['document']);published=assessment_map(saved['published'])
             return dict(journalVersion=record['version'],revision=ctx['revision'],allowed=not reason,reason=reason,
@@ -86,6 +86,10 @@ class HomeworkGrading:
                     reason='Параметры этой работы изменены в черновике. Сначала согласуйте их в журнале.' if a!=draft.get(id) else reason,
                     publishedGrade=existing_grade(saved['published'],ctx['student'],id),
                     draftGrade=existing_grade(saved['document'],ctx['student'],id)) for id,a in published.items()])
+        if db is not None:return read(db)
+        with self.homework.access.lock,self.homework.access.connect() as connection:
+            self.homework.tables(connection);connection.execute('BEGIN')
+            return read(connection)
 
     def apply(self, db, ctx, record, body, created):
         if body.revision!=ctx['revision'] or body.journalVersion!=record['version']:

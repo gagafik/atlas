@@ -11,14 +11,18 @@ class PublishGrade(Version):
     grading: ReviewGrade
 
 
-def prepared(quizzes,request,workspace,id,attempt_id):
+def prepared(quizzes,request,workspace,id,attempt_id,project):
     ctx=context(quizzes,request,workspace,id,attempt_id)
     if not ctx['canReview']:raise HTTPException(403,'Оценку публикует действующий учитель ученика или администратор.')
     if not ctx['quiz']['released']:raise HTTPException(409,'Сначала откройте разбор теста, чтобы результат стал доступен семье.')
-    record=quizzes.journal.find(workspace,ctx['key'])
-    if not record or not record['published']:raise HTTPException(409,'Сначала опубликуйте урок в журнале с актуальным составом.')
-    ctx.update(record=record,published=record['published'])
-    return ctx
+    def read(db):
+        quizzes.recheck(db,ctx)
+        row=db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,ctx['key'])).fetchone()
+        record=quizzes.journal.unpack(row) if row else None
+        if not record or not record['published']:raise HTTPException(409,'Сначала опубликуйте урок в журнале с актуальным составом.')
+        ctx.update(record=record,published=record['published'])
+        return project(db,ctx)
+    return quizzes.read_only(read)
 
 
 def register(app,quizzes,Workspace):
@@ -26,12 +30,11 @@ def register(app,quizzes,Workspace):
 
     @app.get('/api/journal/quizzes/{id}/attempts/{attempt_id}/grading')
     def options(id:str,attempt_id:str,request:Request,workspace:Workspace='school'):
-        ctx=prepared(quizzes,request,workspace,id,attempt_id)
-        return grading.options(ctx)
+        return prepared(quizzes,request,workspace,id,attempt_id,lambda db,ctx:grading.options(ctx,db=db))
 
     @app.post('/api/journal/quizzes/{id}/attempts/{attempt_id}/grade')
     def publish(id:str,attempt_id:str,body:PublishGrade,request:Request,workspace:Workspace='school'):
-        ctx=prepared(quizzes,request,workspace,id,attempt_id);record=grading.prepare(ctx)
+        ctx,record=prepared(quizzes,request,workspace,id,attempt_id,lambda db,ctx:(ctx,grading.prepare(ctx,db=db)))
         with quizzes.access.lock,quizzes.access.connect() as db:
             quizzes.tables(db);db.execute('BEGIN IMMEDIATE');quizzes.recheck(db,ctx)
             attempt=load(db,workspace,id,attempt_id)
