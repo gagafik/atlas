@@ -4542,3 +4542,16 @@ main {
 .period-ack input { flex:0 0 auto; width:auto; margin-top:4px; }
 .period-archive { margin-top:16px; padding:12px; background:var(--surface, #fff); }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }
+
+/* Final-grade forms and personal report cards share the journal layout. */
+.final-grades-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 12px 0; }
+.final-grades-panel .final-band { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.final-grades-panel .field { min-width: 0; }
+.final-grades-panel input:not([type=checkbox]), .final-grades-panel select, .final-grades-panel textarea { max-width: 100%; }
+.final-grades-panel p, .final-grades-panel h3, .final-grades-panel h4 { overflow-wrap: anywhere; }
+.final-grades-panel details { margin: 12px 0; padding: 10px; border: 1px solid var(--border, #d8dee8); border-radius: 8px; }
+.final-grades-panel summary { cursor: pointer; font-weight: 600; }
+.final-evidence { max-height: 360px; overflow: auto; }
+.final-report { padding: 16px; margin: 14px 0; border: 1px solid var(--border, #d8dee8); border-radius: 10px; }
+.final-report article + article { border-top: 1px solid var(--border, #d8dee8); padding-top: 10px; }
+@media (max-width: 600px) { .final-grades-panel .dated-toolbar, .final-grades-panel .final-band { align-items: stretch; flex-direction: column; } .final-grades-panel .field, .final-grades-panel button { max-width: 100%; } }
