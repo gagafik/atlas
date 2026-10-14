@@ -104,6 +104,8 @@ class Messages:
         self.files=MessageFiles(self)
         from .message_drafts import MessageDrafts
         self.drafts=MessageDrafts(self)
+        from .message_groups import MessageGroups
+        self.groups=MessageGroups(self)
 
     def tables(self,db):
         self.access.tables(db)
@@ -121,6 +123,7 @@ class Messages:
         db.execute('CREATE TABLE IF NOT EXISTS message_requests (user_id TEXT,request_id TEXT,body_hash TEXT,thread_id TEXT,PRIMARY KEY(user_id,request_id))')
         db.execute('CREATE TABLE IF NOT EXISTS message_group_scopes (thread_id TEXT PRIMARY KEY,kind TEXT,group_ids TEXT)')
         db.execute('CREATE TABLE IF NOT EXISTS message_exclusions (thread_id TEXT,user_id TEXT,action TEXT,created TEXT,PRIMARY KEY(thread_id,user_id))')
+        db.execute('CREATE TABLE IF NOT EXISTS message_group_managers (thread_id TEXT PRIMARY KEY,manager_id TEXT)')
 
     def context(self,request,workspace):
         user=request.state.user
@@ -132,7 +135,7 @@ class Messages:
     def accounts(self,db,thread_ids=None,user_ids=None):
         clause='active=1';params=[]
         if thread_ids is not None:
-            clause+=' AND id IN (SELECT m.user_id FROM message_members m WHERE m.thread_id IN (SELECT value FROM json_each(?)))';params.append(encoded(thread_ids))
+            clause+=' AND id IN (SELECT m.user_id FROM message_members m WHERE m.thread_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id))';params.append(encoded(thread_ids))
         if user_ids is not None:
             clause+=' AND id IN (SELECT value FROM json_each(?))';params.append(encoded(user_ids))
         return {row[0]:self.access.public(row) for row in db.execute('SELECT * FROM accounts WHERE '+clause,params)}
@@ -177,32 +180,26 @@ class Messages:
             other=db.execute('SELECT user_id FROM message_members WHERE thread_id=? AND user_id!=?',(thread['id'],user['id'])).fetchone()
             if not other or not directory.pair(user,accounts.get(other[0]),thread['studentId']): return None
         elif thread['kind']=='group':
-            scope=db.execute('SELECT kind,group_ids FROM message_group_scopes WHERE thread_id=?',(thread['id'],)).fetchone()
-            author=accounts.get(thread['authorId'])
-            if not scope or not directory.enabled(author):return None
-            original_author=db.execute('SELECT role FROM message_members WHERE thread_id=? AND user_id=?',(thread['id'],thread['authorId'])).fetchone()
-            if not original_author or original_author[0]!=author['role']:return None
-            if scope[0]=='contacts':
-                if user['id']==thread['authorId']:
-                    if author['role'] in FAMILY and thread['studentId'] not in directory.pupils(author):return None
-                elif not directory.pair(author,user,thread['studentId']):return None
-            else:
-                groups=set(json.loads(scope[1]))
-                if not groups<=directory.groups(author):return None
-                if user['id']!=thread['authorId'] and user['role'] in FAMILY:
-                    pupils=set().union(*(directory.members[g] for g in groups))
-                    if not set(json.loads(row[1])) & directory.pupils(user) & pupils:return None
+            scope=self.groups.scope(db,thread)
+            manager=accounts.get(thread['managerId'])
+            if not self.groups.eligible(thread,manager,directory,scope,manager=True):return None
+            manager_row=db.execute('SELECT role FROM message_members WHERE thread_id=? AND user_id=?',(thread['id'],thread['managerId'])).fetchone()
+            if not manager_row or manager_row[0]!=manager['role']:return None
+            if not self.groups.eligible(thread,user,directory,scope):return None
+            if user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user) & self.groups.pupils(thread,directory,scope):return None
         elif thread['status']=='withdrawn' and user['id']!=thread['authorId']: return None
         elif user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user): return None
         return row
 
     @staticmethod
-    def thread(row):
-        return dict(zip(['id','workspace','kind','title','authorId','studentId','version','status','requireAck','created','latestId'],row)) | dict(requireAck=bool(row[8]))
+    def thread(db,row):
+        result=dict(zip(['id','workspace','kind','title','authorId','studentId','version','status','requireAck','created','latestId'],row)) | dict(requireAck=bool(row[8]))
+        manager=db.execute('SELECT manager_id FROM message_group_managers WHERE thread_id=?',(row[0],)).fetchone() if row[2]=='group' else None
+        return result | dict(managerId=manager[0] if manager else row[4])
 
     def find(self,db,id,user,directory,accounts):
         row=db.execute('SELECT * FROM message_threads WHERE id=? AND workspace=?',(id,directory.workspace)).fetchone()
-        thread=self.thread(row) if row else None
+        thread=self.thread(db,row) if row else None
         member=self.member(db,thread,user,directory,accounts) if thread else None
         if not member: raise HTTPException(404,'Переписка недоступна.')
         return thread,member
@@ -300,7 +297,7 @@ class Messages:
                 accounts=self.recipient_accounts(db,body,user,directory)
                 prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,body=body.model_dump(exclude={'draftVersion'} if body.draftVersion is None else set())))
                 if prior:
-                    self.find(db,prior,user,directory,accounts)
+                    self.find(db,prior,user,directory,self.thread_accounts(db,prior,user))
                     return dict(id=prior)
                 recipients=self.recipients(body,user,directory,accounts)
                 self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,None)
@@ -331,7 +328,7 @@ class Messages:
                 accounts=self.accounts(db,thread_ids=[r[0] for r in rows[:100] if r[2] in ['direct','group']])
                 items=[]
                 for row in rows[:100]:
-                    thread=self.thread(row);member=self.member(db,thread,user,directory,accounts)
+                    thread=self.thread(db,row);member=self.member(db,thread,user,directory,accounts)
                     if member: items.append(thread|dict(unread=thread['latestId']>member[2],acknowledged=member[3]==thread['version']))
             return dict(items=items,nextBefore=rows[99][10] if len(rows)>100 else None)
 
@@ -348,7 +345,7 @@ class Messages:
                         if uid!=user['id'] and (peer:=accounts.get(uid)) and self.member(db,thread,peer,directory,accounts):
                             peers.append(dict(id=uid,name=peer['name'],read=read_id>=thread['latestId'],acknowledged=ack==thread['version']))
                 attachments=self.files.for_posts(db,[r[0] for r in posts[:50]])
-                return thread|dict(userId=user['id'],canReply=thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=thread['authorId']==user['id'],
+                return thread|dict(userId=user['id'],canReply=thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=thread['managerId']==user['id'],
                     acknowledged=member[3]==thread['version'],participants=peers,posts=[dict(zip(['id','authorId','author','created','text'],row))|dict(files=attachments[row[0]]) for row in reversed(posts[:50])],
                     nextBefore=posts[49][0] if len(posts)>50 else None)
 
@@ -395,7 +392,7 @@ class Messages:
                     if thread['kind']!='announcement' or not thread['requireAck'] or thread['authorId']==user['id']: raise HTTPException(422,'Подтверждение не требуется.')
                     db.execute('UPDATE message_members SET ack_version=?,read_id=? WHERE thread_id=? AND user_id=?',(body.version,thread['latestId'],id,user['id']))
                 else:
-                    if thread['authorId']!=user['id']: raise HTTPException(403,'Изменять статус может автор.')
+                    if thread['managerId']!=user['id']: raise HTTPException(403,'Изменять статус может управляющий обсуждением или автор личного диалога/объявления.')
                     if body.action=='withdraw' and thread['kind']=='announcement': status='withdrawn'
                     elif body.action in ['close','reopen'] and thread['kind'] in ['direct','group']: status='closed' if body.action=='close' else 'open'
                     else: raise HTTPException(422,'Действие не подходит к этой переписке.')
@@ -412,13 +409,13 @@ class Messages:
                 accounts=self.thread_accounts(db,id,user);thread,_=self.find(db,id,user,directory,accounts)
                 if thread['kind']!='group':raise HTTPException(422,'Участники меняются только в групповом обсуждении.')
                 if thread['version']!=body.version:raise HTTPException(409,'Обсуждение изменилось. Обновите его.')
-                if body.action=='leave' and body.userId!=user['id'] or body.action=='remove' and user['id']!=thread['authorId']:raise HTTPException(403,'Нет права изменить этого участника.')
-                if body.userId==thread['authorId']:raise HTTPException(422,'Автор может закрыть обсуждение целиком.')
-                target=accounts.get(body.userId)
-                if not target or not self.member(db,thread,target,directory,accounts):raise HTTPException(404,'Участник недоступен.')
+                if body.action=='leave' and body.userId!=user['id'] or body.action=='remove' and user['id']!=thread['managerId']:raise HTTPException(403,'Нет права изменить этого участника.')
+                if body.userId==thread['managerId']:raise HTTPException(422,'Перед выходом передайте управление другому участнику или закройте обсуждение.')
+                # A manager can remove a now-inactive account to free a place.
+                if not db.execute('SELECT 1 FROM message_members m WHERE m.thread_id=? AND m.user_id=? AND NOT EXISTS (SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id)',(id,body.userId)).fetchone():raise HTTPException(404,'Участник недоступен.')
                 db.execute('INSERT INTO message_exclusions VALUES (?,?,?,?)',(id,body.userId,body.action,now().isoformat()))
                 # Access revocation must remain possible after the posting limit is reached.
-                post=self.post(db,thread,user,'Участник вышел из обсуждения.' if body.action=='leave' else 'Автор изменил состав обсуждения.',limit=False)
+                post=self.post(db,thread,user,'Участник вышел из обсуждения.' if body.action=='leave' else 'Управляющий изменил состав обсуждения.',limit=False)
                 db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))
                 self.notifications.deliver(db,[u for uid,u in accounts.items() if uid!=user['id'] and self.member(db,thread,u,directory,accounts)],workspace,thread['version']+1,'message.received')
                 self.access.record(db,'message.participant_'+body.action,workspace,detail=id+' · '+body.userId)
