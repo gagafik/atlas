@@ -34,6 +34,19 @@ type History = {
   actor: string;
   action: string;
   comment: string;
+  batchId?: string | null;
+};
+type BulkPreview = {
+  id: string;
+  expires: string;
+  action: string;
+  comment: string;
+  items: (Item & { nextStatus: string })[];
+};
+const actions: Record<string, string> = {
+  approve: "Принять",
+  reject: "Отклонить",
+  revoke: "Отменить принятое решение",
 };
 const labels: Record<string, string> = {
   pending: "На рассмотрении",
@@ -81,6 +94,21 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   const [decisionRequest, setDecisionRequest] = useState(() =>
     crypto.randomUUID(),
   );
+  const [bulkIds, setBulkIds] = useState<string[]>([]),
+    [bulkAction, setBulkAction] = useState("approve"),
+    [bulkComment, setBulkComment] = useState(""),
+    [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null),
+    [bulkRequest, setBulkRequest] = useState(() => crypto.randomUUID());
+  const clearBulkPreview = () => {
+    setBulkPreview(null);
+    setBulkRequest(crypto.randomUUID());
+  };
+  const clearBulk = () => {
+    clearBulkPreview();
+    setBulkIds([]);
+  };
+  const bulkEligible = (item: Item) =>
+    item.status === (bulkAction === "revoke" ? "approved" : "pending");
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -109,6 +137,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     );
     setItems((old) => (before ? [...old, ...r.items] : r.items));
     setNext(r.nextBefore);
+    if (!before) clearBulk();
   };
   const open = async (id: string) => {
     const r = await api(`journal/absences/${id}`, workspace);
@@ -129,6 +158,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   };
   useEffect(() => {
     if (!expanded) return;
+    clearBulk();
     let live = true;
     setBusy(true);
     setError("");
@@ -232,6 +262,43 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   };
   const fileUrl = (id: string) =>
     `/api/journal/absence-files/${id}?workspace=${encodeURIComponent(workspace)}`;
+  const bulkDone = async (count: number) => {
+    clearBulk();
+    setBulkComment("");
+    setSelected(null);
+    setHistory([]);
+    setNotice(
+      `Сохранено решений: ${count}. Обновите журнал для актуальной посещаемости.`,
+    );
+    await list();
+  };
+  const prepareBulk = async () => {
+    const r = await api("journal/absences/bulk/preview", workspace, "POST", {
+      requestId: bulkRequest,
+      items: items
+        .filter((item) => bulkIds.includes(item.id))
+        .map(({ id, version }) => ({ id, version })),
+      action: bulkAction,
+      comment: bulkComment,
+    });
+    if (r.status === "applied") await bulkDone(r.count);
+    else setBulkPreview(r);
+  };
+  const applyBulk = async () => {
+    if (
+      !bulkPreview ||
+      !window.confirm(
+        `Применить решение «${actions[bulkPreview.action]}» ко всем ${bulkPreview.items.length} заявлениям из предпросмотра?`,
+      )
+    )
+      return;
+    const r = await api(
+      `journal/absences/bulk/${bulkPreview.id}/apply`,
+      workspace,
+      "POST",
+    );
+    await bulkDone(r.count);
+  };
   return (
     <details
       className="absence-panel"
@@ -592,8 +659,151 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
             </button>
           </div>
           {!busy && !items.length && <p>Заявлений не найдено.</p>}
+          {options?.canReview && (
+            <section
+              className="absence-card"
+              aria-label="Массовое рассмотрение"
+            >
+              <h3>Общее решение по заявлениям</h3>
+              <p>
+                Выберите до 50 заявлений ниже. Одно объяснение решения
+                сохранится в истории каждого. Родители увидят только своё
+                заявление.
+              </p>
+              <fieldset disabled={busy} className="access-fields">
+                <label className="field">
+                  <span>Общее действие</span>
+                  <select
+                    value={bulkAction}
+                    onChange={(e) => {
+                      setBulkAction(e.target.value);
+                      clearBulk();
+                    }}
+                  >
+                    {Object.entries(actions).map(([id, label]) => (
+                      <option key={id} value={id}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Объяснение общего решения</span>
+                  <textarea
+                    value={bulkComment}
+                    maxLength={2000}
+                    onChange={(e) => {
+                      setBulkComment(e.target.value);
+                      clearBulkPreview();
+                    }}
+                  />
+                </label>
+                <p>Выбрано: {bulkIds.length} из 50.</p>
+                <div className="dated-toolbar">
+                  <button
+                    disabled={!items.some(bulkEligible)}
+                    onClick={() => {
+                      setBulkIds(
+                        items
+                          .filter(bulkEligible)
+                          .slice(0, 50)
+                          .map((item) => item.id),
+                      );
+                      clearBulkPreview();
+                    }}
+                  >
+                    Выбрать до 50 загруженных
+                  </button>
+                  <button disabled={!bulkIds.length} onClick={clearBulk}>
+                    Сбросить выбор
+                  </button>
+                  <button
+                    disabled={!bulkIds.length || !bulkComment.trim()}
+                    onClick={() => void run(prepareBulk)}
+                  >
+                    Подготовить предпросмотр
+                  </button>
+                </div>
+              </fieldset>
+              {bulkPreview && (
+                <section
+                  aria-label="Предпросмотр общего решения"
+                  className="absence-card"
+                >
+                  <h3>Проверьте общее решение</h3>
+                  <p>
+                    <strong>
+                      {actions[bulkPreview.action]} · {bulkPreview.items.length}{" "}
+                      заявлений
+                    </strong>
+                  </p>
+                  <p className="journal-text">{bulkPreview.comment}</p>
+                  <p>
+                    {bulkPreview.action === "approve"
+                      ? "Отсутствие на полностью включённых в период уроках будет учитываться как уважительная причина, в том числе в журналах, созданных позже."
+                      : bulkPreview.action === "revoke"
+                        ? "Эти объяснительные перестанут подтверждать уважительную причину. Исходные отметки учителей снова определят посещаемость."
+                        : "Заявления будут отклонены. Посещаемость останется прежней."}{" "}
+                    Оценки, исходные отметки и публикация журналов сохраняются.
+                  </p>
+                  <div className="absence-bulk-preview">
+                    {bulkPreview.items.map((item) => (
+                      <article className="absence-card" key={item.id}>
+                        <strong>
+                          {item.studentName} · {labels[item.status]} →{" "}
+                          {labels[item.nextStatus]}
+                        </strong>
+                        <p>
+                          {item.start.replace("T", " ")} —{" "}
+                          {item.end.replace("T", " ")}
+                        </p>
+                        <p className="journal-text">{item.reason}</p>
+                        {item.files?.map((file) => (
+                          <p key={file.id}>
+                            <a href={fileUrl(file.id)}>{file.filename}</a>
+                          </p>
+                        ))}
+                      </article>
+                    ))}
+                  </div>
+                  <p>
+                    Предпросмотр действителен до{" "}
+                    {new Date(bulkPreview.expires).toLocaleTimeString("ru-RU")}.
+                    Если заявления или доступы изменились, ни одно решение не
+                    сохранится. После ошибки соединения можно повторить
+                    применение: решения не продублируются.
+                  </p>
+                  <button disabled={busy} onClick={() => void run(applyBulk)}>
+                    Применить ко всем ({bulkPreview.items.length})
+                  </button>
+                </section>
+              )}
+            </section>
+          )}
           {items.map((item) => (
             <article className="absence-card" key={item.id}>
+              {options?.canReview && bulkEligible(item) && (
+                <label className="absence-file">
+                  <input
+                    type="checkbox"
+                    checked={bulkIds.includes(item.id)}
+                    disabled={
+                      busy ||
+                      (!bulkIds.includes(item.id) && bulkIds.length >= 50)
+                    }
+                    onChange={(e) => {
+                      setBulkIds((old) =>
+                        e.target.checked
+                          ? [...old, item.id]
+                          : old.filter((id) => id !== item.id),
+                      );
+                      clearBulkPreview();
+                    }}
+                  />
+                  Включить в общее решение: {item.studentName},{" "}
+                  {item.start.replace("T", " ")}
+                </label>
+              )}
               <strong>
                 {item.studentName} · {labels[item.status]}
               </strong>
@@ -699,6 +909,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   <p>
                     {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·{" "}
                     {labels[h.action] || h.action} · редакция {h.version}
+                    {h.batchId && " · общее решение"}
                   </p>
                   <p className="journal-text">{h.comment}</p>
                 </div>

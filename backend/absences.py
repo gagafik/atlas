@@ -136,7 +136,36 @@ class Absences:
         targets=[u for u in users if self.can_review(db,u,snapshot,workspace,student) or u['id']==row[2] and student in user_ids(u,workspace,'student')]
         self.notifications.deliver(db,targets,workspace,row[8],action)
 
+    def decision_status(self,db,row,user,snap,workspace,version,action):
+        if action=='withdraw':
+            if user['role']!='parent' or row[2]!=user['id']:raise HTTPException(403,'Отозвать может автор заявления.')
+            allowed=row[9]=='pending';status='withdrawn'
+        else:
+            if not self.can_review(db,user,snap,workspace,row[3]):raise HTTPException(403,'Нет права рассматривать это заявление.')
+            allowed=row[9]==('approved' if action=='revoke' else 'pending')
+            status=dict(approve='approved',reject='rejected',revoke='revoked')[action]
+        if not allowed or row[8]!=version:raise HTTPException(409,'Состояние заявления изменилось. Откройте его заново.')
+        return status
+
+    def apply_decision(self,db,row,user,snap,workspace,status,comment,request_id,fingerprint,*,notify=True):
+        """Caller validates every decision first and owns the write transaction."""
+        id=row[0];stamp=now().isoformat();version=row[8]+1
+        db.execute('UPDATE absence_notices SET version=?,status=?,updated=? WHERE id=?',(version,status,stamp,id))
+        db.execute('INSERT INTO absence_history(notice_id,version,created,actor_id,actor_name,action,comment,request_id,request_hash) VALUES (?,?,?,?,?,?,?,?,?)',(id,version,stamp,user['id'],user['name'],status,comment,request_id,fingerprint))
+        changed=self.find(db,id,user,snap,workspace)
+        if notify:self.notify(db,changed,snap,'absence.updated')
+        if notify and status in ['approved','revoked']:
+            candidates=db.execute("""SELECT * FROM accounts a WHERE active=1 AND role IN ('student','parent') AND EXISTS(
+                SELECT 1 FROM json_each(a.permissions,'$.grants') g,json_each(g.value,'$.entityIds') s
+                WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')='student' AND s.value=?)""",(workspace,row[3])).fetchall()
+            targets=[self.access.public(r) for r in candidates]
+            self.notifications.deliver(db,[u for u in targets if row[3] in user_ids(u,workspace,'student')],workspace,version,'journal.updated')
+        self.access.record(db,'absence.'+status,workspace,detail=id)
+        return changed
+
     def register(self,app,Workspace):
+        from .absence_bulk import register
+        register(self,app,Workspace)
         @app.get('/api/journal/absences/options')
         def options(request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace)
@@ -226,9 +255,9 @@ class Absences:
             user,snap=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.recheck(db,user,snap,workspace);self.find(db,id,user,snap,workspace)
-                rows=db.execute('SELECT id,version,created,actor_name,action,comment FROM absence_history WHERE notice_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 51',(id,before,before)).fetchall()
+                rows=db.execute('SELECT id,version,created,actor_name,action,comment,request_id FROM absence_history WHERE notice_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 51',(id,before,before)).fetchall()
                 self.access.record(db,'absence.history_read',workspace,detail=id)
-                return dict(items=[dict(id=r[0],version=r[1],created=r[2],actor=r[3],action=r[4],comment=r[5]) for r in rows[:50]],nextBefore=rows[49][0] if len(rows)>50 else None)
+                return dict(items=[dict(id=r[0],version=r[1],created=r[2],actor=r[3],action=r[4],comment=r[5],batchId=r[6][6:] if r[6].startswith('batch:') else None) for r in rows[:50]],nextBefore=rows[49][0] if len(rows)>50 else None)
 
         @app.post('/api/journal/absences/{id}/decision')
         def decision(id:str,body:Decision,request:Request,workspace:Workspace='school'):
@@ -240,23 +269,6 @@ class Absences:
                 if previous:
                     if previous[0]!=fingerprint:raise HTTPException(409,'Запрос уже использован для другого решения.')
                     return self.detail(db,row,user,snap,workspace)
-                if body.action=='withdraw':
-                    if user['role']!='parent' or row[2]!=user['id']:raise HTTPException(403,'Отозвать может автор заявления.')
-                    allowed=row[9]=='pending';status='withdrawn'
-                else:
-                    if not self.can_review(db,user,snap,workspace,row[3]):raise HTTPException(403,'Нет права рассматривать это заявление.')
-                    allowed=row[9]==('approved' if body.action=='revoke' else 'pending')
-                    status=dict(approve='approved',reject='rejected',revoke='revoked')[body.action]
-                if not allowed or row[8]!=body.version:raise HTTPException(409,'Состояние заявления изменилось. Откройте его заново.')
-                stamp=now().isoformat();version=row[8]+1
-                db.execute('UPDATE absence_notices SET version=?,status=?,updated=? WHERE id=?',(version,status,stamp,id))
-                db.execute('INSERT INTO absence_history(notice_id,version,created,actor_id,actor_name,action,comment,request_id,request_hash) VALUES (?,?,?,?,?,?,?,?,?)',(id,version,stamp,user['id'],user['name'],status,body.comment,body.requestId,fingerprint))
-                changed=self.find(db,id,user,snap,workspace);self.notify(db,changed,snap,'absence.updated')
-                if status in ['approved','revoked']:
-                    candidates=db.execute("""SELECT * FROM accounts a WHERE active=1 AND role IN ('student','parent') AND EXISTS(
-                        SELECT 1 FROM json_each(a.permissions,'$.grants') g,json_each(g.value,'$.entityIds') s
-                        WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')='student' AND s.value=?)""",(workspace,row[3])).fetchall()
-                    targets=[self.access.public(r) for r in candidates]
-                    self.notifications.deliver(db,[u for u in targets if row[3] in user_ids(u,workspace,'student')],workspace,version,'journal.updated')
-                self.access.record(db,'absence.'+status,workspace,detail=id)
+                status=self.decision_status(db,row,user,snap,workspace,body.version,body.action)
+                changed=self.apply_decision(db,row,user,snap,workspace,status,body.comment,body.requestId,fingerprint)
                 return self.detail(db,changed,user,snap,workspace)
