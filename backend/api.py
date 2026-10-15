@@ -424,6 +424,9 @@ school_forms.register(app, Workspace)
 from .meetings import Meetings
 meetings = Meetings(access, notifications, portal_stamp)
 meetings.register(app, Workspace)
+from .staff_time import StaffTime
+staff_time = StaffTime(access, notifications, portal_stamp)
+staff_time.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

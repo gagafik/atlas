@@ -1,0 +1,158 @@
+.staff-time {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: 90dvh;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  padding: 24px;
+  background: var(--surface, #fff);
+  color: var(--text, #1e293b);
+}
+.staff-time::backdrop {
+  background: #0f172a88;
+}
+.staff-time header {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.staff-time h2 {
+  margin: 0;
+}
+.staff-time header p,
+.time-help {
+  color: #526078;
+}
+.staff-time fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.staff-time label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.staff-time input,
+.staff-time select,
+.staff-time textarea {
+  font: inherit;
+  max-width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #b8c5d4;
+  border-radius: 6px;
+  box-sizing: border-box;
+  background: #fff;
+  color: #1e293b;
+}
+.staff-time textarea {
+  width: 100%;
+  min-height: 80px;
+}
+.time-controls,
+.time-actions {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.time-controls label {
+  flex: 1;
+  min-width: 150px;
+}
+.staff-time button {
+  white-space: normal;
+}
+.time-stats {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 16px;
+  background: #edf4ff;
+  border-radius: 8px;
+}
+.staff-time article,
+.staff-time form,
+.time-preview,
+.time-history {
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid #d2dce8;
+  border-radius: 10px;
+}
+.staff-time h4 {
+  margin: 0;
+}
+.time-preview {
+  background: #fff7e5;
+}
+.time-error {
+  padding: 12px;
+  background: #fff0f0;
+  color: #9b2525;
+}
+.time-table {
+  overflow: auto;
+}
+.time-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.time-table th,
+.time-table td {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid #d2dce8;
+}
+.time-history pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.staff-time p {
+  overflow-wrap: anywhere;
+}
+.staff-time details {
+  margin: 14px 0;
+}
+.staff-time summary {
+  cursor: pointer;
+}
+.staff-time :focus-visible {
+  outline: 3px solid #2463eb;
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .staff-time {
+    width: calc(100vw - 16px);
+    max-height: 96dvh;
+    padding: 14px;
+  }
+  .staff-time header {
+    gap: 8px;
+  }
+  .staff-time h2 {
+    font-size: 22px;
+  }
+  .time-controls {
+    align-items: stretch;
+  }
+  .time-controls label {
+    flex-basis: 100%;
+  }
+  .staff-time article,
+  .staff-time form {
+    padding: 12px;
+  }
+  .time-actions button {
+    flex: 1 1 140px;
+  }
+  .time-stats {
+    gap: 8px;
+    display: grid;
+  }
+  .time-table {
+    font-size: 14px;
+  }
+}
