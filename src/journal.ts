@@ -1,5 +1,6 @@
 import { csvCell, download } from "./utils";
 import type { MaterialSnapshot } from "./teachingMaterials";
+import type { TopicReference } from "./curriculum";
 export interface Assessment {
   id: string;
   name: string;
@@ -25,6 +26,7 @@ export interface JournalContent {
   homework: string;
   homeworkFiles?: string[];
   materials?: MaterialSnapshot[];
+  curriculum?: TopicReference | null;
   homeworkLatePolicy?: "allow" | "block";
   dueDate: string | null;
   assessments: Assessment[];

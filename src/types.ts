@@ -252,6 +252,7 @@ export type Page =
   | "homework"
   | "quizzes"
   | "materials"
+  | "curriculum"
   | "access"
   | "publications"
   | "commitments"

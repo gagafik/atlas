@@ -6,6 +6,7 @@ import JournalPanel from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
+import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
@@ -166,21 +167,23 @@ export default function Portal({
         <div>
           <strong>атлас•</strong>
           <h1>
-            {section === "materials"
-              ? "Учебные материалы"
-              : section === "family"
-                ? "Мои дети и доступ"
-                : section === "messages"
-                  ? "Сообщения"
-                  : section === "quizzes"
-                    ? "Контрольные и тесты"
-                    : section === "homework"
-                      ? "Домашние задания"
-                      : section === "journal"
-                        ? "Учебный журнал"
-                        : section === "courses"
-                          ? "Выбор курсов"
-                          : "Моё расписание"}
+            {section === "curriculum"
+              ? "Учебные планы"
+              : section === "materials"
+                ? "Учебные материалы"
+                : section === "family"
+                  ? "Мои дети и доступ"
+                  : section === "messages"
+                    ? "Сообщения"
+                    : section === "quizzes"
+                      ? "Контрольные и тесты"
+                      : section === "homework"
+                        ? "Домашние задания"
+                        : section === "journal"
+                          ? "Учебный журнал"
+                          : section === "courses"
+                            ? "Выбор курсов"
+                            : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -208,6 +211,14 @@ export default function Portal({
           >
             Сообщения
           </button>
+          {session.user!.role === "teacher" && (
+            <button
+              aria-pressed={section === "curriculum"}
+              onClick={() => setSection("curriculum")}
+            >
+              Учебные планы
+            </button>
+          )}
           {session.user!.role === "teacher" && (
             <button
               aria-pressed={section === "materials"}
@@ -288,6 +299,7 @@ export default function Portal({
         </>
       ) : section === "journal" ||
         section === "materials" ||
+        section === "curriculum" ||
         section === "homework" ||
         section === "quizzes" ? (
         <>
@@ -305,7 +317,9 @@ export default function Portal({
             </select>
           </label>
           {workspace &&
-            (section === "materials" ? (
+            (section === "curriculum" ? (
+              <CurriculumPanel key={workspace} workspace={workspace} />
+            ) : section === "materials" ? (
               <TeachingMaterialsPanel key={workspace} workspace={workspace} />
             ) : section === "quizzes" ? (
               <QuizzesPanel key={workspace} workspace={workspace} />

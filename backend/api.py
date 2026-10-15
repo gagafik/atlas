@@ -374,6 +374,9 @@ homework.register(app, Workspace)
 from .teaching_materials import TeachingMaterials
 teaching_materials = TeachingMaterials(journal, homework.snapshots)
 teaching_materials.register(app, Workspace)
+from .curriculum import Curriculum
+curriculum = Curriculum(teaching_materials)
+curriculum.register(app, Workspace)
 from .quizzes import Quizzes
 quizzes = Quizzes(journal, homework.snapshots)
 quizzes.register(app, Workspace)
