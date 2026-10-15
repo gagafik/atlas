@@ -430,6 +430,9 @@ staff_time.register(app, Workspace)
 from .school_documents import SchoolDocuments
 school_documents = SchoolDocuments(access, notifications, portal_stamp)
 school_documents.register(app, Workspace)
+from .library import Library
+library = Library(access, notifications, portal_stamp)
+library.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
