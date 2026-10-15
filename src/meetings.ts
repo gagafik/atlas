@@ -61,6 +61,8 @@ export type Booking = {
   endsAt: string;
   canCancel: boolean;
   canMark: boolean;
+  canReschedule?: boolean;
+  rescheduleReason?: string;
   location: string;
   roomName: string;
   parentAccessCurrent?: boolean;
@@ -101,6 +103,7 @@ export const labels: Record<string, string> = {
   attended: "Встреча состоялась",
   no_show: "Не пришли",
   booked: "Запись создана",
+  rescheduled: "Встреча перенесена",
 };
 // Inputs and displays use school time regardless of the parent's device zone.
 export function schoolInput(iso: string) {

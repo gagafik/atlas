@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Account } from "./auth";
 import MeetingEditor from "./MeetingEditor";
+import MeetingReschedule from "./MeetingReschedule";
 import {
   blankDefinition,
   clockTime,
@@ -75,13 +76,25 @@ export default function ParentMeetings({
     [to, setTo] = useState("19:00"),
     [reason, setReason] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [transfer, setTransfer] = useState<Booking | null>(null);
   const [history, setHistory] = useState<
-    Record<string, { action: string; created: string; reason?: string }[]>
+    Record<
+      string,
+      {
+        action: string;
+        created: string;
+        reason?: string;
+        source?: { startsAt: string };
+        target?: { startsAt: string };
+        sourceBlocked?: boolean;
+      }[]
+    >
   >({});
   const mayLeave = () =>
     !(dirty || note) ||
     window.confirm("Есть несохранённые изменения. Продолжить без сохранения?");
   function clear() {
+    setTransfer(null);
     setSelected(null);
     setDraft(null);
     setDirty(false);
@@ -157,7 +170,7 @@ export default function ParentMeetings({
     setBookings((old) => (after ? [...old, ...r.items] : r.items));
     setNextBooking(r.nextAfter);
   }
-  async function open(id: string, keep = false) {
+  async function open(id: string, keep = false, newDate?: string) {
     const e: MeetingEvent = await api(`meetings/events/${id}`, workspace);
     setSelected(e);
     setDraft(null);
@@ -166,7 +179,9 @@ export default function ParentMeetings({
     setNote("");
     setPreview(null);
     setHistory({});
-    const date = keep ? day : schoolInput(e.definition.startsAt).slice(0, 10),
+    const date =
+        newDate ??
+        (keep ? day : schoolInput(e.definition.startsAt).slice(0, 10)),
       host = keep && e.hosts.some((h) => h.accountId === hostId) ? hostId : "";
     setDay(date);
     setHostId(host);
@@ -955,6 +970,11 @@ export default function ParentMeetings({
                         <p>{labels[b.status]}</p>
                         {b.note && <p>Комментарий: {b.note}</p>}
                         {b.reason && <p>Причина отмены: {b.reason}</p>}
+                        {b.rescheduleReason && (
+                          <p>
+                            Причина последнего переноса: {b.rescheduleReason}
+                          </p>
+                        )}
                         {b.parentAccessCurrent === false && (
                           <p className="meeting-error">
                             Текущий доступ родителя к ребёнку изменился.
@@ -962,6 +982,14 @@ export default function ParentMeetings({
                           </p>
                         )}
                         <div className="meeting-toolbar">
+                          {options.canManage && b.canReschedule && (
+                            <button
+                              disabled={busy || b.parentAccessCurrent === false}
+                              onClick={() => setTransfer(b)}
+                            >
+                              Перенести встречу
+                            </button>
+                          )}
                           {b.canCancel && (
                             <button
                               disabled={busy}
@@ -1008,6 +1036,16 @@ export default function ParentMeetings({
                                 {displayTime(h.created)} ·{" "}
                                 {labels[h.action] || h.action}
                                 {h.reason ? ` · ${h.reason}` : ""}
+                                {h.source && h.target && (
+                                  <>
+                                    {" "}
+                                    · {displayTime(h.source.startsAt)} →{" "}
+                                    {displayTime(h.target.startsAt)}
+                                    {h.sourceBlocked
+                                      ? " · прежний интервал закрыт"
+                                      : " · прежний интервал освобождён"}
+                                  </>
+                                )}
                               </li>
                             ))}
                           </ol>
@@ -1040,6 +1078,29 @@ export default function ParentMeetings({
           )}
         </main>
       </div>
+      {transfer && (
+        <MeetingReschedule
+          key={workspace + transfer.id}
+          booking={transfer}
+          workspace={workspace}
+          reminderMinutes={selected?.definition.reminderMinutes || 0}
+          onClose={() => setTransfer(null)}
+          onComplete={async (startsAt) => {
+            setTransfer(null);
+            await run(async () => {
+              setNotice("Перенос сохранён. Обновляю список встреч…");
+              if (selected)
+                await open(
+                  selected.id,
+                  true,
+                  schoolInput(startsAt).slice(0, 10),
+                );
+              await list();
+              setNotice("Встреча перенесена. Напоминание и история обновлены.");
+            });
+          }}
+        />
+      )}
     </dialog>
   );
 }

@@ -174,3 +174,46 @@
     flex: 1 1 150px;
   }
 }
+.meeting-reschedule {
+  width: min(620px, 94vw);
+  max-height: 90vh;
+  overflow: auto;
+  border: 1px solid #c5d5cb;
+  border-radius: 14px;
+  padding: 20px;
+  color: #183a4a;
+}
+.meeting-reschedule::backdrop {
+  background: #172f3d88;
+}
+.meeting-reschedule header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.meeting-reschedule fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.meeting-reschedule label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+.meeting-reschedule input,
+.meeting-reschedule select,
+.meeting-reschedule textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+.meeting-reschedule .meeting-reschedule-check {
+  flex-direction: row;
+  align-items: center;
+}
+.meeting-reschedule p {
+  overflow-wrap: anywhere;
+}
