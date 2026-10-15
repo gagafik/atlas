@@ -2,6 +2,9 @@
 
 Разрабатываемая школьная платформа с расписанием, личными кабинетами, журналом, домашними работами и сообщениями. React + TypeScript, Python/FastAPI, SQLite, OR-Tools CP-SAT. Полный функционал aSc Timetables и EduPage ещё не реализован; актуальный перечень — [FEATURES.md](FEATURES.md) и [EDUPAGE_ROADMAP.md](EDUPAGE_ROADMAP.md).
 
+[Интерактивные занятия](INTERACTIVE_LESSONS.md): учитель открывает вопросы по очереди,
+ученики отвечают с автосохранением, затем школа открывает разбор и результаты семье.
+
 Для совместной разработки: [CONTRIBUTING.md](CONTRIBUTING.md). Для сервера с HTTPS: [DEPLOYMENT.md](DEPLOYMENT.md). Общие инструкции для Codex и Claude: [AGENTS.md](AGENTS.md). Репозиторий содержит код и искусственные тестовые данные; рабочая школьная база, списки и вложения в Git не входят.
 
 ## Запуск на Windows
