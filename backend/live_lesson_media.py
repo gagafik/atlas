@@ -1,12 +1,10 @@
 """Pinned library editions and a projection view without personal responses."""
 import hashlib
 import json
-from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
 from fastapi import HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
 from . import homework_files, teaching_material_files, teaching_materials
+from . import teaching_media
 from .notifications import encoded
 from .quiz_models import public_question
 from .live_lessons import stamp
@@ -59,7 +57,7 @@ def register(s, app, Workspace):
     @app.get('/api/live-lessons/{id}/files/{file_id}')
     def file(id: str, file_id: str, request: Request, workspace: Workspace = 'school',
              questionIndex: int = Query(ge=0, le=49),
-             part: Literal['materials', 'solutionMaterials'] = 'materials', projection: bool = False):
+             part: Literal['materials', 'solutionMaterials'] = 'materials', projection: bool = False, download: bool = False):
         with s.context(request, workspace) as (db, user, snap):
             row = s.access_row(db, user, snap, workspace, id, staff=projection)
             manage = s.manage(user, snap, workspace, row)
@@ -75,9 +73,4 @@ def register(s, app, Workspace):
             if not f: raise HTTPException(404, 'Файл не найден.')
             path = homework_files.file_path(teaching_material_files.root_for(db), file_id)
             if not path.is_file(): raise HTTPException(404, 'Файл отсутствует в хранилище.')
-            mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg'}.get(Path(f['filename']).suffix.lower())
-            disposition = 'inline' if mime else 'attachment'
-            headers = {'Content-Disposition': disposition + "; filename*=UTF-8''" + quote(f['filename']),
-                       'Cache-Control': 'no-store', 'Vary': 'Cookie', 'X-Content-Type-Options': 'nosniff',
-                       'Content-Security-Policy': "sandbox; default-src 'none'"}
-            return FileResponse(path, media_type=mime or 'application/octet-stream', headers=headers)
+            return teaching_media.response(path,f['filename'],download=download,inline_images=True)

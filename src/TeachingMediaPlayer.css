@@ -1,0 +1,21 @@
+.teaching-media {
+  margin: 12px 0;
+  min-width: 0;
+}
+.teaching-media-player {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+}
+video.teaching-media-player {
+  max-height: 52vh;
+  background: #102934;
+  border-radius: 8px;
+}
+.teaching-media p {
+  font-size: 14px;
+  color: #773923;
+}
+.live-projector video.teaching-media-player {
+  max-height: 38vh;
+}
