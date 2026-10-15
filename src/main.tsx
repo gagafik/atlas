@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import AuthShell from "./AuthShell";
 import "./styles.css";
+const AuthShell = React.lazy(() => import("./AuthShell"));
+const ApplicantPortal = React.lazy(() => import("./ApplicantPortal"));
+const applicationEntry = new URLSearchParams(window.location.search);
 if (
   import.meta.env.PROD &&
   "serviceWorker" in navigator &&
@@ -17,6 +19,16 @@ if (
 }
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <AuthShell />
+    <React.Suspense
+      fallback={<main className="auth-screen">Открываю Атлас…</main>}
+    >
+      {applicationEntry.has("apply") ? (
+        <ApplicantPortal
+          initialCampaign={applicationEntry.get("apply") || null}
+        />
+      ) : (
+        <AuthShell />
+      )}
+    </React.Suspense>
   </React.StrictMode>,
 );
