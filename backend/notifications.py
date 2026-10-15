@@ -137,20 +137,15 @@ class Notifications:
         self.deliver(db,recipients,workspace,after.revision,action)
 
     def granted_users(self, db, workspace, view, entity_ids, roles):
-        """Select candidates in SQL, then enforce effective grants without caching them.
+        """Select indexed candidates, then enforce effective grants without caching them.
 
         Stored parent grants may have expired or not started yet. Access.public
         remains authoritative; the SQL predicate only narrows the candidate set.
         """
         ids=set(entity_ids)
         if not ids:return []
-        rows=db.execute('''SELECT a.* FROM accounts a WHERE a.active=1
-            AND a.role IN (SELECT value FROM json_each(?)) AND EXISTS (
-                SELECT 1 FROM json_each(a.permissions,'$.grants') g,
-                              json_each(g.value,'$.entityIds') entity
-                WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')=?
-                  AND entity.value IN (SELECT value FROM json_each(?)))''',
-            (encoded(roles),workspace,view,encoded(sorted(ids))))
+        from .account_grants import candidates
+        rows=candidates(db,workspace,view,ids,roles)
         result=[]
         for row in rows:
             user=self.access.public(row)
