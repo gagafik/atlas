@@ -55,7 +55,7 @@ def notify_batch(service,db,rows,snap):
     private_targets=[];journal_targets=[]
     for account in candidates:
         user=service.access.public(account);children=user_ids(user,workspace,'student')
-        if (user['role']=='admin' or user['role']=='teacher' and user['id'] in reviewers and user_ids(user,workspace,'teacher')
+        if (user['role']=='admin' or user['role'] in ['teacher','staff'] and user['id'] in reviewers and any(service.can_review(db,user,snap,workspace,r[3]) for r in rows)
             or user['role']=='parent' and any(r[2]==user['id'] and r[3] in children for r in rows)):
             private_targets.append(user)
         if journal_changed and user['role'] in ['student','parent'] and students & children:journal_targets.append(user)
@@ -69,7 +69,7 @@ def register(service,app,Workspace):
 
     def context(request,workspace):
         user,snap=service.context(request,workspace)
-        if user['role'] not in ['admin','teacher']:raise HTTPException(403,'Общее решение доступно только ответственным сотрудникам.')
+        if user['role'] not in ['admin','teacher','staff']:raise HTTPException(403,'Общее решение доступно только ответственным сотрудникам.')
         return user,snap
 
     def rows_for(db,body,user,snap,workspace):

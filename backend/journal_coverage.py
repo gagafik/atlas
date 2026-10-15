@@ -58,7 +58,7 @@ class JournalCoverage:
         own=user_ids(user,workspace,'teacher');state=snap.state
         if user['role']=='admin':classes={c.id for c in state.classes}
         elif body.mode=='classes':
-            classes=self.absences.classes(db,user,workspace)&set(snap.entities['class_'])
+            classes=self.absences.classes(db,user,snap,workspace,'journal_coverage')&set(snap.entities['class_'])
             if not classes:raise HTTPException(403,'Нужно назначение ответственным за класс.')
         else:
             if not own:raise HTTPException(403,'Нет назначения преподавателем.')
@@ -193,7 +193,7 @@ class JournalCoverage:
             user,snap=self.reports.context(request,workspace)
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
-                modes=['classes'] if user['role']=='admin' else ['teaching']+(['classes'] if self.absences.classes(db,user,workspace) else [])
+                modes=['classes'] if user['role']=='admin' else (['teaching'] if user['role']=='teacher' else [])+(['classes'] if self.absences.classes(db,user,snap,workspace,'journal_coverage') else [])
                 scopes={mode:self.scope(db,user,snap,workspace,CoverageQuery(start=snap.state.settings.yearStart,end=snap.state.settings.yearStart,mode=mode))[0] for mode in modes}
                 own=user_ids(user,workspace,'teacher')
                 return dict(modes=modes,classes={mode:[dict(id=c.id,name=c.name) for c in snap.state.classes if c.id in ids] for mode,ids in scopes.items()},teachers={mode:[dict(id=t.id,name=t.name) for t in snap.state.teachers if user['role']=='admin' or mode=='classes' or t.id in own] for mode in modes},yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd,today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date(),subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects])

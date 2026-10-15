@@ -1,0 +1,35 @@
+.class-staff-panel {
+  margin: 20px 0;
+  min-width: 0;
+}
+.class-staff-panel fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.class-staff-panel button {
+  white-space: normal;
+  max-width: 100%;
+  margin: 4px;
+}
+.class-staff-panel input:not([type="checkbox"]),
+.class-staff-panel select,
+.class-staff-workspace select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.class-staff-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.class-staff-panel .export-card {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.class-staff-workspace,
+.class-staff-workspace section {
+  min-width: 0;
+}

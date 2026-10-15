@@ -11,6 +11,7 @@ import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
+import ClassStaffWorkspace from "./ClassStaffWorkspace";
 interface Space {
   id: string;
   name: string;
@@ -167,23 +168,25 @@ export default function Portal({
         <div>
           <strong>атлас•</strong>
           <h1>
-            {section === "curriculum"
-              ? "Учебные планы"
-              : section === "materials"
-                ? "Учебные материалы"
-                : section === "family"
-                  ? "Мои дети и доступ"
-                  : section === "messages"
-                    ? "Сообщения"
-                    : section === "quizzes"
-                      ? "Контрольные и тесты"
-                      : section === "homework"
-                        ? "Домашние задания"
-                        : section === "journal"
-                          ? "Учебный журнал"
-                          : section === "courses"
-                            ? "Выбор курсов"
-                            : "Моё расписание"}
+            {section === "class-staff"
+              ? "Работа с классами"
+              : section === "curriculum"
+                ? "Учебные планы"
+                : section === "materials"
+                  ? "Учебные материалы"
+                  : section === "family"
+                    ? "Мои дети и доступ"
+                    : section === "messages"
+                      ? "Сообщения"
+                      : section === "quizzes"
+                        ? "Контрольные и тесты"
+                        : section === "homework"
+                          ? "Домашние задания"
+                          : section === "journal"
+                            ? "Учебный журнал"
+                            : section === "courses"
+                              ? "Выбор курсов"
+                              : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -191,6 +194,14 @@ export default function Portal({
       </header>
       {
         <div className="dated-toolbar portal-tabs">
+          {session.user!.role === "teacher" && (
+            <button
+              aria-pressed={section === "class-staff"}
+              onClick={() => setSection("class-staff")}
+            >
+              Работа с классами
+            </button>
+          )}
           {session.user!.role === "parent" && (
             <button
               aria-pressed={section === "family"}
@@ -261,7 +272,9 @@ export default function Portal({
           )}
         </div>
       }
-      {section === "family" ? (
+      {section === "class-staff" ? (
+        <ClassStaffWorkspace />
+      ) : section === "family" ? (
         <FamilyPortal />
       ) : section === "messages" ? (
         <>

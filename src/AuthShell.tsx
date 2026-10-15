@@ -15,6 +15,7 @@ import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
 import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
+const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 
 export default function AuthShell() {
   const [session, setSession] = useState<AuthStatus | null>(null),
@@ -211,7 +212,18 @@ export default function AuthShell() {
   );
   return (
     <>
-      {session.user && !["admin", "editor"].includes(session.user.role) ? (
+      {session.user?.role === "staff" ? (
+        <Suspense
+          fallback={
+            <main className="auth-screen">Открываю рабочее место…</main>
+          }
+        >
+          <ClassStaffWorkspace
+            key={session.user.id + ":" + session.user.version}
+            controls={controls}
+          />
+        </Suspense>
+      ) : session.user && !["admin", "editor"].includes(session.user.role) ? (
         <Portal
           key={session.user.id + ":" + session.user.version}
           session={session}

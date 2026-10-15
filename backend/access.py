@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import ConfigDict, Field, SecretStr, model_validator, field_validator
 from .models import Model
 
-Role = Literal['admin', 'editor', 'teacher', 'student', 'parent', 'viewer']
+Role = Literal['admin', 'editor', 'teacher', 'student', 'parent', 'viewer', 'staff']
 WORKSPACES = ['school', 'demo']
 COOKIE = 'atlas_session'
 LOCAL = dict(id='local', name='Локальный пользователь', role='admin', workspaces=WORKSPACES, grants=[])
@@ -66,8 +66,8 @@ class Account(Credentials):
     @model_validator(mode='after')
     def permissions(self):
         if len(set(self.workspaces)) != len(self.workspaces): raise ValueError('Пространства не должны повторяться.')
-        if self.role in ['admin','editor']:
-            if self.grants: raise ValueError('Администратор и составитель используют доступ к пространствам.')
+        if self.role in ['admin','editor','staff']:
+            if self.grants: raise ValueError('Эта роль не использует назначения личных расписаний.')
             if not self.workspaces: raise ValueError('Выберите рабочее пространство.')
         else:
             if not self.grants and self.role!='parent': raise ValueError('Выберите разрешённые расписания.')

@@ -71,9 +71,9 @@ class AttendanceReports:
 
     def context(self,request,workspace):
         user,snap=self.absences.context(request,workspace)
-        if user['role'] not in ['admin','teacher']:raise HTTPException(403,'Сводная посещаемость доступна ответственным сотрудникам.')
+        if user['role'] not in ['admin','teacher','staff']:raise HTTPException(403,'Сводная посещаемость доступна ответственным сотрудникам.')
         from .journal import user_ids
-        if user['role']=='admin' and workspace not in user['workspaces'] or user['role']=='teacher' and not user_ids(user,workspace,'teacher'):
+        if user['role'] in ['admin','staff'] and workspace not in user['workspaces'] or user['role']=='teacher' and not user_ids(user,workspace,'teacher'):
             raise HTTPException(403,'Нет доступа к журналам этого пространства.')
         from .absences import tables
         with self.access.lock,self.access.connect() as db:self.journal.tables(db);tables(db)
@@ -87,7 +87,7 @@ class AttendanceReports:
         return hashlib.sha256(encoded([workspace,snap.state.revision,user['id'],permission_key(user),config['version'],epoch,decisions]).encode()).hexdigest()
 
     def scope(self,db,user,snap,workspace,body):
-        allowed=self.absences.classes(db,user,workspace)
+        allowed=self.absences.classes(db,user,snap,workspace,'attendance_read')
         if user['role']!='admin' and not allowed:raise HTTPException(403,'Для этого отчёта нужно назначение ответственным за класс.')
         classes={c.id:c.name for c in snap.state.classes if user['role']=='admin' or c.id in allowed}
         if body.classId and body.classId not in classes:raise HTTPException(404,'Класс не найден или недоступен.')
@@ -220,7 +220,7 @@ class AttendanceReports:
             user,snap=self.context(request,workspace)
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
-                allowed=self.absences.classes(db,user,workspace)
+                allowed=self.absences.classes(db,user,snap,workspace,'attendance_read')
                 classes=[dict(id=c.id,name=c.name) for c in snap.state.classes if user['role']=='admin' or c.id in allowed]
                 ids={c['id'] for c in classes}
                 return dict(available=user['role']=='admin' or bool(allowed),admin=user['role']=='admin',classes=classes,
