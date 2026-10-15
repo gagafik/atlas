@@ -3,6 +3,8 @@ import { api } from "./api";
 import { Multi } from "./DatedSchedule";
 import InvitationPanel from "./InvitationPanel";
 import FamilyPanel from "./FamilyPanel";
+import ClassStaffPanel from "./ClassStaffPanel";
+import "./classStaff.css";
 import type { State } from "./types";
 import {
   roleNames,
@@ -279,11 +281,16 @@ export default function AccessPanel({
             users={users}
             onChanged={reload}
           />
+          <ClassStaffPanel
+            key={`class-staff:${workspace}`}
+            workspace={workspace}
+          />
           <p className="info-line">
             Администратор управляет доступом и всей базой. Составитель
-            редактирует выбранные пространства. Остальные роли видят только
-            назначенные расписания текущей рабочей версии. Пароли хранятся в
-            виде защищённых проверочных значений.
+            редактирует выбранные пространства. Сотруднику отдельно назначаются
+            функции по классам. Остальные роли видят только назначенные
+            расписания текущей рабочей версии. Пароли хранятся в виде защищённых
+            проверочных значений.
           </p>
           <div className="dated-toolbar">
             <button
@@ -419,7 +426,7 @@ export default function AccessPanel({
                     Администратору доступны школа, пример и управление
                     пользователями.
                   </p>
-                ) : form.role === "editor" ? (
+                ) : ["editor", "staff"].includes(form.role) ? (
                   <Multi
                     label="Разрешённые пространства"
                     items={[
@@ -566,7 +573,7 @@ export default function AccessPanel({
                   <p className="muted">
                     {u.role === "admin"
                       ? "Все пространства"
-                      : u.role === "editor"
+                      : ["editor", "staff"].includes(u.role)
                         ? u.workspaces
                             .map((w) => (w === "school" ? "Школа" : "Пример"))
                             .join(", ")

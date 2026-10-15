@@ -81,7 +81,7 @@ export default function JournalCoveragePanel({
   onOpen,
 }: {
   workspace: string;
-  onOpen: (key: string, day: string) => void;
+  onOpen?: (key: string, day: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false),
     [options, setOptions] = useState<Options | null>(null);
@@ -449,7 +449,7 @@ export default function JournalCoveragePanel({
                     {row.hasDraftChanges && (
                       <p>Есть изменения после последней публикации.</p>
                     )}
-                    {row.canOpen && (
+                    {row.canOpen && onOpen && (
                       <button
                         disabled={busy}
                         onClick={() => onOpen(row.lessonKey, row.date)}

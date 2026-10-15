@@ -1,5 +1,5 @@
 export type Role =
-  "admin" | "editor" | "teacher" | "student" | "parent" | "viewer";
+  "admin" | "editor" | "teacher" | "student" | "parent" | "viewer" | "staff";
 export type AccessView = "class" | "teacher" | "room" | "group" | "student";
 export interface Grant {
   workspace: "school" | "demo";
@@ -28,4 +28,5 @@ export const roleNames: Record<Role, string> = {
   student: "Ученик",
   parent: "Родитель",
   viewer: "Наблюдатель",
+  staff: "Сотрудник",
 };

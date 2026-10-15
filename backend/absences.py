@@ -14,6 +14,8 @@ from .notifications import encoded
 
 
 def tables(db):
+    from .class_staff import tables as staff_tables
+    staff_tables(db)
     db.execute('''CREATE TABLE IF NOT EXISTS absence_notices (
         id TEXT PRIMARY KEY,workspace TEXT,author_id TEXT,student_id TEXT,class_id TEXT,
         student_name TEXT,created TEXT,updated TEXT,version INTEGER,status TEXT,
@@ -86,7 +88,8 @@ class Absences:
 
     def context(self,request,workspace):
         user=request.state.user or LOCAL
-        if user['role'] not in ['admin','teacher','parent']:raise HTTPException(403,'Раздел доступен родителям и ответственным сотрудникам.')
+        if user['role'] not in ['admin','teacher','staff','parent']:raise HTTPException(403,'Раздел доступен родителям и ответственным сотрудникам.')
+        if user['role']=='staff' and workspace not in user['workspaces']:raise HTTPException(403,'Нет доступа к этому пространству.')
         return user,self.snapshots.get(workspace)
 
     def recheck(self,db,user,snapshot,workspace):
@@ -95,12 +98,13 @@ class Absences:
         if not current or current[0]!=snapshot.state.revision:raise HTTPException(409,'Школьные данные изменились. Обновите раздел.')
 
     def config(self,db,workspace):
-        row=db.execute('SELECT version,document FROM absence_reviewers WHERE workspace=?',(workspace,)).fetchone()
-        return dict(version=row[0],assignments=json.loads(row[1])) if row else dict(version=0,assignments={})
+        from .class_staff import config
+        value=config(db,workspace)
+        return dict(version=value['version'],assignments={id:[r['accountId'] for r in rows if 'absence_review' in r['capabilities']] for id,rows in value['assignments'].items()})
 
-    def classes(self,db,user,workspace):
-        if user['role']!='teacher' or not user_ids(user,workspace,'teacher'):return set()
-        return {id for id,accounts in self.config(db,workspace)['assignments'].items() if user['id'] in accounts}
+    def classes(self,db,user,snapshot,workspace,capability='absence_review'):
+        from .class_staff import classes
+        return classes(db,user,snapshot,workspace,capability)
 
     def parent(self,user,snapshot,workspace,student):
         pupil=snapshot.entities['student'].get(student)
@@ -109,7 +113,7 @@ class Absences:
 
     def can_review(self,db,user,snapshot,workspace,student):
         pupil=snapshot.entities['student'].get(student)
-        return user['role']=='admin' or bool(pupil and pupil.classId in self.classes(db,user,workspace))
+        return user['role']=='admin' or bool(pupil and pupil.classId in self.classes(db,user,snapshot,workspace))
 
     def find(self,db,id,user,snapshot,workspace):
         row=db.execute('SELECT * FROM absence_notices WHERE id=? AND workspace=?',(id,workspace)).fetchone()
@@ -164,6 +168,8 @@ class Absences:
         return changed
 
     def register(self,app,Workspace):
+        from .class_staff import register as register_staff
+        register_staff(self,app,Workspace)
         from .absence_bulk import register
         register(self,app,Workspace)
         @app.get('/api/journal/absences/options')
@@ -171,7 +177,7 @@ class Absences:
             user,snap=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.recheck(db,user,snap,workspace)
-                config=self.config(db,workspace);classes=self.classes(db,user,workspace)
+                config=self.config(db,workspace);classes=self.classes(db,user,snap,workspace)
                 pupils=[dict(id=s.id,name=s.name) for s in snap.state.students if s.active and s.id in user_ids(user,workspace,'student')] if user['role']=='parent' else []
                 result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd)
                 if user['role']=='admin':
@@ -185,6 +191,8 @@ class Absences:
             if user['role']!='admin':raise HTTPException(403,'Назначение ответственных доступно администратору.')
             with self.access.lock,self.access.connect() as db:
                 tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
+                if db.execute('SELECT 1 FROM class_staff_permissions WHERE workspace=?',(workspace,)).fetchone():
+                    raise HTTPException(409,'Полномочия уже разделены. Используйте «Права работы с классами» в разделе пользователей.')
                 if self.config(db,workspace)['version']!=body.version:raise HTTPException(409,'Назначения изменились. Обновите раздел.')
                 classes={c.id for c in snap.state.classes}
                 teachers={r[0]:self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")}
@@ -202,7 +210,7 @@ class Absences:
                 if user['role']=='parent':
                     query+=' AND author_id=? AND student_id IN (SELECT value FROM json_each(?))';params += [user['id'],encoded(sorted(user_ids(user,workspace,'student')))]
                 elif user['role']!='admin':
-                    classes=self.classes(db,user,workspace);ids=[s.id for s in snap.state.students if s.classId in classes]
+                    classes=self.classes(db,user,snap,workspace);ids=[s.id for s in snap.state.students if s.classId in classes]
                     query+=' AND student_id IN (SELECT value FROM json_each(?))';params.append(encoded(ids))
                 if status!='all':query+=' AND status=?';params.append(status)
                 if before is not None:query+=' AND n.rowid<?';params.append(before)

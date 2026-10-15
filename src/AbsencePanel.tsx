@@ -89,8 +89,6 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       }[]
     | null
   >(null);
-  const [classId, setClassId] = useState(""),
-    [assignments, setAssignments] = useState<Record<string, string[]>>({});
   const [decisionRequest, setDecisionRequest] = useState(() =>
     crypto.randomUUID(),
   );
@@ -124,8 +122,6 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   const loadOptions = async () => {
     const r: Options = await api("journal/absences/options", workspace);
     setOptions(r);
-    setAssignments(r.config?.assignments || {});
-    setClassId((old) => old || r.classes?.[0]?.id || "");
     setStudent((old) => old || r.students[0]?.id || "");
     setStart((old) => old || r.yearStart);
     setEnd((old) => old || r.yearStart);
@@ -169,8 +165,6 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       .then(([o, r]) => {
         if (!live) return;
         setOptions(o);
-        setAssignments(o.config?.assignments || {});
-        setClassId((old) => old || o.classes?.[0]?.id || "");
         setStudent((old) => old || o.students[0]?.id || "");
         setStart((old) => old || o.yearStart);
         setEnd((old) => old || o.yearStart);
@@ -257,7 +251,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     await changes();
     await list();
     setNotice(
-      "Решение сохранено. Обновите журнал, чтобы увидеть актуальную посещаемость.",
+      "Решение сохранено и учитывается при следующем просмотре посещаемости.",
     );
   };
   const fileUrl = (id: string) =>
@@ -268,7 +262,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     setSelected(null);
     setHistory([]);
     setNotice(
-      `Сохранено решений: ${count}. Обновите журнал для актуальной посещаемости.`,
+      `Сохранено решений: ${count}. Они учитываются при следующем просмотре посещаемости.`,
     );
     await list();
   };
@@ -320,68 +314,11 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
           )}
           {notice && <p role="status">{notice}</p>}
           {options?.admin && (
-            <details>
-              <summary>Ответственные за рассмотрение по классам</summary>
-              <fieldset disabled={busy} className="access-fields">
-                <p>
-                  Администратор рассматривает все заявления. Назначение здесь
-                  открывает учителю причины и файлы учащихся выбранного класса;
-                  оно не открывает оценки других предметников.
-                </p>
-                <label className="field">
-                  <span>Класс для рассмотрения заявлений</span>
-                  <select
-                    value={classId}
-                    onChange={(e) => setClassId(e.target.value)}
-                  >
-                    {options.classes?.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Ответственные учителя (можно выбрать несколько)</span>
-                  <select
-                    multiple
-                    size={6}
-                    value={assignments[classId] || []}
-                    onChange={(e) =>
-                      setAssignments({
-                        ...assignments,
-                        [classId]: Array.from(
-                          e.target.selectedOptions,
-                          (o) => o.value,
-                        ),
-                      })
-                    }
-                  >
-                    {options.teachers?.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name} · {t.login}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  onClick={() =>
-                    void run(async () => {
-                      await api(
-                        "journal/absences/reviewers",
-                        workspace,
-                        "PUT",
-                        { version: options.config!.version, assignments },
-                      );
-                      await loadOptions();
-                      setNotice("Ответственные сохранены.");
-                    })
-                  }
-                >
-                  Сохранить ответственных
-                </button>
-              </fieldset>
-            </details>
+            <p>
+              Назначение ответственных: «Пользователи и доступ» → «Права работы
+              с классами». Рассмотрение объяснительных, сводная посещаемость и
+              контроль журналов выдаются отдельно.
+            </p>
           )}
           {options && !options.parent && !options.canReview && (
             <p>
