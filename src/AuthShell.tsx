@@ -26,6 +26,7 @@ const Clubs = lazy(() => import("./Clubs"));
 const SchoolSite = lazy(() => import("./SchoolSite"));
 const Admissions = lazy(() => import("./AdmissionOffice"));
 const SchoolPayments = lazy(() => import("./SchoolPayments"));
+const Canteen = lazy(() => import("./Canteen"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -53,6 +54,7 @@ export default function AuthShell() {
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
+  const [canteenWorkspace, setCanteenWorkspace] = useState<string | null>(null);
   const [paymentsWorkspace, setPaymentsWorkspace] = useState<string | null>(
     null,
   );
@@ -137,6 +139,7 @@ export default function AuthShell() {
     setStaffTimeWorkspace(null);
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
+    setCanteenWorkspace(null);
     setPaymentsWorkspace(null);
     setLostFoundWorkspace(null);
     setClubsWorkspace(null);
@@ -359,6 +362,9 @@ export default function AuthShell() {
             Потерянные вещи
           </button>
           <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
+          <button onClick={() => setCanteenWorkspace("school")}>
+            Столовая
+          </button>
           {session.user.role !== "student" && (
             <button onClick={() => setPaymentsWorkspace("school")}>
               Платежи
@@ -509,6 +515,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={paymentsWorkspace}
             onClose={() => setPaymentsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {canteenWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю столовую…</p>}>
+          <Canteen
+            key={`${session.user.id}:${session.user.version}`}
+            user={session.user}
+            initialWorkspace={canteenWorkspace}
+            onClose={() => setCanteenWorkspace(null)}
           />
         </Suspense>
       )}

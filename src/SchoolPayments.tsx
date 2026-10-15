@@ -961,6 +961,8 @@ function PaymentsWorkspace({
                                       payers: "Изменение плательщиков",
                                       reminded: "Напоминание",
                                       plan_charged: "Начисление по плану",
+                                      canteen_charge: "Заказ питания",
+                                      canteen_cancelled: "Отмена питания",
                                     } as Record<string, string>
                                   )[h.action] || "Изменение счёта"}
                                 </summary>

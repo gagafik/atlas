@@ -450,6 +450,9 @@ admissions.register(app, Workspace)
 from .payments import Payments
 payments = Payments(access, notifications, portal_stamp)
 payments.register(app, Workspace)
+from .canteen import Canteen
+canteen = Canteen(access, notifications, payments, portal_stamp)
+canteen.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
