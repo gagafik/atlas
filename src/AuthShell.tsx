@@ -28,6 +28,7 @@ const Admissions = lazy(() => import("./AdmissionOffice"));
 const SchoolPayments = lazy(() => import("./SchoolPayments"));
 const Canteen = lazy(() => import("./Canteen"));
 const Handover = lazy(() => import("./Handover"));
+const LiveLessons = lazy(() => import("./LiveLessons"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -54,6 +55,7 @@ export default function AuthShell() {
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  const [liveWorkspace, setLiveWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
   const [canteenWorkspace, setCanteenWorkspace] = useState<string | null>(null);
   const [handoverWorkspace, setHandoverWorkspace] = useState<string | null>(
@@ -153,6 +155,7 @@ export default function AuthShell() {
     setLibraryWorkspace(null);
     setCanteenWorkspace(null);
     setHandoverWorkspace(null);
+    setLiveWorkspace(null);
     setPaymentsWorkspace(null);
     setLostFoundWorkspace(null);
     setClubsWorkspace(null);
@@ -368,6 +371,13 @@ export default function AuthShell() {
           <button onClick={() => setFormsWorkspace("school")}>
             Формы и опросы
           </button>
+          {["admin", "teacher", "student", "parent"].includes(
+            session.user.role,
+          ) && (
+            <button onClick={() => setLiveWorkspace("school")}>
+              Интерактивные занятия
+            </button>
+          )}
           <button onClick={() => setLibraryWorkspace("school")}>
             Библиотека и учебники
           </button>
@@ -543,6 +553,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={handoverWorkspace}
             onClose={() => setHandoverWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {liveWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываем занятия…</p>}>
+          <LiveLessons
+            key={`${session.user.id}:${session.user.version}`}
+            user={session.user}
+            initialWorkspace={liveWorkspace}
+            onClose={() => setLiveWorkspace(null)}
           />
         </Suspense>
       )}

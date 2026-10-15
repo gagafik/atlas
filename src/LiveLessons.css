@@ -1,0 +1,177 @@
+.live-dialog {
+  width: min(1240px, calc(100vw - 24px));
+  max-height: 94dvh;
+  box-sizing: border-box;
+  border: 1px solid #bdcfd8;
+  border-radius: 18px;
+  padding: 24px;
+  background: #f4f7fa;
+  color: #243844;
+  font:
+    15px/1.5 system-ui,
+    sans-serif;
+}
+.live-dialog::backdrop {
+  background: #152c3c99;
+}
+.live-dialog header,
+.live-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.live-dialog header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.live-dialog h2 {
+  margin: 4px 0;
+  font-size: 28px;
+}
+.live-dialog h3,
+.live-dialog h4 {
+  margin: 10px 0;
+}
+.live-dialog fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.live-dialog label {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0;
+  min-width: 0;
+}
+.live-dialog input:not([type="checkbox"]):not([type="radio"]),
+.live-dialog textarea,
+.live-dialog select {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+  border: 1px solid #b8cbd5;
+  border-radius: 8px;
+  font: inherit;
+  background: white;
+  color: inherit;
+}
+.live-dialog textarea {
+  min-height: 95px;
+  resize: vertical;
+}
+.live-dialog button {
+  font: inherit;
+  white-space: normal;
+  border: 1px solid #b5cbd6;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: white;
+  color: #153e55;
+}
+.live-dialog button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.live-dialog button:focus-visible,
+.live-dialog a:focus-visible {
+  outline: 3px solid #287caa;
+  outline-offset: 2px;
+}
+.live-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+.live-layout main,
+.live-layout nav {
+  min-width: 0;
+}
+.live-layout main {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: none;
+}
+.live-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+.live-list-item.active {
+  background: #dfeef6;
+  border-color: #477b98;
+}
+.live-list-item span,
+.live-note {
+  font-size: 13px;
+  color: #536a79;
+}
+.live-card {
+  padding: 20px;
+  background: white;
+  border: 1px solid #d2dfe5;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.live-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-dialog .live-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  background: #f3f7fa;
+  border-radius: 8px;
+}
+.live-choice input {
+  margin-top: 5px;
+}
+.live-error {
+  padding: 12px;
+  border: 1px solid #e7b2ab;
+  border-radius: 8px;
+  background: #fff1ed;
+  color: #8a2820;
+}
+.live-response {
+  border-top: 1px solid #d2dfe5;
+  padding: 12px 0;
+}
+.live-dialog details {
+  margin-top: 15px;
+  padding: 12px;
+  background: #eef5f5;
+  border-radius: 8px;
+}
+.live-dialog summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+@media (max-width: 700px) {
+  .live-dialog {
+    padding: 14px;
+  }
+  .live-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .live-card {
+    padding: 14px;
+  }
+  .live-dialog h2 {
+    font-size: 23px;
+  }
+  .live-toolbar > * {
+    max-width: 100%;
+  }
+}

@@ -456,6 +456,9 @@ canteen.register(app, Workspace)
 from .handover import Handover
 handover = Handover(access, notifications, portal_stamp)
 handover.register(app, Workspace)
+from .live_lessons import LiveLessons
+live_lessons = LiveLessons(access, portal_stamp)
+live_lessons.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
