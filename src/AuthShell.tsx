@@ -16,6 +16,12 @@ import InvitationForm from "./InvitationForm";
 import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
+const RecoveryForm = lazy(() =>
+  import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
+);
+const RecoveryPanel = lazy(() =>
+  import("./Recovery").then((module) => ({ default: module.RecoveryPanel })),
+);
 
 export default function AuthShell() {
   const [session, setSession] = useState<AuthStatus | null>(null),
@@ -29,6 +35,9 @@ export default function AuthShell() {
   const [accountError, setAccountError] = useState("");
   const [registration, setRegistration] = useState(false),
     [invitationForm, setInvitationForm] = useState(false);
+  const [recoveryForm, setRecoveryForm] = useState(false),
+    [recoveryPanel, setRecoveryPanel] = useState(false),
+    [loginNotice, setLoginNotice] = useState("");
   const refreshSequence = useRef(0);
   useEffect(() => {
     setPasswordForm(false);
@@ -36,6 +45,7 @@ export default function AuthShell() {
     setNewPassword("");
     setAccountError("");
     setInvitationForm(false);
+    setRecoveryPanel(false);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -80,6 +90,7 @@ export default function AuthShell() {
       ++refreshSequence.current;
       setSession(result);
       setPassword("");
+      setLoginNotice("");
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -116,7 +127,25 @@ export default function AuthShell() {
   if (session.enabled && !session.user)
     return (
       <main className="auth-screen">
-        {registration ? (
+        {recoveryForm ? (
+          <Suspense fallback={<p>Открываю восстановление доступа…</p>}>
+            <RecoveryForm
+              initialLogin={login}
+              onCancel={() => setRecoveryForm(false)}
+              onComplete={(name) => {
+                ++refreshSequence.current;
+                setLogin(name);
+                setPassword("");
+                setError("");
+                setRecoveryForm(false);
+                setLoginNotice(
+                  "Пароль изменён. Войдите с новым паролем. Все прежние сеансы завершены.",
+                );
+                void refresh();
+              }}
+            />
+          </Suspense>
+        ) : registration ? (
           <InvitationForm
             onComplete={acceptInvitation}
             onCancel={() => setRegistration(false)}
@@ -137,6 +166,7 @@ export default function AuthShell() {
                 {error}
               </p>
             )}
+            {loginNotice && <p role="status">{loginNotice}</p>}
             <label className="field">
               <span>Логин</span>
               <input
@@ -161,6 +191,20 @@ export default function AuthShell() {
             <button className="primary" disabled={busy}>
               {busy ? "Вхожу…" : "Войти"}
             </button>
+            <p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setError("");
+                  setPassword("");
+                  setLoginNotice("");
+                  setRecoveryForm(true);
+                }}
+              >
+                Забыли пароль?
+              </button>
+            </p>
             <p>
               <button
                 type="button"
@@ -206,6 +250,7 @@ export default function AuthShell() {
           <button disabled={busy} onClick={() => void signOut()}>
             Выйти
           </button>
+          <button onClick={() => setRecoveryPanel(true)}>Резервные коды</button>
         </>
       )}
     </div>
@@ -266,6 +311,22 @@ export default function AuthShell() {
           </section>
         </div>
       )}
+      {recoveryPanel && session.user && (
+        <Suspense
+          fallback={
+            <p className="auth-error" role="status">
+              Открываю резервные коды…
+            </p>
+          }
+        >
+          <RecoveryPanel
+            key={session.user.id + ":" + session.user.version}
+            login={session.user.login}
+            onClose={() => setRecoveryPanel(false)}
+            onAuthCheck={refresh}
+          />
+        </Suspense>
+      )}
       {passwordForm && (
         <div className="modal-backdrop">
           <section
@@ -275,7 +336,11 @@ export default function AuthShell() {
             aria-label="Сменить пароль"
           >
             <h2>Сменить пароль</h2>
-            <p>После смены остальные сеансы этой учётной записи завершатся.</p>
+            <p>
+              После смены остальные сеансы этой учётной записи завершатся, а
+              резервные коды будут отозваны. Новый набор можно создать после
+              смены пароля.
+            </p>
             {accountError && (
               <p className="error-banner" role="alert">
                 {accountError}
