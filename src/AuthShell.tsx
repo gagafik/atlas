@@ -19,6 +19,7 @@ const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
+const StaffTime = lazy(() => import("./StaffTime"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -44,6 +45,17 @@ export default function AuthShell() {
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  const [staffTimeWorkspace, setStaffTimeWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setStaffTimeWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-staff-time", open);
+    return () => window.removeEventListener("atlas-open-staff-time", open);
+  }, []);
   const [meetingsWorkspace, setMeetingsWorkspace] = useState<string | null>(
     null,
   );
@@ -72,6 +84,7 @@ export default function AuthShell() {
     setOperationsPanel(false);
     setFormsWorkspace(null);
     setMeetingsWorkspace(null);
+    setStaffTimeWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -283,6 +296,13 @@ export default function AuthShell() {
           <button onClick={() => setFormsWorkspace("school")}>
             Формы и опросы
           </button>
+          {["admin", "editor", "teacher", "staff"].includes(
+            session.user.role,
+          ) && (
+            <button onClick={() => setStaffTimeWorkspace("school")}>
+              Табель и отсутствия
+            </button>
+          )}
           {["admin", "editor", "teacher", "staff", "parent"].includes(
             session.user.role,
           ) && (
@@ -389,6 +409,18 @@ export default function AuthShell() {
           />
         </Suspense>
       )}
+      {staffTimeWorkspace &&
+        session.user &&
+        ["admin", "editor", "teacher", "staff"].includes(session.user.role) && (
+          <Suspense fallback={<p role="status">Открываю табель…</p>}>
+            <StaffTime
+              key={session.user.id + ":" + session.user.version}
+              user={session.user}
+              initialWorkspace={staffTimeWorkspace}
+              onClose={() => setStaffTimeWorkspace(null)}
+            />
+          </Suspense>
+        )}
       {meetingsWorkspace && session.user && (
         <Suspense
           fallback={<p role="status">Открываю родительские встречи…</p>}
