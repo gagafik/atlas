@@ -1,0 +1,311 @@
+.school-payments {
+  width: min(1180px, calc(100vw - 32px));
+  max-height: 94dvh;
+  box-sizing: border-box;
+  border: 1px solid #c6d7d4;
+  border-radius: 18px;
+  padding: 26px;
+  background: #f5f8f7;
+  color: #163835;
+  font:
+    15px/1.5 system-ui,
+    sans-serif;
+}
+.school-payments::backdrop {
+  background: #0d282880;
+}
+.school-payments header,
+.finance-toolbar,
+.finance-actions,
+.finance-tabs {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.school-payments header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.school-payments h2 {
+  font-size: 28px;
+  margin: 4px 0;
+}
+.school-payments h3,
+.school-payments h4 {
+  margin: 0 0 12px;
+}
+.school-payments p {
+  margin: 10px 0;
+}
+.finance-eyebrow {
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  color: #396b64;
+  font-weight: 700;
+}
+.finance-body,
+.school-payments fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.school-payments label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.school-payments input,
+.school-payments select,
+.school-payments textarea {
+  font: inherit;
+  border: 1px solid #aac2bd;
+  border-radius: 7px;
+  background: white;
+  color: #163835;
+  box-sizing: border-box;
+  padding: 10px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+}
+.school-payments textarea {
+  resize: vertical;
+}
+.school-payments button {
+  font: inherit;
+  color: #163835;
+  background: #fff;
+  border: 1px solid #abc5bf;
+  border-radius: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+.school-payments button:hover {
+  background: #e4f1ec;
+}
+.school-payments button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.school-payments :focus-visible {
+  outline: 3px solid #d49e40;
+  outline-offset: 2px;
+}
+.school-payments a {
+  color: #17615b;
+  text-decoration: underline;
+}
+.school-payments form > button[type="submit"],
+.school-payments form > button:not([type]) {
+  background: #17665b;
+  color: #fff;
+  margin: 10px 8px 0 0;
+}
+.finance-tabs {
+  margin: 20px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #cbded8;
+}
+.finance-tabs [aria-pressed="true"],
+.finance-account-list .selected {
+  background: #d7eae3;
+  border-color: #4c8b7d;
+}
+.finance-card {
+  background: #fff;
+  border: 1px solid #d0dfda;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 18px 0;
+  min-width: 0;
+}
+.finance-grid,
+.finance-line {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+  align-items: end;
+}
+.finance-editor {
+  border-left: 3px solid #73a89b;
+  padding: 16px;
+  margin: 18px 0;
+  background: #f3f8f5;
+}
+.finance-editor > label,
+.finance-card > label {
+  margin: 12px 0;
+}
+.finance-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.finance-summary > div {
+  background: #f1f7f4;
+  padding: 14px;
+  border-radius: 10px;
+  display: grid;
+  gap: 5px;
+}
+.finance-summary span {
+  font-size: 12px;
+  color: #46625c;
+}
+.finance-summary strong {
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+.finance-summary > div:first-child {
+  background: #dceee6;
+}
+.finance-muted,
+.school-payments small {
+  font-size: 13px;
+  color: #58706b;
+}
+.finance-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 16px 0;
+}
+.school-payments table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+.school-payments caption {
+  text-align: left;
+  font-size: 17px;
+  font-weight: 700;
+  margin: 8px 0;
+}
+.school-payments th,
+.school-payments td {
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid #d8e6df;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.school-payments th {
+  background: #f2f7f4;
+}
+.finance-account-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.finance-account-list button {
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.finance-account-list span {
+  font-size: 12px;
+  color: #506c64;
+}
+.finance-choices {
+  max-height: 250px;
+  overflow: auto;
+  border: 1px solid #d0dfda;
+  padding: 10px;
+  border-radius: 8px;
+}
+.school-payments .finance-check {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: 8px 0;
+}
+.finance-check input {
+  width: auto;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+.finance-preview {
+  border: 2px solid #5e9a89;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 15px 0;
+  background: #f4faf6;
+}
+.finance-error {
+  padding: 12px;
+  background: #fff0ec;
+  border: 1px solid #ce7968;
+  border-radius: 8px;
+  color: #882d1d;
+}
+.finance-notice {
+  padding: 12px;
+  background: #e1f2e8;
+  border-radius: 8px;
+  color: #215d42;
+}
+.school-payments details {
+  padding: 12px 0;
+  border-bottom: 1px solid #d4e2dc;
+}
+.school-payments pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 350px;
+  overflow: auto;
+  font-size: 12px;
+}
+.school-payments article {
+  padding: 12px 0;
+  border-bottom: 1px solid #d4e2dc;
+}
+@media (max-width: 600px) {
+  .school-payments {
+    width: calc(100vw - 12px);
+    max-height: 96dvh;
+    padding: 14px;
+  }
+  .school-payments h2 {
+    font-size: 23px;
+  }
+  .finance-card {
+    padding: 12px;
+  }
+  .finance-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .finance-summary strong {
+    font-size: 16px;
+  }
+  .finance-summary > div {
+    padding: 10px;
+  }
+  .finance-grid,
+  .finance-line,
+  .finance-account-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .finance-toolbar > * {
+    max-width: 100%;
+  }
+  .finance-toolbar label {
+    flex: 1 1 180px;
+  }
+  .finance-tabs {
+    gap: 6px;
+  }
+  .finance-tabs button {
+    padding: 8px;
+    font-size: 13px;
+  }
+  .school-payments th,
+  .school-payments td {
+    padding: 8px;
+    min-width: 85px;
+  }
+}

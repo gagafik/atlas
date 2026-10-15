@@ -19,6 +19,12 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "payments:charged": "В финансовом кабинете появилось начисление",
+  "payments:received": "Школа учла поступление оплаты",
+  "payments:adjusted": "Школа уточнила начисление",
+  "payments:updated": "Обновлена история оплаты",
+  "payments:reminder":
+    "Проверьте просроченные начисления в финансовом кабинете",
   "meeting.published": "Открыта запись на родительские встречи",
   "meeting.booked": "Создана запись на встречу",
   "meeting.cancelled": "Встреча отменена",
