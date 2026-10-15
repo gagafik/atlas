@@ -18,6 +18,7 @@ import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
+const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -43,6 +44,17 @@ export default function AuthShell() {
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  const [meetingsWorkspace, setMeetingsWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setMeetingsWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-meetings", open);
+    return () => window.removeEventListener("atlas-open-meetings", open);
+  }, []);
   useEffect(() => {
     const open = (event: Event) =>
       setFormsWorkspace((event as CustomEvent).detail?.workspace || "school");
@@ -59,6 +71,7 @@ export default function AuthShell() {
     setRecoveryPanel(false);
     setOperationsPanel(false);
     setFormsWorkspace(null);
+    setMeetingsWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -270,6 +283,13 @@ export default function AuthShell() {
           <button onClick={() => setFormsWorkspace("school")}>
             Формы и опросы
           </button>
+          {["admin", "editor", "teacher", "staff", "parent"].includes(
+            session.user.role,
+          ) && (
+            <button onClick={() => setMeetingsWorkspace("school")}>
+              Родительские встречи
+            </button>
+          )}
           {session.user.role === "admin" && (
             <button onClick={() => setOperationsPanel(true)}>
               Состояние сервера
@@ -366,6 +386,18 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={formsWorkspace}
             onClose={() => setFormsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {meetingsWorkspace && session.user && (
+        <Suspense
+          fallback={<p role="status">Открываю родительские встречи…</p>}
+        >
+          <ParentMeetings
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={meetingsWorkspace}
+            onClose={() => setMeetingsWorkspace(null)}
           />
         </Suspense>
       )}

@@ -421,6 +421,9 @@ push_service.register(app)
 from .school_forms import SchoolForms
 school_forms = SchoolForms(access, notifications, portal_stamp)
 school_forms.register(app, Workspace)
+from .meetings import Meetings
+meetings = Meetings(access, notifications, portal_stamp)
+meetings.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
