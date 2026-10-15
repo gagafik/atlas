@@ -1,6 +1,6 @@
 """Validated question snapshots, assignment settings and answer contracts."""
 from datetime import date, datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 import unicodedata
 from zoneinfo import ZoneInfo
 
@@ -11,6 +11,13 @@ from .models import Model
 class Option(Model):
     id: str = Field(min_length=1,max_length=80)
     text: str = Field(min_length=1,max_length=1000)
+
+
+class Attachment(Model):
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    filename: str = Field(min_length=1,max_length=180)
+    size: int = Field(ge=1,le=10*1024*1024)
+    created: str = Field(max_length=80)
 
 
 class Question(Model):
@@ -24,9 +31,16 @@ class Question(Model):
     number: float | None = Field(default=None,ge=-1e12,le=1e12,allow_inf_nan=False)
     tolerance: float = Field(default=0,ge=0,le=1e12,allow_inf_nan=False)
     explanation: str = Field(default='',max_length=4000)
+    fileIds: list[Annotated[str, Field(pattern=r'^[a-f0-9]{32}$')]] = Field(default_factory=list,max_length=6)
+    solutionFileIds: list[Annotated[str, Field(pattern=r'^[a-f0-9]{32}$')]] = Field(default_factory=list,max_length=6)
+    # Accepted for editor round trips; bind_question replaces all client metadata.
+    attachments: list[Attachment] = Field(default_factory=list,max_length=6)
+    solutionAttachments: list[Attachment] = Field(default_factory=list,max_length=6)
 
     @model_validator(mode='after')
     def valid(self):
+        files=self.fileIds+self.solutionFileIds
+        if len(files)!=len(set(files)):raise ValueError('Файлы вопроса и разбора должны быть разными и не повторяться.')
         ids=[o.id for o in self.options]
         if len(ids)!=len(set(ids)) or len(self.correctIds)!=len(set(self.correctIds)):raise ValueError('Варианты ответа должны быть уникальны.')
         if self.kind in ['single','multiple']:
@@ -165,4 +179,4 @@ def auto_mark(question, answer):
 
 def public_question(item):
     q=item['question']
-    return dict(id=item['id'],kind=q['kind'],text=q['text'],points=q['points'],options=q['options'])
+    return dict(id=item['id'],kind=q['kind'],text=q['text'],points=q['points'],options=q['options'],attachments=q.get('attachments',[]))

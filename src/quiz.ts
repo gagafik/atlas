@@ -1,5 +1,11 @@
 import type { GradingEvidence } from "./HomeworkGradeForm";
 
+export interface QuizFile {
+  id: string;
+  filename: string;
+  size: number;
+  created: string;
+}
 export interface Question {
   kind: "single" | "multiple" | "short" | "number" | "essay";
   text: string;
@@ -11,6 +17,10 @@ export interface Question {
   number: number | null;
   tolerance: number;
   explanation: string;
+  fileIds?: string[];
+  solutionFileIds?: string[];
+  attachments?: QuizFile[];
+  solutionAttachments?: QuizFile[];
 }
 export interface BankItem {
   id: string;
@@ -57,7 +67,10 @@ export interface Attempt {
   startedAt: string;
   deadline: string;
   submittedAt: string | null;
-  questions?: (Pick<Question, "kind" | "text" | "points" | "options"> & {
+  questions?: (Pick<
+    Question,
+    "kind" | "text" | "points" | "options" | "attachments"
+  > & {
     id: string;
   })[];
   answers?: Record<string, { selected: string[]; text: string }>;

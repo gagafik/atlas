@@ -32,6 +32,8 @@ def register(app,quizzes,Workspace):
             if old and user['role']!='admin' and old[1]!=user['id']:raise HTTPException(403,'Это вопрос другого автора.')
             if body.version!=(old[0] if old else 0):raise HTTPException(409,'Вопрос изменился. Обновите банк.')
             document=dict(tags=body.tags,question=body.question.model_dump(mode='json'));updated=now().isoformat();version=body.version+1
+            from .quiz_files import bind_question
+            bind_question(db,workspace,id,version,user,document['question'])
             owner=old[1] if old else user['id']
             db.execute('INSERT INTO quiz_questions VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(workspace,id) DO UPDATE SET version=excluded.version,updated=excluded.updated,subject=excluded.subject,archived=excluded.archived,document=excluded.document',
                        (workspace,id,version,owner,updated,body.subject,int(body.archived),encoded(document)))

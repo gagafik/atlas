@@ -18,7 +18,7 @@ UPLOAD_SLOTS = threading.BoundedSemaphore(4)
 
 def total_stored(db):
     total=0
-    for table in ['homework_files','message_files','absence_files','assignment_files','teaching_material_files','lost_found_files','school_site_files','admission_files']:
+    for table in ['homework_files','message_files','absence_files','assignment_files','teaching_material_files','lost_found_files','school_site_files','admission_files','quiz_files']:
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
             total+=db.execute(f'SELECT coalesce(sum(size),0) FROM {table}').fetchone()[0]
     return total
