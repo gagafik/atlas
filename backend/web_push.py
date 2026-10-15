@@ -247,7 +247,9 @@ class PushService:
             device=db.execute('SELECT active,version FROM push_devices WHERE id=?',(job['device'],)).fetchone()
             if not row or not device or not device[0] or device[1]!=job['version']:return
             if status is None:
-                state,error,delay='cancelled','access_or_read',0
+                # A newer unread event may have arrived after this job was claimed.
+                # Recheck that generation instead of cancelling it with the old one.
+                state,error,delay=('queued' if row[0]!=job['generation'] else 'cancelled'),'access_or_read',0
             elif 200<=status<300:
                 state,error,delay=('queued' if row[0]!=job['generation'] else 'sent'),None,2
                 db.execute("UPDATE push_devices SET last_sent=?,last_status='accepted' WHERE id=?",(stamp,job['device']))

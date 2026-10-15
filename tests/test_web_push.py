@@ -313,6 +313,18 @@ def test_revocation_during_network_io_cannot_reactivate_device(client,push):
     assert signed('admin').get(BASE+'/options').json()['devices'][0]['active'] is False
 
 
+def test_new_generation_survives_reading_old_notice_after_claim(client,push):
+    account=enable(client);subscribe(client);notify(account)
+    service,clock,calls=push;clock[0]+=3
+    job=service.claim()
+    with api.connect() as db:db.execute('UPDATE notifications SET read_at=?',(now().isoformat(),))
+    notify(account)
+    assert service.prepare(job) is None
+    service.finish(job,None)
+    assert queue()[0][1]=='queued'
+    assert service.process_one() and len(calls)==1 and queue()[0][1]=='sent'
+
+
 def test_transport_encrypts_generic_payload_and_refuses_redirects_without_real_network(client,push,monkeypatch):
     import requests
     from http_ece import decrypt
