@@ -11,7 +11,8 @@ tokens=[re.compile(rb'gh[pousr]_[A-Za-z0-9]{30,}'),re.compile(rb'github_pat_[A-Z
         re.compile(rb'sb_secret_[A-Za-z0-9_-]{25,}'),re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----')]
 for name in filter(None,FILES):
     path=Path(name)
-    private=(path.parts[0] in ['data','node_modules','.venv','.gstack','dist','private-backups'] or any(part.endswith('.grading') for part in path.parts) or
+    private=(path.parts[0] in ['data','node_modules','.venv','.gstack','dist','private-backups'] or any(part.endswith(('.grading','.backup-agent','.files')) or re.fullmatch(r'backup-\d{14}-[a-f0-9]{16}',part) for part in path.parts) or
+             path.name=='atlas-backup-owner.json' or
              path.name.startswith('.env') and path.name!='.env.example' or
              path.suffix.lower() in ['.db','.sqlite','.sqlite3','.pem','.key','.p12','.mhtml','.xlsx','.xls'] and name!='tests/fixtures/legacy-import.xls')
     if private:bad.append((name,'private file'));continue

@@ -56,6 +56,11 @@ jobs:
           curl --fail http://127.0.0.1:8000/ > /dev/null
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/state)" = "401"
           docker exec atlas-ci-app python -c 'import httpx; c=httpx.Client(base_url="http://127.0.0.1:8000",trust_env=False); r=c.post("/api/auth/login",headers={"X-Atlas-Request":"1"},json={"login":"ci-admin","password":"Only-for-isolated-CI-2026!"}); r.raise_for_status(); c.get("/api/state?workspace=demo").raise_for_status()'
+          curl --fail http://127.0.0.1:8000/api/ready
+      - name: Verify backup and isolated restore in non-root container
+        run: |
+          docker volume create atlas-ci-backups
+          docker run --rm -v atlas-ci:/app/data -v atlas-ci-backups:/app/backups -e ATLAS_BACKUP_DIR=/app/backups atlas:ci python -m tools.backup_service --once
       - name: Container logs
         if: failure()
         run: docker logs atlas-ci-app || true
@@ -64,3 +69,4 @@ jobs:
         run: |
           docker rm -f atlas-ci-app || true
           docker volume rm atlas-ci || true
+          docker volume rm atlas-ci-backups || true

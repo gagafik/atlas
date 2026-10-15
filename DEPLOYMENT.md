@@ -27,7 +27,7 @@ docker compose build
 docker compose run --rm --no-deps app python -m tools.create_admin admin --name "School administrator"
 docker compose up -d
 docker compose ps
-curl --fail https://YOUR_DOMAIN/api/health
+curl --fail https://YOUR_DOMAIN/api/ready
 ```
 
 Пароль вводится интерактивно дважды. Он не передаётся аргументом команды,
@@ -65,9 +65,12 @@ docker compose exec app python -m tools.backup_school
 docker compose cp app:/app/data/backups ./private-backups
 ```
 
-Папка копий на том же сервере не защищает от потери сервера: храните проверенную
-копию вне него. Автоматическое расписание и внешнее хранилище ещё не настроены.
-При больших объёмах делайте согласованную копию в период низкой нагрузки.
+Есть opt-in служба автоматических копий с проверкой и восстановлением в отдельную
+папку, сроком хранения и состоянием для администратора. Включение профиля `backups`,
+ограничения и порядок восстановления — в [BACKUPS.md](BACKUPS.md). Папка или отдельный
+том на том же сервере не защищает от потери сервера: внешнее хранилище и серверная
+приёмка ещё нужны. При больших объёмах замерьте длительность блокировки записи
+во время согласованного снимка.
 
 ```sh
 git pull --ff-only

@@ -12,8 +12,9 @@ from test_access import client,HEADERS,PASSWORD
 def test_server_requires_admin_and_preserves_schedule(client,monkeypatch):
     before=api.read('demo').model_dump()
     monkeypatch.setenv('TIMETABLE_REQUIRE_AUTH','1')
-    for path in ['/api/state?workspace=demo','/api/auth/status','/api/health']:
+    for path in ['/api/state?workspace=demo','/api/auth/status','/api/ready']:
         assert client.get(path).status_code==503
+    assert client.get('/api/health').status_code==200
     assert client.post('/api/auth/setup',json=dict(login='admin',name='Admin',password=PASSWORD)).status_code==503
     with pytest.raises(ValueError,match='Создайте администратора'):verify_ready()
     id=create_first_admin('admin','Administrator',PASSWORD)

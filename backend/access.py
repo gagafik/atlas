@@ -167,6 +167,12 @@ class Access:
     async def guard(self, request, call_next):
         path = request.url.path
         if not (path.startswith('/api/') or path == '/openapi.json'): return await call_next(request)
+        # Probes must not bootstrap accounts, wait for authentication writes, or
+        # turn a missing/corrupt school database into a newly created empty one.
+        if path in ['/api/health','/api/ready'] and request.method in ['GET','HEAD']:
+            response=await call_next(request)
+            response.headers['Cache-Control']='no-store'
+            return response
         # SQLite/lock waits must not block the ASGI event loop for every client.
         enabled, user = await run_in_threadpool(self.identify, request)
         request.state.user = user

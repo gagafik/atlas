@@ -19,9 +19,9 @@ RUN pip install --no-cache-dir -r requirements.lock.txt
 COPY backend ./backend
 COPY tools ./tools
 COPY --from=frontend /build/dist ./dist
-RUN mkdir -p /app/data && chown atlas:atlas /app/data
+RUN mkdir -p /app/data /app/backups && chown atlas:atlas /app/data /app/backups
 USER atlas
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=3)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready',timeout=3)"
 CMD ["python", "-m", "tools.serve"]
