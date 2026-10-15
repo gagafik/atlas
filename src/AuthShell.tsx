@@ -20,6 +20,7 @@ const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
+const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -45,6 +46,17 @@ export default function AuthShell() {
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  const [documentsWorkspace, setDocumentsWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setDocumentsWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-documents", open);
+    return () => window.removeEventListener("atlas-open-documents", open);
+  }, []);
   const [staffTimeWorkspace, setStaffTimeWorkspace] = useState<string | null>(
     null,
   );
@@ -85,6 +97,7 @@ export default function AuthShell() {
     setFormsWorkspace(null);
     setMeetingsWorkspace(null);
     setStaffTimeWorkspace(null);
+    setDocumentsWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -296,6 +309,9 @@ export default function AuthShell() {
           <button onClick={() => setFormsWorkspace("school")}>
             Формы и опросы
           </button>
+          <button onClick={() => setDocumentsWorkspace("school")}>
+            Документы и архив
+          </button>
           {["admin", "editor", "teacher", "staff"].includes(
             session.user.role,
           ) && (
@@ -406,6 +422,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={formsWorkspace}
             onClose={() => setFormsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {documentsWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю документы…</p>}>
+          <SchoolDocuments
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={documentsWorkspace}
+            onClose={() => setDocumentsWorkspace(null)}
           />
         </Suspense>
       )}
