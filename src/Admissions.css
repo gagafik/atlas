@@ -1,0 +1,327 @@
+.admission-ui {
+  --admission-accent: #265b56;
+  color: #192d35;
+  background: #f2f5f5;
+  padding: 24px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.admission-public {
+  max-width: 1240px;
+  min-height: 100vh;
+  margin: auto;
+}
+.admission-modal {
+  width: min(1400px, 96vw);
+  height: 94vh;
+  overflow: auto;
+  border-radius: 16px;
+}
+.admission-ui header,
+.admission-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.admission-ui header {
+  margin-bottom: 24px;
+  border-bottom: 1px solid #c9d7d6;
+  padding-bottom: 20px;
+}
+.admission-ui h1 {
+  font-size: 28px;
+  margin: 4px 0;
+}
+.admission-ui h2 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+.admission-ui h3 {
+  font-size: 17px;
+  margin: 24px 0 10px;
+}
+.admission-eyebrow {
+  color: #37665f;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.admission-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 300px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.admission-public > .admission-layout {
+  grid-template-columns: 1fr 1fr;
+}
+.admission-card {
+  min-width: 0;
+  padding: 22px;
+  background: #fff;
+  border: 1px solid #d8e2e1;
+  border-radius: 12px;
+}
+.admission-main {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.admission-ui label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.admission-ui input:not([type="checkbox"]),
+.admission-ui select,
+.admission-ui textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px;
+  border: 1px solid #9fafaf;
+  border-radius: 7px;
+  background: #fff;
+  color: #192d35;
+  font: inherit;
+}
+.admission-ui textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.admission-ui input:disabled,
+.admission-ui textarea:disabled,
+.admission-ui select:disabled {
+  background: #edf1f1;
+  color: #44595b;
+}
+.admission-ui button {
+  border: 1px solid #a9bfbb;
+  border-radius: 7px;
+  padding: 9px 13px;
+  background: #f8fbfa;
+  color: #1b4c46;
+  font: inherit;
+  cursor: pointer;
+  max-width: 100%;
+}
+.admission-ui button.primary {
+  background: var(--admission-accent);
+  border-color: var(--admission-accent);
+  color: #fff;
+}
+.admission-ui button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.admission-ui :focus-visible {
+  outline: 3px solid #d28c37;
+  outline-offset: 2px;
+}
+.admission-ui a {
+  color: #1e6259;
+  text-decoration: underline;
+}
+.admission-ui fieldset {
+  border: 1px solid #d7e0de;
+  border-radius: 8px;
+  padding: 14px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.admission-ui legend {
+  font-weight: 700;
+  padding: 0 6px;
+}
+.admission-fields {
+  border: 0 !important;
+  padding: 0 !important;
+}
+.admission-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  min-width: 0;
+}
+.admission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 14px 0;
+}
+.admission-actions label {
+  flex: 1;
+  min-width: 130px;
+}
+.admission-ui .admission-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 400;
+  min-width: 0;
+}
+.admission-check input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 2px 0;
+}
+.admission-actions .admission-check {
+  flex: 0 0 auto;
+}
+.admission-ui .admission-case-button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  margin: 10px 0;
+  padding: 12px;
+}
+.admission-case-button small {
+  font-size: 12px;
+  color: #506c68;
+}
+.admission-case-button.selected {
+  border: 2px solid #33766b;
+  background: #ecf5f1;
+}
+.admission-case-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.admission-badge {
+  display: inline-block;
+  background: #e2eeea;
+  color: #214d45;
+  border-radius: 20px;
+  font-size: 13px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+.admission-error {
+  background: #fff0ef;
+  border: 1px solid #c98f89;
+  color: #7d2923;
+  padding: 12px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+.admission-notice {
+  background: #e3f4eb;
+  border: 1px solid #97c6b2;
+  color: #235540;
+  padding: 12px;
+  border-radius: 8px;
+}
+.admission-muted {
+  font-size: 13px;
+  color: #566f6a;
+}
+.admission-pre {
+  white-space: pre-wrap;
+}
+.admission-recovery {
+  background: #fff9e9;
+  border: 1px solid #e0c793;
+  padding: 14px;
+  border-radius: 8px;
+  margin: 14px 0;
+}
+.admission-file {
+  border-bottom: 1px solid #dde6e2;
+  padding: 10px 0;
+}
+.admission-ui details {
+  margin: 16px 0;
+}
+.admission-ui summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #245e54;
+}
+.admission-editor-row {
+  background: #f4f7f5;
+  border-radius: 8px;
+  padding: 14px;
+  margin: 12px 0;
+}
+.admission-submission dl > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 2fr;
+  gap: 12px;
+  border-bottom: 1px solid #e4eae7;
+  padding: 8px 0;
+}
+.admission-submission dt {
+  color: #4a635d;
+}
+.admission-submission dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.admission-history {
+  padding: 0;
+  list-style: none;
+}
+.admission-history > li {
+  border-left: 3px solid #b5cfc5;
+  padding: 8px 14px;
+  margin: 12px 0;
+  background: #f7faf8;
+}
+.admission-history small {
+  display: block;
+  color: #587268;
+  font-size: 12px;
+  margin: 5px 0;
+}
+.admission-campaign-info {
+  font-size: 14px;
+}
+@media (max-width: 700px) {
+  .admission-ui {
+    padding: 14px;
+  }
+  .admission-modal {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+  .admission-layout,
+  .admission-public > .admission-layout {
+    grid-template-columns: 1fr;
+  }
+  .admission-card {
+    padding: 16px;
+  }
+  .admission-pair {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .admission-ui h1 {
+    font-size: 24px;
+  }
+  .admission-ui header {
+    align-items: flex-start;
+  }
+  .admission-case-grid {
+    grid-template-columns: 1fr;
+  }
+  .admission-submission dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .admission-actions label {
+    width: 100%;
+    flex-basis: 100%;
+  }
+}

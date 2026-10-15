@@ -24,6 +24,7 @@ const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const LostFound = lazy(() => import("./LostFound"));
 const Clubs = lazy(() => import("./Clubs"));
 const SchoolSite = lazy(() => import("./SchoolSite"));
+const Admissions = lazy(() => import("./AdmissionOffice"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -53,6 +54,9 @@ export default function AuthShell() {
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
   const [clubsWorkspace, setClubsWorkspace] = useState<string | null>(null);
   const [siteWorkspace, setSiteWorkspace] = useState<string | null>(null);
+  const [admissionsWorkspace, setAdmissionsWorkspace] = useState<string | null>(
+    null,
+  );
   useEffect(() => {
     const open = (event: Event) =>
       setClubsWorkspace((event as CustomEvent).detail?.workspace || "school");
@@ -353,9 +357,14 @@ export default function AuthShell() {
           {["admin", "editor", "teacher", "staff"].includes(
             session.user.role,
           ) && (
-            <button onClick={() => setSiteWorkspace("school")}>
-              Сайт школы
-            </button>
+            <>
+              <button onClick={() => setAdmissionsWorkspace("school")}>
+                Приём в школу
+              </button>
+              <button onClick={() => setSiteWorkspace("school")}>
+                Сайт школы
+              </button>
+            </>
           )}
           <button onClick={() => setDocumentsWorkspace("school")}>
             Документы и архив
@@ -480,6 +489,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={libraryWorkspace}
             onClose={() => setLibraryWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {admissionsWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю приёмную комиссию…</p>}>
+          <Admissions
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={admissionsWorkspace}
+            onClose={() => setAdmissionsWorkspace(null)}
           />
         </Suspense>
       )}

@@ -444,5 +444,9 @@ from .school_site import SchoolSite
 school_site = SchoolSite(access, portal_stamp)
 school_site.register(app, Workspace)
 
+from .admissions import Admissions
+admissions = Admissions(access, portal_stamp)
+admissions.register(app, Workspace)
+
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
