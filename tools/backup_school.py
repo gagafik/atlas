@@ -13,7 +13,7 @@ from uuid import uuid4
 
 STORES = [('homework_files','homework'),('message_files','messages'),
           ('absence_files','absences'),('assignment_files','assignments'),
-          ('teaching_material_files','materials'),('lost_found_files','lost-found')]
+          ('teaching_material_files','materials'),('lost_found_files','lost-found'),('school_site_files','school-site')]
 
 
 def reject_link(path):

@@ -440,5 +440,9 @@ from .clubs import Clubs
 clubs = Clubs(access, notifications, portal_stamp)
 clubs.register(app, Workspace)
 
+from .school_site import SchoolSite
+school_site = SchoolSite(access, portal_stamp)
+school_site.register(app, Workspace)
+
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
