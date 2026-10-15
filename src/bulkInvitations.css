@@ -1,0 +1,46 @@
+.bulk-invitations {
+  margin: 24px 0;
+  padding: 16px;
+  border: 1px solid #dfe5ec;
+  border-radius: 12px;
+  min-width: 0;
+}
+.bulk-invitations fieldset {
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.bulk-invitations .export-card {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.bulk-invitations input:not([type="checkbox"]),
+.bulk-invitations select {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+.bulk-invitations button {
+  margin: 4px;
+  white-space: normal;
+  max-width: 100%;
+}
+.bulk-invitations .dated-fields {
+  min-width: 0;
+}
+.bulk-targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.bulk-targets label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.bulk-targets input {
+  flex: 0 0 auto;
+}

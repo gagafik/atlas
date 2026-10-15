@@ -3,6 +3,7 @@ import { api } from "./api";
 import { Multi } from "./DatedSchedule";
 import { roleNames, type Grant } from "./auth";
 import type { State } from "./types";
+import BulkInvitationPanel from "./BulkInvitationPanel";
 
 type InviteRole = "parent" | "student" | "teacher";
 interface Invitation {
@@ -105,6 +106,17 @@ export default function InvitationPanel({
   return (
     <section className="invitation-panel">
       <h3>Приглашения в школу</h3>
+      <details>
+        <summary>Массовое подключение учеников, родителей и учителей</summary>
+        <BulkInvitationPanel
+          state={state}
+          workspace={workspace}
+          onChange={async () => {
+            await reload();
+            await onChange();
+          }}
+        />
+      </details>
       <p>
         Выберите конкретного получателя и его доступ. Передайте код этому
         человеку после проверки в школе. Каждый представитель ребёнка получает
