@@ -11,6 +11,16 @@
 .operations-dialog p {
   font-weight: 400;
 }
+.operations-dialog section {
+  border-bottom: 1px solid #d5dce0;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+}
+.operations-queues {
+  padding-left: 20px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .operations-error {
   padding: 12px;
   background: #fff0ec;
