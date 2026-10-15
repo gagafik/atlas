@@ -19,6 +19,8 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "canteen:ordered": "Оформлен заказ питания",
+  "canteen:cancelled": "Заказ питания отменён",
   "payments:charged": "В финансовом кабинете появилось начисление",
   "payments:received": "Школа учла поступление оплаты",
   "payments:adjusted": "Школа уточнила начисление",

@@ -1,0 +1,391 @@
+.canteen-dialog {
+  width: min(1200px, calc(100vw - 32px));
+  max-height: 94dvh;
+  box-sizing: border-box;
+  border: 1px solid #c5d5cb;
+  border-radius: 18px;
+  padding: 26px;
+  background: #f6f8f2;
+  color: #263d2e;
+  font:
+    15px/1.5 system-ui,
+    sans-serif;
+}
+.canteen-dialog::backdrop {
+  background: #14251c80;
+}
+.canteen-dialog header,
+.canteen-toolbar,
+.canteen-actions,
+.canteen-tabs,
+.canteen-dish-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.canteen-dialog header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.canteen-dialog h2 {
+  font-size: 28px;
+  margin: 4px 0;
+}
+.canteen-dialog h3,
+.canteen-dialog h4 {
+  margin: 0 0 10px;
+}
+.canteen-dialog p {
+  margin: 10px 0;
+}
+.canteen-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #536d3b;
+}
+.canteen-body {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.canteen-dialog label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.canteen-dialog input,
+.canteen-dialog select,
+.canteen-dialog textarea {
+  font: inherit;
+  color: #263d2e;
+  background: white;
+  border: 1px solid #aebfac;
+  border-radius: 7px;
+  padding: 8px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.canteen-dialog textarea {
+  min-height: 75px;
+  resize: vertical;
+}
+.canteen-dialog button,
+.canteen-dialog a {
+  font: inherit;
+}
+.canteen-dialog button {
+  border: 1px solid #a8bca5;
+  border-radius: 8px;
+  padding: 9px 13px;
+  background: #fff;
+  color: #263d2e;
+  cursor: pointer;
+}
+.canteen-dialog button:hover {
+  background: #e8efdf;
+}
+.canteen-dialog button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.canteen-dialog button:focus-visible,
+.canteen-dialog a:focus-visible {
+  outline: 3px solid #6b9341;
+  outline-offset: 2px;
+}
+.canteen-dialog a {
+  color: #345b1e;
+  text-underline-offset: 3px;
+}
+.canteen-dialog .canteen-primary,
+.canteen-tabs button[aria-pressed="true"] {
+  background: #385d2e;
+  color: white;
+  border-color: #385d2e;
+}
+.canteen-tabs {
+  margin: 18px 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #d2dfc8;
+}
+.canteen-period {
+  margin: 12px 0 20px;
+}
+.canteen-toolbar {
+  margin-bottom: 14px;
+  align-items: end;
+}
+.canteen-toolbar label {
+  flex: 1 1 180px;
+  max-width: 330px;
+}
+.canteen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.canteen-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+}
+.canteen-layout > *,
+.canteen-card,
+.canteen-order {
+  min-width: 0;
+}
+.canteen-card,
+.canteen-order {
+  border: 1px solid #d4dfcf;
+  background: white;
+  border-radius: 12px;
+  padding: 18px;
+  margin: 0 0 16px;
+}
+.canteen-menu-list {
+  display: grid;
+  gap: 8px;
+}
+.canteen-menu-list button {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+.canteen-menu-list button.selected {
+  border: 2px solid #50733f;
+  background: #edf3e5;
+}
+.canteen-menu-list small,
+.canteen-muted {
+  color: #61745e;
+}
+.canteen-empty {
+  padding: 20px;
+  color: #61745e;
+}
+.canteen-dish {
+  padding: 16px 0;
+  border-top: 1px solid #e0e8da;
+}
+.canteen-dish-title {
+  justify-content: space-between;
+}
+.canteen-dish-title h4 {
+  margin: 0;
+}
+.canteen-preserve {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.canteen-status {
+  display: inline-block;
+  font-size: 13px;
+  background: #edf2e8;
+  border-radius: 5px;
+  padding: 3px 7px;
+}
+.canteen-actions {
+  margin: 14px 0;
+}
+.canteen-dialog .canteen-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.canteen-check input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  accent-color: #385d2e;
+}
+.canteen-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+}
+.canteen-class-choice {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid #d2dfc8;
+  border-radius: 8px;
+}
+.canteen-class-choice summary,
+.canteen-order summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.canteen-variant {
+  border: 1px solid #c9d8bf;
+  border-radius: 10px;
+  padding: 15px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.canteen-variant legend {
+  font-weight: 700;
+  padding: 0 8px;
+}
+.canteen-variant > label,
+.canteen-editor > label {
+  margin: 10px 0;
+}
+.canteen-choice-list {
+  max-height: 250px;
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+}
+.canteen-choice-list label {
+  padding: 7px;
+  background: #f4f7ef;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+.canteen-preview {
+  padding: 16px;
+  background: #f3f6e3;
+  border: 1px solid #b9ca86;
+  border-radius: 10px;
+  margin: 14px 0;
+}
+.canteen-preview ul {
+  max-height: 220px;
+  overflow: auto;
+  padding-left: 22px;
+}
+.canteen-order-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 10px 0;
+}
+.canteen-order-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.canteen-order {
+  margin: 0;
+}
+.canteen-copy {
+  border-top: 1px solid #d4dfcf;
+  padding-top: 16px;
+  margin-top: 14px;
+}
+.canteen-staff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.canteen-staff-row {
+  padding: 12px;
+  border: 1px solid #d4dfcf;
+  border-radius: 8px;
+  min-width: 0;
+}
+.canteen-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 14px 0;
+}
+.canteen-totals > div {
+  display: grid;
+  gap: 4px;
+  min-width: 105px;
+  padding: 13px;
+  background: #eef3e7;
+  border-radius: 8px;
+}
+.canteen-totals strong {
+  font-size: 24px;
+}
+.canteen-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.canteen-dialog table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.canteen-dialog th,
+.canteen-dialog td {
+  border-bottom: 1px solid #d6dfcf;
+  padding: 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.canteen-dialog th {
+  font-size: 13px;
+  background: #f0f5e9;
+}
+.canteen-error {
+  padding: 12px;
+  border: 1px solid #d5a49a;
+  border-radius: 9px;
+  background: #fff0e9;
+  color: #7a3026;
+  white-space: pre-wrap;
+}
+.canteen-notice {
+  padding: 12px;
+  border: 1px solid #adc6a2;
+  border-radius: 9px;
+  background: #eef5e8;
+}
+.canteen-history {
+  padding-left: 23px;
+}
+.canteen-history li {
+  padding: 10px;
+  border-bottom: 1px solid #d4dfcf;
+}
+.canteen-history p {
+  margin: 4px 0;
+}
+@media (max-width: 720px) {
+  .canteen-dialog {
+    width: calc(100vw - 16px);
+    max-height: 96dvh;
+    padding: 15px;
+  }
+  .canteen-dialog h2 {
+    font-size: 24px;
+  }
+  .canteen-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .canteen-menu-list {
+    max-height: 240px;
+    overflow: auto;
+  }
+  .canteen-toolbar label {
+    max-width: none;
+  }
+  .canteen-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .canteen-order-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .canteen-card {
+    padding: 13px;
+  }
+  .canteen-tabs {
+    gap: 7px;
+  }
+  .canteen-tabs button {
+    padding: 8px;
+  }
+  .canteen-staff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
