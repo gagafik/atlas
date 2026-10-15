@@ -3,15 +3,14 @@ import asyncio
 from datetime import timedelta
 import os
 from pathlib import Path
-from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 from .access import now
 from . import homework_files as files
+from . import teaching_media as media
 
 
 def tables(db):
@@ -63,7 +62,7 @@ def collect_unused(db):
 
 
 def reserve(db, workspace, user, filename):
-    name=files.name_for(filename)
+    name=media.name_for(filename)
     size=db.execute('SELECT coalesce(sum(size),0) FROM teaching_material_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
     pending=db.execute("SELECT count(*) FROM teaching_material_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
     if files.total_stored(db)+files.MAX_FILE>files.total_limit() or size+files.MAX_FILE>250*1024*1024:
@@ -107,7 +106,7 @@ class MaterialFiles:
                     await run_in_threadpool(os.fsync,stream.fileno())
                 await run_in_threadpool(stream.close);stream=None
                 def finish():
-                    digest=files.validate_file(path,name)
+                    digest=media.validate_file(path,name)
                     with self.access.lock,self.access.connect() as db:
                         db.execute('BEGIN IMMEDIATE');self.library.recheck(db,user,workspace)
                         db.execute("UPDATE teaching_material_files SET status='ready',size=?,sha256=? WHERE id=?",(size,digest,id))
@@ -131,7 +130,7 @@ class MaterialFiles:
                 finally: files.UPLOAD_SLOTS.release()
 
         @app.get('/api/journal/material-files/{id}')
-        def download(id:str,request:Request,workspace:Workspace='school',materialId:str|None=None,version:int|None=None,lessonKey:str|None=None):
+        def download(id:str,request:Request,workspace:Workspace='school',materialId:str|None=None,version:int|None=None,lessonKey:str|None=None,download:bool=False):
             school=None
             if lessonKey:
                 user=self.library.journal.scope(request,workspace)
@@ -154,6 +153,4 @@ class MaterialFiles:
                 if not row or not lessonKey and not materialId and row[2]!=user['id']: raise HTTPException(404,'Файл не найден.')
                 path=files.file_path(root_for(db),id)
                 if not path.is_file(): raise HTTPException(404,'Файл недоступен. Обратитесь к администратору.')
-                headers={'Content-Disposition':"attachment; filename*=UTF-8''"+quote(row[3]),'Content-Length':str(row[4]),
-                         'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"}
-                return FileResponse(path,media_type='application/octet-stream',headers=headers)
+                return media.response(path,row[3],download=download)

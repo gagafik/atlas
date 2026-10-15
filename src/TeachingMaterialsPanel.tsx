@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { MaterialView } from "./LessonMaterials";
+import TeachingMediaPlayer from "./TeachingMediaPlayer";
 import {
   materialFileUrl,
   materialSnapshot,
@@ -582,11 +583,16 @@ export default function TeachingMaterialsPanel({
                     </p>
                     <label className="field">
                       <span>Файлы материала (до пяти по 10 МБ)</span>
+                      <small>
+                        Документы и изображения, аудио MP3/WAV/M4A/OGG, видео
+                        MP4/WebM. Текстовую расшифровку можно добавить в
+                        описание материала.
+                      </small>
                       <input
                         type="file"
                         multiple
                         disabled={draft.fileIds.length >= 5}
-                        accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+                        accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx,.mp3,.wav,.m4a,.ogg,.mp4,.webm"
                         onChange={(e) => {
                           void upload(e.target.files);
                           e.target.value = "";
@@ -598,14 +604,26 @@ export default function TeachingMaterialsPanel({
                         .filter((f) => draft.fileIds.includes(f.id))
                         .map((file) => (
                           <li key={file.id}>
-                            <a
-                              href={materialFileUrl(
+                            <TeachingMediaPlayer
+                              filename={file.filename}
+                              url={materialFileUrl(
                                 workspace,
                                 file.id,
                                 selected?.content.fileIds.includes(file.id)
                                   ? selected
                                   : undefined,
                               )}
+                            />
+                            <a
+                              href={
+                                materialFileUrl(
+                                  workspace,
+                                  file.id,
+                                  selected?.content.fileIds.includes(file.id)
+                                    ? selected
+                                    : undefined,
+                                ) + "&download=true"
+                              }
                             >
                               {file.filename}
                             </a>

@@ -2,6 +2,7 @@ import { useState } from "react";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import type { MaterialSnapshot } from "./teachingMaterials";
 import "./LiveLessonMedia.css";
+import TeachingMediaPlayer from "./TeachingMediaPlayer";
 
 export type MaterialPart = "materials" | "solutionMaterials";
 export type QuestionMaterials = {
@@ -103,13 +104,22 @@ export function LiveMaterials({
             const url = `/api/live-lessons/${encodeURIComponent(lesson)}/files/${encodeURIComponent(f.id)}?${new URLSearchParams({ workspace, questionIndex: String(index), part, projection: String(projection) })}`;
             return (
               <div key={f.id}>
+                <TeachingMediaPlayer
+                  key={url}
+                  filename={f.filename}
+                  url={url}
+                />
                 {/\.(png|jpe?g)$/i.test(f.filename) && (
                   <a href={url} target="_blank" rel="noopener noreferrer">
                     <img src={url} alt={f.filename} loading="lazy" />
                   </a>
                 )}
-                <a href={url} target="_blank" rel="noopener noreferrer">
-                  {f.filename} · {Math.ceil(f.size / 1024)} КБ
+                <a
+                  href={url + "&download=true"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Скачать {f.filename} · {Math.ceil(f.size / 1024)} КБ
                 </a>
               </div>
             );

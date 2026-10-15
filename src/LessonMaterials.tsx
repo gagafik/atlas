@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import Library from "./TeachingMaterialsLoader";
 import { materialFileUrl, type MaterialSnapshot } from "./teachingMaterials";
 import "./teachingMaterials.css";
+import TeachingMediaPlayer from "./TeachingMediaPlayer";
 
 export function MaterialView({
   item,
@@ -27,7 +28,16 @@ export function MaterialView({
         <ul className="homework-files">
           {item.files.map((file) => (
             <li key={file.id}>
-              <a href={materialFileUrl(workspace, file.id, item, lessonKey)}>
+              <TeachingMediaPlayer
+                filename={file.filename}
+                url={materialFileUrl(workspace, file.id, item, lessonKey)}
+              />
+              <a
+                href={
+                  materialFileUrl(workspace, file.id, item, lessonKey) +
+                  "&download=true"
+                }
+              >
                 {file.filename}
               </a>{" "}
               <small>{Math.max(1, Math.ceil(file.size / 1024))} КБ</small>
