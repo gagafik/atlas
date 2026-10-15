@@ -84,6 +84,7 @@ export type Slot = {
 export type Preview = {
   affectedSlots: number;
   bookingsToCancel: number;
+  offersToRevoke?: number;
   conflictCount: number;
   previewHash: string;
   conflicts: { host: string; startsAt: string; reason: string }[];
@@ -96,6 +97,7 @@ export const labels: Record<string, string> = {
   archived: "В архиве",
   available: "Свободно",
   occupied: "Занято",
+  held: "Ожидает ответа семьи",
   blocked: "Недоступно",
   conflict: "Пересечение",
   past: "Время прошло",

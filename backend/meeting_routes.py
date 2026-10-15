@@ -12,6 +12,8 @@ from .meetings import version
 from .messages import Directory
 from .school_forms import enabled,grant_ids
 from .notifications import encoded,permission_key
+from . import meeting_waitlist
+from .meeting_booking import check as check_booking,insert as insert_booking
 
 
 def cursor(value):
@@ -104,6 +106,7 @@ def register(service,app,Workspace):
                     slot['id']=str(uuid4());slot['version']=1
                     db.execute('INSERT INTO meeting_slots VALUES (:id,:event_id,:workspace,:host_id,:teacher_id,:room_id,:starts_at,:ends_at,:version,:status,:reason)',slot)
             else:
+                if body.action=='block':meeting_waitlist.cancel_for_event(service,db,event,user,snap,workspace,body.reason,[s['id'] for s in slots])
                 for booked in bookings:service.cancel_booking(db,service.booking(db,workspace,booked['id']),event,user,snap,workspace,body.reason)
                 for slot in slots:db.execute('UPDATE meeting_slots SET status=?,version=version+1,reason=? WHERE id=?',('blocked' if body.action=='block' else 'open',body.reason if body.action=='block' else '',slot['id']))
             result=service.save_event(db,event,user,body.action,dict(affectedSlots=len(slots),cancelledBookings=len(bookings),reason=body.reason))
@@ -142,6 +145,8 @@ def register(service,app,Workspace):
                 if event['status']=='archived':raise HTTPException(409,'Мероприятие уже в архиве.')
                 if db.execute("SELECT 1 FROM meeting_bookings WHERE event_id=? AND status='scheduled' AND ends_at>? LIMIT 1",(id,utc(now()))).fetchone():raise HTTPException(409,'Сначала отмените предстоящие встречи или дождитесь их окончания.')
                 event['status']='archived'
+            if body.action in ['cancel','archive']:
+                meeting_waitlist.cancel_for_event(service,db,event,user,snap,workspace,body.reason or 'Мероприятие отправлено в архив.')
             result=service.save_event(db,event,user,body.action,dict(reason=body.reason))
             if recipients:service.notifications.deliver(db,recipients,workspace,event['version'],'meeting.published')
             return service.remember(db,user,body,fingerprint,result)
@@ -162,7 +167,7 @@ def register(service,app,Workspace):
             for row in rows[:limit]:
                 host=hosts[row['host_id']];booking=db.execute("SELECT * FROM meeting_bookings WHERE slot_id=? AND status!='cancelled'",(row['id'],)).fetchone()
                 conflict=service.slot_conflict(db,row,occupancy,row['id']) if row['status']=='open' and host['current'] else None
-                status='blocked' if row['status']=='blocked' or not host['current'] else 'occupied' if booking else 'past' if datetime.fromisoformat(row['starts_at'])<=now() else 'conflict' if conflict else 'available'
+                status='blocked' if row['status']=='blocked' or not host['current'] else 'occupied' if booking else 'held' if meeting_waitlist.hold(service,db,row,snap,workspace) else 'past' if datetime.fromisoformat(row['starts_at'])<=now() else 'conflict' if conflict else 'available'
                 item=dict(id=row['id'],version=row['version'],hostId=row['host_id'],hostName=host['name'],startsAt=row['starts_at'],endsAt=row['ends_at'],status=status,location=host['location'],roomName=snap.entities['room'][host['roomId']].name if host['roomId'] in snap.entities['room'] else '')
                 if user['role']=='admin':item.update(reason=row['reason'],conflict=conflict)
                 if booking and service.booking_access(db,booking,event,user,snap,workspace):item['booking']=service.booking_public(booking,event,user)
@@ -181,19 +186,10 @@ def register(service,app,Workspace):
             if old:return old
             version(event,body.eventVersion);version(slot,body.version)
             if not service.registration_open(event) or slot['status']!='open' or datetime.fromisoformat(slot['starts_at'])<=now():raise HTTPException(409,'Запись на этот интервал закрыта.')
-            if service.slot_conflict(db,slot,Occupancy(snap),id):raise HTTPException(409,'Ведущий или кабинет уже занят. Выберите другой интервал.')
-            if db.execute("SELECT 1 FROM meeting_bookings WHERE status!='cancelled' AND (slot_id=? OR (event_id=? AND host_id=? AND student_id=?)) LIMIT 1",(id,event['id'],slot['host_id'],body.studentId)).fetchone():raise HTTPException(409,'Интервал занят или за этого ребёнка уже есть запись к ведущему в этом мероприятии.')
-            for column,value in [('parent_id',user['id']),('student_id',body.studentId)]:
-                if db.execute(f"SELECT 1 FROM meeting_bookings WHERE workspace=? AND {column}=? AND status!='cancelled' AND starts_at<? AND ends_at>? LIMIT 1",(workspace,value,slot['ends_at'],slot['starts_at'])).fetchone():raise HTTPException(409,'У вас или ребёнка уже есть встреча в это время.')
-            booking_id=str(uuid4());document=dict(parentName=user['name'],studentName=snap.entities['student'][body.studentId].name,hostName=host['name'],studentId=body.studentId,note=body.note,reason='',location=host['location'],roomName=snap.entities['room'][host['roomId']].name if host['roomId'] in snap.entities['room'] else '',updated=utc(now()))
-            db.execute('INSERT INTO meeting_bookings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(booking_id,event['id'],id,workspace,user['id'],body.studentId,host['accountId'],permission_key(user),slot['starts_at'],slot['ends_at'],'scheduled',1,encoded(document)))
-            db.execute('UPDATE meeting_slots SET version=version+1 WHERE id=?',(id,))
-            if event['definition']['reminderMinutes']:
-                due=utc(datetime.fromisoformat(slot['starts_at'])-timedelta(minutes=event['definition']['reminderMinutes']))
-                db.execute("INSERT INTO meeting_reminders VALUES (?,?,'pending')",(booking_id,due))
-            service.history(db,event,user,'booked',dict(version=1),booking_id)
-            service.notifications.deliver(db,[user,host['user']],workspace,1,'meeting.booked')
-            return service.remember(db,user,body,fingerprint,dict(id=booking_id,version=1,status='scheduled'))
+            check_booking(service,db,event,slot,user,body.studentId,snap,workspace)
+            result=insert_booking(service,db,event,slot,user,body.studentId,host,snap,workspace,body.note)
+            meeting_waitlist.booked(service,db,event,slot,user,body.studentId,snap,workspace,result['id'])
+            return service.remember(db,user,body,fingerprint,result)
 
     @app.get('/api/meetings/bookings')
     def bookings(request:Request,workspace:Workspace='school',eventId:str='',onDate:date|None=None,after:str=Query(default='',max_length=150),limit:int=Query(default=30,ge=1,le=100)):

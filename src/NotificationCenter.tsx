@@ -40,6 +40,9 @@ const titles: Record<string, string> = {
   "meeting.booked": "Создана запись на встречу",
   "meeting.cancelled": "Встреча отменена",
   "meeting.updated": "Обновлена запись на встречу",
+  "meeting.waitlist_offer":
+    "Школа предложила время встречи. Откройте очередь ожидания.",
+  "meeting.waitlist_changed": "Изменилась заявка в очереди ожидания встреч.",
   "meeting.rescheduled": "Изменилось время родительской встречи",
   "meeting.reminder": "Скоро родительская встреча",
   "forms.assigned": "Вам назначена школьная форма",
