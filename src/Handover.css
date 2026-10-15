@@ -1,0 +1,246 @@
+.handover-dialog {
+  width: min(1180px, calc(100vw - 32px));
+  max-height: 94dvh;
+  box-sizing: border-box;
+  border: 1px solid #bfd0d6;
+  border-radius: 18px;
+  padding: 26px;
+  background: #f3f7f8;
+  color: #233b47;
+  font:
+    15px/1.5 system-ui,
+    sans-serif;
+}
+.handover-dialog::backdrop {
+  background: #12263188;
+}
+.handover-dialog header,
+.handover-toolbar,
+.handover-actions,
+.handover-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.handover-dialog header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.handover-dialog h2 {
+  font-size: 28px;
+  margin: 4px 0;
+}
+.handover-dialog h3,
+.handover-dialog h4 {
+  margin: 12px 0;
+}
+.handover-dialog p {
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.handover-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #496f7b;
+}
+.handover-body {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.handover-dialog label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin: 10px 0;
+}
+.handover-dialog input,
+.handover-dialog select,
+.handover-dialog textarea {
+  font: inherit;
+  color: inherit;
+  background: white;
+  border: 1px solid #a7bec7;
+  border-radius: 7px;
+  padding: 8px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.handover-dialog textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.handover-dialog button,
+.handover-dialog a {
+  font: inherit;
+}
+.handover-dialog button {
+  border: 1px solid #a7bec7;
+  border-radius: 8px;
+  padding: 9px 13px;
+  background: white;
+  color: #233b47;
+  cursor: pointer;
+}
+.handover-dialog button:hover {
+  background: #e3eef1;
+}
+.handover-dialog button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.handover-dialog :is(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid #4d8ba0;
+  outline-offset: 2px;
+}
+.handover-dialog a {
+  color: #255d71;
+  text-underline-offset: 3px;
+}
+.handover-dialog .handover-primary,
+.handover-tabs button[aria-pressed="true"] {
+  background: #28596a;
+  color: white;
+  border-color: #28596a;
+}
+.handover-tabs {
+  margin: 18px 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #cedfe4;
+}
+.handover-toolbar {
+  margin: 12px 0;
+  align-items: end;
+}
+.handover-toolbar label {
+  flex: 1 1 170px;
+  max-width: 310px;
+}
+.handover-toolbar form {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.handover-toolbar form button {
+  margin-bottom: 10px;
+}
+.handover-grid,
+.handover-list,
+.handover-staff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin: 12px 0;
+}
+.handover-card {
+  border: 1px solid #cfdee3;
+  border-radius: 12px;
+  padding: 18px;
+  background: white;
+  min-width: 0;
+}
+.handover-status {
+  display: inline-block;
+  background: #e9f1f3;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.handover-actions {
+  margin: 14px 0;
+}
+.handover-dialog .handover-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.handover-check input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: #28596a;
+}
+.handover-policy,
+.handover-preserve {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.handover-policy {
+  padding: 12px;
+  border-left: 3px solid #6998a8;
+  background: #edf4f6;
+}
+.handover-review {
+  background: #eaf4e8;
+  border: 1px solid #a7c29c;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.handover-error {
+  padding: 12px;
+  border: 1px solid #d5a49a;
+  border-radius: 9px;
+  background: #fff0e9;
+  color: #7a3026;
+  white-space: pre-wrap;
+}
+.handover-notice {
+  padding: 12px;
+  border: 1px solid #b0c9d1;
+  border-radius: 9px;
+  background: #eaf2f5;
+}
+.handover-empty {
+  padding: 20px;
+  color: #53717d;
+}
+.handover-class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+  max-height: 180px;
+  overflow: auto;
+  gap: 5px;
+}
+.handover-history {
+  padding-left: 24px;
+}
+.handover-history li {
+  padding: 10px;
+  border-bottom: 1px solid #cedfe4;
+}
+.handover-dialog summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .handover-dialog {
+    width: calc(100vw - 16px);
+    max-height: 96dvh;
+    padding: 15px;
+  }
+  .handover-dialog h2 {
+    font-size: 24px;
+  }
+  .handover-grid,
+  .handover-list,
+  .handover-staff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .handover-toolbar label {
+    max-width: none;
+  }
+  .handover-card {
+    padding: 13px;
+  }
+  .handover-tabs {
+    gap: 7px;
+  }
+  .handover-tabs button {
+    padding: 8px;
+  }
+}

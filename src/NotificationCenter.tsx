@@ -19,6 +19,15 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "handover:adult_proposed":
+    "Школе предложен взрослый, который будет забирать ребёнка",
+  "handover:adult_updated": "Изменилось разрешение забирать ребёнка",
+  "handover:requested": "Оформлена заявка на уход ребёнка",
+  "handover:arrive": "Взрослый прибыл за ребёнком",
+  "handover:ready": "Ребёнок готов к уходу",
+  "handover:cancel": "Заявка на уход отменена",
+  "handover:completed": "Школа подтвердила передачу ребёнка",
+  "handover:returned": "Школа отметила возвращение ребёнка",
   "canteen:ordered": "Оформлен заказ питания",
   "canteen:cancelled": "Заказ питания отменён",
   "payments:charged": "В финансовом кабинете появилось начисление",
@@ -418,6 +427,19 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                       Открыть табель
                     </button>
                   )}
+                  {item.action.startsWith("handover:") && (
+                    <button
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new CustomEvent("atlas-open-handover", {
+                            detail: { workspace: item.workspace },
+                          }),
+                        )
+                      }
+                    >
+                      Открыть уход детей
+                    </button>
+                  )}
                   {item.action.startsWith("meeting.") && (
                     <button
                       onClick={() =>
@@ -462,39 +484,41 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.revision}
                   </p>
                   <p>
-                    {item.action.startsWith("clubs.")
-                      ? "Откройте кружки, чтобы проверить запись и занятия."
-                      : item.action.startsWith("lost-found.")
-                        ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
-                        : item.action.startsWith("library.")
-                          ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
-                          : item.action.startsWith("documents.")
-                            ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
-                            : item.action.startsWith("staff-time.")
-                              ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
-                              : item.action.startsWith("meeting.")
-                                ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
-                                : item.action.startsWith("forms.")
-                                  ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
-                                  : item.action === "push.test"
-                                    ? "Это проверочное уведомление для вашего устройства."
-                                    : item.action.startsWith("absence.")
-                                      ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
-                                      : item.action === "family.updated"
-                                        ? "Откройте «Мои дети и доступ» в личном кабинете."
-                                        : item.action.startsWith("message.")
-                                          ? "Откройте раздел сообщений в личном кабинете."
-                                          : item.action.startsWith("quiz.")
-                                            ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
-                                            : item.action.startsWith(
-                                                  "homework.",
-                                                )
-                                              ? "Откройте домашнюю работу в учебном журнале."
+                    {item.action.startsWith("handover:")
+                      ? "Откройте уход детей, чтобы проверить разрешение или состояние заявки."
+                      : item.action.startsWith("clubs.")
+                        ? "Откройте кружки, чтобы проверить запись и занятия."
+                        : item.action.startsWith("lost-found.")
+                          ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
+                          : item.action.startsWith("library.")
+                            ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
+                            : item.action.startsWith("documents.")
+                              ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
+                              : item.action.startsWith("staff-time.")
+                                ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
+                                : item.action.startsWith("meeting.")
+                                  ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
+                                  : item.action.startsWith("forms.")
+                                    ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
+                                    : item.action === "push.test"
+                                      ? "Это проверочное уведомление для вашего устройства."
+                                      : item.action.startsWith("absence.")
+                                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                                        : item.action === "family.updated"
+                                          ? "Откройте «Мои дети и доступ» в личном кабинете."
+                                          : item.action.startsWith("message.")
+                                            ? "Откройте раздел сообщений в личном кабинете."
+                                            : item.action.startsWith("quiz.")
+                                              ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
                                               : item.action.startsWith(
-                                                    "journal.",
+                                                    "homework.",
                                                   )
-                                                ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                                                : "Проверьте доступное вам расписание, включая занятия по датам."}
+                                                ? "Откройте домашнюю работу в учебном журнале."
+                                                : item.action.startsWith(
+                                                      "journal.",
+                                                    )
+                                                  ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                                  : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}

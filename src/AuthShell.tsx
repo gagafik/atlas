@@ -27,6 +27,7 @@ const SchoolSite = lazy(() => import("./SchoolSite"));
 const Admissions = lazy(() => import("./AdmissionOffice"));
 const SchoolPayments = lazy(() => import("./SchoolPayments"));
 const Canteen = lazy(() => import("./Canteen"));
+const Handover = lazy(() => import("./Handover"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -55,6 +56,17 @@ export default function AuthShell() {
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
   const [canteenWorkspace, setCanteenWorkspace] = useState<string | null>(null);
+  const [handoverWorkspace, setHandoverWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setHandoverWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-handover", open);
+    return () => window.removeEventListener("atlas-open-handover", open);
+  }, []);
   const [paymentsWorkspace, setPaymentsWorkspace] = useState<string | null>(
     null,
   );
@@ -140,6 +152,7 @@ export default function AuthShell() {
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
     setCanteenWorkspace(null);
+    setHandoverWorkspace(null);
     setPaymentsWorkspace(null);
     setLostFoundWorkspace(null);
     setClubsWorkspace(null);
@@ -366,6 +379,11 @@ export default function AuthShell() {
             Столовая
           </button>
           {session.user.role !== "student" && (
+            <button onClick={() => setHandoverWorkspace("school")}>
+              Уход детей
+            </button>
+          )}
+          {session.user.role !== "student" && (
             <button onClick={() => setPaymentsWorkspace("school")}>
               Платежи
             </button>
@@ -515,6 +533,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={paymentsWorkspace}
             onClose={() => setPaymentsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {handoverWorkspace && session.user && session.user.role !== "student" && (
+        <Suspense fallback={<p role="status">Открываем уход детей…</p>}>
+          <Handover
+            key={`${session.user.id}:${session.user.version}`}
+            user={session.user}
+            initialWorkspace={handoverWorkspace}
+            onClose={() => setHandoverWorkspace(null)}
           />
         </Suspense>
       )}
