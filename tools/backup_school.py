@@ -43,7 +43,7 @@ def create_backup(source: Path, destination: Path):
     uri = source.as_uri() + '?mode=rw'
     with closing(sqlite3.connect(uri, uri=True, timeout=10)) as reservation:
         reservation.execute('BEGIN IMMEDIATE')
-        locked_at=time.monotonic()
+        locked_at=time.perf_counter()
         try:
             with closing(sqlite3.connect(uri, uri=True, timeout=10)) as reader, closing(sqlite3.connect(target)) as copy:
                 reader.backup(copy)
@@ -77,7 +77,7 @@ def create_backup(source: Path, destination: Path):
                     copy.commit()
         finally:
             reservation.rollback()
-            writer_seconds=round(time.monotonic()-locked_at,6)
+            writer_seconds=round(time.perf_counter()-locked_at,6)
     manifest = dict(format='atlas-local-backup-v1', createdAt=datetime.now(timezone.utc).isoformat(),
                     database=dict(path=target.name, size=target.stat().st_size, sha256=digest(target)),
                     files=entries, incompleteUploadsExcluded=discarded, writerLockSeconds=writer_seconds)
