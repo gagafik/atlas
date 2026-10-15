@@ -20,6 +20,7 @@ const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
+const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -46,6 +47,13 @@ export default function AuthShell() {
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setLibraryWorkspace((event as CustomEvent).detail?.workspace || "school");
+    window.addEventListener("atlas-open-library", open);
+    return () => window.removeEventListener("atlas-open-library", open);
+  }, []);
   const [documentsWorkspace, setDocumentsWorkspace] = useState<string | null>(
     null,
   );
@@ -98,6 +106,7 @@ export default function AuthShell() {
     setMeetingsWorkspace(null);
     setStaffTimeWorkspace(null);
     setDocumentsWorkspace(null);
+    setLibraryWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -309,6 +318,9 @@ export default function AuthShell() {
           <button onClick={() => setFormsWorkspace("school")}>
             Формы и опросы
           </button>
+          <button onClick={() => setLibraryWorkspace("school")}>
+            Библиотека и учебники
+          </button>
           <button onClick={() => setDocumentsWorkspace("school")}>
             Документы и архив
           </button>
@@ -422,6 +434,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={formsWorkspace}
             onClose={() => setFormsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {libraryWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю библиотеку…</p>}>
+          <SchoolLibrary
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={libraryWorkspace}
+            onClose={() => setLibraryWorkspace(null)}
           />
         </Suspense>
       )}
