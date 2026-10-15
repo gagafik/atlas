@@ -357,6 +357,8 @@ register_publications(app, Workspace, require_revision, connect, db_lock)
 from .access import Access
 access = Access(connect, db_lock, read, lambda: connect(read_only=True))
 access.register(app)
+from .operations import register as register_operations
+register_operations(app, access, lambda: DB)
 from .invitations import register_invitations
 register_invitations(app, access)
 from .notifications import Notifications

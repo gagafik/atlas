@@ -16,6 +16,7 @@ import InvitationForm from "./InvitationForm";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
+const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -39,6 +40,7 @@ export default function AuthShell() {
   const [recoveryForm, setRecoveryForm] = useState(false),
     [recoveryPanel, setRecoveryPanel] = useState(false),
     [loginNotice, setLoginNotice] = useState("");
+  const [operationsPanel, setOperationsPanel] = useState(false);
   const refreshSequence = useRef(0);
   useEffect(() => {
     setPasswordForm(false);
@@ -47,6 +49,7 @@ export default function AuthShell() {
     setAccountError("");
     setInvitationForm(false);
     setRecoveryPanel(false);
+    setOperationsPanel(false);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -255,6 +258,11 @@ export default function AuthShell() {
             Выйти
           </button>
           <button onClick={() => setRecoveryPanel(true)}>Резервные коды</button>
+          {session.user.role === "admin" && (
+            <button onClick={() => setOperationsPanel(true)}>
+              Состояние сервера
+            </button>
+          )}
         </>
       )}
     </div>
@@ -328,6 +336,14 @@ export default function AuthShell() {
             login={session.user.login}
             onClose={() => setRecoveryPanel(false)}
             onAuthCheck={refresh}
+          />
+        </Suspense>
+      )}
+      {operationsPanel && session.user?.role === "admin" && (
+        <Suspense fallback={<p role="status">Открываю состояние сервера…</p>}>
+          <OperationsPanel
+            key={session.user.id + ":" + session.user.version}
+            onClose={() => setOperationsPanel(false)}
           />
         </Suspense>
       )}

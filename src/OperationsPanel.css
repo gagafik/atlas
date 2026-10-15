@@ -1,0 +1,28 @@
+.operations-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px 16px;
+}
+.operations-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+.operations-dialog p {
+  font-weight: 400;
+}
+.operations-error {
+  padding: 12px;
+  background: #fff0ec;
+  border: 1px solid #d7afa2;
+  border-radius: 8px;
+}
+@media (max-width: 480px) {
+  .operations-facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .operations-facts dd {
+    margin-bottom: 10px;
+  }
+}

@@ -10,6 +10,9 @@ services:
       ATLAS_UPLOAD_TOTAL_MB: ${ATLAS_UPLOAD_TOTAL_MB:-2048}
       ATLAS_WEB_PUSH_ENABLED: ${ATLAS_WEB_PUSH_ENABLED:-0}
       ATLAS_WEB_PUSH_SUBJECT: ${ATLAS_WEB_PUSH_SUBJECT:-}
+      ATLAS_BACKUP_DIR: ${ATLAS_BACKUP_DIR:-}
+      ATLAS_BACKUP_INTERVAL_HOURS: ${ATLAS_BACKUP_INTERVAL_HOURS:-24}
+      ATLAS_BACKUP_KEEP: ${ATLAS_BACKUP_KEEP:-7}
       FORWARDED_ALLOW_IPS: "*"
     volumes:
       - atlas_data:/app/data
@@ -18,6 +21,41 @@ services:
       - "8000"
     stop_grace_period: 45s
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  backups:
+    profiles: [backups]
+    build: .
+    command: [python, -m, tools.backup_service]
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      TIMETABLE_DB: /app/data/timetable.db
+      ATLAS_BACKUP_DIR: ${ATLAS_BACKUP_DIR:-}
+      ATLAS_BACKUP_INTERVAL_HOURS: ${ATLAS_BACKUP_INTERVAL_HOURS:-24}
+      ATLAS_BACKUP_KEEP: ${ATLAS_BACKUP_KEEP:-7}
+      ATLAS_BACKUP_SNAPSHOT_TIMEOUT_SECONDS: ${ATLAS_BACKUP_SNAPSHOT_TIMEOUT_SECONDS:-30}
+      ATLAS_BACKUP_VERIFY_TIMEOUT_SECONDS: ${ATLAS_BACKUP_VERIFY_TIMEOUT_SECONDS:-600}
+    volumes:
+      - atlas_data:/app/data
+      - atlas_backups:/app/backups
+    healthcheck:
+      test: [CMD, python, -c, "from pathlib import Path; from tools.backup_service import public_status; assert public_status(Path('/app/data/timetable.db'))['state']=='running'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    init: true
+    stop_grace_period: 15s
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -51,5 +89,6 @@ services:
         max-file: "3"
 volumes:
   atlas_data:
+  atlas_backups:
   caddy_data:
   caddy_config:

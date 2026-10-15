@@ -8,7 +8,17 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import time
 from uuid import uuid4
+
+STORES = [('homework_files','homework'),('message_files','messages'),
+          ('absence_files','absences'),('assignment_files','assignments'),
+          ('teaching_material_files','materials')]
+
+
+def reject_link(path):
+    if path.is_symlink() or getattr(path,'is_junction',lambda:False)():
+        raise ValueError('Symbolic links and junctions are not allowed in backup storage.')
 
 
 def digest(path):
@@ -33,21 +43,25 @@ def create_backup(source: Path, destination: Path):
     uri = source.as_uri() + '?mode=rw'
     with closing(sqlite3.connect(uri, uri=True, timeout=10)) as reservation:
         reservation.execute('BEGIN IMMEDIATE')
+        locked_at=time.perf_counter()
         try:
             with closing(sqlite3.connect(uri, uri=True, timeout=10)) as reader, closing(sqlite3.connect(target)) as copy:
                 reader.backup(copy)
                 if copy.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
                     raise RuntimeError('Database integrity check failed; backup is incomplete.')
-                for table,folder in [('homework_files','homework'),('message_files','messages'),('absence_files','absences'),('assignment_files','assignments'),('teaching_material_files','materials')]:
+                for table,folder in STORES:
                     if not copy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():continue
                     rows = copy.execute(f"SELECT id,size,sha256 FROM {table} WHERE status='ready' ORDER BY id").fetchall()
                     file_root = source.with_suffix('.files') / folder
+                    reject_link(source.with_suffix('.files'))
+                    reject_link(file_root)
                     copy_root = target.with_suffix('.files') / folder
                     if rows:
                         copy_root.mkdir(parents=True)
                     for file_id, size, expected_hash in rows:
                         if not re.fullmatch('[a-f0-9]{32}', file_id) or not re.fullmatch('[a-f0-9]{64}', expected_hash or ''):
                             raise RuntimeError('Invalid attachment metadata; backup is incomplete.')
+                        reject_link(file_root / (file_id + '.bin'))
                         original = (file_root / (file_id + '.bin')).resolve(strict=True)
                         if not original.is_relative_to(file_root.resolve()):
                             raise RuntimeError('Attachment outside storage; backup is incomplete.')
@@ -63,9 +77,10 @@ def create_backup(source: Path, destination: Path):
                     copy.commit()
         finally:
             reservation.rollback()
+            writer_seconds=round(time.perf_counter()-locked_at,6)
     manifest = dict(format='atlas-local-backup-v1', createdAt=datetime.now(timezone.utc).isoformat(),
                     database=dict(path=target.name, size=target.stat().st_size, sha256=digest(target)),
-                    files=entries, incompleteUploadsExcluded=discarded)
+                    files=entries, incompleteUploadsExcluded=discarded, writerLockSeconds=writer_seconds)
     # The completion marker is created only after every file and the DB verified.
     pending = destination / 'manifest.pending.json'
     pending.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
