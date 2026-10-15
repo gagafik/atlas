@@ -4,6 +4,8 @@ from .notifications import encoded
 
 
 def tables(db):
+    from .quiz_files import tables as file_tables
+    file_tables(db)
     db.execute('''CREATE TABLE IF NOT EXISTS quiz_questions (
         workspace TEXT,id TEXT,version INTEGER,owner_id TEXT,updated TEXT,subject TEXT,archived INTEGER,document TEXT,
         PRIMARY KEY(workspace,id))''')

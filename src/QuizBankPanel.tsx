@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import QuizFiles from "./QuizFiles";
 import {
   blankQuestion,
   questionKinds,
@@ -30,10 +31,13 @@ export default function QuizBankPanel({
     [dirty, setDirty] = useState(false);
   const [tagsText, setTagsText] = useState("");
   const alive = useRef(true);
+  const uploadLock = useRef(false),
+    uploadAbort = useRef<AbortController | null>(null);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      uploadAbort.current?.abort();
     };
   }, []);
   useEffect(() => {
@@ -67,6 +71,7 @@ export default function QuizBankPanel({
   function canLeave() {
     return (
       !busy &&
+      !uploadLock.current &&
       (!dirty || window.confirm("Закрыть несохранённые изменения вопроса?"))
     );
   }
@@ -78,6 +83,7 @@ export default function QuizBankPanel({
     if (editing) patch({ question: { ...editing.question, ...value } });
   }
   async function save() {
+    if (uploadLock.current) return;
     if (!editing || busy) return;
     setBusy(true);
     setError("");
@@ -109,6 +115,69 @@ export default function QuizBankPanel({
     }
   }
   const q = editing?.question;
+  async function upload(files: FileList | null, solution: boolean) {
+    if (!files?.length || !editing || busy || uploadLock.current) return;
+    const ids = solution ? "solutionFileIds" : "fileIds";
+    const projection = solution ? "solutionAttachments" : "attachments";
+    const batch = Array.from(files);
+    if (
+      batch.length + (editing.question[ids]?.length || 0) > 6 ||
+      batch.some((f) => !f.size || f.size > 10 * 1024 * 1024)
+    ) {
+      setError("До шести непустых файлов в каждом разделе, каждый до 10 МБ.");
+      return;
+    }
+    uploadLock.current = true;
+    setBusy(true);
+    setError("");
+    const controller = new AbortController();
+    uploadAbort.current = controller;
+    try {
+      for (const file of batch) {
+        const params = new URLSearchParams({ workspace, filename: file.name });
+        const response = await fetch(`/api/journal/quiz-files?${params}`, {
+          method: "POST",
+          headers: {
+            "X-Atlas-Request": "1",
+            "Content-Type": "application/octet-stream",
+          },
+          body: file,
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          if (response.status === 401)
+            window.dispatchEvent(new Event("atlas-auth-required"));
+          throw new Error(
+            typeof result.detail === "string"
+              ? result.detail
+              : "Не удалось загрузить файл.",
+          );
+        }
+        if (alive.current) {
+          setEditing((old) =>
+            old
+              ? {
+                  ...old,
+                  question: {
+                    ...old.question,
+                    [ids]: [...(old.question[ids] || []), result.id],
+                    [projection]: [...(old.question[projection] || []), result],
+                  },
+                }
+              : old,
+          );
+          setDirty(true);
+        }
+      }
+    } catch (e: any) {
+      if (alive.current && e.name !== "AbortError") setError(e.message);
+    } finally {
+      uploadLock.current = false;
+      uploadAbort.current = null;
+      if (alive.current) setBusy(false);
+    }
+  }
   return (
     <section className="quiz-bank">
       <p className="info-line">
@@ -319,6 +388,38 @@ export default function QuizBankPanel({
                 onChange={(e) => question({ points: Number(e.target.value) })}
               />
             </label>
+            <fieldset>
+              <legend>Материалы вопроса</legend>
+              <QuizFiles
+                files={q.attachments}
+                workspace={workspace}
+                disabled={busy}
+                onRemove={(id) =>
+                  question({
+                    fileIds: (q.fileIds || []).filter((v) => v !== id),
+                    attachments: (q.attachments || []).filter(
+                      (f) => f.id !== id,
+                    ),
+                  })
+                }
+              />
+              <label className="field">
+                <span>Добавить файл к вопросу</span>
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx,.mp3,.wav,.m4a,.ogg,.mp4,.webm"
+                  onChange={(e) => {
+                    void upload(e.target.files, false);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <small>
+                До 6 файлов по 10 МБ: изображения, PDF, документы Office, текст,
+                аудио и видео. Ученик увидит их после начала попытки.
+              </small>
+            </fieldset>
             {(q.kind === "single" || q.kind === "multiple") && (
               <fieldset className="quiz-options">
                 <legend>Варианты ответа · отметьте правильные</legend>
@@ -499,6 +600,41 @@ export default function QuizBankPanel({
               />
               Убрать в архив банка
             </label>
+            <fieldset>
+              <legend>Материалы разбора</legend>
+              <QuizFiles
+                files={q.solutionAttachments}
+                workspace={workspace}
+                solution
+                disabled={busy}
+                onRemove={(id) =>
+                  question({
+                    solutionFileIds: (q.solutionFileIds || []).filter(
+                      (v) => v !== id,
+                    ),
+                    solutionAttachments: (q.solutionAttachments || []).filter(
+                      (f) => f.id !== id,
+                    ),
+                  })
+                }
+              />
+              <label className="field">
+                <span>Добавить файл к разбору</span>
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx,.mp3,.wav,.m4a,.ogg,.mp4,.webm"
+                  onChange={(e) => {
+                    void upload(e.target.files, true);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <small>
+                До 6 файлов по 10 МБ. Ученики и родители увидят их только после
+                открытия разбора.
+              </small>
+            </fieldset>
             <div className="dated-toolbar">
               <button className="primary" type="submit">
                 Сохранить вопрос

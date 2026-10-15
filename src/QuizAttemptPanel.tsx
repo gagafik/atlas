@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import QuizFiles from "./QuizFiles";
 import HomeworkGradeForm, { type ReviewGrade } from "./HomeworkGradeForm";
 import {
   quizStatuses,
@@ -423,6 +424,13 @@ export default function QuizAttemptPanel({
           return (
             <li key={q.id}>
               <h4 className="journal-text">{q.text}</h4>
+              <QuizFiles
+                files={q.attachments}
+                workspace={workspace}
+                quizId={work.quizId}
+                attemptId={work.id}
+                questionId={q.id}
+              />
               <small>Максимум: {q.points} б.</small>
               {q.kind === "single" || q.kind === "multiple" ? (
                 <fieldset disabled={!canAnswer} className="quiz-options">
@@ -501,6 +509,14 @@ export default function QuizAttemptPanel({
                               .join("; ")}
                   </p>
                   <p className="journal-text">{solution.explanation}</p>
+                  <QuizFiles
+                    files={solution.solutionAttachments}
+                    workspace={workspace}
+                    quizId={work.quizId}
+                    attemptId={work.id}
+                    questionId={q.id}
+                    solution
+                  />
                 </details>
               )}
               {canReview && (

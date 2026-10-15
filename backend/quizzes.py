@@ -199,6 +199,8 @@ class Quizzes:
         return resolved
 
     def register(self,app,Workspace):
+        from .quiz_files import QuizFiles
+        QuizFiles(self).register(app,Workspace)
         from .quiz_bank import register as register_bank
         from .quiz_attempts import register as register_attempts
         from .quiz_catalog import register as register_catalog
