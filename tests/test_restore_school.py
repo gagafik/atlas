@@ -123,3 +123,21 @@ def test_restore_cli_checks_new_copy_without_printing_private_content(tmp_path):
     assert result.returncode==0,result.stderr
     assert json.loads(result.stdout)['restored'] is True
     assert content.decode() not in result.stdout and 'private' not in result.stdout
+
+
+def test_json_expression_index_survives_protected_verification_and_restore(tmp_path):
+    source,_,_=fixture_database(tmp_path)
+    with closing(sqlite3.connect(source)) as db:
+        db.execute("CREATE INDEX school_json_day ON workspaces(json_extract(document,'$.private'))")
+        db.commit()
+    backup_school.create_backup(source,tmp_path/'json-snapshot')
+    assert restore_school.verify_backup(tmp_path/'json-snapshot')['workspaces']==1
+    assert restore_school.restore_backup(tmp_path/'json-snapshot',tmp_path/'json-restore')['files']==1
+
+
+def test_old_sqlite_reports_runtime_requirement_without_touching_backup(tmp_path,monkeypatch):
+    _,directory,_=snapshot(tmp_path)
+    before=(directory/'manifest.json').read_bytes()
+    monkeypatch.setattr(sqlite3,'sqlite_version_info',(3,40,1))
+    with pytest.raises(ValueError,match='SQLite 3.42'):restore_school.verify_backup(directory)
+    assert (directory/'manifest.json').read_bytes()==before

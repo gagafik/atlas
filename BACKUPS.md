@@ -15,8 +15,14 @@ python -m tools.restore_school /private-backups/new-copy
 python -m tools.restore_school /private-backups/new-copy --output /private-restore/new-drill
 ```
 
-На Windows используйте Python из `.venv/Scripts/python.exe`. Выходной каталог
-должен быть новым: существующий не перезаписывается. Без `--output` последняя
+На Windows используйте Python из `.venv/Scripts/python.exe`.
+Для защищённой проверки требуется SQLite 3.42 или новее в составе Python;
+версия видна через `python -c "import sqlite3; print(sqlite3.sqlite_version)"`.
+Серверный образ использует Debian Trixie: прежняя SQLite 3.40.1 в Bookworm
+отвергала существующий JSON-индекс при `trusted_schema=OFF`. Проверка остаётся
+защищённой, старый runtime выдаёт требование обновления.
+
+Выходной каталог должен быть новым: существующий не перезаписывается. Без `--output` последняя
 команда только проверяет копию. Успех печатается после проверки всех файлов,
 контрольных сумм, целостности SQLite, внешних ключей, ссылок на готовые вложения
 и чтения JSON-документов пространств. Лишние/пропавшие файлы, символьные ссылки,

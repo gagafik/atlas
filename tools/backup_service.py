@@ -18,7 +18,7 @@ import time
 from uuid import uuid4
 
 from .backup_school import create_backup, digest, reject_link
-from .restore_school import restore_backup
+from .restore_school import restore_backup, check_runtime
 
 ROOT=Path(__file__).resolve().parents[1]
 RUN=re.compile(r'backup-\d{14}-[a-f0-9]{16}')
@@ -125,6 +125,7 @@ class Worker:
         self.child=None
 
     def initialize(self):
+        check_runtime()
         c=self.config
         reject_link(c.control);reject_link(c.destination)
         target=c.destination.resolve()

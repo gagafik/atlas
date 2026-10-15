@@ -13,6 +13,14 @@ MAX_MANIFEST_BYTES=64*1024*1024
 MAX_FILES=200000
 
 
+def check_runtime():
+    # The former Debian Bookworm image (SQLite 3.40.1) rejects our JSON
+    # expression index with trusted_schema=OFF. Keep the protected check and
+    # require the newer runtime used by the server image instead of relaxing it.
+    if sqlite3.sqlite_version_info<(3,42,0):
+        raise ValueError('Verified restores require SQLite 3.42 or newer.')
+
+
 def unique_object(pairs):
     result={}
     for key,value in pairs:
@@ -48,6 +56,7 @@ def entry_check(root, entry):
 
 
 def verify_backup(directory:Path):
+    check_runtime()
     reject_link(directory)
     root=directory.resolve(strict=True)
     if not root.is_dir():raise ValueError('A backup directory is required.')
@@ -142,6 +151,8 @@ def main():
     try:
         result=restore_backup(args.backup,args.output) if args.output else verify_backup(args.backup)
     except (ValueError,OSError,sqlite3.Error) as exc:
+        if sqlite3.sqlite_version_info<(3,42,0):
+            parser.exit(2,'Verification requires SQLite 3.42 or newer. Update the Python runtime. No existing school data was replaced.\n')
         parser.exit(2,f'Backup verification/restore failed ({type(exc).__name__}). No existing school data was replaced.\n')
     print(json.dumps(dict(verified=True,restored=bool(args.output),files=result['files'],bytes=result['bytes'],workspaces=result['workspaces'])))
 

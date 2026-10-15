@@ -8,7 +8,7 @@ COPY public ./public
 COPY tools/pwa.mjs ./tools/pwa.mjs
 RUN npm run build
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TIMETABLE_DB=/app/data/timetable.db TIMETABLE_REQUIRE_AUTH=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 libstdc++6 \
