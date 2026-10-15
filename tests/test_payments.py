@@ -119,13 +119,17 @@ def test_stale_preview_after_account_or_school_change(client,setup):
     assert post(client,'plans/'+p['id']+'/issue',**data,previewHash=preview['previewHash']).status_code==409
 
 def test_bank_import_exact_matching_errors_and_duplicate_sources(client,setup):
-    charge(client);code=account(client)['code'];text=f'bank_id,paid_date,account_code,amount,payer\nB1,2026-10-14,{code},123.45,Parent\nB2,2026-10-14,{code},10.01,Parent\n'
+    charge(client)
+    # Include bank reference substrings to catch accidental whole-file replacements.
+    with api.connect() as db:db.execute("UPDATE finance_accounts SET code='AT-00B100B200000000' WHERE workspace='demo' AND student_id='s1'")
+    code=account(client)['code'];text=f'bank_id,paid_date,account_code,amount,payer\nB1,2026-10-14,{code},123.45,Parent\nB2,2026-10-14,{code},10.01,Parent\n'
     data=dict(text=text,source='Bank 1',reason='Statement matched');p=ok(post(client,'import/preview',**data));assert not p['errors'] and p['total']=='13346'
     req=body(**data,previewHash=p['previewHash']);result=ok(client.post(path('import'),json=req));assert result['count']==2 and account(client)['summary']['received']=='13346'
     assert client.post(path('import'),json=req).json()==result
     p=ok(post(client,'import/preview',**data));assert len(p['errors'])==2
     assert post(client,'import',**data,previewHash=p['previewHash']).status_code==422
-    bad=data|dict(text=text.replace('B1','B3').replace('B2','B4').replace('10.01','1e2'));p=ok(post(client,'import/preview',**bad));assert len(p['errors'])==1
+    bad=data|dict(text=f'bank_id,paid_date,account_code,amount,payer\nB3,2026-10-14,{code},123.45,Parent\nB4,2026-10-14,{code},1e2,Parent\n')
+    p=ok(post(client,'import/preview',**bad));assert len(p['errors'])==1 and p['errors'][0]['line']==3
     assert post(client,'import',**bad,previewHash=p['previewHash']).status_code==422 and account(client)['summary']['received']=='13346'
 
 def test_close_period_freezes_day_and_historical_report_survives_later_refund(client,setup,monkeypatch):
