@@ -35,7 +35,7 @@ def test_verify_and_restore_all_storages_preserves_original_and_refuses_replacem
         db.commit()
     directory=tmp_path/'backup';backup_school.create_backup(source,directory)
     result=restore_school.verify_backup(directory)
-    assert result['files']==5 and result['workspaces']==1
+    assert result['files']==len(backup_school.STORES) and result['workspaces']==1
     destination=tmp_path/'restored'
     assert restore_school.restore_backup(directory,destination)==result
     with closing(sqlite3.connect(destination/'school.db')) as db:
