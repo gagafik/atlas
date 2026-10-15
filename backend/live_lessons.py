@@ -51,8 +51,11 @@ class LiveLessons:
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='live_lesson_requests'").fetchone(): return
-        with self.access.lock, self.access.connect() as db: tables(db)
+            if db.execute("SELECT count(*) FROM sqlite_master WHERE name IN ('live_lesson_requests','teaching_material_file_links')").fetchone()[0] == 2: return
+        from .teaching_materials import tables as material_tables
+        with self.access.lock, self.access.connect() as db:
+            tables(db)
+            material_tables(db)
 
     @contextmanager
     def context(self, request, workspace, write=False):
@@ -119,15 +122,23 @@ class LiveLessons:
         db.execute('INSERT INTO live_lesson_history(lesson_id,created,actor_id,actor_name,action,document) VALUES (?,?,?,?,?,?)',(id,stamp(),u['id'],u['name'],action,encoded(detail)))
 
     def questions(self,db,u,w,refs,old=None):
+        from .live_lesson_media import bind_materials
         retained = {(q['id'],q['version']):q for q in (old or {}).get('questions',[])}
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='quiz_questions'").fetchone()
         result=[]
         for ref in refs:
-            if (ref.id,ref.version) in retained: result.append(retained[ref.id,ref.version]); continue
+            previous = retained.get((ref.id,ref.version))
+            if previous:
+                result.append(dict(id=ref.id,version=ref.version,question=previous['question']))
+                continue
             q = db.execute('SELECT * FROM quiz_questions WHERE workspace=? AND id=?',(w,ref.id)).fetchone() if exists else None
             if not q or q['archived'] or (u['role']!='admin' and q['owner_id']!=u['id']): raise HTTPException(422,'Выберите доступный вопрос из своего банка.')
             if q['version']!=ref.version: raise HTTPException(409,'Вопрос изменён. Обновите банк вопросов.')
             result.append(dict(id=ref.id,version=ref.version,question=json.loads(q['document'])['question']))
+        for q,ref in zip(result,refs):
+            previous = retained.get((ref.id,ref.version),{})
+            for field in ('materials','solutionMaterials'):
+                q[field] = bind_materials(db,u,w,getattr(ref,field),previous.get(field,[]))
         return result
 
     def save(self,db,u,snap,w,body,row=None):

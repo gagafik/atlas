@@ -1,0 +1,119 @@
+.live-material-editor {
+  margin: 14px 0;
+  padding: 12px;
+  background: #f1f6f8;
+  border-radius: 8px;
+}
+.live-material-editor > div {
+  margin: 10px 0;
+}
+.live-materials section {
+  margin: 16px 0;
+  border-left: 3px solid #6b9eae;
+  padding-left: 16px;
+}
+.live-materials img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  margin-bottom: 8px;
+}
+.live-materials a {
+  overflow-wrap: anywhere;
+  color: #176278;
+}
+.live-media-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-projector {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100dvh;
+  max-width: none;
+  margin: 0;
+  padding: clamp(20px, 4vw, 64px);
+  background: #f7fafb;
+  color: #143344;
+  font:
+    clamp(20px, 2.6vw, 36px)/1.45 system-ui,
+    sans-serif;
+  overflow-wrap: anywhere;
+}
+.live-projector header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 16px;
+}
+.live-projector header div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.live-projector h1 {
+  font-size: 16px;
+  color: #567080;
+  margin: 20px 0 8px;
+}
+.live-projector h2 {
+  font-size: 1.1em;
+  margin: 12px 0;
+}
+.live-projector .live-materials h4 {
+  font-size: 0.65em;
+  margin: 8px 0;
+}
+.live-projector .live-materials p {
+  margin: 8px 0;
+  font-size: 0.8em;
+}
+.live-projector .live-materials img {
+  max-height: 28vh;
+}
+.live-projector .live-materials a {
+  font-size: 16px;
+}
+.live-projector .projection-options {
+  font-size: 0.8em;
+  margin: 16px 0;
+}
+.live-projector select,
+.live-projector button {
+  font: inherit;
+  padding: 8px;
+  max-width: 100%;
+}
+.live-projector .projection-phase {
+  display: inline-block;
+  padding: 6px 16px;
+  background: #dfedf0;
+  border-radius: 8px;
+  font-size: 0.65em;
+}
+.live-projector .projection-options {
+  display: grid;
+  gap: 12px;
+  padding-left: 1.5em;
+}
+.live-projector .projection-solution {
+  margin-top: 32px;
+  padding: 24px;
+  border-radius: 14px;
+  background: #e4f2e9;
+}
+.live-projector .projection-error {
+  background: #fff0e9;
+  padding: 16px;
+  color: #862d1d;
+  font-size: 18px;
+}
+.live-projector a:focus-visible,
+.live-projector button:focus-visible,
+.live-projector select:focus-visible {
+  outline: 3px solid #197b9b;
+  outline-offset: 3px;
+}

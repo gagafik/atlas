@@ -29,6 +29,7 @@ const SchoolPayments = lazy(() => import("./SchoolPayments"));
 const Canteen = lazy(() => import("./Canteen"));
 const Handover = lazy(() => import("./Handover"));
 const LiveLessons = lazy(() => import("./LiveLessons"));
+const LiveProjector = lazy(() => import("./LiveProjector"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -338,6 +339,17 @@ export default function AuthShell() {
         )}
         <DeviceTools />
       </main>
+    );
+  const projection = new URLSearchParams(window.location.search);
+  if (projection.has("projectLesson"))
+    return (
+      <Suspense fallback={<p>Загрузка экрана занятия…</p>}>
+        <LiveProjector
+          key={`${session.user?.id}:${session.user?.version}`}
+          lesson={projection.get("projectLesson") || ""}
+          workspace={projection.get("workspace") || "school"}
+        />
+      </Suspense>
     );
   const controls = (
     <div className="account-controls">
