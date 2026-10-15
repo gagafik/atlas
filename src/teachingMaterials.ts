@@ -41,6 +41,7 @@ export interface MaterialDetail {
   archived: boolean;
   canEdit: boolean;
   content: MaterialContent;
+  canUseInPlan: boolean;
   files: TeachingFile[];
   created: string;
   actor: string;

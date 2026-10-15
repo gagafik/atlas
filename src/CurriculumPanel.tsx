@@ -8,6 +8,7 @@ import type {
   PlanTopic,
 } from "./curriculum";
 import "./curriculum.css";
+import TopicMaterials from "./TopicMaterials";
 
 interface Pair {
   groupId: string;
@@ -57,6 +58,8 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
   const [copyGroup, setCopyGroup] = useState(""),
     [copyStart, setCopyStart] = useState(""),
     [copyEnd, setCopyEnd] = useState("");
+  const [omitUnavailableMaterials, setOmitUnavailableMaterials] =
+    useState(false);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
@@ -144,6 +147,7 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
     setCopyGroup(item.content.groupId);
     setCopyStart(item.content.start);
     setCopyEnd(item.content.end);
+    setOmitUnavailableMaterials(false);
   }
   async function run(work: () => Promise<void>) {
     if (lock.current) return;
@@ -511,6 +515,14 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
                       }
                     />
                   </label>
+                  <TopicMaterials
+                    key={`${selected?.id || "new"}:${selected?.version || 0}:${t.id}`}
+                    workspace={workspace}
+                    items={t.materials || []}
+                    status={selected?.materialStatus || {}}
+                    disabled={busy || !editable}
+                    onChange={(materials) => changeTopic(t.id, { materials })}
+                  />
                   <div className="curriculum-toolbar">
                     <button
                       type="button"
@@ -654,6 +666,7 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
                         groupId: copyGroup,
                         start: copyStart,
                         end: copyEnd,
+                        omitUnavailableMaterials,
                       },
                     );
                     if (alive.current) {
@@ -670,7 +683,7 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
                       setOffset(0);
                       setEpoch((v) => v + 1);
                       setNotice(
-                        "Копия создана. Проверьте и заполните плановые даты тем.",
+                        `Копия создана. Проверьте и заполните плановые даты тем.${item.omittedMaterials ? ` Пропущено недоступных материалов: ${item.omittedMaterials}.` : ""}`,
                       );
                     }
                   });
@@ -714,6 +727,16 @@ export default function CurriculumPanel({ workspace }: { workspace: string }) {
                       />
                     </label>
                   </div>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={omitUnavailableMaterials}
+                      onChange={(e) =>
+                        setOmitUnavailableMaterials(e.target.checked)
+                      }
+                    />{" "}
+                    Копировать без недоступных материалов, если они есть
+                  </label>
                   <button>Создать копию редакции {selected.version}</button>
                 </fieldset>
               </form>

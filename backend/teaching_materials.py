@@ -137,6 +137,8 @@ class TeachingMaterials:
         document,created,author=version_document(db,row['id'],version)
         return dict(id=row['id'],version=version,latestVersion=row['version'],owner=row['owner'],visibility=row['visibility'],
                     archived=bool(row['archived']),canEdit=can_edit(user,row),created=created,actor=author,
+                    canUseInPlan=bool(not row['archived'] and row['visibility']=='staff' and db.execute(
+                        "SELECT 1 FROM teaching_material_versions WHERE material_id=? AND version=? AND visibility='staff'",(row['id'],version)).fetchone()),
                     content=document,files=snapshot(db,row['id'],version)['files'])
 
     def save(self, db, workspace, user, body, row=None, *, trusted_files=False, archived=False):
@@ -190,11 +192,12 @@ class TeachingMaterials:
 
         @app.get('/api/journal/library')
         def listing(request:Request,workspace:Workspace='school',q:str=Query(default='',max_length=200),
-                    mine:bool=False,archived:bool=False,offset:int=Query(default=0,ge=0,le=100000),limit:int=Query(default=20,ge=1,le=50)):
+                    mine:bool=False,archived:bool=False,sharedOnly:bool=False,offset:int=Query(default=0,ge=0,le=100000),limit:int=Query(default=20,ge=1,le=50)):
             user=self.scope(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 tables(db);db.execute('BEGIN');self.recheck(db,user,workspace)
                 where='workspace=? AND archived=?';params=[workspace,int(archived)]
+                if sharedOnly: where+=" AND visibility='staff' AND archived=0"
                 if mine: where+=' AND owner_id=?';params.append(user['id'])
                 if user['role']!='admin':
                     where+=' AND (owner_id=? OR (visibility=\'staff\' AND archived=0))';params.append(user['id'])

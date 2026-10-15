@@ -4,6 +4,15 @@ export interface PlanTopic {
   hours: number;
   plannedDate: string | null;
   standard: string;
+  materials?: PlanMaterialReference[];
+}
+export interface PlanMaterialReference {
+  id: string;
+  version: number;
+}
+export interface PlanMaterialStatus extends PlanMaterialReference {
+  available: boolean;
+  title?: string;
 }
 export interface PlanContent {
   title: string;
@@ -21,6 +30,7 @@ export interface PlanDetail {
   created: string;
   actor: string;
   content: PlanContent;
+  materialStatus: Record<string, PlanMaterialStatus>;
 }
 export interface TopicReference {
   planId: string;

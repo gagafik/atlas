@@ -4,6 +4,7 @@ const Panel = lazy(() => import("./TeachingMaterialsPanel"));
 export default function TeachingMaterialsLoader(props: {
   workspace: string;
   onChoose?: (item: MaterialSnapshot) => void;
+  sharedOnly?: boolean;
 }) {
   return (
     <Suspense fallback={<p role="status">Загружаем библиотеку материалов…</p>}>
