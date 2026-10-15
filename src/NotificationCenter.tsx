@@ -19,6 +19,10 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "forms.assigned": "Вам назначена школьная форма",
+  "forms.published": "Опубликована школьная форма",
+  "forms.submitted": "Получен ответ на школьную форму",
+  "forms.reviewed": "Изменилось решение по заявке",
   "push.test": "Проверка фоновых уведомлений",
   "absence.submitted": "Поступило заявление об отсутствии",
   "absence.updated": "Изменилось решение по объяснительной",
@@ -320,9 +324,23 @@ export default function NotificationCenter({ identity }: { identity: string }) {
               {inbox.items.map((item) => (
                 <article key={item.id} className={item.read ? "" : "unread"}>
                   <h3>{titles[item.action] || titles.saved}</h3>
+                  {item.action.startsWith("forms.") && (
+                    <button
+                      onClick={() => {
+                        window.dispatchEvent(
+                          new CustomEvent("atlas-open-forms", {
+                            detail: { workspace: item.workspace },
+                          }),
+                        );
+                      }}
+                    >
+                      Открыть формы и опросы
+                    </button>
+                  )}
                   <p>
                     {item.workspace === "school" ? "Школа" : "Демонстрация"} ·{" "}
-                    {item.action.startsWith("journal.") ||
+                    {item.action.startsWith("forms.") ||
+                    item.action.startsWith("journal.") ||
                     item.action.startsWith("homework.") ||
                     item.action.startsWith("quiz.") ||
                     item.action.startsWith("message.")
@@ -331,21 +349,23 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.revision}
                   </p>
                   <p>
-                    {item.action === "push.test"
-                      ? "Это проверочное уведомление для вашего устройства."
-                      : item.action.startsWith("absence.")
-                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
-                        : item.action === "family.updated"
-                          ? "Откройте «Мои дети и доступ» в личном кабинете."
-                          : item.action.startsWith("message.")
-                            ? "Откройте раздел сообщений в личном кабинете."
-                            : item.action.startsWith("quiz.")
-                              ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
-                              : item.action.startsWith("homework.")
-                                ? "Откройте домашнюю работу в учебном журнале."
-                                : item.action.startsWith("journal.")
-                                  ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                                  : "Проверьте доступное вам расписание, включая занятия по датам."}
+                    {item.action.startsWith("forms.")
+                      ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
+                      : item.action === "push.test"
+                        ? "Это проверочное уведомление для вашего устройства."
+                        : item.action.startsWith("absence.")
+                          ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                          : item.action === "family.updated"
+                            ? "Откройте «Мои дети и доступ» в личном кабинете."
+                            : item.action.startsWith("message.")
+                              ? "Откройте раздел сообщений в личном кабинете."
+                              : item.action.startsWith("quiz.")
+                                ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                                : item.action.startsWith("homework.")
+                                  ? "Откройте домашнюю работу в учебном журнале."
+                                  : item.action.startsWith("journal.")
+                                    ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                    : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}

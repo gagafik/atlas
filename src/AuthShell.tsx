@@ -17,6 +17,7 @@ import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
+const SchoolForms = lazy(() => import("./SchoolForms"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -41,6 +42,13 @@ export default function AuthShell() {
     [recoveryPanel, setRecoveryPanel] = useState(false),
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
+  const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setFormsWorkspace((event as CustomEvent).detail?.workspace || "school");
+    window.addEventListener("atlas-open-forms", open);
+    return () => window.removeEventListener("atlas-open-forms", open);
+  }, []);
   const refreshSequence = useRef(0);
   useEffect(() => {
     setPasswordForm(false);
@@ -50,6 +58,7 @@ export default function AuthShell() {
     setInvitationForm(false);
     setRecoveryPanel(false);
     setOperationsPanel(false);
+    setFormsWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -258,6 +267,9 @@ export default function AuthShell() {
             Выйти
           </button>
           <button onClick={() => setRecoveryPanel(true)}>Резервные коды</button>
+          <button onClick={() => setFormsWorkspace("school")}>
+            Формы и опросы
+          </button>
           {session.user.role === "admin" && (
             <button onClick={() => setOperationsPanel(true)}>
               Состояние сервера
@@ -344,6 +356,16 @@ export default function AuthShell() {
           <OperationsPanel
             key={session.user.id + ":" + session.user.version}
             onClose={() => setOperationsPanel(false)}
+          />
+        </Suspense>
+      )}
+      {formsWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю формы…</p>}>
+          <SchoolForms
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={formsWorkspace}
+            onClose={() => setFormsWorkspace(null)}
           />
         </Suspense>
       )}

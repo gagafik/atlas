@@ -418,6 +418,9 @@ register_intake(app, Workspace, access, read, require_revision, save, connect, d
 from .web_push import PushService
 push_service = PushService(access)
 push_service.register(app)
+from .school_forms import SchoolForms
+school_forms = SchoolForms(access, notifications, portal_stamp)
+school_forms.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

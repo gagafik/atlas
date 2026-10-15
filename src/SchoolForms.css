@@ -1,0 +1,200 @@
+.school-forms-dialog {
+  width: min(1160px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 22px;
+  border: 1px solid #d5dfd4;
+  border-radius: 16px;
+  background: white;
+  color: #24382d;
+  overflow: auto;
+}
+.school-forms-dialog::backdrop {
+  background: #182c2466;
+}
+.school-forms-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  position: sticky;
+  top: -22px;
+  padding: 12px 0;
+  background: white;
+  z-index: 2;
+}
+.school-forms-header h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+.school-forms-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin: 12px 0;
+}
+.school-forms-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
+  gap: 24px;
+}
+.school-forms-dialog label {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  min-width: 0;
+  font-weight: 600;
+}
+.school-forms-dialog input:not([type="checkbox"]),
+.school-forms-dialog select,
+.school-forms-dialog textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  padding: 9px;
+  border: 1px solid #bdcbbf;
+  border-radius: 7px;
+  background: white;
+  color: inherit;
+}
+.school-forms-dialog textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.school-forms-dialog fieldset {
+  min-width: 0;
+  border: 1px solid #dbe3dc;
+  border-radius: 10px;
+  padding: 14px;
+  margin: 16px 0;
+}
+.school-forms-dialog legend {
+  font-weight: 700;
+  padding: 0 6px;
+}
+.school-forms-dialog p,
+.school-forms-dialog dd,
+.school-forms-dialog li,
+.school-forms-dialog small {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.school-forms-dialog h3,
+.school-forms-dialog h4,
+.school-forms-dialog dt {
+  overflow-wrap: anywhere;
+}
+.school-forms-dialog h4 {
+  margin: 5px 0 10px;
+}
+.school-forms-dialog button {
+  min-height: 36px;
+  white-space: normal;
+}
+.school-forms-dialog button[aria-pressed="true"] {
+  background: #e7efe4;
+  border-color: #688562;
+}
+.school-form-list {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+.school-form-list button {
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  width: 100%;
+  padding: 12px;
+}
+.school-form-list strong {
+  overflow-wrap: anywhere;
+}
+.school-form-question,
+.school-form-response {
+  padding: 14px;
+  background: #f7f9f5;
+  border: 1px solid #dbe3dc;
+  border-radius: 10px;
+  margin: 14px 0;
+}
+.school-forms-dialog .school-form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+.school-form-check input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.school-form-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0 14px;
+  max-height: 240px;
+  overflow: auto;
+}
+.school-form-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.school-form-collaborator {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.school-form-collaborator button {
+  margin-bottom: 10px;
+}
+.school-forms-error {
+  background: #fff0ec;
+  border: 1px solid #d7afa2;
+  padding: 12px;
+  border-radius: 8px;
+}
+.school-forms-notice,
+.school-form-preview {
+  background: #edf4ea;
+  border: 1px solid #b4c8ae;
+  padding: 12px;
+  border-radius: 8px;
+}
+.school-form-response dd {
+  margin: 4px 0 14px;
+}
+.school-form-response dt {
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  .school-forms-dialog {
+    padding: 14px;
+  }
+  .school-forms-header {
+    top: -14px;
+  }
+  .school-forms-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .school-form-list {
+    max-height: 220px;
+    overflow: auto;
+  }
+  .school-form-dates,
+  .school-form-collaborator {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .school-forms-dialog fieldset {
+    padding: 10px;
+  }
+  .school-form-question,
+  .school-form-response {
+    padding: 10px;
+  }
+}
