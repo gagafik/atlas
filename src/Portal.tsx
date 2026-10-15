@@ -5,6 +5,7 @@ import { csvCell, download } from "./utils";
 import JournalPanel from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
+import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
@@ -165,19 +166,21 @@ export default function Portal({
         <div>
           <strong>атлас•</strong>
           <h1>
-            {section === "family"
-              ? "Мои дети и доступ"
-              : section === "messages"
-                ? "Сообщения"
-                : section === "quizzes"
-                  ? "Контрольные и тесты"
-                  : section === "homework"
-                    ? "Домашние задания"
-                    : section === "journal"
-                      ? "Учебный журнал"
-                      : section === "courses"
-                        ? "Выбор курсов"
-                        : "Моё расписание"}
+            {section === "materials"
+              ? "Учебные материалы"
+              : section === "family"
+                ? "Мои дети и доступ"
+                : section === "messages"
+                  ? "Сообщения"
+                  : section === "quizzes"
+                    ? "Контрольные и тесты"
+                    : section === "homework"
+                      ? "Домашние задания"
+                      : section === "journal"
+                        ? "Учебный журнал"
+                        : section === "courses"
+                          ? "Выбор курсов"
+                          : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -205,6 +208,14 @@ export default function Portal({
           >
             Сообщения
           </button>
+          {session.user!.role === "teacher" && (
+            <button
+              aria-pressed={section === "materials"}
+              onClick={() => setSection("materials")}
+            >
+              Учебные материалы
+            </button>
+          )}
           {["teacher", "student", "parent"].includes(session.user!.role) && (
             <button
               aria-pressed={section === "quizzes"}
@@ -276,6 +287,7 @@ export default function Portal({
           {workspace && <IntakePortal key={workspace} workspace={workspace} />}
         </>
       ) : section === "journal" ||
+        section === "materials" ||
         section === "homework" ||
         section === "quizzes" ? (
         <>
@@ -293,7 +305,9 @@ export default function Portal({
             </select>
           </label>
           {workspace &&
-            (section === "quizzes" ? (
+            (section === "materials" ? (
+              <TeachingMaterialsPanel key={workspace} workspace={workspace} />
+            ) : section === "quizzes" ? (
               <QuizzesPanel key={workspace} workspace={workspace} />
             ) : section === "homework" ? (
               <HomeworkQueuePanel key={workspace} workspace={workspace} />

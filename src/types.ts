@@ -251,6 +251,7 @@ export type Page =
   | "journal"
   | "homework"
   | "quizzes"
+  | "materials"
   | "access"
   | "publications"
   | "commitments"
