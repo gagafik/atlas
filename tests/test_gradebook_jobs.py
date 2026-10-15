@@ -112,18 +112,22 @@ def test_expired_owner_cannot_publish_or_remove_new_attempt_rows(client,tmp_path
     with q.connect() as db:assert db.execute('SELECT count(*) FROM grading_rows').fetchone()[0]==0
 
 def claim_and_crash(path,ready):
-    q=Queue(path,lease=.3);assert q.claim();ready.set();os._exit(23)
+    q=Queue(path,clock=lambda:100.0,lease=1);assert q.claim();ready.set();os._exit(23)
 
 def test_worker_process_crash_is_recovered_from_durable_job(client,tmp_path,monkeypatch):
-    p,_=setup(client);q=Queue(api.DB,lease=.3);j=q.enqueue('demo',p,LOCAL)
+    clock=[100.0]
+    p,_=setup(client);q=Queue(api.DB,clock=lambda:clock[0],lease=1);j=q.enqueue('demo',p,LOCAL)
     monkeypatch.setenv('TIMETABLE_DB',str(api.DB));ctx=mp.get_context('spawn');ready=ctx.Event();child=ctx.Process(target=claim_and_crash,args=(str(api.DB),ready))
     child.start()
     try:assert ready.wait(10);child.join(10);assert child.exitcode==23
     finally:
         if child.is_alive():child.terminate();child.join(3)
         child.close()
-    time.sleep(.35);token,job=q.claim();assert job['id']==j['id'] and job['attempts']==2
-    path=tmp_path/'recovered.db';compile_book(api.DB,job,path,threading.Event(),lambda p:None);q.heartbeat(job['id'],token,{})
+    # Expire only the crashed worker. Recovery must not race the CI machine's
+    # speed while compiling/importing a book without a production heartbeat loop.
+    clock[0]=102.0;token,job=q.claim();assert job['id']==j['id'] and job['attempts']==2
+    path=tmp_path/'recovered.db';compile_book(api.DB,job,path,threading.Event(),lambda p:None)
+    assert q.heartbeat(job['id'],token,{})==(True,False)
     q.import_stage(job,token,path,threading.Event(),lambda p:None);assert q.get(job['id'],'demo')['status']=='succeeded'
 
 def never_finishes(path,job,stage,cancel,channel):
