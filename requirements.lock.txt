@@ -17,6 +17,7 @@ iniconfig==2.3.1
 numpy==2.5.4
 opentelemetry-api==1.45.1
 openpyxl==3.1.5
+Pillow==12.3.0
 ortools==9.15.6755
 packaging==26.3
 pandas==3.0.6

@@ -433,6 +433,9 @@ school_documents.register(app, Workspace)
 from .library import Library
 library = Library(access, notifications, portal_stamp)
 library.register(app, Workspace)
+from .lost_found import LostFound
+lost_found = LostFound(access, notifications, portal_stamp)
+lost_found.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

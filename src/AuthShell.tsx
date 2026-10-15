@@ -21,6 +21,7 @@ const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
 const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
+const LostFound = lazy(() => import("./LostFound"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -48,6 +49,17 @@ export default function AuthShell() {
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
+  const [lostFoundWorkspace, setLostFoundWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setLostFoundWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-lost-found", open);
+    return () => window.removeEventListener("atlas-open-lost-found", open);
+  }, []);
   useEffect(() => {
     const open = (event: Event) =>
       setLibraryWorkspace((event as CustomEvent).detail?.workspace || "school");
@@ -107,6 +119,7 @@ export default function AuthShell() {
     setStaffTimeWorkspace(null);
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
+    setLostFoundWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -321,6 +334,9 @@ export default function AuthShell() {
           <button onClick={() => setLibraryWorkspace("school")}>
             Библиотека и учебники
           </button>
+          <button onClick={() => setLostFoundWorkspace("school")}>
+            Потерянные вещи
+          </button>
           <button onClick={() => setDocumentsWorkspace("school")}>
             Документы и архив
           </button>
@@ -444,6 +460,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={libraryWorkspace}
             onClose={() => setLibraryWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {lostFoundWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю потерянные вещи…</p>}>
+          <LostFound
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={lostFoundWorkspace}
+            onClose={() => setLostFoundWorkspace(null)}
           />
         </Suspense>
       )}
