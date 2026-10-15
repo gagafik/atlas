@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from backend import api
 from backend.access import password_hash
+from backend.recovery import revoke_all
 
 
 def main():
@@ -24,9 +25,10 @@ def main():
     with api.db_lock,api.connect() as db:
         cursor=db.execute('UPDATE accounts SET password=?,version=version+1 WHERE id=? AND version=?',(encoded,row[0],row[2]))
         if not cursor.rowcount: raise SystemExit('Запись изменилась. Повторите команду.')
+        revoke_all(db,row[0])
         db.execute('DELETE FROM sessions WHERE user_id=?',(row[0],))
         api.access.record(db,'account.password_reset_locally',detail=args.login.lower())
-    print('Пароль изменён, прежние сеансы завершены. Расписание сохранено без изменений.')
+    print('Пароль изменён, прежние сеансы завершены, резервные коды отозваны. Расписание сохранено без изменений.')
 
 
 if __name__=='__main__': main()

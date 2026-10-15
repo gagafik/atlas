@@ -169,7 +169,7 @@ class Access:
         request.state.auth_enabled = enabled
         if not enabled and os.environ.get('TIMETABLE_REQUIRE_AUTH') == '1':
             return JSONResponse(status_code=503,content={'detail':'Сервер ещё не настроен. Администратор должен создать первую учётную запись в консоли сервера.'})
-        public = path in ['/api/auth/status','/api/auth/login','/api/auth/logout','/api/auth/setup','/api/auth/register','/api/health']
+        public = path in ['/api/auth/status','/api/auth/login','/api/auth/logout','/api/auth/setup','/api/auth/register','/api/auth/recover','/api/health']
         unsafe = request.method not in ['GET','HEAD','OPTIONS']
         if not enabled and not self.local(request) and path != '/api/health':
             return JSONResponse(status_code=403,content={'detail':'Сначала включите учётные записи на компьютере сервера.'})
@@ -179,7 +179,7 @@ class Access:
             if not user: return JSONResponse(status_code=401,content={'detail':'Войдите в учётную запись.'})
             administrative = path.startswith('/api/access/')
             portal = path.startswith('/api/portal/') or path == '/api/portal'
-            personal = path in ['/api/auth/password','/api/auth/invitations/accept'] or path.startswith(('/api/notifications/','/api/journal/','/api/final-grades/','/api/intake/','/api/messages/'))
+            personal = path in ['/api/auth/password','/api/auth/invitations/accept','/api/auth/recovery/options','/api/auth/recovery/codes','/api/auth/recovery/revoke'] or path.startswith(('/api/notifications/','/api/journal/','/api/final-grades/','/api/intake/','/api/messages/'))
             workspace = request.query_params.get('workspace','school')
             allowed = user['role'] == 'admin' or personal or portal or (not administrative and user['role'] == 'editor' and workspace in user['workspaces'])
             if not allowed: return JSONResponse(status_code=403,content={'detail':'У вашей учётной записи нет доступа к этому действию.'})
@@ -201,6 +201,18 @@ class Access:
 
     def register(self, app):
         app.middleware('http')(self.guard)
+        from .recovery import register as register_recovery, revoke_all
+        register_recovery(self,app)
+        from fastapi.exceptions import RequestValidationError
+        from fastapi.exception_handlers import request_validation_exception_handler
+
+        @app.exception_handler(RequestValidationError)
+        async def credential_validation(request,exc):
+            if request.url.path.startswith('/api/auth/'):
+                # Validation input can contain a raw password or recovery code.
+                return JSONResponse(status_code=422,content={'detail':[
+                    {key:error[key] for key in ['type','loc','msg']} for error in exc.errors()]})
+            return await request_validation_exception_handler(request,exc)
 
         @app.get('/api/auth/status')
         def status(request: Request):
@@ -265,6 +277,7 @@ class Access:
             with self.lock,self.connect() as db:
                 result=db.execute('UPDATE accounts SET password=?,version=version+1 WHERE id=? AND version=?',(encoded,user['id'],row[5]))
                 if not result.rowcount: raise HTTPException(409,'Учётная запись изменилась. Повторите действие.')
+                revoke_all(db,user['id'])
                 db.execute('DELETE FROM sessions WHERE user_id=?',(user['id'],))
                 self.issue_session(db,user['id'],response,request)
                 self.record(db,'account.password_changed')
@@ -294,6 +307,8 @@ class Access:
                 permissions=sync_account(db,id,body.role,dict(workspaces=WORKSPACES if body.role=='admin' else body.workspaces,grants=[g.model_dump() for g in body.grants]),source='account.assignment',previous=old)
                 permissions=json.dumps(permissions,ensure_ascii=False)
                 db.execute('INSERT OR REPLACE INTO accounts VALUES (?,?,?,?,?,?,?,?)',(id,body.login,body.name,body.role,int(body.active),version,encoded or old[6],permissions))
+                if old and (encoded or old[1]!=body.login or old[3]!=body.role or old[4]!=int(body.active)):
+                    revoke_all(db,id)
                 db.execute('DELETE FROM sessions WHERE user_id=?',(id,))
                 self.record(db,'account.updated' if old else 'account.created',detail=body.login+' · '+body.role)
                 return self.public(db.execute('SELECT * FROM accounts WHERE id=?',(id,)).fetchone(),configured=True)
