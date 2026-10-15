@@ -19,15 +19,14 @@ import {
 } from "./PaymentEditors";
 import "./SchoolPayments.css";
 
-export default function SchoolPayments({
-  user,
-  initialWorkspace,
-  onClose,
-}: {
+type PaymentsProps = {
   user: Account;
   initialWorkspace: string;
   onClose: () => void;
-}) {
+};
+
+export default function SchoolPayments(props: PaymentsProps) {
+  const { user, initialWorkspace } = props;
   const spaces =
     user.role === "admin"
       ? ["school", "demo"]
@@ -42,6 +41,27 @@ export default function SchoolPayments({
       ? initialWorkspace
       : spaces[0] || "school",
   );
+  return (
+    <PaymentsWorkspace
+      key={workspace}
+      {...props}
+      workspace={workspace}
+      spaces={spaces}
+      onWorkspaceChange={setWorkspace}
+    />
+  );
+}
+
+function PaymentsWorkspace({
+  onClose,
+  workspace,
+  spaces,
+  onWorkspaceChange,
+}: PaymentsProps & {
+  workspace: string;
+  spaces: string[];
+  onWorkspaceChange: (workspace: string) => void;
+}) {
   const [options, setOptions] = useState<any>(null),
     [accounts, setAccounts] = useState<any>({ items: [] }),
     [account, setAccount] = useState<any>(null);
@@ -283,13 +303,7 @@ export default function SchoolPayments({
               value={workspace}
               onChange={(e) => {
                 if (leave()) {
-                  setWorkspace(e.target.value);
-                  setOptions(null);
-                  setAccount(null);
-                  setTab("accounts");
-                  setDirty(false);
-                  setQuery("");
-                  setOffset(0);
+                  onWorkspaceChange(e.target.value);
                 }
               }}
             >
