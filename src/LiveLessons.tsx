@@ -5,6 +5,14 @@ import { startPolling } from "./polling";
 import QuizBankPanel from "./QuizBankPanel";
 import type { Activity, BankItem, QuestionSnapshot } from "./quiz";
 import "./LiveLessons.css";
+import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
+import { canLeaveHomework } from "./homeworkNavigation";
+import {
+  LiveMaterials,
+  LiveSolution as Solution,
+  MaterialEditor,
+} from "./LiveLessonMaterials";
+import type { QuestionMaterials } from "./LiveLessonMaterials";
 
 const labels: Record<string, string> = {
   draft: "Черновик",
@@ -72,6 +80,7 @@ function Workspace({
     [status, setStatus] = useState<any>(null);
   const [editor, setEditor] = useState<any>(null),
     [bank, setBank] = useState(false),
+    [library, setLibrary] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
@@ -92,6 +101,7 @@ function Workspace({
   }, []);
   const bankActivity = useCallback((a: Activity) => track("bank", a), [track]);
   const leave = () =>
+    canLeaveHomework() &&
     !busyRef.current &&
     !activity.busy &&
     (!(editor || activity.dirty) ||
@@ -387,16 +397,31 @@ function Workspace({
                   setId("");
                   setEditor(null);
                   setBank(!bank);
+                  setLibrary(false);
                 }
               }}
             >
               {bank ? "К занятиям" : "Банк вопросов"}
             </button>
             <button
+              disabled={busy || activity.busy}
+              onClick={() => {
+                if (leave()) {
+                  setId("");
+                  setEditor(null);
+                  setBank(false);
+                  setLibrary(!library);
+                }
+              }}
+            >
+              {library ? "К занятиям" : "Библиотека материалов"}
+            </button>
+            <button
               disabled={busy || activity.busy || !options.pairs.length}
               onClick={() => {
                 if (leave()) {
                   setBank(false);
+                  setLibrary(false);
                   setId("");
                   setEditor({
                     title: "",
@@ -422,6 +447,7 @@ function Workspace({
       {bank && (
         <QuizBankPanel workspace={workspace} onActivity={bankActivity} />
       )}
+      {library && <TeachingMaterialsPanel workspace={workspace} />}
       {editor && (
         <section className="live-card">
           <h3>{id ? "Редактирование" : "Подготовка занятия"}</h3>
@@ -467,33 +493,49 @@ function Workspace({
             </label>
             <h4>Порядок вопросов · {editor.questions.length}/50</h4>
             <ol>
-              {editor.questions.map((q: QuestionSnapshot, i: number) => (
-                <li key={q.id}>
-                  <p>{q.question.text}</p>
-                  <button
-                    disabled={!i}
-                    onClick={() => {
-                      const qs = [...editor.questions];
-                      [qs[i - 1], qs[i]] = [qs[i], qs[i - 1]];
-                      setEditor({ ...editor, questions: qs });
-                    }}
-                  >
-                    Выше
-                  </button>{" "}
-                  <button
-                    onClick={() =>
-                      setEditor({
-                        ...editor,
-                        questions: editor.questions.filter(
-                          (_: any, j: number) => i !== j,
-                        ),
-                      })
-                    }
-                  >
-                    Убрать
-                  </button>
-                </li>
-              ))}
+              {editor.questions.map(
+                (q: QuestionSnapshot & QuestionMaterials, i: number) => (
+                  <li key={q.id}>
+                    <p>{q.question.text}</p>
+                    <MaterialEditor
+                      workspace={workspace}
+                      question={q}
+                      onChange={(part, items) => {
+                        setEditor({
+                          ...editor,
+                          questions: editor.questions.map((item: any) =>
+                            item.id === q.id
+                              ? { ...item, [part]: items }
+                              : item,
+                          ),
+                        });
+                      }}
+                    />
+                    <button
+                      disabled={!i}
+                      onClick={() => {
+                        const qs = [...editor.questions];
+                        [qs[i - 1], qs[i]] = [qs[i], qs[i - 1]];
+                        setEditor({ ...editor, questions: qs });
+                      }}
+                    >
+                      Выше
+                    </button>{" "}
+                    <button
+                      onClick={() =>
+                        setEditor({
+                          ...editor,
+                          questions: editor.questions.filter(
+                            (_: any, j: number) => i !== j,
+                          ),
+                        })
+                      }
+                    >
+                      Убрать
+                    </button>
+                  </li>
+                ),
+              )}
             </ol>
             <button
               disabled={
@@ -509,10 +551,19 @@ function Workspace({
                     instructions: editor.instructions,
                     groupId: editor.groupId,
                     subjectId: editor.subjectId,
-                    questions: editor.questions.map((q: QuestionSnapshot) => ({
-                      id: q.id,
-                      version: q.version,
-                    })),
+                    questions: editor.questions.map(
+                      (q: QuestionSnapshot & QuestionMaterials) => ({
+                        id: q.id,
+                        version: q.version,
+                        materials: (q.materials || []).map((m) => ({
+                          id: m.id,
+                          version: m.version,
+                        })),
+                        solutionMaterials: (q.solutionMaterials || []).map(
+                          (m) => ({ id: m.id, version: m.version }),
+                        ),
+                      }),
+                    ),
                   },
                 })
               }
@@ -538,7 +589,7 @@ function Workspace({
           />
         </section>
       )}
-      {!bank && !editor && (
+      {!bank && !library && !editor && (
         <div className="live-layout">
           <nav aria-label="Список занятий">
             <label>
@@ -628,6 +679,13 @@ function Workspace({
                   {detail.manage && (
                     <fieldset disabled={busy || activity.busy}>
                       <div className="live-toolbar">
+                        <a
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          href={`/?${new URLSearchParams({ projectLesson: id, workspace })}`}
+                        >
+                          Открыть экран проектора
+                        </a>
                         {detail.status === "draft" && (
                           <>
                             <button
@@ -720,6 +778,12 @@ function Workspace({
                         : ""}
                     </p>
                     <p className="live-text">{r.question.text}</p>
+                    <LiveMaterials
+                      items={r.materials}
+                      workspace={workspace}
+                      lesson={id}
+                      index={r.index}
+                    />
                     {detail.manage ? (
                       <>
                         <ul>
@@ -773,6 +837,13 @@ function Workspace({
                             : "Разбор"}
                         </summary>
                         <Solution question={r.solution} />
+                        <LiveMaterials
+                          items={r.solutionMaterials}
+                          workspace={workspace}
+                          lesson={id}
+                          index={r.index}
+                          part="solutionMaterials"
+                        />
                         {r.response?.mark && (
                           <p>
                             Баллы: {r.response.mark.score} / {r.question.points}
@@ -918,25 +989,6 @@ function AnswerText({ answer, question }: { answer: any; question: any }) {
           .join("; ") ||
         "Пустой ответ"}
     </p>
-  );
-}
-function Solution({ question: q }: { question: any }) {
-  return (
-    <div className="live-text">
-      <p>
-        {q.kind === "essay"
-          ? "Развёрнутый ответ проверяет учитель."
-          : q.kind === "number"
-            ? `${q.number} (допуск ${q.tolerance})`
-            : q.kind === "short"
-              ? q.accepted.join(" / ")
-              : q.options
-                  .filter((o: any) => q.correctIds.includes(o.id))
-                  .map((o: any) => o.text)
-                  .join("; ")}
-      </p>
-      <p>{q.explanation}</p>
-    </div>
   );
 }
 function AnswerEditor({

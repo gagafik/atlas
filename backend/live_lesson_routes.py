@@ -10,6 +10,8 @@ from .payment_routes import csv_response
 
 
 def register(s,app,Workspace):
+    from .live_lesson_media import register as register_media
+    register_media(s,app,Workspace)
     def scope(db,u,snap,w,row,student):
         manage=s.manage(u,snap,w,row)
         ids=s.audience(db,snap,row)
@@ -127,6 +129,8 @@ def register(s,app,Workspace):
             for r in rounds:
                 i=r['question_index'];q=doc['questions'][i];reveal=r['phase']=='revealed'
                 item=dict(index=i,phase=r['phase'],deadline=r['deadline'],question=public_question(q))
+                item['materials']=q.get('materials',[])
+                if manage or reveal:item['solutionMaterials']=q.get('solutionMaterials',[])
                 if manage or reveal:item['solution']=q['question']
                 if student and (u['role']=='student' or reveal):item['response']=answer_view(own.get(i),q['question'],reveal)
                 item['canAnswer']=bool(student and u['role']=='student' and row['status']=='live' and r['phase']=='open' and not (own.get(i) and own[i]['submitted']))

@@ -10,12 +10,24 @@ class Mutation(Model):
     version: int = Field(default=0, ge=0)
 
 
+class QuestionReference(Reference):
+    materials: list[Reference] = Field(default_factory=list, max_length=3)
+    solutionMaterials: list[Reference] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode='after')
+    def unique_materials(self):
+        for refs in (self.materials, self.solutionMaterials):
+            if len({r.id for r in refs}) != len(refs):
+                raise ValueError('Материал указан несколько раз.')
+        return self
+
+
 class Definition(Model):
     title: str = Field(min_length=1, max_length=160)
     instructions: str = Field(default='', max_length=4000)
     groupId: str = Field(min_length=1, max_length=80)
     subjectId: str = Field(min_length=1, max_length=80)
-    questions: list[Reference] = Field(min_length=1, max_length=50)
+    questions: list[QuestionReference] = Field(min_length=1, max_length=50)
 
     @model_validator(mode='after')
     def unique(self):
