@@ -42,12 +42,21 @@ class MaterialReference(Model):
     version: int = Field(ge=1)
 
 
+class TopicReference(Model):
+    model_config = ConfigDict(extra='ignore')
+    planId: str = Field(pattern=r'^[a-f0-9]{32}$')
+    version: int = Field(ge=1)
+    topicId: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')
+    units: int = Field(default=1, ge=1, le=12)
+
+
 class Content(Model):
     topic: str = Field(default='', max_length=2000)
     homework: str = Field(default='', max_length=4000)
     dueDate: date | None = None
     homeworkFiles: list[str] = Field(default_factory=list, max_length=5)
     materials: list[MaterialReference] = Field(default_factory=list, max_length=10)
+    curriculum: TopicReference | None = None
     homeworkLatePolicy: Literal['allow','block'] = 'allow'
     assessments: list[Assessment] = Field(default_factory=list, max_length=10)
     records: list[PupilRecord] = Field(default_factory=list, max_length=1000)
@@ -145,6 +154,7 @@ def pupil_projection(document, student_id):
                 content={k:document['content'][k] for k in ['topic','homework','dueDate','assessments']} | dict(
                     homeworkFiles=document['content'].get('homeworkFiles',[]),
                     materials=document['content'].get('materials',[]),
+                    curriculum=document['content'].get('curriculum'),
                     homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow')),record=record)
 
 
@@ -323,6 +333,9 @@ class Journal:
         if document['content'].get('materials'):
             from .teaching_materials import bind
             document=dict(document,content=dict(document['content'],materials=bind(db,document['content']['materials'],workspace,key,user)))
+        if document['content'].get('curriculum'):
+            from .curriculum import bind as bind_topic
+            document=dict(document,content=dict(document['content'],curriculum=bind_topic(db,document['content']['curriculum'],workspace,key,document['lesson'])))
         created=created or now().isoformat()
         old_public=previous['published'] if previous else None
         published=document if publish else old_public
@@ -333,6 +346,9 @@ class Journal:
         action='journal.published' if publish else 'journal.draft_saved'
         self.members(db,workspace,key,document,'draft')
         if publish:self.members(db,workspace,key,published,'published')
+        if publish:
+            from .curriculum import project
+            project(db,workspace,key,published)
         db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',
                    (workspace,key,version,created,user['name'],action,encoded(document)))
         self.access.record(db,action,workspace,revision,detail=f'{key}: редакция {version}')
@@ -435,6 +451,8 @@ class Journal:
                 db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',(workspace,body.lessonKey,version,updated,user['name'],'journal.withdrawn',encoded(record['document'])))
                 self.access.record(db,'journal.withdrawn',workspace,detail=f'{body.lessonKey}: редакция {version}')
                 self.members(db,workspace,body.lessonKey,None,'published')
+                from .curriculum import project
+                project(db,workspace,body.lessonKey,None)
                 self.notify(db,workspace,version,record['published'],None)
             return dict(version=version)
 

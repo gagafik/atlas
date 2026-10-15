@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import LessonMaterials from "./LessonMaterials";
+import LessonTopic, { SavedPlanTopic } from "./LessonTopic";
 import AssignmentFilesPanel, {
   SavedMaterialLinks,
 } from "./AssignmentFilesPanel";
@@ -101,6 +102,7 @@ function PublishedRows({
               </p>
             );
           })}
+          <SavedPlanTopic value={row.content.curriculum} />
           {workspace && (
             <LessonMaterials
               items={row.content.materials || []}
@@ -636,6 +638,26 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         }
                       />
                     </label>
+                    <LessonTopic
+                      workspace={workspace}
+                      lessonKey={entry.lessonKey}
+                      day={entry.document.lesson.date}
+                      value={entry.document.content.curriculum}
+                      disabled={!editable}
+                      onChange={(curriculum) =>
+                        content((c) => ({
+                          ...c,
+                          curriculum,
+                          topic:
+                            curriculum &&
+                            (curriculum.planId !== c.curriculum?.planId ||
+                              curriculum.version !== c.curriculum?.version ||
+                              curriculum.topicId !== c.curriculum?.topicId)
+                              ? curriculum.title
+                              : c.topic,
+                        }))
+                      }
+                    />
                     <label className="field">
                       <span>Домашнее задание</span>
                       <textarea
@@ -1205,6 +1227,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           : "разрешена с отметкой"}
                         .
                       </p>
+                      <SavedPlanTopic
+                        value={historical.document.content.curriculum}
+                      />
                       <LessonMaterials
                         items={historical.document.content.materials || []}
                         workspace={workspace}

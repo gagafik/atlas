@@ -1,0 +1,79 @@
+.curriculum-panel {
+  max-width: 1100px;
+  min-width: 0;
+}
+.curriculum-panel fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.curriculum-toolbar,
+.curriculum-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+}
+.curriculum-toolbar .field {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.curriculum-list button {
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.curriculum-topic {
+  border: 1px solid #dfe5ec;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 14px 0;
+  background: #fff;
+}
+.curriculum-panel input,
+.curriculum-panel select,
+.curriculum-panel textarea {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.curriculum-panel .field > input,
+.curriculum-panel .field > select,
+.curriculum-panel .field > textarea {
+  width: 100%;
+}
+.curriculum-panel details {
+  padding: 14px 0;
+}
+.curriculum-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.curriculum-table {
+  overflow-x: auto;
+}
+.curriculum-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.curriculum-table td,
+.curriculum-table th {
+  padding: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+}
+.curriculum-table td:first-child {
+  overflow-wrap: anywhere;
+  min-width: 150px;
+}
+@media (max-width: 600px) {
+  .curriculum-toolbar {
+    align-items: stretch;
+  }
+  .curriculum-toolbar > * {
+    max-width: 100%;
+  }
+  .curriculum-topic {
+    padding: 12px;
+  }
+}
