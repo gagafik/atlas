@@ -189,7 +189,7 @@ class Access:
             if not user: return JSONResponse(status_code=401,content={'detail':'Войдите в учётную запись.'})
             administrative = path.startswith('/api/access/')
             portal = path.startswith('/api/portal/') or path == '/api/portal'
-            personal = path in ['/api/auth/password','/api/auth/invitations/accept','/api/auth/recovery/options','/api/auth/recovery/codes','/api/auth/recovery/revoke'] or path.startswith(('/api/notifications/','/api/journal/','/api/final-grades/','/api/intake/','/api/messages/','/api/forms/','/api/meetings/','/api/staff-time/','/api/documents/','/api/library/','/api/lost-found/','/api/clubs/'))
+            personal = path in ['/api/auth/password','/api/auth/invitations/accept','/api/auth/recovery/options','/api/auth/recovery/codes','/api/auth/recovery/revoke'] or path.startswith(('/api/notifications/','/api/journal/','/api/final-grades/','/api/intake/','/api/messages/','/api/forms/','/api/meetings/','/api/staff-time/','/api/documents/','/api/library/','/api/lost-found/','/api/clubs/','/api/school-site/'))
             workspace = request.query_params.get('workspace','school')
             allowed = user['role'] == 'admin' or personal or portal or (not administrative and user['role'] == 'editor' and workspace in user['workspaces'])
             if not allowed: return JSONResponse(status_code=403,content={'detail':'У вашей учётной записи нет доступа к этому действию.'})
