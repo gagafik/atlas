@@ -419,6 +419,7 @@ export default function StaffTime({
             <div className="time-actions">
               <button
                 onClick={() => {
+                  if (!canLeave()) return;
                   const reason = window.prompt(
                     "Причина изменения порядка учёта",
                   );
@@ -525,6 +526,7 @@ export default function StaffTime({
               }
               onClick={() =>
                 void run(async () => {
+                  if (!canLeave()) return;
                   await mutate(
                     preview.kind === "leave"
                       ? `leave/${preview.id}/action`
