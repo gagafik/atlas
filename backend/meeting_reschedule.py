@@ -26,6 +26,8 @@ def movable(booking,event):
 def conflict(service,db,booking,target,snap,occupancy):
     if target['status']!='open' or datetime.fromisoformat(target['starts_at'])<=meetings.now():
         return 'Этот интервал закрыт или уже начался.'
+    from .meeting_waitlist import hold
+    if hold(service,db,target,snap,booking['workspace']):return 'Этот интервал предложен семье из очереди ожидания.'
     if problem:=service.slot_conflict(db,target,occupancy,target['id']):return problem
     if db.execute("SELECT 1 FROM meeting_bookings WHERE slot_id=? AND status!='cancelled' LIMIT 1",(target['id'],)).fetchone():
         return 'Этот интервал уже занят.'

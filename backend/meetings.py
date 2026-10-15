@@ -50,6 +50,8 @@ def tables(db):
       seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,request_id TEXT,fingerprint TEXT,result TEXT,UNIQUE(user_id,request_id));
     CREATE INDEX IF NOT EXISTS meeting_request_owner ON meeting_requests(user_id,seq);
     ''')
+    from .meeting_waitlist import tables as waitlist_tables
+    waitlist_tables(db)
 
 
 def version(item,expected):
@@ -63,7 +65,7 @@ class Meetings:
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='meeting_request_owner'").fetchone():return
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='meeting_waitlist_ready'").fetchone():return
         with self.access.lock,self.access.connect() as db:tables(db);self.notifications.tables(db)
 
     @contextmanager
@@ -219,8 +221,11 @@ class Meetings:
             if body.action=='unblock':
                 for slot in slots:
                     if proposal_conflict(slot):conflicts.append(dict(host=hosts[slot['host_id']]['name'],startsAt=slot['starts_at'],reason='В выбранных интервалах пересекается ведущий или кабинет.'))
-        key=hashlib.sha256(encoded([body.action,slots,bookings,conflicts,snap.state.revision]).encode()).hexdigest()
-        return dict(affectedSlots=len(slots),bookingsToCancel=len(bookings),conflicts=conflicts[:30],conflictCount=len(conflicts),previewHash=key),slots,bookings
+        offers=[]
+        if body.action=='block':
+            offers=[dict(r) for r in db.execute("SELECT id,version,expires_at FROM meeting_waitlist WHERE event_id=? AND status='offered' AND slot_id IN (SELECT value FROM json_each(?)) ORDER BY id",(event['id'],encoded([s['id'] for s in slots])))]
+        key=hashlib.sha256(encoded([body.action,slots,bookings,offers,conflicts,snap.state.revision]).encode()).hexdigest()
+        return dict(affectedSlots=len(slots),bookingsToCancel=len(bookings),offersToRevoke=len(offers),conflicts=conflicts[:30],conflictCount=len(conflicts),previewHash=key),slots,bookings
 
     def booking_owner(self,db,booking,snap,workspace):
         row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(booking['parent_id'],)).fetchone()
@@ -261,4 +266,6 @@ class Meetings:
         from .meeting_reminders import MeetingReminders
         register(self,app,Workspace)
         register_reschedule(self,app,Workspace)
+        from .meeting_waitlist import register as register_waitlist
+        register_waitlist(self,app,Workspace)
         self.reminders=MeetingReminders(self);self.reminders.register(app)

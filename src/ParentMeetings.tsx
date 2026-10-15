@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Account } from "./auth";
 import MeetingEditor from "./MeetingEditor";
 import MeetingReschedule from "./MeetingReschedule";
+import MeetingWaitlist from "./MeetingWaitlist";
 import {
   blankDefinition,
   clockTime,
@@ -76,6 +77,7 @@ export default function ParentMeetings({
     [to, setTo] = useState("19:00"),
     [reason, setReason] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [queueOpen, setQueueOpen] = useState(false);
   const [transfer, setTransfer] = useState<Booking | null>(null);
   const [history, setHistory] = useState<
     Record<
@@ -94,6 +96,7 @@ export default function ParentMeetings({
     !(dirty || note) ||
     window.confirm("Есть несохранённые изменения. Продолжить без сохранения?");
   function clear() {
+    setQueueOpen(false);
     setTransfer(null);
     setSelected(null);
     setDraft(null);
@@ -504,6 +507,16 @@ export default function ParentMeetings({
                   ? `Напоминание за ${selected.definition.reminderMinutes} мин.`
                   : "Напоминания отключены."}
               </p>
+              {(options.canManage || user.role === "parent") && (
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    if (mayLeave()) setQueueOpen(true);
+                  }}
+                >
+                  Очередь ожидания
+                </button>
+              )}
               <nav className="meeting-toolbar" aria-label="Разделы встреч">
                 {(
                   [
@@ -779,6 +792,8 @@ export default function ParentMeetings({
                             Интервалов: <strong>{preview.affectedSlots}</strong>
                             . Записей будет отменено:{" "}
                             <strong>{preview.bookingsToCancel}</strong>.
+                            Предложений времени будет отозвано:{" "}
+                            <strong>{preview.offersToRevoke || 0}</strong>.
                             Пересечений:{" "}
                             <strong>{preview.conflictCount}</strong>.
                           </p>
@@ -1078,6 +1093,19 @@ export default function ParentMeetings({
           )}
         </main>
       </div>
+      {queueOpen && selected && (
+        <MeetingWaitlist
+          key={workspace + selected.id}
+          workspace={workspace}
+          eventId={selected.id}
+          admin={options.canManage}
+          students={options.students}
+          onClose={() => {
+            setQueueOpen(false);
+            void run(() => open(selected.id, true));
+          }}
+        />
+      )}
       {transfer && (
         <MeetingReschedule
           key={workspace + transfer.id}

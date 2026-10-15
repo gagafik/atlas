@@ -217,3 +217,16 @@
 .meeting-reschedule p {
   overflow-wrap: anywhere;
 }
+
+.meeting-waitlist {
+  width: min(860px, 94vw);
+}
+.meeting-waitlist article {
+  overflow-wrap: anywhere;
+}
+.meeting-waitlist .meeting-toolbar {
+  flex-wrap: wrap;
+}
+.meeting-waitlist button {
+  white-space: normal;
+}
