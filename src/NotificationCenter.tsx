@@ -35,6 +35,8 @@ const titles: Record<string, string> = {
   "library.reminder": "Напоминание о библиотечной книге",
   "lost-found.claimed": "Есть изменение в заявках на найденные вещи",
   "lost-found.changed": "Изменилось решение по вашей находке",
+  "clubs.changed": "Изменилась запись или информация кружка",
+  "clubs.session": "Изменилось занятие или посещение кружка",
   "documents.assigned": "Вам поручена подготовка документа",
   "documents.submitted": "Школьный документ ожидает проверки",
   "documents.issued": "Вам доступен школьный документ",
@@ -354,6 +356,20 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                       Открыть библиотеку
                     </button>
                   )}
+                  {item.action.startsWith("clubs.") && (
+                    <button
+                      onClick={() => {
+                        window.dispatchEvent(
+                          new CustomEvent("atlas-open-clubs", {
+                            detail: { workspace: item.workspace },
+                          }),
+                        );
+                        setOpen(false);
+                      }}
+                    >
+                      Открыть кружки
+                    </button>
+                  )}
                   {item.action.startsWith("lost-found.") && (
                     <button
                       onClick={() => {
@@ -425,6 +441,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.action.startsWith("meeting.") ||
                     item.action.startsWith("documents.") ||
                     item.action.startsWith("library.") ||
+                    item.action.startsWith("clubs.") ||
                     item.action.startsWith("lost-found.") ||
                     item.action.startsWith("staff-time.") ||
                     item.action.startsWith("forms.") ||
@@ -437,33 +454,39 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.revision}
                   </p>
                   <p>
-                    {item.action.startsWith("lost-found.")
-                      ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
-                      : item.action.startsWith("library.")
-                        ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
-                        : item.action.startsWith("documents.")
-                          ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
-                          : item.action.startsWith("staff-time.")
-                            ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
-                            : item.action.startsWith("meeting.")
-                              ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
-                              : item.action.startsWith("forms.")
-                                ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
-                                : item.action === "push.test"
-                                  ? "Это проверочное уведомление для вашего устройства."
-                                  : item.action.startsWith("absence.")
-                                    ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
-                                    : item.action === "family.updated"
-                                      ? "Откройте «Мои дети и доступ» в личном кабинете."
-                                      : item.action.startsWith("message.")
-                                        ? "Откройте раздел сообщений в личном кабинете."
-                                        : item.action.startsWith("quiz.")
-                                          ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
-                                          : item.action.startsWith("homework.")
-                                            ? "Откройте домашнюю работу в учебном журнале."
-                                            : item.action.startsWith("journal.")
-                                              ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                                              : "Проверьте доступное вам расписание, включая занятия по датам."}
+                    {item.action.startsWith("clubs.")
+                      ? "Откройте кружки, чтобы проверить запись и занятия."
+                      : item.action.startsWith("lost-found.")
+                        ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
+                        : item.action.startsWith("library.")
+                          ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
+                          : item.action.startsWith("documents.")
+                            ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
+                            : item.action.startsWith("staff-time.")
+                              ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
+                              : item.action.startsWith("meeting.")
+                                ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
+                                : item.action.startsWith("forms.")
+                                  ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
+                                  : item.action === "push.test"
+                                    ? "Это проверочное уведомление для вашего устройства."
+                                    : item.action.startsWith("absence.")
+                                      ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                                      : item.action === "family.updated"
+                                        ? "Откройте «Мои дети и доступ» в личном кабинете."
+                                        : item.action.startsWith("message.")
+                                          ? "Откройте раздел сообщений в личном кабинете."
+                                          : item.action.startsWith("quiz.")
+                                            ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                                            : item.action.startsWith(
+                                                  "homework.",
+                                                )
+                                              ? "Откройте домашнюю работу в учебном журнале."
+                                              : item.action.startsWith(
+                                                    "journal.",
+                                                  )
+                                                ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                                : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}
