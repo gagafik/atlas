@@ -97,6 +97,10 @@ class PasswordChange(Credentials):
     password: SecretStr = Field(min_length=12,max_length=128)
 
 
+class Logout(Credentials):
+    pushEndpointHash: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
+
+
 class Presence(Model):
     clientId: str = Field(pattern=r'^[A-Za-z0-9_-]{8,100}$')
     page: str = Field(default='',max_length=80)
@@ -208,7 +212,7 @@ class Access:
 
         @app.exception_handler(RequestValidationError)
         async def credential_validation(request,exc):
-            if request.url.path.startswith('/api/auth/'):
+            if request.url.path.startswith(('/api/auth/','/api/notifications/push/')):
                 # Validation input can contain a raw password or recovery code.
                 return JSONResponse(status_code=422,content={'detail':[
                     {key:error[key] for key in ['type','loc','msg']} for error in exc.errors()]})
@@ -260,10 +264,13 @@ class Access:
             return dict(enabled=True,user=self.public(row))
 
         @app.post('/api/auth/logout')
-        def logout(request: Request,response: Response):
+        def logout(request: Request,response: Response,body: Logout | None=None):
             with self.lock,self.connect() as db:
                 self.tables(db); db.execute('DELETE FROM sessions WHERE token=?',(digest(request.cookies.get(COOKIE,'')),))
-                if request.state.user: self.record(db,'account.signed_out')
+                if request.state.user:
+                    from .web_push import revoke_session
+                    revoke_session(db,request.state.user['id'],digest(request.cookies.get(COOKIE,'')),body.pushEndpointHash if body else None)
+                    self.record(db,'account.signed_out')
             response.delete_cookie(COOKIE,path='/')
             return dict(status='signed_out')
 

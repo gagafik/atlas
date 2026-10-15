@@ -17,7 +17,12 @@ function worker() {
   const fetch = vi.fn(async () => new Response("online app"));
   const self = {
     location: { origin: "https://school.example" },
-    clients: { claim: vi.fn(async () => {}) },
+    registration: { showNotification: vi.fn(async () => {}) },
+    clients: {
+      claim: vi.fn(async () => {}),
+      matchAll: vi.fn(async () => []),
+      openWindow: vi.fn(async () => {}),
+    },
     addEventListener: (name, fn) => {
       handlers[name] = fn;
     },
@@ -98,5 +103,84 @@ describe("public offline shell", () => {
     w.fetch.mockResolvedValueOnce(new Response("error", { status: 503 }));
     w.handlers.fetch(event);
     expect(await pending).toBe(w.fallback);
+  });
+});
+
+describe("private background notifications", () => {
+  it("shows only fixed generic text even if a payload contains personal data or a link", async () => {
+    const w = worker();
+    let pending;
+    const json = vi.fn(() => ({
+      body: "Private pupil and grade",
+      url: "https://attacker.example",
+      title: "Secret",
+    }));
+    w.handlers.push({
+      data: { json },
+      waitUntil: (value) => {
+        pending = value;
+      },
+    });
+    await pending;
+    const [title, options] = w.self.registration.showNotification.mock.calls[0];
+    expect(title).toBe("Атлас");
+    expect(options).toEqual({
+      body: "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.",
+      icon: "/icons/atlas-192.png",
+      tag: "atlas-updates",
+    });
+    expect(json).not.toHaveBeenCalled();
+    expect(w.fetch).not.toHaveBeenCalled();
+    expect(w.caches.open).not.toHaveBeenCalled();
+  });
+  it("opens the inbox without following links in the notification", async () => {
+    const w = worker();
+    let pending;
+    const close = vi.fn();
+    const event = {
+      notification: { close, data: { url: "https://attacker.example" } },
+      waitUntil: (value) => {
+        pending = value;
+      },
+    };
+    const wrong = { url: "https://other.example/", focus: vi.fn() };
+    const publication = {
+      url: "https://school.example/published/private",
+      focus: vi.fn(),
+    };
+    w.self.clients.matchAll.mockResolvedValue([wrong, publication]);
+    w.handlers.notificationclick(event);
+    await pending;
+    expect(w.self.clients.openWindow).toHaveBeenCalledWith("/?notifications=1");
+    const app = {
+      url: "https://school.example/",
+      focus: vi.fn(async () => {}),
+      postMessage: vi.fn(),
+    };
+    w.self.clients.matchAll.mockResolvedValue([wrong, publication, app]);
+    w.handlers.notificationclick(event);
+    await pending;
+    expect(app.focus).toHaveBeenCalledOnce();
+    expect(app.postMessage).toHaveBeenCalledWith({
+      type: "atlas-open-notifications",
+    });
+    expect(wrong.focus).not.toHaveBeenCalled();
+    expect(publication.focus).not.toHaveBeenCalled();
+  });
+  it("requires the user to re-enrol after a provider replaces the subscription", async () => {
+    const w = worker();
+    let pending;
+    const app = { postMessage: vi.fn() };
+    w.self.clients.matchAll.mockResolvedValue([app]);
+    w.handlers.pushsubscriptionchange({
+      waitUntil: (value) => {
+        pending = value;
+      },
+    });
+    await pending;
+    expect(app.postMessage).toHaveBeenCalledWith({
+      type: "atlas-push-changed",
+    });
+    expect(w.fetch).not.toHaveBeenCalled();
   });
 });

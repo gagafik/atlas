@@ -3820,6 +3820,23 @@ main {
   background: #f3f6ef;
   margin: 18px 0;
 }
+.push-settings {
+  border: 1px solid #dce3eb;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px 0;
+}
+.push-settings > small { display: block; margin: 10px 0; }
+.push-settings summary { font-weight: 700; cursor: pointer; }
+.push-devices { list-style: none; padding: 0; }
+.push-devices li {
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+  padding: 12px 0;
+  border-top: 1px solid #dce3eb;
+}
+.push-settings input { max-width: 100%; }
 .notification-settings label {
   display: flex;
   align-items: center;

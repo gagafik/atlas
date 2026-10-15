@@ -13,6 +13,7 @@ import NotificationCenter from "./NotificationCenter";
 import DeviceTools from "./DeviceTools";
 import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
+import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
@@ -103,7 +104,10 @@ export default function AuthShell() {
     setBusy(true);
     setAccountError("");
     try {
-      await api("auth/logout", "school", "POST");
+      await api("auth/logout", "school", "POST", {
+        pushEndpointHash: await logoutPushFingerprint(),
+      });
+      await unsubscribeBrowser();
       ++refreshSequence.current;
       setPasswordForm(false);
       setOldPassword("");
