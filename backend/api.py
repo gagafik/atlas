@@ -436,6 +436,9 @@ library.register(app, Workspace)
 from .lost_found import LostFound
 lost_found = LostFound(access, notifications, portal_stamp)
 lost_found.register(app, Workspace)
+from .clubs import Clubs
+clubs = Clubs(access, notifications, portal_stamp)
+clubs.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

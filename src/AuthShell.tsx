@@ -22,6 +22,7 @@ const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
 const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const LostFound = lazy(() => import("./LostFound"));
+const Clubs = lazy(() => import("./Clubs"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -49,6 +50,13 @@ export default function AuthShell() {
   const [operationsPanel, setOperationsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
+  const [clubsWorkspace, setClubsWorkspace] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setClubsWorkspace((event as CustomEvent).detail?.workspace || "school");
+    window.addEventListener("atlas-open-clubs", open);
+    return () => window.removeEventListener("atlas-open-clubs", open);
+  }, []);
   const [lostFoundWorkspace, setLostFoundWorkspace] = useState<string | null>(
     null,
   );
@@ -120,6 +128,7 @@ export default function AuthShell() {
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
     setLostFoundWorkspace(null);
+    setClubsWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;
@@ -337,6 +346,7 @@ export default function AuthShell() {
           <button onClick={() => setLostFoundWorkspace("school")}>
             Потерянные вещи
           </button>
+          <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
           <button onClick={() => setDocumentsWorkspace("school")}>
             Документы и архив
           </button>
@@ -460,6 +470,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={libraryWorkspace}
             onClose={() => setLibraryWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {clubsWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю кружки…</p>}>
+          <Clubs
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={clubsWorkspace}
+            onClose={() => setClubsWorkspace(null)}
           />
         </Suspense>
       )}
