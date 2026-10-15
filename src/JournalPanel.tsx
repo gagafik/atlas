@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
+import LessonMaterials from "./LessonMaterials";
 import AssignmentFilesPanel, {
   SavedMaterialLinks,
 } from "./AssignmentFilesPanel";
@@ -100,6 +101,13 @@ function PublishedRows({
               </p>
             );
           })}
+          {workspace && (
+            <LessonMaterials
+              items={row.content.materials || []}
+              workspace={workspace}
+              lessonKey={row.lessonKey}
+            />
+          )}
           {workspace && row.content.homework && (
             <HomeworkPanel
               key={workspace + row.lessonKey + row.student.id}
@@ -223,7 +231,14 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       }
     };
     window.addEventListener("beforeunload", leave);
-    return () => window.removeEventListener("beforeunload", leave);
+    const navigate = (e: Event) => {
+      if (!canLeave()) e.preventDefault();
+    };
+    window.addEventListener("atlas-homework-leave", navigate);
+    return () => {
+      window.removeEventListener("beforeunload", leave);
+      window.removeEventListener("atlas-homework-leave", navigate);
+    };
   }, [dirty, busy]);
   function canLeave() {
     if (busy || saveLock.current) return false;
@@ -686,6 +701,16 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         тоже потребуется продление срока.
                       </small>
                     </label>
+                    <LessonMaterials
+                      key={workspace + entry.lessonKey + entry.version}
+                      items={entry.document.content.materials || []}
+                      workspace={workspace}
+                      lessonKey={entry.lessonKey}
+                      disabled={!editable}
+                      onChange={(materials) =>
+                        content((c) => ({ ...c, materials }))
+                      }
+                    />
                     <AssignmentFilesPanel
                       key={workspace + entry.lessonKey}
                       entry={entry}
@@ -1180,6 +1205,11 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           : "разрешена с отметкой"}
                         .
                       </p>
+                      <LessonMaterials
+                        items={historical.document.content.materials || []}
+                        workspace={workspace}
+                        lessonKey={entry.lessonKey}
+                      />
                       <SavedMaterialLinks
                         ids={historical.document.content.homeworkFiles || []}
                         workspace={workspace}

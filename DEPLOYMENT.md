@@ -103,6 +103,13 @@ SQLite-файлами. Они содержат ученические данны
 
 ## Источники
 
+Библиотека учебных материалов хранит файлы в `<имя базы>.files/materials`.
+Они входят в общий лимит `ATLAS_UPLOAD_TOTAL_MB` и в полную копию
+`tools.backup_school`. При восстановлении переносите их вместе с базой;
+не публикуйте этот каталог как статические файлы. Сохранённые версии и копии
+могут ссылаться на один файл, поэтому ручное удаление файлов нарушит историю.
+Подробнее: [MATERIALS.md](MATERIALS.md).
+
 - [GitHub Pages — статический хостинг](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 - [Архитектура Supabase](https://supabase.com/docs/guides/getting-started/architecture)
 - [Автоматический HTTPS в Caddy](https://caddyserver.com/docs/automatic-https)

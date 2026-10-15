@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Literal
 from fastapi import HTTPException, Request
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from .models import Model
 from .access import LOCAL, now
 from .calendar_ops import resolve_day, DayContext
@@ -34,11 +34,20 @@ class PupilRecord(Model):
     grades: list[Grade] = Field(default_factory=list, max_length=10)
 
 
+class MaterialReference(Model):
+    # Responses include server snapshots. Accept them on round-trip, but resolve
+    # every reference again inside store_revision; never trust submitted text/files.
+    model_config = ConfigDict(extra='ignore')
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    version: int = Field(ge=1)
+
+
 class Content(Model):
     topic: str = Field(default='', max_length=2000)
     homework: str = Field(default='', max_length=4000)
     dueDate: date | None = None
     homeworkFiles: list[str] = Field(default_factory=list, max_length=5)
+    materials: list[MaterialReference] = Field(default_factory=list, max_length=10)
     homeworkLatePolicy: Literal['allow','block'] = 'allow'
     assessments: list[Assessment] = Field(default_factory=list, max_length=10)
     records: list[PupilRecord] = Field(default_factory=list, max_length=1000)
@@ -135,6 +144,7 @@ def pupil_projection(document, student_id):
                 lesson={k:lesson[k] for k in ['date','start','end','subjectId','subject','group','teachers','rooms']},
                 content={k:document['content'][k] for k in ['topic','homework','dueDate','assessments']} | dict(
                     homeworkFiles=document['content'].get('homeworkFiles',[]),
+                    materials=document['content'].get('materials',[]),
                     homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow')),record=record)
 
 
@@ -310,6 +320,9 @@ class Journal:
     def store_revision(self, db, workspace, key, user, revision, version, document, previous, *, publish=False, created=None):
         """Store one authorized, validated revision inside the caller's write transaction."""
         if not db.in_transaction: raise RuntimeError('Journal revisions require a transaction.')
+        if document['content'].get('materials'):
+            from .teaching_materials import bind
+            document=dict(document,content=dict(document['content'],materials=bind(db,document['content']['materials'],workspace,key,user)))
         created=created or now().isoformat()
         old_public=previous['published'] if previous else None
         published=document if publish else old_public
