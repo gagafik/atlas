@@ -11,6 +11,12 @@
 .operations-dialog p {
   font-weight: 400;
 }
+.operations-error {
+  padding: 12px;
+  background: #fff0ec;
+  border: 1px solid #d7afa2;
+  border-radius: 8px;
+}
 @media (max-width: 480px) {
   .operations-facts {
     grid-template-columns: minmax(0, 1fr);

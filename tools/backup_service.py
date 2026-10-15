@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -23,6 +24,11 @@ ROOT=Path(__file__).resolve().parents[1]
 RUN=re.compile(r'backup-\d{14}-[a-f0-9]{16}')
 RETRY_SECONDS=900
 HEARTBEAT_SECONDS=5
+CHILD_ERRORS={3:'permission',4:'database',5:'verification',6:'missing_file',7:'unexpected',8:'copy_integrity'}
+
+
+class ChildFailure(RuntimeError):
+    def __init__(self,code):self.code=CHILD_ERRORS.get(code,'process')
 
 
 def timestamp():return datetime.now(timezone.utc).isoformat()
@@ -183,7 +189,7 @@ class Worker:
                 try:self.child.wait(timeout=min(HEARTBEAT_SECONDS,timeout))
                 except subprocess.TimeoutExpired:self.publish()
             if self.child.returncode==124:raise TimeoutError('Backup phase exceeded its deadline.')
-            if self.child.returncode:raise RuntimeError('Backup phase failed.')
+            if self.child.returncode:raise ChildFailure(self.child.returncode)
         finally:
             if self.child.poll() is None:self.child.kill();self.child.wait()
             self.child=None
@@ -235,7 +241,8 @@ class Worker:
             return True
         except (OSError,ValueError,RuntimeError) as exc:
             code='timeout' if isinstance(exc,TimeoutError) else 'stopped' if isinstance(exc,InterruptedError) else 'failed'
-            self.state['lastFailure']=dict(at=timestamp(),code=code)
+            self.state['lastFailure']=dict(at=timestamp(),code=code,phase=self.state.get('phase'),
+                                           reason=exc.code if isinstance(exc,ChildFailure) else type(exc).__name__)
             self.state['nextRun']=time.time()+RETRY_SECONDS
             return False
         finally:
@@ -327,12 +334,21 @@ def main():
             worker=Worker(config)
             def stop(*_):worker.stop=True
             signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
-            if not worker.run(args.once):return 2
+            if not worker.run(args.once):
+                print(json.dumps(dict(verified=False,failure=worker.state.get('lastFailure'))),file=sys.stderr)
+                return 2
             if args.once:
                 last=worker.state['lastSuccess']
                 print(json.dumps(dict(verified=True,restoreVerified=True,files=last['files'],bytes=last['bytes'])))
     except Exception as exc:
         print(f'Backup worker failed ({type(exc).__name__}); private details omitted.',file=sys.stderr)
+        if args.action!='run':
+            if isinstance(exc,PermissionError):return 3
+            if isinstance(exc,sqlite3.Error):return 4
+            if isinstance(exc,ValueError):return 5
+            if isinstance(exc,FileNotFoundError):return 6
+            if isinstance(exc,RuntimeError):return 8
+            return 7
         return 2
     return 0
 

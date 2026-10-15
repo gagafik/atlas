@@ -96,7 +96,7 @@ export default function OperationsPanel({ onClose }: { onClose: () => void }) {
       <p>Состояние обновляется, пока это окно открыто.</p>
       <button onClick={() => poll.current?.refresh()}>Обновить</button>
       {error && (
-        <p role="alert" className="auth-error">
+        <p role="alert" className="operations-error">
           {error}
         </p>
       )}
@@ -152,13 +152,13 @@ export default function OperationsPanel({ onClose }: { onClose: () => void }) {
             )
           )}
           {backup.overdue && (
-            <p className="auth-error">
+            <p className="operations-error">
               Нет свежей проверенной копии. Требуется внимание ответственного за
               сервер.
             </p>
           )}
           {backup.lastFailure && (
-            <p className="auth-error">
+            <p className="operations-error" role="alert">
               Последняя попытка не завершилась: {date(backup.lastFailure.at)}.
               {backup.lastFailure.code === "timeout"
                 ? " Превышено время копирования или проверки."
@@ -166,7 +166,7 @@ export default function OperationsPanel({ onClose }: { onClose: () => void }) {
             </p>
           )}
           {backup.cleanupWarning && (
-            <p className="auth-error">
+            <p className="operations-error">
               Старые или временные копии требуют проверки. Автоматическая
               очистка не завершилась.
             </p>
