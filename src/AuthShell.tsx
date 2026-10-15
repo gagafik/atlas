@@ -13,6 +13,7 @@ import NotificationCenter from "./NotificationCenter";
 import DeviceTools from "./DeviceTools";
 import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
+import { canLeaveHomework } from "./homeworkNavigation";
 const App = lazy(() => import("./App"));
 
 export default function AuthShell() {
@@ -85,6 +86,7 @@ export default function AuthShell() {
     }
   }
   async function signOut() {
+    if (!canLeaveHomework()) return;
     ++refreshSequence.current;
     setBusy(true);
     setAccountError("");

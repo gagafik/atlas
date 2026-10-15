@@ -54,19 +54,19 @@ def available(db, token_hash):
     return row
 
 
-def validate_targets(db, grants):
+def validate_targets(db, grants, documents=None):
     # Read the current document inside the same transaction as the grant. Do not
     # call Access.read here: it acquires the non-reentrant writer lock itself.
-    documents = {}
+    documents = {} if documents is None else documents
     for grant in grants:
         space = grant['workspace']
         if space not in documents:
             row = db.execute('SELECT document FROM workspaces WHERE id=?', (space,)).fetchone()
             documents[space] = json.loads(row[0]) if row else {}
         key = 'teachers' if grant['view'] == 'teacher' else 'students'
-        ids = {item['id'] for item in documents[space].get(key, [])}
+        ids = {item['id'] for item in documents[space].get(key, []) if key=='teachers' or item.get('active',True)}
         if set(grant['entityIds']) - ids:
-            raise HTTPException(422, 'Школьные записи изменились. Попросите администратора проверить приглашение.')
+            raise HTTPException(422, 'Школьные записи изменились или ученик выбыл. Попросите администратора проверить приглашение.')
 
 
 def public(row):
@@ -89,6 +89,9 @@ def register_invitations(app, access):
         row = db.execute('SELECT role,active,version FROM accounts WHERE id=?', (user['id'],)).fetchone() if user else None
         if not row or row[0] != 'admin' or not row[1] or row[2] != user['version']:
             raise HTTPException(403, 'Управление приглашениями доступно действующему администратору.')
+
+    from .invitation_batches import register as register_batches
+    register_batches(app,access,transaction,admin)
 
     def reserve(request, code):
         client = request.client.host if request.client else 'unknown'
