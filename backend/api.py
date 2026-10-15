@@ -453,6 +453,9 @@ payments.register(app, Workspace)
 from .canteen import Canteen
 canteen = Canteen(access, notifications, payments, portal_stamp)
 canteen.register(app, Workspace)
+from .handover import Handover
+handover = Handover(access, notifications, portal_stamp)
+handover.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
