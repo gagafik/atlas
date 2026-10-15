@@ -111,6 +111,8 @@ class Notifications:
         db.execute('CREATE INDEX IF NOT EXISTS notification_owner ON notifications(user_id,permissions,id)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_age ON notifications(created)')
         db.execute('CREATE TABLE IF NOT EXISTS notification_preferences (user_id TEXT PRIMARY KEY,enabled INTEGER)')
+        from .web_push import tables
+        tables(db)
 
     def capture(self, db, workspace, before, after, action='saved'):
         self.tables(db)
@@ -159,8 +161,10 @@ class Notifications:
         created = now().isoformat()
         for user in users:
             if user['id'] in muted: continue
-            db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action) VALUES (?,?,?,?,?,?)',
-                       (user['id'], permission_key(user), workspace, revision, created, action))
+            notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action) VALUES (?,?,?,?,?,?)',
+                       (user['id'], permission_key(user), workspace, revision, created, action)).lastrowid
+            from .web_push import enqueue
+            enqueue(db,user,notice)
             db.execute('DELETE FROM notifications WHERE user_id=? AND id NOT IN (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500)', (user['id'], user['id']))
         db.execute('DELETE FROM notifications WHERE created<?', ((now()-timedelta(days=90)).isoformat(),))
 

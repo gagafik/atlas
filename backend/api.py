@@ -413,6 +413,9 @@ from .assistant import register_assistant
 _assistant_requests = register_assistant(app, Workspace, access, read, require_revision, create_preview)
 from .intake import register_intake
 register_intake(app, Workspace, access, read, require_revision, save, connect, db_lock)
+from .web_push import PushService
+push_service = PushService(access)
+push_service.register(app)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

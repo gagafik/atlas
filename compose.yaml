@@ -8,6 +8,8 @@ services:
       TIMETABLE_DB: /app/data/timetable.db
       TIMETABLE_ALLOWED_ORIGINS: https://${ATLAS_DOMAIN:?Set ATLAS_DOMAIN in .env}
       ATLAS_UPLOAD_TOTAL_MB: ${ATLAS_UPLOAD_TOTAL_MB:-2048}
+      ATLAS_WEB_PUSH_ENABLED: ${ATLAS_WEB_PUSH_ENABLED:-0}
+      ATLAS_WEB_PUSH_SUBJECT: ${ATLAS_WEB_PUSH_SUBJECT:-}
       FORWARDED_ALLOW_IPS: "*"
     volumes:
       - atlas_data:/app/data

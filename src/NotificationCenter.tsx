@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { startPolling } from "./polling";
+import PushSettings from "./PushSettings";
 
 interface Notice {
   id: number;
@@ -18,6 +19,7 @@ interface Inbox {
   enabled: boolean;
 }
 const titles: Record<string, string> = {
+  "push.test": "Проверка фоновых уведомлений",
   "absence.submitted": "Поступило заявление об отсутствии",
   "absence.updated": "Изменилось решение по объяснительной",
   "message.received": "Новое сообщение",
@@ -55,6 +57,11 @@ export default function NotificationCenter({ identity }: { identity: string }) {
         ? "unsupported"
         : Notification.permission,
     );
+  const [pushActive, setPushActive] = useState(false);
+  useEffect(() => {
+    if (typeof Notification !== "undefined")
+      setPermission(Notification.permission);
+  }, [pushActive]);
   const dialog = useRef<HTMLDialogElement>(null),
     request = useRef(0),
     latest = useRef<number | null>(null);
@@ -103,6 +110,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
         if (
           fresh &&
           browserOn &&
+          !pushActive &&
           data.enabled &&
           typeof Notification !== "undefined" &&
           Notification.permission === "granted"
@@ -129,6 +137,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
       // Preserve explicitly enabled alerts while an inactive tab remains open.
       background: () =>
         browserOn &&
+        !pushActive &&
         typeof Notification !== "undefined" &&
         Notification.permission === "granted",
     });
@@ -136,7 +145,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
       live = false;
       polling.stop();
     };
-  }, [identity, unreadOnly, open, browserOn]);
+  }, [identity, unreadOnly, open, browserOn, pushActive]);
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -216,9 +225,8 @@ export default function NotificationCenter({ identity }: { identity: string }) {
           </button>
         </header>
         <p>
-          Изменения расписания и учебного журнала. Список хранится до 90 дней,
-          не более 500 записей. Опубликованные снимки по ссылкам обновляются
-          отдельно.
+          Сообщения и изменения в школе. Список хранится до 90 дней, не более
+          500 записей. Опубликованные снимки по ссылкам обновляются отдельно.
         </p>
         {error && (
           <p role="alert" className="error-banner">
@@ -246,13 +254,19 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                 Сохранять новые уведомления
               </label>
               <button
-                disabled={busy || permission === "unsupported"}
+                disabled={busy || permission === "unsupported" || pushActive}
                 onClick={() => void run(toggleBrowser)}
               >
                 {browserOn
                   ? "Выключить уведомления браузера"
                   : "Включить уведомления браузера"}
               </button>
+              {pushActive && (
+                <small>
+                  Фоновая доставка включена; отдельные уведомления открытой
+                  вкладки приостановлены.
+                </small>
+              )}
               <small>
                 Уведомления браузера работают, пока эта вкладка открыта.
                 Включаются отдельно для этой вкладки и учётной записи. В них нет
@@ -265,6 +279,11 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                 </small>
               )}
             </div>
+            <PushSettings
+              identity={identity}
+              open={open}
+              onActiveChange={setPushActive}
+            />
             <div className="dated-toolbar">
               <label>
                 <input
@@ -312,19 +331,21 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     {item.revision}
                   </p>
                   <p>
-                    {item.action.startsWith("absence.")
-                      ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
-                      : item.action === "family.updated"
-                        ? "Откройте «Мои дети и доступ» в личном кабинете."
-                        : item.action.startsWith("message.")
-                          ? "Откройте раздел сообщений в личном кабинете."
-                          : item.action.startsWith("quiz.")
-                            ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
-                            : item.action.startsWith("homework.")
-                              ? "Откройте домашнюю работу в учебном журнале."
-                              : item.action.startsWith("journal.")
-                                ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                                : "Проверьте доступное вам расписание, включая занятия по датам."}
+                    {item.action === "push.test"
+                      ? "Это проверочное уведомление для вашего устройства."
+                      : item.action.startsWith("absence.")
+                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                        : item.action === "family.updated"
+                          ? "Откройте «Мои дети и доступ» в личном кабинете."
+                          : item.action.startsWith("message.")
+                            ? "Откройте раздел сообщений в личном кабинете."
+                            : item.action.startsWith("quiz.")
+                              ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                              : item.action.startsWith("homework.")
+                                ? "Откройте домашнюю работу в учебном журнале."
+                                : item.action.startsWith("journal.")
+                                  ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                  : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}

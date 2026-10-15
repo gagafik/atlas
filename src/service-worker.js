@@ -47,6 +47,25 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+self.addEventListener("push", (event) => {
+  // Never display payload contents, links, account names or private school data.
+  event.waitUntil(
+    self.registration.showNotification("Атлас", {
+      body: "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.",
+      icon: "/icons/atlas-192.png",
+      tag: "atlas-updates",
+    }),
+  );
+});
+self.addEventListener("pushsubscriptionchange", (event) => {
+  // Re-enrolment needs an authenticated user and explicit consent in the UI.
+  event.waitUntil(
+    self.clients.matchAll({ type: "window" }).then((windows) => {
+      for (const client of windows)
+        client.postMessage({ type: "atlas-push-changed" });
+    }),
+  );
+});
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil(
