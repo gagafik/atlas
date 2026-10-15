@@ -49,7 +49,10 @@ def test_operations_is_read_only_and_administrator_only(client,monkeypatch):
     assert client.get('/api/access/operations').status_code==403
     enable(client)
     response=client.get('/api/access/operations')
-    assert response.status_code==200 and response.json()==dict(databaseReady=True,backup=dict(state='disabled'))
+    assert response.status_code==200
+    status=response.json()
+    assert status['databaseReady'] and status['backup']==dict(state='disabled')
+    assert status['traffic']['totalRequests']>0 and status['resources']['disk']['freeBytes']>0
     assert response.headers['cache-control']=='no-store'
     create(client,role='teacher')
     client.cookies.clear()

@@ -22,7 +22,64 @@ type Backup = {
     restoreVerified: boolean;
   } | null;
 };
-type Status = { databaseReady: boolean; backup: Backup };
+type Traffic = {
+  startedAt: string;
+  uptimeSeconds: number;
+  inFlight: number;
+  totalRequests: number;
+  totalServerErrors: number;
+  window: {
+    seconds: number;
+    requests: number;
+    requestsPerSecond: number;
+    serverErrors: number;
+    clientErrors: number;
+    unavailable: number;
+    rateLimited: number;
+    incomplete: number;
+    averageMs: number | null;
+    maximumMs: number | null;
+    p95UpperMs: number | null;
+    p95Overflow: boolean;
+  };
+};
+type Resources = {
+  checkedAt: string;
+  ageSeconds: number;
+  disk: {
+    freeBytes: number;
+    totalBytes: number;
+    freePercent: number;
+    level: string;
+  } | null;
+  queues:
+    | {
+        name: string;
+        initialized: boolean;
+        counts: Record<string, { count: number; capped: boolean }>;
+      }[]
+    | null;
+};
+type Status = {
+  databaseReady: boolean;
+  backup: Backup;
+  traffic: Traffic;
+  resources: Resources;
+};
+const queueNames: Record<string, string> = {
+  generation: "Генерация расписания",
+  reports: "Подготовка ведомостей",
+  push: "Уведомления на устройства",
+};
+const queueStates: Record<string, string> = {
+  queued: "в очереди",
+  running: "в работе",
+  cancelling: "отмена",
+  sending: "отправка",
+  failed: "не доставлены",
+};
+const gib = (bytes: number) =>
+  (bytes / 1024 ** 3).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 const date = (value: string | number) =>
   new Date(value).toLocaleString("ru-RU");
 const states: Record<string, string> = {
@@ -79,6 +136,9 @@ export default function OperationsPanel({ onClose }: { onClose: () => void }) {
   }, []);
   const backup = status?.backup;
   const last = backup?.lastSuccess;
+  const traffic = status?.traffic;
+  const recent = traffic?.window;
+  const resources = status?.resources;
   return (
     <dialog
       ref={dialog}
@@ -107,6 +167,136 @@ export default function OperationsPanel({ onClose }: { onClose: () => void }) {
             <strong>База данных:</strong>{" "}
             {status.databaseReady ? "доступна" : "требуется проверка"}
           </p>
+          {traffic && recent && (
+            <section aria-labelledby="operations-traffic-title">
+              <h3 id="operations-traffic-title">Скорость и нагрузка</h3>
+              <p>
+                За последние пять минут; после запуска — за доступное время.
+              </p>
+              <dl className="operations-facts">
+                <dt>Запросы сейчас в работе</dt>
+                <dd>{traffic.inFlight}</dd>
+                <dt>Завершённые запросы</dt>
+                <dd>
+                  {recent.requests} · {recent.requestsPerSecond} в секунду
+                </dd>
+                <dt>Среднее время ответа</dt>
+                <dd>
+                  {recent.averageMs === null
+                    ? "Пока нет данных"
+                    : `${recent.averageMs} мс`}
+                </dd>
+                <dt>95% ответов не дольше</dt>
+                <dd>
+                  {recent.p95Overflow
+                    ? "Более 30 секунд — проверьте нагрузку"
+                    : recent.p95UpperMs === null
+                      ? "Пока нет данных"
+                      : `${recent.p95UpperMs} мс (верхняя граница)`}
+                </dd>
+                <dt>Самый долгий ответ</dt>
+                <dd>
+                  {recent.maximumMs === null
+                    ? "Пока нет данных"
+                    : `${recent.maximumMs} мс`}
+                </dd>
+                <dt>Ошибки сервера</dt>
+                <dd>{recent.serverErrors}</dd>
+                <dt>Сервер временно недоступен</dt>
+                <dd>{recent.unavailable}</dd>
+                <dt>Отказы в запросах</dt>
+                <dd>
+                  {recent.clientErrors}, из них ограничение частоты:{" "}
+                  {recent.rateLimited}
+                </dd>
+                <dt>Незавершённые ответы</dt>
+                <dd>{recent.incomplete}</dd>
+              </dl>
+              {(recent.serverErrors > 0 || recent.incomplete > 0) && (
+                <p className="operations-error" role="status">
+                  Есть ошибки или оборванные ответы. Ответственному за сервер
+                  нужно проверить причину.
+                </p>
+              )}
+              <p>
+                С запуска {date(traffic.startedAt)}: запросов{" "}
+                {traffic.totalRequests}, ошибок сервера{" "}
+                {traffic.totalServerErrors}. При перезапуске показатели
+                сбрасываются.
+              </p>
+              <details>
+                <summary>Как считаются показатели</summary>
+                <p>
+                  Отказы могут означать неверный ввод или отсутствие доступа.
+                  Один ответ может попасть в несколько счётчиков.
+                </p>
+                <p>
+                  Измеряется обработка запросов приложением до отправки ответа.
+                  Время сети и загрузки страницы сюда не входит. Проверки
+                  состояния и статические файлы исключены. Адреса запросов и
+                  данные пользователей в метриках не сохраняются.
+                </p>
+              </details>
+            </section>
+          )}
+          {resources && (
+            <section aria-labelledby="operations-resources-title">
+              <h3 id="operations-resources-title">Место и фоновые задачи</h3>
+              {resources.disk ? (
+                <>
+                  <p>
+                    Свободно на диске с данными школы:{" "}
+                    <strong>
+                      {gib(resources.disk.freeBytes)} из{" "}
+                      {gib(resources.disk.totalBytes)} ГиБ (
+                      {resources.disk.freePercent}%)
+                    </strong>
+                    .
+                  </p>
+                  {resources.disk.level !== "normal" && (
+                    <p className="operations-error" role="status">
+                      {resources.disk.level === "critical"
+                        ? "Критически мало места. Сохранение данных может прекратиться."
+                        : "Место заканчивается. Нужно проверить хранилище."}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="operations-error">
+                  Не удалось проверить свободное место.
+                </p>
+              )}
+              {resources.queues ? (
+                <ul className="operations-queues">
+                  {resources.queues.map((queue) => (
+                    <li key={queue.name}>
+                      <strong>{queueNames[queue.name] || queue.name}</strong>:{" "}
+                      {queue.initialized
+                        ? Object.entries(queue.counts)
+                            .map(
+                              ([name, value]) =>
+                                `${queueStates[name] || name} — ${value.capped ? "более " : ""}${value.count}`,
+                            )
+                            .join("; ")
+                        : "ещё не запускалась"}
+                      .
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="operations-error">
+                  Не удалось проверить фоновые задачи. Это не означает, что
+                  очередь пуста.
+                </p>
+              )}
+              <p>
+                Количество задач само по себе не подтверждает работу
+                исполнителя. Состояние диска и очередей проверяется не чаще раза
+                в 10 секунд.
+              </p>
+              <small>Проверено: {date(resources.checkedAt)}.</small>
+            </section>
+          )}
           <h3>Резервные копии</h3>
           <p role="status">
             <strong>{states[backup.state] || "Состояние неизвестно"}</strong>

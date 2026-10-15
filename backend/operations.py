@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from tools.backup_service import public_status
+from .server_metrics import MetricsMiddleware, RequestMetrics, ResourceSnapshot
 
 
 def ready(database):
@@ -25,6 +26,12 @@ def ready(database):
 
 
 def register(app,access,database):
+    metrics, resources = RequestMetrics(), ResourceSnapshot()
+    app.state.operations_metrics = metrics
+    app.state.operations_resources = resources
+    # Registered after access.guard: include early authorization and CSRF refusals.
+    app.add_middleware(MetricsMiddleware, metrics=metrics)
+
     @app.get('/api/ready')
     def readiness():
         ok=ready(database())
@@ -38,7 +45,8 @@ def register(app,access,database):
             row=db.execute('SELECT role,active,version FROM accounts WHERE id=?',(user['id'],)).fetchone() if user else None
             if not row or row[0]!='admin' or not row[1] or row[2]!=user['version']:
                 raise HTTPException(403,'Состояние сервера доступно действующему администратору.')
-            return dict(databaseReady=ready(database()),backup=public_status(database()))
+            return dict(databaseReady=ready(database()), backup=public_status(database()),
+                        traffic=metrics.snapshot(), resources=resources.snapshot(database()))
 
     @app.exception_handler(sqlite3.OperationalError)
     async def database_busy(request,exc):
