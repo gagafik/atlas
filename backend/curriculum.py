@@ -9,7 +9,8 @@ from pydantic import Field, model_validator
 from .access import now
 from .models import Model
 from .notifications import encoded
-from .journal import user_ids, staff_read, key_for, TopicReference
+from .journal import user_ids, staff_read, key_for, TopicReference, MaterialReference
+from . import curriculum_materials as plan_materials
 from .resources import teacher_ids
 
 
@@ -19,6 +20,13 @@ class Topic(Model):
     hours: int = Field(ge=1, le=1000)
     plannedDate: date | None = None
     standard: str = Field(default='', max_length=2000)
+    materials: list[MaterialReference] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode='after')
+    def valid_materials(self):
+        if len({r.id for r in self.materials})!=len(self.materials):
+            raise ValueError('В теме можно выбрать только одну редакцию каждого материала.')
+        return self
 
 
 class PlanContent(Model):
@@ -37,6 +45,8 @@ class PlanContent(Model):
             raise ValueError('Идентификаторы тем не должны повторяться.')
         if any(t.plannedDate and not self.start <= t.plannedDate <= self.end for t in self.topics):
             raise ValueError('Плановая дата темы должна входить в период плана.')
+        if len({(r.id,r.version) for t in self.topics for r in t.materials})>100:
+            raise ValueError('В одном плане допускается до 100 различных редакций материалов.')
         return self
 
 
@@ -55,6 +65,7 @@ class CopyPlan(Model):
     groupId: str = Field(min_length=1, max_length=80)
     start: date
     end: date
+    omitUnavailableMaterials: bool = False
 
     @model_validator(mode='after')
     def valid(self):
@@ -148,7 +159,8 @@ class Curriculum:
     def detail(self, db, row, version=None):
         content,created,actor,archived=version_content(db,row['id'],version or row['version'])
         return dict(id=row['id'],version=version or row['version'],latestVersion=row['version'],
-                    archived=archived,created=created,actor=actor,content=content)
+                    archived=archived,created=created,actor=actor,content=content,
+                    materialStatus=plan_materials.status(db,row['workspace'],plan_materials.references(content)))
 
     def accessible(self, db, workspace, id, school, user):
         row=plan_row(db,workspace,id)
@@ -166,6 +178,8 @@ class Curriculum:
             AND archived=0 AND start<=? AND end>=? AND id<>? LIMIT 1''',(workspace,c['groupId'],c['subjectId'],c['end'],c['start'],id)).fetchone():
             raise HTTPException(409,'Для этой группы и предмета уже есть действующий план на пересекающийся период.')
         version=body.version+1;created=now().isoformat()
+        previous=version_content(db,id,row['version'])[0] if row else None
+        plan_materials.validate(db,workspace,c,previous)
         db.execute('''INSERT INTO curriculum_plans VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
             title=excluded.title,version=excluded.version,archived=excluded.archived,updated=excluded.updated,actor=excluded.actor''',
             (id,workspace,c['groupId'],c['subjectId'],c['start'],c['end'],c['title'],version,int(archived),created,user['name']))
@@ -174,6 +188,24 @@ class Curriculum:
         return self.detail(db,plan_row(db,workspace,id))
 
     def register(self, app, Workspace):
+        @app.get('/api/journal/curriculum/topic-materials')
+        def topic_materials(request:Request,day:date,planId:str,topicId:str,
+                            version:int=Query(ge=1),lessonKey:str=Query(min_length=64,max_length=64),workspace:Workspace='school'):
+            user,school=self.context(request,workspace)
+            lesson=next((r for r in school.lesson_rows(day) if r['activity']=='lesson' and key_for(r)==lessonKey),None)
+            if not lesson or not staff_read(user,workspace,lesson) or lesson['status']=='cancelled':
+                raise HTTPException(403,'Нет доступа к действующему уроку.')
+            with self.access.lock,self.access.connect() as db:
+                tables(db);db.execute('BEGIN');self.recheck(db,user,workspace,school)
+                row=plan_row(db,workspace,planId)
+                if row['archived'] or row['version']!=version: raise HTTPException(409,'План обновлён. Загрузите темы заново.')
+                if (row['groupId'],row['subjectId'])!=(lesson['groupId'],lesson['subjectId']) or not row['start']<=day.isoformat()<=row['end']:
+                    raise HTTPException(403,'План не относится к этому уроку.')
+                content,*_=version_content(db,planId,version)
+                topic=next((t for t in content['topics'] if t['id']==topicId),None)
+                if not topic: raise HTTPException(404,'Тема не найдена.')
+                return plan_materials.resolve(db,workspace,topic)
+
         @app.get('/api/journal/curriculum/options')
         def options(request:Request,workspace:Workspace='school'):
             user,school=self.context(request,workspace)
@@ -247,9 +279,10 @@ class Curriculum:
                 tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,workspace,school)
                 self.accessible(db,workspace,id,school,user)
                 content,*_=version_content(db,id,body.version)
+                omitted=plan_materials.copy_content(db,workspace,content,body.omitUnavailableMaterials)
                 content.update(groupId=body.groupId,start=body.start,end=body.end)
                 for topic in content['topics']: topic.update(id=uuid4().hex,plannedDate=None)
-                return self.save(db,workspace,user,school,SavePlan(content=content))
+                return self.save(db,workspace,user,school,SavePlan(content=content)) | dict(omittedMaterials=omitted)
 
         @app.get('/api/journal/curriculum/{id}/history')
         def history(id:str,request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):

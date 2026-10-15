@@ -643,11 +643,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       lessonKey={entry.lessonKey}
                       day={entry.document.lesson.date}
                       value={entry.document.content.curriculum}
+                      materials={entry.document.content.materials || []}
                       disabled={!editable}
-                      onChange={(curriculum) =>
+                      onChange={(curriculum, materials) =>
                         content((c) => ({
                           ...c,
                           curriculum,
+                          materials: materials ?? c.materials,
                           topic:
                             curriculum &&
                             (curriculum.planId !== c.curriculum?.planId ||

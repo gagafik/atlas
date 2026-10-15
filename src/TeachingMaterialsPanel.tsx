@@ -28,9 +28,11 @@ interface HistoryItem {
 export default function TeachingMaterialsPanel({
   workspace,
   onChoose,
+  sharedOnly = false,
 }: {
   workspace: string;
   onChoose?: (item: MaterialSnapshot) => void;
+  sharedOnly?: boolean;
 }) {
   const [items, setItems] = useState<LibraryItem[]>([]),
     [more, setMore] = useState(false),
@@ -105,6 +107,7 @@ export default function TeachingMaterialsPanel({
       mine: String(mine),
       archived: String(archived),
       offset: String(offset),
+      sharedOnly: String(sharedOnly),
     });
     api(`journal/library?${params}`, workspace)
       .then((result) => {
@@ -126,7 +129,7 @@ export default function TeachingMaterialsPanel({
     return () => {
       active = false;
     };
-  }, [workspace, search, mine, archived, offset, epoch]);
+  }, [workspace, search, mine, archived, offset, epoch, sharedOnly]);
 
   function install(item: MaterialDetail) {
     setSelected(item);
@@ -656,11 +659,22 @@ export default function TeachingMaterialsPanel({
                   {onChoose && (
                     <button
                       className="primary"
-                      disabled={busy || selected.archived}
+                      disabled={
+                        busy ||
+                        selected.archived ||
+                        (sharedOnly && !selected.canUseInPlan)
+                      }
                       onClick={() => onChoose(materialSnapshot(selected))}
                     >
-                      Прикрепить версию {selected.version} к уроку
+                      Прикрепить версию {selected.version}{" "}
+                      {sharedOnly ? "к теме плана" : "к уроку"}
                     </button>
+                  )}
+                  {onChoose && sharedOnly && !selected.canUseInPlan && (
+                    <p role="status">
+                      В общий план можно добавить только редакцию, открытую
+                      сотрудникам. Эта редакция недоступна для плана.
+                    </p>
                   )}
                   {!onChoose && (
                     <button disabled={busy} onClick={() => void action("copy")}>

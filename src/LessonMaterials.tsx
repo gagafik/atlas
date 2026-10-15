@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Library from "./TeachingMaterialsLoader";
 import { materialFileUrl, type MaterialSnapshot } from "./teachingMaterials";
 import "./teachingMaterials.css";
@@ -53,7 +53,9 @@ export default function LessonMaterials({
   onChange?: (items: MaterialSnapshot[]) => void;
 }) {
   const [choosing, setChoosing] = useState(false);
-  const [unsaved, setUnsaved] = useState<Set<string>>(new Set());
+  const saved = useRef(
+    new Set(items.map((item) => item.id + ":" + item.version)),
+  );
   if (!items.length && !onChange) return null;
   return (
     <section className="lesson-materials" aria-label="Материалы урока">
@@ -71,7 +73,9 @@ export default function LessonMaterials({
             item={item}
             workspace={workspace}
             lessonKey={
-              unsaved.has(item.id + ":" + item.version) ? undefined : lessonKey
+              !onChange || saved.current.has(item.id + ":" + item.version)
+                ? lessonKey
+                : undefined
             }
           />
           {onChange && (
@@ -102,9 +106,6 @@ export default function LessonMaterials({
               return;
             }
             onChange?.([...items.filter((m) => m.id !== item.id), item]);
-            setUnsaved((previous) =>
-              new Set(previous).add(item.id + ":" + item.version),
-            );
             setChoosing(false);
           }}
         />
