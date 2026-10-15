@@ -256,9 +256,9 @@ def register(service,app,Workspace):
             output=tempfile.SpooledTemporaryFile(max_size=1024*1024,mode='w+',encoding='utf-8',newline='');output.write('\ufeff');writer=csv.writer(output)
             def cell(v):
                 text=str(v or '');return "'"+text if text.lstrip().startswith(('=','+','-','@')) else text
-            writer.writerow(['Начало (время школы)','Окончание','Ведущий','Родитель','Ученик','Статус','Место','Комментарий','Причина отмены'])
+            writer.writerow(['Начало (время школы)','Окончание','Ведущий','Родитель','Ученик','Статус','Место','Комментарий','Причина отмены','Причина последнего переноса'])
             for booking in db.execute('SELECT * FROM meeting_bookings WHERE event_id=? AND host_id IN (SELECT value FROM json_each(?)) ORDER BY starts_at,id',(id,encoded(list(hosts)))):
-                d=json.loads(booking['document']);writer.writerow([cell(v) for v in [datetime.fromisoformat(booking['starts_at']).astimezone(ZONE).isoformat(),datetime.fromisoformat(booking['ends_at']).astimezone(ZONE).isoformat(),d['hostName'],d['parentName'],d['studentName'],booking['status'],d['roomName'] or d['location'],d['note'],d['reason']]])
+                d=json.loads(booking['document']);writer.writerow([cell(v) for v in [datetime.fromisoformat(booking['starts_at']).astimezone(ZONE).isoformat(),datetime.fromisoformat(booking['ends_at']).astimezone(ZONE).isoformat(),d['hostName'],d['parentName'],d['studentName'],booking['status'],d['roomName'] or d['location'],d['note'],d['reason'],d.get('rescheduleReason','')]])
             output.seek(0)
             def chunks():
                 try:

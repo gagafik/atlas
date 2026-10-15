@@ -240,6 +240,7 @@ class Meetings:
 
     def booking_public(self,booking,event,user):
         doc=json.loads(booking['document'])
+        doc['canReschedule']=user['role']=='admin' and booking['status']=='scheduled' and event['status'] in ['open','closed'] and now()<datetime.fromisoformat(booking['starts_at'])
         return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or user['role']=='parent' and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role']!='parent' and booking['status']!='cancelled' and event['status'] not in ['cancelled','archived'] and now()>=datetime.fromisoformat(booking['starts_at']))
 
     def cancel_booking(self,db,booking,event,user,snap,workspace,reason,notify=True):
@@ -256,6 +257,8 @@ class Meetings:
 
     def register(self,app,Workspace):
         from .meeting_routes import register
+        from .meeting_reschedule import register as register_reschedule
         from .meeting_reminders import MeetingReminders
         register(self,app,Workspace)
+        register_reschedule(self,app,Workspace)
         self.reminders=MeetingReminders(self);self.reminders.register(app)

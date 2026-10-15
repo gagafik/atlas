@@ -103,3 +103,18 @@ class Book(Mutation):
 class BookingChange(Mutation):
     action: Literal['cancel','attended','no_show','scheduled']
     reason: str = Field(default='',max_length=500)
+
+
+class Reschedule(Mutation):
+    eventVersion: int = Field(ge=1)
+    sourceSlotVersion: int = Field(ge=1)
+    targetSlotId: str = Field(min_length=1,max_length=100)
+    targetSlotVersion: int = Field(ge=1)
+    reason: str = Field(min_length=1,max_length=500)
+    blockSource: bool = False
+
+    @model_validator(mode='after')
+    def valid(self):
+        self.reason=self.reason.strip()
+        if not self.reason:raise ValueError('Укажите причину переноса.')
+        return self
