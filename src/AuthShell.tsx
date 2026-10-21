@@ -161,6 +161,7 @@ export default function AuthShell() {
     setLostFoundWorkspace(null);
     setClubsWorkspace(null);
     setSiteWorkspace(null);
+    setAdmissionsWorkspace(null);
   }, [session?.user?.id]);
   function acceptInvitation(result: AuthStatus) {
     ++refreshSequence.current;

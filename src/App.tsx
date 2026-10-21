@@ -481,9 +481,15 @@ export default function App({
         ? activeCycle
         : patterns(saved)[0].id;
       setActiveCycle(id);
-      setReport(
-        await api(`check?cycleId=${encodeURIComponent(id)}`, workspace),
-      );
+      // The save is already committed: a failed check must not invite a retry
+      // that would store new records twice.
+      try {
+        setReport(
+          await api(`check?cycleId=${encodeURIComponent(id)}`, workspace),
+        );
+      } catch (e: any) {
+        setError(`Изменения сохранены, но проверка не выполнена: ${e.message}`);
+      }
       setToast(message);
       return true;
     } catch (e: any) {

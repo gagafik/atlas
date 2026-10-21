@@ -125,6 +125,22 @@ def test_substitute_candidates_exclude_absent_busy_and_keep_other_teachers():
     with pytest.raises(ValueError): substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId='missing'))
 
 
+
+def test_substitute_candidates_ignore_issues_the_lesson_already_has():
+    s = fixture(); w = s.workloads[0]; teacher = w.teacherId
+    classes = next(g for g in s.groups if g.id == w.groupId).classIds
+    s.rules = [TimetableRule(id='c', name='Класс занят', kind='availability', scope='class', targetIds=classes, unavailable=[dict(day=0, start='08:00', end='18:00')])]
+    s = State.model_validate(s.model_dump())
+    assert any(i['type'] == 'dated_rule' for i in day_report(s, MON)['issues'])
+    result = substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId=f'{MON}:eng', teacherId=teacher))
+    options = {r['id']: r for r in result['candidates']}
+    assert all(c['available'] for c in result['candidates'])
+    s.rules.append(TimetableRule(id='t', name='Учитель занят', kind='availability', scope='teacher', targetIds=[s.workloads[4].teacherId], unavailable=[dict(day=0, start='08:00', end='18:00')]))
+    s = State.model_validate(s.model_dump())
+    options = {r['id']: r for r in substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId=f'{MON}:eng', teacherId=teacher))['candidates']}
+    blocked = options[s.workloads[4].teacherId]
+    assert not blocked['available'] and blocked['reasons'] and all('Класс занят' not in r for r in blocked['reasons'])
+
 def test_dated_room_change_respects_directed_travel_and_added_lesson_legacy_availability():
     s = fixture()
     s.campus = s.campus.model_validate(dict(buildings=[dict(id='a', name='A'), dict(id='b', name='B')], defaultTravelMinutes=60))

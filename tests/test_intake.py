@@ -120,3 +120,13 @@ def test_locked_accepted_request_and_stale_personal_form(client):
     state=api.read('demo');state.courseRequests[0].lockedGroupId='g-math';api.save('demo',state)
     assert review(client,record).status_code==422
     assert submit(pupil,version=0).status_code==409
+
+
+def test_closing_day_follows_school_time_zone(client,monkeypatch):
+    from datetime import datetime,timezone
+    from backend import intake
+    pupil,_=setup(client);configure(client,closesOn='2026-10-20')
+    monkeypatch.setattr(intake,'now',lambda:datetime(2026,10,20,18,30,tzinfo=timezone.utc))
+    assert personal(pupil)['accepting']
+    monkeypatch.setattr(intake,'now',lambda:datetime(2026,10,20,19,30,tzinfo=timezone.utc))
+    assert not personal(pupil)['accepting'] and submit(pupil).status_code==422
