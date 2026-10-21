@@ -22,6 +22,7 @@ const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
 const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const LostFound = lazy(() => import("./LostFound"));
+const BehaviourNotes = lazy(() => import("./BehaviourNotes"));
 const Clubs = lazy(() => import("./Clubs"));
 const SchoolSite = lazy(() => import("./SchoolSite"));
 const Admissions = lazy(() => import("./AdmissionOffice"));
@@ -87,6 +88,17 @@ export default function AuthShell() {
   const [lostFoundWorkspace, setLostFoundWorkspace] = useState<string | null>(
     null,
   );
+  const [behaviourWorkspace, setBehaviourWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setBehaviourWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-behaviour", open);
+    return () => window.removeEventListener("atlas-open-behaviour", open);
+  }, []);
   useEffect(() => {
     const open = (event: Event) =>
       setLostFoundWorkspace(
@@ -159,6 +171,7 @@ export default function AuthShell() {
     setLiveWorkspace(null);
     setPaymentsWorkspace(null);
     setLostFoundWorkspace(null);
+    setBehaviourWorkspace(null);
     setClubsWorkspace(null);
     setSiteWorkspace(null);
   }, [session?.user?.id]);
@@ -396,6 +409,11 @@ export default function AuthShell() {
           <button onClick={() => setLostFoundWorkspace("school")}>
             Потерянные вещи
           </button>
+          {session.user.role !== "editor" && (
+            <button onClick={() => setBehaviourWorkspace("school")}>
+              Похвалы и замечания
+            </button>
+          )}
           <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
           <button onClick={() => setCanteenWorkspace("school")}>
             Столовая
@@ -625,6 +643,16 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={lostFoundWorkspace}
             onClose={() => setLostFoundWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {behaviourWorkspace && session.user && (
+        <Suspense fallback={<p role="status">Открываю похвалы и замечания…</p>}>
+          <BehaviourNotes
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={behaviourWorkspace}
+            onClose={() => setBehaviourWorkspace(null)}
           />
         </Suspense>
       )}

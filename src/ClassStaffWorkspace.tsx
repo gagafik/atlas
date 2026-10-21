@@ -109,6 +109,19 @@ export default function ClassStaffWorkspace({
             {has("journal_coverage") && (
               <JournalCoveragePanel workspace={workspace} />
             )}
+            {has("behaviour_notes") && (
+              <button
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("atlas-open-behaviour", {
+                      detail: { workspace },
+                    }),
+                  )
+                }
+              >
+                Похвалы и замечания классу
+              </button>
+            )}
           </section>
         </>
       )}

@@ -9,8 +9,10 @@ from .models import Model
 from .journal import user_ids
 from .notifications import encoded
 
-Capability = Literal['absence_review','attendance_read','journal_coverage']
-CAPABILITIES = ['absence_review','attendance_read','journal_coverage']
+Capability = Literal['absence_review','attendance_read','journal_coverage','behaviour_notes']
+CAPABILITIES = ['absence_review','attendance_read','journal_coverage','behaviour_notes']
+# Duties that the single legacy reviewer assignment granted before permissions were split.
+LEGACY = ['absence_review','attendance_read','journal_coverage']
 
 
 def tables(db):
@@ -29,7 +31,7 @@ def config(db,workspace):
     # administrator explicitly reviews and saves the independent permissions.
     legacy=json.loads(row[1]) if row else {}
     return dict(version=row[0] if row else 0,legacy=bool(row),assignments={
-        id:[dict(accountId=account,capabilities=CAPABILITIES.copy()) for account in accounts]
+        id:[dict(accountId=account,capabilities=LEGACY.copy()) for account in accounts]
         for id,accounts in legacy.items() if accounts})
 
 
@@ -47,7 +49,7 @@ def classes(db,user,snap,workspace,capability):
 
 class Assignment(Model):
     accountId:str=Field(min_length=1,max_length=100)
-    capabilities:list[Capability]=Field(min_length=1,max_length=3)
+    capabilities:list[Capability]=Field(min_length=1,max_length=4)
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.capabilities))!=len(self.capabilities):raise ValueError('Полномочия не должны повторяться.')

@@ -436,6 +436,9 @@ library.register(app, Workspace)
 from .lost_found import LostFound
 lost_found = LostFound(access, notifications, portal_stamp)
 lost_found.register(app, Workspace)
+from .behaviour import Behaviour
+behaviour = Behaviour(access, notifications, portal_stamp)
+behaviour.register(app, Workspace)
 from .clubs import Clubs
 clubs = Clubs(access, notifications, portal_stamp)
 clubs.register(app, Workspace)

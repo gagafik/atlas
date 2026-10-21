@@ -2,6 +2,7 @@ export const classCapabilities = {
   absence_review: "Рассмотрение объяснительных",
   attendance_read: "Сводная посещаемость",
   journal_coverage: "Контроль заполнения журналов",
+  behaviour_notes: "Похвалы и замечания",
 };
 export type ClassCapability = keyof typeof classCapabilities;
 export type ClassAssignment = {

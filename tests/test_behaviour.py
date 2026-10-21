@@ -1,0 +1,119 @@
+"""Praise and remarks: teaching scope, private family view, acknowledgement and history."""
+from datetime import date, timedelta
+from uuid import uuid4
+from backend import api
+from backend.behaviour import today
+from test_access import client, enable, create, signed
+
+BASE = '/api/behaviour/'
+DAY = today().isoformat()
+
+
+def url(part, **query):
+    params = '&'.join(f'{k}={v}' for k, v in query.items())
+    return BASE + part + '?workspace=demo' + ('&' + params if params else '')
+def ok(response):
+    assert response.status_code == 200, response.text
+    return response.json()
+def note(c, students, category='activity', text='Отличная работа', **values):
+    return c.post(url('notes'), json=dict(requestId=str(uuid4()), studentIds=students, categoryId=category, day=DAY, text=text) | values)
+def staff_list(c, **query): return ok(c.get(url('notes', **query)))['items']
+def family(c, student): return c.get(url('family', studentId=student))
+def guardian(client, login, student):
+    return create(client, 'parent', login=login, grants=[dict(workspace='demo', view='student', entityIds=[student])])
+def teacher(client, login, entity):
+    return create(client, 'teacher', login=login, grants=[dict(workspace='demo', view='teacher', entityIds=[entity])])
+
+
+def test_teacher_records_praise_and_each_family_sees_only_own_child(client):
+    enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2'); guardian(client, 'other', 's3'); create(client, 'student')
+    t, mother, other, pupil = signed('math'), signed('mother'), signed('other'), signed('student')
+    options = ok(t.get(url('options')))
+    assert options['canWrite'] and {s['id'] for s in options['students']} == {'s2', 's4'}
+    assert note(t, ['s1']).status_code == 403
+    body = dict(requestId=str(uuid4()), studentIds=['s2', 's4'], categoryId='activity', day=DAY, text='Отличная работа')
+    first = ok(t.post(url('notes'), json=body))
+    assert len(first['ids']) == 2 and ok(t.post(url('notes'), json=body)) == first
+    assert t.post(url('notes'), json=body | dict(text='Другое')).status_code == 409
+    own = ok(family(mother, 's2'))
+    assert own['praise'] == 1 and len(own['items']) == 1 and own['items'][0]['author'] == 'Сотрудник'
+    assert 's4' not in str(own) and 'Ученик 4' not in str(own)
+    assert family(other, 's2').status_code == 404 and family(pupil, 's2').status_code == 404
+    assert ok(family(pupil, 's1'))['items'] == []
+    assert mother.get('/api/notifications/inbox').json()['unread'] == 1
+    assert other.get(url('notes')).status_code == 403
+    assert {n['studentId'] for n in staff_list(t)} == {'s2', 's4'}
+
+
+def test_remark_acknowledgement_edit_withdraw_and_history(client):
+    enable(client); teacher(client, 'math', 't1'); teacher(client, 'colleague', 't3'); guardian(client, 'mother', 's2'); create(client, 'student', grants=[dict(workspace='demo', view='student', entityIds=['s2'])])
+    t, colleague, mother, pupil = signed('math'), signed('colleague'), signed('mother'), signed('student')
+    ok(note(t, ['s2'], 'discipline', 'Разговаривал на контрольной'))
+    item = ok(family(mother, 's2'))['items'][0]
+    assert item['kind'] == 'remark' and item['requireAck'] and not item['acknowledged']
+    assert pupil.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=item['version'])).status_code == 404
+    assert mother.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=item['version'] + 1)).status_code == 409
+    acked = ok(mother.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=item['version'])))
+    assert acked['acknowledged'] and acked['acknowledgedBy'] == 'Сотрудник'
+    assert mother.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=acked['version'])).status_code == 409
+    assert t.get('/api/notifications/inbox').json()['unread'] == 1
+    current = staff_list(t)[0]
+    assert t.post(url(f'notes/{item["id"]}/edit'), json=dict(version=current['version'], categoryId='discipline', text='Иначе', reason='Уточнение')).status_code == 409
+    assert not staff_list(colleague)[0]['canChange']
+    assert colleague.post(url(f'notes/{item["id"]}/withdraw'), json=dict(version=current['version'], reason='Ошибка')).status_code == 403
+    withdrawn = ok(client.post(url(f'notes/{item["id"]}/withdraw'), json=dict(version=current['version'], reason='Ошибка ученика')))
+    assert withdrawn['status'] == 'withdrawn' and withdrawn['withdrawReason'] == 'Ошибка ученика'
+    assert ok(family(mother, 's2'))['items'] == [] and ok(family(mother, 's2'))['remark'] == 0
+    actions = [h['action'] for h in ok(t.get(url(f'notes/{item["id"]}/history')))['items']]
+    assert actions == ['created', 'acknowledged', 'withdrawn']
+
+
+def test_author_edit_keeps_history_and_praise_needs_no_acknowledgement(client):
+    enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2')
+    t, mother = signed('math'), signed('mother')
+    ok(note(t, ['s2']))
+    item = staff_list(t)[0]
+    edited = ok(t.post(url(f'notes/{item["id"]}/edit'), json=dict(version=item['version'], categoryId='help', text='Помог другу', reason='Точнее')))
+    assert edited['category'] == 'Помощь одноклассникам' and edited['version'] == 2
+    seen = ok(family(mother, 's2'))['items'][0]
+    assert seen['text'] == 'Помог другу' and not seen['requireAck']
+    assert mother.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=seen['version'])).status_code == 409
+    assert t.post(url(f'notes/{item["id"]}/edit'), json=dict(version=1, categoryId='help', text='x', reason='y')).status_code == 409
+
+
+def test_class_staff_capability_admin_categories_and_date_bounds(client):
+    enable(client); staff = create(client, 'staff'); worker = signed('staff')
+    assert worker.get(url('notes')).status_code == 403
+    current = ok(client.get('/api/access/class-staff?workspace=demo'))
+    ok(client.put('/api/access/class-staff?workspace=demo', json=dict(version=current['version'], revision=current['revision'], reason='Классный руководитель',
+                                                                       assignments={'c-demo-a': [dict(accountId=staff['id'], capabilities=['behaviour_notes'])]})))
+    assert ok(note(worker, ['s1', 's2'])) and note(worker, ['s3']).status_code == 403
+    assert note(worker, ['s1'], day=(today() + timedelta(days=1)).isoformat()).status_code == 422
+    assert note(worker, ['s1'], day=(today() - timedelta(days=400)).isoformat()).status_code == 422
+    options = ok(client.get(url('options')))
+    categories = [c | dict(active=c['id'] != 'uniform') for c in options['categories']] + [dict(id='late', kind='remark', title='Опоздание', active=True)]
+    assert worker.put(url('config'), json=dict(version=options['configVersion'], reason='x', categories=categories)).status_code == 403
+    saved = ok(client.put(url('config'), json=dict(version=options['configVersion'], reason='Решение совета', categories=categories, remarkAck=False)))
+    assert saved['version'] == 1 and not saved['remarkAck']
+    assert client.put(url('config'), json=dict(version=0, reason='x', categories=categories)).status_code == 409
+    assert note(worker, ['s1'], 'uniform').status_code == 422
+    ok(note(worker, ['s1'], 'late'))
+    late = next(n for n in staff_list(worker) if n['categoryId'] == 'late')
+    assert late['kind'] == 'remark' and not late['requireAck'] and late['className'] == '10A'
+
+
+def test_lost_teaching_scope_hides_notes_and_csv_is_safe(client):
+    enable(client); teacher(client, 'math', 't1'); t = signed('math')
+    ok(note(t, ['s2'], 'discipline', '=HYPERLINK("http://x")')); ok(note(t, ['s2', 's4']))
+    summary = ok(t.get(url('summary')))['items']
+    assert {(r['studentId'], r['praise'], r['remark']) for r in summary} == {('s2', 1, 1), ('s4', 1, 0)}
+    exported = t.get(url('export'))
+    assert exported.status_code == 200 and "'=HYPERLINK" in exported.text and '\n=HYPERLINK' not in exported.text
+    assert len(staff_list(t, kind='remark')) == 1 and len(staff_list(t, studentId='s4')) == 1
+    assert t.get(url('notes', start='2026-01-10', end='2025-01-01')).status_code == 422
+    state = api.read('demo')
+    for w in state.workloads:
+        if w.teacherId == 't1': w.teacherId = 't0'
+    api.save('demo', state)
+    assert signed('math').get(url('notes')).status_code == 403
+    assert len(staff_list(client)) == 3
