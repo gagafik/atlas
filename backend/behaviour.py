@@ -1,4 +1,4 @@
-"""Praise and remarks for pupils. One row per pupil keeps every family's view private."""
+"""Praise, remarks and educational measures. One row per pupil keeps every family's view private."""
 from contextlib import closing,contextmanager
 from datetime import date,timedelta
 from typing import Literal
@@ -16,14 +16,25 @@ from .portal_cache import PortalSnapshots
 from .school_forms import enabled,grant_ids
 
 Kind=Literal['praise','remark']
+Level=Literal['teacher','class_teacher','director']
 KINDS={'praise':'Похвала','remark':'Замечание'}
+LEVELS={'teacher':'Учитель','class_teacher':'Классный руководитель','director':'Директор'}
+STATES={'pending':'На согласовании','published':'Действует','rejected':'Отклонена','withdrawn':'Отозвана'}
+def category(id,kind,title,level='teacher',approval=False,quick=False,letter=False):
+    return dict(id=id,kind=kind,title=title,active=True,level=level,approval=approval,quick=quick,letter=letter)
 DEFAULT_CATEGORIES=[
-    dict(id='activity',kind='praise',title='Активная работа на уроке',active=True),
-    dict(id='help',kind='praise',title='Помощь одноклассникам',active=True),
-    dict(id='achievement',kind='praise',title='Успех в конкурсе или олимпиаде',active=True),
-    dict(id='discipline',kind='remark',title='Нарушение дисциплины',active=True),
-    dict(id='unprepared',kind='remark',title='Не готов к уроку',active=True),
-    dict(id='uniform',kind='remark',title='Нет школьной формы',active=True),
+    category('activity','praise','Активная работа на уроке',quick=True),
+    category('help','praise','Помощь одноклассникам',quick=True),
+    category('achievement','praise','Успех в конкурсе или олимпиаде'),
+    category('class-praise','praise','Похвала классного руководителя','class_teacher'),
+    category('director-praise','praise','Благодарность директора','director',letter=True),
+    category('discipline','remark','Нарушение дисциплины',quick=True),
+    category('unprepared','remark','Не готов к уроку',quick=True),
+    category('no-homework','remark','Нет домашнего задания',quick=True),
+    category('uniform','remark','Нет школьной формы'),
+    category('class-remark','remark','Замечание классного руководителя','class_teacher'),
+    category('performance-warning','remark','Предупреждение о неуспеваемости','class_teacher',approval=True,letter=True),
+    category('director-remark','remark','Замечание директора','director',letter=True),
 ]
 PAGE=50
 def stamp():return now().isoformat()
@@ -42,7 +53,12 @@ def tables(db):
     CREATE TABLE IF NOT EXISTS behaviour_history(seq INTEGER PRIMARY KEY AUTOINCREMENT,workspace TEXT,note_id TEXT,actor_id TEXT,actor_name TEXT,created TEXT,action TEXT,reason TEXT,document TEXT);
     CREATE INDEX IF NOT EXISTS behaviour_history_note ON behaviour_history(workspace,note_id,seq);
     CREATE TABLE IF NOT EXISTS behaviour_requests(seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,request_id TEXT,fingerprint TEXT,result TEXT,UNIQUE(user_id,request_id));
+    CREATE TABLE IF NOT EXISTS behaviour_letters(workspace TEXT,year INTEGER,last INTEGER NOT NULL,PRIMARY KEY(workspace,year));
     ''')
+    # Rows written before measures existed are visible published notes.
+    if 'visible' not in {r[1] for r in db.execute('PRAGMA table_info(behaviour_notes)')}:
+        db.execute('ALTER TABLE behaviour_notes ADD COLUMN visible INTEGER NOT NULL DEFAULT 1')
+    db.execute('CREATE INDEX IF NOT EXISTS behaviour_queue ON behaviour_notes(workspace,status,seq)')
 
 
 class Category(Model):
@@ -50,6 +66,10 @@ class Category(Model):
     kind:Kind
     title:str=Field(min_length=1,max_length=120)
     active:bool=True
+    level:Level='teacher'
+    approval:bool=False
+    quick:bool=False
+    letter:bool=False
 
 
 class Config(Model):
@@ -69,6 +89,7 @@ class NewNotes(Model):
     categoryId:str=Field(min_length=1,max_length=40)
     day:date
     text:str=Field(default='',max_length=2000)
+    visible:bool=True
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.studentIds))!=len(self.studentIds):raise ValueError('Ученики не должны повторяться.')
@@ -87,6 +108,11 @@ class Withdraw(Model):
     reason:str=Field(min_length=1,max_length=500)
 
 
+class Decision(Model):
+    version:int=Field(ge=1)
+    reason:str=Field(default='',max_length=500)
+
+
 class Acknowledge(Model):
     version:int=Field(ge=1)
 
@@ -98,7 +124,7 @@ class Behaviour:
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='behaviour_history_note'").fetchone():return
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='behaviour_queue'").fetchone():return
         with self.access.lock,self.access.connect() as db:tables(db);self.notifications.tables(db)
 
     @contextmanager
@@ -119,18 +145,38 @@ class Behaviour:
 
     def config(self,db,workspace):
         row=db.execute('SELECT version,document FROM behaviour_config WHERE workspace=?',(workspace,)).fetchone()
-        return dict(version=row[0],**json.loads(row[1])) if row else dict(version=0,categories=DEFAULT_CATEGORIES,remarkAck=True)
+        if not row:return dict(version=0,categories=DEFAULT_CATEGORIES,remarkAck=True)
+        value=json.loads(row[1])
+        # Categories saved before measures existed get the defaults of the new fields.
+        return dict(version=row[0],remarkAck=value['remarkAck'],categories=[Category.model_validate(c).model_dump() for c in value['categories']])
+
+    def rights(self,db,user,snap,workspace):
+        """Current teaching pupils and classes assigned to the user as class teacher."""
+        if user['role'] not in ['teacher','staff']:return set(),set()
+        from .class_staff import classes
+        from .messages import Directory
+        teaching=Directory(snap.state,workspace).pupils(user) if user['role']=='teacher' else set()
+        return teaching,classes(db,user,snap,workspace,'behaviour_notes')
 
     def scope(self,db,user,snap,workspace):
         """Pupils a staff member may record and read now: own teaching groups or assigned classes."""
         active={id:s for id,s in snap.entities['student'].items() if s.active}
         if user['role']=='admin':return set(active)
-        if user['role'] not in ['teacher','staff']:return set()
-        from .class_staff import classes
-        from .messages import Directory
-        allowed=Directory(snap.state,workspace).pupils(user) if user['role']=='teacher' else set()
-        assigned=classes(db,user,snap,workspace,'behaviour_notes')
-        return {id for id,s in active.items() if id in allowed or s.classId in assigned}
+        teaching,assigned=self.rights(db,user,snap,workspace)
+        return {id for id,s in active.items() if id in teaching or s.classId in assigned}
+
+    def levels(self,db,user,snap,workspace):
+        if user['role']=='admin':return set(LEVELS)
+        teaching,assigned=self.rights(db,user,snap,workspace)
+        return ({'teacher'} if teaching or assigned else set())|({'class_teacher'} if assigned else set())
+
+    def allowed(self,db,user,snap,workspace,level,students):
+        if user['role']=='admin':return True
+        if level=='director':return False
+        teaching,assigned=self.rights(db,user,snap,workspace)
+        pupils=snap.entities['student']
+        if level=='class_teacher':return all(pupils[id].classId in assigned for id in students)
+        return all(id in teaching or pupils[id].classId in assigned for id in students)
 
     def family(self,user,snap,workspace):
         if user['role'] not in ['parent','student']:return set()
@@ -146,19 +192,31 @@ class Behaviour:
         if row['student_id'] not in self.scope(db,user,snap,workspace):raise HTTPException(404,'Запись не найдена.')
         return row
 
+    def family_note(self,db,user,snap,workspace,id):
+        row=self.note(db,workspace,id)
+        if row['student_id'] not in self.family(user,snap,workspace) or row['status']!='published' or not row['visible']:raise HTTPException(404,'Запись не найдена.')
+        return row
+
     def may_change(self,user,row):
-        return user['role']=='admin' or row['author_id']==user['id']
+        if row['status'] not in ['pending','published']:return False
+        if user['role']=='admin':return True
+        # An approved measure belongs to the administration once it is in force.
+        return row['author_id']==user['id'] and not (row['status']=='published' and row['data'].get('approval'))
 
     def public(self,row,snap,staff=False,user=None):
-        pupil=snap.entities['student'].get(row['student_id'])
+        pupil=snap.entities['student'].get(row['student_id']);data=row['data']
         result={k:row[k] for k in ['id','version','status','kind','day','created','updated']}|dict(
-            categoryId=row['category_id'],category=row['data']['category'],text=row['data']['text'],author=row['author_name'],
-            studentId=row['student_id'],student=pupil.name if pupil else '',requireAck=row['data']['requireAck'],
-            acknowledged=bool(row['ack_at']),acknowledgedAt=row['ack_at'],acknowledgedBy=row['ack_by'])
+            categoryId=row['category_id'],category=data['category'],text=data['text'],author=row['author_name'],
+            level=data.get('level','teacher'),levelTitle=LEVELS[data.get('level','teacher')],
+            studentId=row['student_id'],student=pupil.name if pupil else '',requireAck=data['requireAck'],
+            acknowledged=bool(row['ack_at']),acknowledgedAt=row['ack_at'],acknowledgedBy=row['ack_by'],
+            letter=bool(data.get('letterNumber')),letterNumber=data.get('letterNumber',''))
         if staff:
             classes={c.id:c.name for c in snap.state.classes}
-            result.update(className=classes.get(row['class_id'],''),withdrawReason=row['data'].get('withdrawReason',''),
-                          canChange=bool(user and row['status']=='published' and self.may_change(user,row)))
+            result.update(className=classes.get(row['class_id'],''),withdrawReason=data.get('withdrawReason',''),visible=bool(row['visible']),
+                          approval=bool(data.get('approval')),decision=data.get('decision',''),approvedBy=data.get('approvedBy',''),
+                          canChange=bool(user and self.may_change(user,row)),
+                          canDecide=bool(user and user['role']=='admin' and row['status']=='pending'))
         return result
 
     def history(self,db,workspace,user,note,action,reason,document):
@@ -182,10 +240,23 @@ class Behaviour:
         targets=self.notifications.granted_users(db,workspace,'student',students,['student','parent'])
         self.notifications.deliver(db,targets,workspace,version,action)
 
+    def notify_accounts(self,db,workspace,ids,version,action,skip=None):
+        rows=[r for r in db.execute('SELECT * FROM accounts WHERE active=1 AND id IN (SELECT value FROM json_each(?))',(encoded(sorted(ids)),)) if r['id']!=skip]
+        self.notifications.deliver(db,[self.access.public(r) for r in rows],workspace,version,action)
+
+    def notify_admins(self,db,workspace,version,skip):
+        ids={r[0] for r in db.execute("SELECT id FROM accounts WHERE active=1 AND role='admin'")}
+        self.notify_accounts(db,workspace,ids,version,'behaviour.pending',skip)
+
     def category(self,db,workspace,id):
         found=next((c for c in self.config(db,workspace)['categories'] if c['id']==id and c['active']),None)
         if not found:raise HTTPException(422,'Выберите действующую категорию.')
         return found
+
+    def letter_number(self,db,workspace):
+        year=today().year
+        db.execute('INSERT INTO behaviour_letters(workspace,year,last) VALUES (?,?,1) ON CONFLICT(workspace,year) DO UPDATE SET last=last+1',(workspace,year))
+        return f"{year}-{db.execute('SELECT last FROM behaviour_letters WHERE workspace=? AND year=?',(workspace,year)).fetchone()[0]:04d}"
 
     def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status):
         allowed=self.scope(db,user,snap,workspace)
@@ -213,12 +284,13 @@ def export_rows(rows,snap):
     output=tempfile.SpooledTemporaryFile(max_size=512*1024,mode='w+',encoding='utf-8',newline='')
     try:
         writer=csv.writer(output);output.write('﻿')
-        writer.writerow(['Дата','Ученик','Класс','Вид','Категория','Комментарий','Автор','Статус','Ознакомлен'])
+        writer.writerow(['Дата','Ученик','Класс','Вид','Уровень','Категория','Комментарий','Автор','Статус','Скрыта от семьи','Письмо','Ознакомлен'])
         classes={c.id:c.name for c in snap.state.classes}
         for row in rows:
             data=json.loads(row['document']);pupil=snap.entities['student'].get(row['student_id'])
             writer.writerow([csv_cell(v) for v in [row['day'],pupil.name if pupil else row['student_id'],classes.get(row['class_id'],''),KINDS[row['kind']],
-                             data['category'],data['text'],row['author_name'],'Действует' if row['status']=='published' else 'Отозвана',row['ack_at'] or '']])
+                             LEVELS[data.get('level','teacher')],data['category'],data['text'],row['author_name'],STATES[row['status']],
+                             '' if row['visible'] else 'Да',data.get('letterNumber',''),row['ack_at'] or '']])
         output.seek(0)
     except BaseException:
         output.close();raise

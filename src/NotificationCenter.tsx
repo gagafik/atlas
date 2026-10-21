@@ -60,6 +60,8 @@ const titles: Record<string, string> = {
   "behaviour.changed": "Изменена запись о поведении",
   "behaviour.withdrawn": "Запись о поведении отозвана",
   "behaviour.acknowledged": "Родитель ознакомился с замечанием",
+  "behaviour.pending": "Мера ждёт согласования администрации",
+  "behaviour.decided": "Принято решение по вашей мере",
   "clubs.changed": "Изменилась запись или информация кружка",
   "clubs.session": "Изменилось занятие или посещение кружка",
   "documents.assigned": "Вам поручена подготовка документа",
