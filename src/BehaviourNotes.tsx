@@ -53,6 +53,7 @@ type Note = {
   acknowledgedBy: string | null;
   letter: boolean;
   letterNumber: string;
+  lesson: string;
   visible?: boolean;
   approval?: boolean;
   decision?: string;
@@ -871,6 +872,7 @@ export default function BehaviourNotes({
                   {n.text && <p className="bn-text">{n.text}</p>}
                   <p className="bn-meta">
                     Автор: {n.author}
+                    {n.lesson && ` · Урок: ${n.lesson}`}
                     {n.approvedBy && ` · Утвердил(а): ${n.approvedBy}`}
                     {n.decision && ` · Решение: ${n.decision}`}
                     {n.requireAck &&

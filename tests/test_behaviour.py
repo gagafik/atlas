@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 from uuid import uuid4
 from backend import api
+from backend.models import DatedLesson
 from backend.behaviour import today
 from test_access import client, enable, create, signed
 
@@ -212,3 +213,47 @@ def test_old_rows_and_saved_categories_gain_measure_defaults(client):
     ok(client.put(url('config'), json=dict(version=options['configVersion'], reason='Прежний формат', categories=legacy)))
     saved = ok(client.get(url('options')))['categories']
     assert all(c['level'] == 'teacher' and not c['approval'] and not c['letter'] for c in saved)
+
+
+LESSON_DAY = '2026-08-17'
+
+
+def lesson_key(c, subject='Английский язык'):
+    rows = ok(c.get('/api/journal/day?workspace=demo&day=' + LESSON_DAY))['lessons']
+    return next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and not r['archived'])
+
+
+def lesson_note(c, key, students, category='discipline', **values):
+    return note(c, students, category, day=LESSON_DAY, lessonKey=key, **values)
+
+
+def test_lesson_teacher_marks_pupils_of_that_lesson_and_family_sees_lesson(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'other', 't1'); guardian(client, 'mother', 's1')
+    t, other, mother = signed('teacher'), signed('other'), signed('mother')
+    key = lesson_key(t)
+    marks = ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))
+    assert marks['canMark'] and marks['notes'] == [] and marks['label'] == 'Английский язык, 17.08.2026, 08:20'
+    assert {c['level'] for c in marks['categories']} == {'teacher'}
+    assert ok(lesson_note(t, key, ['s1'], 'discipline', text='Разговаривал'))['status'] == 'published'
+    assert lesson_note(t, key, ['s3']).status_code == 403
+    assert lesson_note(t, key, ['s1'], 'class-remark').status_code == 403
+    assert other.get(url('lesson', lessonKey=key, day=LESSON_DAY)).status_code == 404
+    assert lesson_note(other, key, ['s1']).status_code == 404
+    assert [(n['studentId'], n['category']) for n in ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['notes']] == [('s1', 'Нарушение дисциплины')]
+    seen = ok(family(mother, 's1'))['items'][0]
+    assert seen['lesson'] == 'Английский язык, 17.08.2026, 08:20' and seen['text'] == 'Разговаривал'
+
+
+def test_substitute_marks_lesson_and_closed_period_blocks_marks(client):
+    from test_journal_periods import period, close
+    enable(client); create(client, 'teacher'); teacher(client, 'substitute', 't3')
+    original, substitute = signed('teacher'), signed('substitute')
+    key = lesson_key(original)
+    state = api.read('demo')
+    state.datedLessons = [DatedLesson(id='replace', name='Замена', kind='change', placementId='eng', sourceDate=date(2026, 8, 17), onDate=date(2026, 8, 17), teacherIds=['t3'])]
+    api.save('demo', state)
+    assert original.get(url('lesson', lessonKey=key, day=LESSON_DAY)).status_code == 404
+    assert ok(lesson_note(substitute, key, ['s2'], 'activity'))['status'] == 'published'
+    close(client, period(client))
+    assert not ok(substitute.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['canMark']
+    assert lesson_note(substitute, key, ['s1']).status_code == 403
