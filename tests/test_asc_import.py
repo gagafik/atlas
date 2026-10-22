@@ -103,13 +103,30 @@ def test_periods_numbered_from_one_map_to_profile_indexes():
 def test_unplaced_cards_keep_the_whole_day_and_blocks_fit_the_week():
     # Lesson 03 of class 1Z asks for 9 hours but has only its 2 cards.
     state, report = variant('subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="2.0"', 'subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="9.0"')
-    assert load(state, 3).allowedPeriods == load(state, 4).allowedPeriods == [1, 2, 3, 4] and load(state, 1).allowedPeriods == [1, 2, 3]
+    assert load(state, 3).allowedPeriods == load(state, 4).allowedPeriods == [] and load(state, 1).allowedPeriods == [1, 2, 3]
+    assert load(state, 10).allowedPeriods == [0] and report['workloads']['dedicatedPeriods'] == 1
     assert report['workloads']['openClasses'] == 1 and report['workloads']['cardCountMismatch'] == 1
     assert solve(state.model_copy(update={'placements': []}), seconds=10)['status'] == 'success'
     # Six doubles in five days: one day must hold two of them.
     state, _ = variant('periodspercard="2" periodsperweek="2.0"', 'periodspercard="2" periodsperweek="12.0"', period_policy='free')
     assert load(state, 2).lessonLengths == [2] * 6 and load(state, 2).maxPerDay == 4
     assert solve(state.model_copy(update={'placements': []}), seconds=10)['status'] == 'success'
+
+
+def test_day_restricted_lessons_with_unplaced_cards_fit_their_days():
+    four = ''.join(f'<period period="{i}" starttime="{8 + i}:00" endtime="{8 + i}:45"/>' for i in range(4))
+    for options, max_per_day in [(dict(ppw='2.0'), 2), (dict(ppw='4.0', ppc='2'), 4)]:
+        state, report = import_asc(mini(periods=four, daysdef='D2', **options), 'mini.xml')
+        assert state.workloads[0].maxPerDay == max_per_day and report['workloads']['dayRules'] == 1
+        assert solve(state.model_copy(update={'placements': []}), seconds=10)['status'] == 'success'
+
+
+def test_only_repeated_complete_lessons_make_a_period_dedicated():
+    # Lesson 09 (one hour of 7Y) alone in the otherwise unused last period.
+    state, report = variant('period="3" weeks="1" terms="1" days="01000"/>\n    <card lessonid="1EABCDEFABCDEF0A"',
+                            'period="4" weeks="1" terms="1" days="01000"/>\n    <card lessonid="1EABCDEFABCDEF0A"')
+    assert report['workloads']['dedicatedPeriods'] == 1 and load(state, 10).allowedPeriods == [0]
+    assert load(state, 9).allowedPeriods == load(state, 2).allowedPeriods == [1, 2, 3, 4]
 
 
 def test_double_across_long_break_keeps_its_lesson_pattern():
@@ -245,7 +262,7 @@ def test_cli_never_overwrites_databases_it_did_not_create(tmp_path):
     with closing(sqlite3.connect(atlas)) as connection, connection:
         connection.execute('CREATE TABLE workspaces (id TEXT PRIMARY KEY, revision INTEGER, document TEXT)')
         connection.execute("INSERT INTO workspaces VALUES ('school', 7, '{\"settings\": {\"name\": \"School\"}}')")
-    for flags in [[], ['--force'], ['--workspace', 'demo', '--force']]:
+    for flags in [[], ['--force'], ['--force', '--rosters', 'none']]:
         refused = cli(FIXTURE, '--db', atlas, *flags, cwd=tmp_path)
         assert refused.returncode != 0 and 'не этим импортом' in refused.stderr
     with closing(sqlite3.connect(atlas)) as connection:
@@ -258,9 +275,25 @@ def test_cli_never_overwrites_databases_it_did_not_create(tmp_path):
         connection.execute("UPDATE workspaces SET document = json_set(document, '$.settings.name', 'Renamed') WHERE id = 'school'")
     refused = cli(FIXTURE, '--db', own, '--force', cwd=tmp_path)
     assert refused.returncode != 0 and 'не похожа' in refused.stderr
+    # Outputs never replace a database, the source or each other; other files only with --force.
+    for args, message in [(['--db', tmp_path / 'n1.db', '--report', atlas, '--force'], 'SQLite'),
+                          (['--db', tmp_path / 'n2.db', '--json', tmp_path / 'n2.db'], 'совпадает'),
+                          (['--db', tmp_path / 'n3.db', '--json', tmp_path / 'o.json', '--report', tmp_path / 'o.json'], 'совпадает'),
+                          (['--db', tmp_path / 'n4.db', '--json', tmp_path / 'source.xml', '--force'], 'совпадает')]:
+        (tmp_path / 'source.xml').write_bytes(FIXTURE.read_bytes())
+        refused = cli(tmp_path / 'source.xml', *args, cwd=tmp_path)
+        assert refused.returncode != 0 and message in refused.stderr
+    assert (tmp_path / 'source.xml').read_bytes() == FIXTURE.read_bytes()
+    with closing(sqlite3.connect(atlas)) as connection:
+        assert connection.execute('SELECT id, revision FROM workspaces').fetchall() == [('school', 7)]
+    assert not any((tmp_path / f'n{i}.db').exists() for i in range(1, 5)) and not (tmp_path / 'o.json').exists()
+    (tmp_path / 'old.json').write_text('{}', encoding='utf-8')
+    assert 'существует' in cli(FIXTURE, '--db', tmp_path / 'n5.db', '--report', tmp_path / 'old.json', cwd=tmp_path).stderr
+    assert cli(FIXTURE, '--db', tmp_path / 'n6.db', '--report', tmp_path / 'old.json', '--force', cwd=tmp_path).returncode == 0
+    assert json.loads((tmp_path / 'old.json').read_text(encoding='utf-8'))['counts']['placements'] == 16
     code = ('import runpy, sys; script, *args = sys.argv[1:]; sys.argv = [script, *args]; runpy.run_path(script, run_name="__main__"); '
             'print("LOADED", sorted(m for m in ["backend.api", "backend.seed"] if m in sys.modules))')
-    done = subprocess.run([sys.executable, '-I', '-c', code, str(CLI), str(FIXTURE), '--db', str(tmp_path / 'z.db'), '--workspace', 'demo'],
+    done = subprocess.run([sys.executable, '-I', '-c', code, str(CLI), str(FIXTURE), '--db', str(tmp_path / 'z.db')],
                           cwd=tmp_path, capture_output=True, text=True, encoding='utf-8', timeout=120)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip().splitlines()[-1] == 'LOADED []'

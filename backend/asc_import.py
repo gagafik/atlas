@@ -1,8 +1,9 @@
 """aSc Timetables 2012 XML -> Atlas State for a separate temporary database.
 
 Pure: no server, seed or school data is touched. aSc identifiers are kept as
-`asc-<kind>-<id>`, so repeated imports give identical records. Division groups
-receive anonymous synthetic pupils only on request; they never belong in `school`.
+`asc-<kind>-<id>`, so repeated imports give identical records. By default
+(rosters='synthetic') division groups receive anonymous synthetic pupils that only
+belong in a temporary database; exports with pupils or group rosters are refused.
 The report holds counts only: names, contacts and group titles stay in the State.
 """
 from collections import Counter, defaultdict
@@ -204,9 +205,10 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
     days = len(next(iter(options.values()))[0])
     class_names = {key(c['id']): named('classes', f'Класс aSc {key(c["id"])[:6]}', c.get('name'), c.get('short')) for c in get('classes')}
 
-    # Observed periods: a period used only by lessons that never leave it is dedicated
-    # (here the zero lesson); other lessons may use any period up to their classes' last one.
-    # A class with unplaced cards has no observed last period, so it keeps the whole day.
+    # Observed periods: a period is dedicated (here the zero lesson) when a complete lesson
+    # keeps at least two cards there and no lesson using it leaves it. Its complete lessons
+    # stay in it, other lessons may use any period up to their classes' last one but not it.
+    # A class with unplaced cards has no observed day, so its lessons keep every period.
     by_lesson = defaultdict(list)
     for c in cards: by_lesson[key(c['lessonid'])].append(c)
     hours_of = lambda l: int(float(l['periodsperweek'].replace(',', '.')))
@@ -216,18 +218,20 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
     period_lessons = defaultdict(list)
     for lk, values in lesson_periods.items():
         for p in values: period_lessons[p].append(lk)
-    dedicated = {p for p, keys in period_lessons.items() if all(lesson_periods[lk] == {p} for lk in keys)}
+    dedicated = {p for p, keys in period_lessons.items() if all(lesson_periods[lk] == {p} for lk in keys)
+                 and any(lk not in incomplete and len(by_lesson[lk]) > 1 for lk in keys)}
     class_top = {}
     for l in lessons:
         for c in ids(l['classids']):
             if lesson_periods[key(l['id'])]: class_top[key(c)] = max(class_top.get(key(c), 0), *lesson_periods[key(l['id'])])
-    for c in open_classes: class_top[c] = n - 1
 
     def allowed_periods(l):
-        own = lesson_periods[key(l['id'])]
+        lk, classes = key(l['id']), [key(c) for c in ids(l['classids'])]
+        own = lesson_periods[lk]
         if period_policy == 'free': return []
-        if len(own) == 1 and own <= dedicated and key(l['id']) not in incomplete: return sorted(own)
-        values = sorted({p for p in range(max(class_top.get(key(c), n - 1) for c in ids(l['classids'])) + 1) if p not in dedicated} | own)
+        if len(own) == 1 and own <= dedicated and lk not in incomplete: return sorted(own)
+        if any(c in open_classes for c in classes): return []
+        values = sorted({p for p in range(max(class_top.get(c, n - 1) for c in classes) + 1) if p not in dedicated} | own)
         return [] if len(values) == n else values
 
     used_divisions = {}
@@ -308,7 +312,9 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
         used_rooms = [r for r in room_list if any(r in rs for rs in card_rooms)]
         if rooms == 'used' and used_rooms: room_list = used_rooms
         per_day = Counter(c['days'].index('1') for c in own)
-        spread = ppc * ceil(len(lengths) / days) if lengths else ceil(hours / days)
+        allowed_days = {i for o in options.get(key(l.get('daysdefid')), ['1' * days]) for i, ch in enumerate(o) if ch == '1'}
+        # Enough per day for every hour or block on the lesson's own days, even with unplaced cards.
+        spread = ppc * ceil(len(lengths) / len(allowed_days)) if lengths else ceil(hours / len(allowed_days))
         w = dict(id=aid('l', lk), groupId=lesson_groups[lk], subjectId=aid('s', l['subjectid']), teacherId=teacher_list[0] if teacher_list else None,
                  additionalTeacherIds=teacher_list[1:], teacherRequired=bool(teacher_list), hours=hours,
                  maxPerDay=min(12, max([*per_day.values(), *lengths, spread])), roomIds=room_list, roomRequired=bool(room_list),
@@ -321,7 +327,6 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
             day, period = c['days'].index('1'), slot(c)
             placements.append(dict(id=f'asc-p-{lk}-{day}-{period}', workloadId=w['id'], day=day, period=period, roomId=rs[0] if rs else None,
                                    classIds=class_ids, sourceCells=[f'asc-card:{c["lessonid"]}:{c["days"]}:{int(c["period"])}'], cycleId='weekly'))
-        allowed_days = {i for o in options.get(key(l.get('daysdefid')), ['1' * days]) for i, ch in enumerate(o) if ch == '1'}
         if len(allowed_days) < days:
             rules.append(dict(id=f'asc-rule-days-{lk}', name=f'Дни урока aSc {lk[:6]}', kind='availability', scope='workload', targetIds=[w['id']],
                               mode='hard', unavailable=[dict(day=d, start='00:00', end='23:59') for d in range(days) if d not in allowed_days]))
@@ -342,7 +347,7 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
                    if rosters == 'synthetic' else f'Составы групп делений в XML не указаны: {len(imported_groups)} групп без состава, генерация для них недоступна.')
     notes = [f'Импорт XML aSc Timetables 2012: {len(lessons)} уроков, {len(cards)} карточек; идентификаторы aSc сохранены с префиксом asc-.', roster_note,
              f'Допустимые уроки: {"выведены из расписания aSc" if period_policy == "observed" else "без ограничений"}; выделенных периодов: {len(dedicated) if period_policy == "observed" else 0}'
-             + (f'; классов с неразмещёнными карточками без ограничения последнего урока: {len(open_classes)}.' if period_policy == 'observed' and open_classes else '.'),
+             + (f'; классов с неразмещёнными карточками, уроки которых не ограничены: {len(open_classes)}.' if period_policy == 'observed' and open_classes else '.'),
              f'Неиспользуемых групп делений: {unused_divisions}. Без учителя: {stats["teacherless"]}; без кабинета: {stats["roomless"]}; вместимость неизвестна у {unknown_capacity} кабинетов.'
              + (f' Вместимость {ignored_capacity} кабинетов не перенесена: синтетические составы не дают настоящего размера групп.' if ignored_capacity else ''),
              'Не перенесены: контакты, пол, цвет и краткие имена учителей, краткие названия, параллели, классные руководители и домашние кабинеты классов.']
