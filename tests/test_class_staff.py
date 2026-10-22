@@ -31,7 +31,7 @@ def test_legacy_assignment_keeps_real_rights_until_explicit_split(client):
     _,teacher,parent,reader=setup(client);mark(client);notice=send(parent)
     current=settings(client)
     assert current['legacy'] and current['version']==1
-    assert current['assignments']=={A:[item(teacher,*CAPS)]}
+    assert current['assignments']=={A:[item(teacher,*class_staff.LEGACY)]}
     assert report(reader).status_code==200 and coverage(reader).status_code==200
     assign(client,{A:[item(teacher,'attendance_read')]})
     assert report(reader).status_code==200

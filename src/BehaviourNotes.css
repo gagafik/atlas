@@ -1,0 +1,131 @@
+.behaviour {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: 92dvh;
+  border: 1px solid #ccd5de;
+  border-radius: 16px;
+  padding: 24px;
+  background: #fff;
+  color: #172c39;
+}
+.behaviour::backdrop {
+  background: #10253588;
+}
+.behaviour header,
+.bn-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.behaviour header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.behaviour h2 {
+  margin: 0;
+}
+.behaviour fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.behaviour label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.behaviour p {
+  line-height: 1.5;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.bn-form {
+  border: 1px solid #dfe6ec;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 12px 0;
+}
+.behaviour .bn-pupils {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 12px 0;
+  border: 1px solid #dfe6ec;
+  border-radius: 8px;
+  padding: 8px;
+}
+.behaviour .bn-pupils label,
+.behaviour .bn-check {
+  flex-direction: row;
+  align-items: center;
+}
+.behaviour .bn-wide {
+  display: flex;
+  margin-bottom: 12px;
+}
+.bn-wide textarea {
+  min-height: 72px;
+}
+.bn-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.bn-note {
+  border: 1px solid #dfe6ec;
+  border-left: 6px solid #6a7d8c;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.bn-praise {
+  border-left-color: #2f8a4a;
+}
+.bn-remark {
+  border-left-color: #c0532b;
+}
+.bn-withdrawn {
+  opacity: 0.6;
+}
+.bn-text {
+  white-space: pre-wrap;
+}
+.bn-meta {
+  color: #4b5f6d;
+  font-size: 0.92em;
+}
+.bn-totals {
+  display: flex;
+  gap: 16px;
+  font-weight: 600;
+}
+.bn-totals .bn-praise {
+  color: #2f8a4a;
+}
+.bn-totals .bn-remark {
+  color: #c0532b;
+}
+.bn-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.bn-table th,
+.bn-table td {
+  border-bottom: 1px solid #dfe6ec;
+  padding: 6px 8px;
+  text-align: left;
+}
+.bn-history {
+  font-size: 0.92em;
+  color: #4b5f6d;
+}
+@media (max-width: 600px) {
+  .behaviour {
+    padding: 16px;
+  }
+  .behaviour label {
+    width: 100%;
+  }
+}
