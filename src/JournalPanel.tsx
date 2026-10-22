@@ -12,6 +12,7 @@ import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
+import GradeFeed from "./GradeFeed";
 import {
   attendanceNames,
   gradeLabel,
@@ -1303,6 +1304,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                   />
                 </label>
               </div>
+              {student && (
+                <GradeFeed
+                  workspace={workspace}
+                  studentId={student}
+                  staff={Boolean(options.staff)}
+                />
+              )}
               <p className="info-line">
                 Только опубликованные записи. Учитель видит записи своих уроков.
                 Средний процент — сумма процентов по работам с их весами,

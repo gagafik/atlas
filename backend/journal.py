@@ -187,6 +187,8 @@ class Journal:
         db.execute('CREATE TABLE IF NOT EXISTS journal_history (id INTEGER PRIMARY KEY,workspace TEXT,lesson_key TEXT,version INTEGER,updated TEXT,actor_name TEXT,action TEXT,document TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS journal_history_entry ON journal_history(workspace,lesson_key,version)')
         db.execute('CREATE INDEX IF NOT EXISTS journal_versions ON journal_entries(workspace,version)')
+        from .grade_feed import tables as grade_tables
+        grade_tables(db)
         db.execute("CREATE INDEX IF NOT EXISTS journal_entry_day ON journal_entries(workspace,json_extract(document,'$.lesson.date'))")
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_members'").fetchone()
         db.execute('CREATE TABLE IF NOT EXISTS journal_members (workspace TEXT,lesson_key TEXT,student_id TEXT,name TEXT,kind TEXT,PRIMARY KEY(workspace,lesson_key,student_id,kind))')
@@ -321,7 +323,10 @@ class Journal:
             row = db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(user['id'],)).fetchone()
             if not row or self.access.public(row)!=user: raise HTTPException(409,'Учётная запись изменилась. Войдите снова.')
 
-    def notify(self, db, workspace, version, before, after):
+    def notify(self, db, workspace, version, before, after, key=None):
+        if key:
+            from .grade_feed import record
+            record(db,workspace,key,before,after)
         ids = {r['studentId'] for d in [before,after] if d for r in d['content']['records']}
         changed = {id for id in ids if (pupil_projection(before,id) if before else None) != (pupil_projection(after,id) if after else None)}
         targets = self.notifications.granted_users(db,workspace,'student',changed,['student','parent'])
@@ -352,10 +357,12 @@ class Journal:
         db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',
                    (workspace,key,version,created,user['name'],action,encoded(document)))
         self.access.record(db,action,workspace,revision,detail=f'{key}: редакция {version}')
-        if publish:self.notify(db,workspace,version,old_public,published)
+        if publish:self.notify(db,workspace,version,old_public,published,key)
         return self.unpack(row)
 
     def register(self, app, Workspace):
+        from .grade_feed import register as grade_feed
+        grade_feed(self,app,Workspace)
         @app.get('/api/journal/options')
         def options(request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace)
@@ -453,7 +460,7 @@ class Journal:
                 self.members(db,workspace,body.lessonKey,None,'published')
                 from .curriculum import project
                 project(db,workspace,body.lessonKey,None)
-                self.notify(db,workspace,version,record['published'],None)
+                self.notify(db,workspace,version,record['published'],None,body.lessonKey)
             return dict(version=version)
 
         @app.get('/api/journal/history')

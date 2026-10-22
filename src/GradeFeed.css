@@ -1,0 +1,131 @@
+.grade-feed {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  min-width: 0;
+}
+.grade-feed-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.grade-feed-head h3 {
+  margin: 0;
+  margin-right: auto;
+}
+.grade-feed-count {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #edf3e7;
+  color: var(--dark);
+}
+.grade-feed-count.grade-feed-count-open {
+  background: #fdf1d6;
+  color: #7a4f00;
+  font-weight: 700;
+}
+.grade-feed p {
+  margin: 6px 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.grade-feed-meta {
+  color: #66706a;
+  font-size: 0.92em;
+}
+.grade-feed-error {
+  color: #9a3d1c;
+}
+.grade-feed-list {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.grade-feed-item {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: var(--warm);
+}
+.grade-feed-item.grade-feed-unsigned {
+  border-left-color: #d99a1e;
+  background: #fffaf0;
+}
+.grade-feed-item p {
+  margin: 2px 0 0;
+}
+.grade-feed-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+.grade-feed-change,
+.grade-feed-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+.grade-feed-change {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.grade-feed-badge {
+  white-space: nowrap;
+}
+.grade-feed-change {
+  background: #eef2f5;
+  color: #3b4a55;
+}
+.grade-feed-new .grade-feed-change {
+  background: #e3f3e8;
+  color: #1f6a35;
+}
+.grade-feed-changed .grade-feed-change {
+  background: #e6effa;
+  color: #234f86;
+}
+.grade-feed-removed .grade-feed-change {
+  background: #fbe9e2;
+  color: #9a3d1c;
+}
+.grade-feed-removed .grade-feed-value {
+  text-decoration: line-through;
+}
+.grade-feed-badge {
+  background: #fdf1d6;
+  color: #7a4f00;
+}
+.grade-feed-comment {
+  white-space: pre-wrap;
+}
+.grade-feed-table {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+.grade-feed-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.grade-feed-table th,
+.grade-feed-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.grade-feed-table td.grade-feed-open {
+  color: #7a4f00;
+  font-weight: 700;
+}
+@media print {
+  .grade-feed {
+    display: none;
+  }
+}
