@@ -7,6 +7,7 @@ import AssignmentFilesPanel, {
   SavedMaterialLinks,
 } from "./AssignmentFilesPanel";
 import AbsencePanel from "./AbsencePanel";
+import { LessonMarkBar, useLessonMarks } from "./LessonMarks";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
@@ -138,6 +139,11 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const [entry, setEntry] = useState<JournalEntry | null>(null),
     [syncRoster, setSyncRoster] = useState(false),
     [dirty, setDirty] = useState(false);
+  const lessonMarks = useLessonMarks(
+    workspace,
+    entry?.lessonKey,
+    entry?.currentDate ?? undefined,
+  );
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   useEffect(() => {
@@ -965,6 +971,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                 {!s.enrolled ? " · прежний состав" : ""}
                               </small>
                             </h4>
+                            {s.enrolled && (
+                              <LessonMarkBar
+                                marks={lessonMarks}
+                                studentId={s.id}
+                              />
+                            )}
                             <div className="journal-pupil-fields">
                               <label className="field">
                                 <span>Посещаемость</span>

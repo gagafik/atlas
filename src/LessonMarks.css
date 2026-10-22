@@ -1,0 +1,41 @@
+.lesson-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+.lesson-mark {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.85em;
+  background: #eef2f5;
+}
+.lesson-mark.lesson-mark-praise {
+  background: #e3f3e8;
+  color: #1f6a35;
+}
+.lesson-mark.lesson-mark-remark {
+  background: #fbe9e2;
+  color: #9a3d1c;
+}
+.lesson-mark-button {
+  font-size: 0.85em;
+  padding: 2px 10px;
+}
+.lesson-mark-button.lesson-mark-praise {
+  border-color: #2f8a4a;
+  color: #1f6a35;
+}
+.lesson-mark-button.lesson-mark-remark {
+  border-color: #c0532b;
+  color: #9a3d1c;
+}
+.lesson-marks select {
+  font-size: 0.85em;
+  max-width: 220px;
+}
+.lesson-mark-error {
+  color: #9a3d1c;
+  font-size: 0.85em;
+}

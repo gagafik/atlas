@@ -64,12 +64,20 @@ def register(service,app,Workspace):
         with service.context(request,workspace,True) as (db,user,snap):
             key,previous=service.replay(db,user,body)
             if previous:return previous
-            allowed=staff(db,user,snap,workspace)
-            if not set(body.studentIds)<=allowed:raise HTTPException(403,'Можно отметить только учеников, которых вы сейчас учите или курируете.')
             if body.day>today() or body.day<today()-timedelta(days=366):raise HTTPException(422,'Дата записи — не позже сегодняшнего дня и не раньше года назад.')
-            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace)
-            if not service.allowed(db,user,snap,workspace,category['level'],body.studentIds):
-                raise HTTPException(403,f'Меру уровня «{LEVELS[category["level"]]}» вы не можете назначить выбранным ученикам.')
+            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace);lesson=None
+            if body.lessonKey:
+                # Whoever teaches the lesson today may mark its pupils at teacher level, substitutes included.
+                lesson=service.lesson(db,user,snap,workspace,body.day,body.lessonKey)
+                if lesson['locked']:raise HTTPException(403,'Период журнала закрыт: отметки к этому уроку больше не добавляются.')
+                if not set(body.studentIds)<=set(lesson['studentIds']):raise HTTPException(403,'Отметить можно только учеников этого урока.')
+                if category['level']!='teacher' and not service.allowed(db,user,snap,workspace,category['level'],body.studentIds):
+                    raise HTTPException(403,f'Меру уровня «{LEVELS[category["level"]]}» вы не можете назначить выбранным ученикам.')
+            else:
+                allowed=staff(db,user,snap,workspace)
+                if not set(body.studentIds)<=allowed:raise HTTPException(403,'Можно отметить только учеников, которых вы сейчас учите или курируете.')
+                if not service.allowed(db,user,snap,workspace,category['level'],body.studentIds):
+                    raise HTTPException(403,f'Меру уровня «{LEVELS[category["level"]]}» вы не можете назначить выбранным ученикам.')
             status='pending' if category['approval'] and user['role']!='admin' else 'published'
             batch=new_id();created=stamp();ids=[]
             for student in body.studentIds:
@@ -77,6 +85,7 @@ def register(service,app,Workspace):
                 data=dict(category=category['title'],text=body.text.strip(),level=category['level'],approval=category['approval'],letter=category['letter'],
                           requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
                           approvedBy=user['name'] if category['approval'] and status=='published' else '')
+                if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'])
                 row=dict(student_id=student,visible=int(body.visible))
                 if status=='published':publish(db,workspace,row,user,1,data)
                 db.execute('''INSERT INTO behaviour_notes(id,batch,workspace,student_id,class_id,version,status,kind,category_id,day,author_id,author_name,created,updated,document,visible)
@@ -84,6 +93,19 @@ def register(service,app,Workspace):
                 service.history(db,workspace,user,id,'created','',data|dict(visible=body.visible,status=status))
             if status=='pending':service.notify_admins(db,workspace,1,user['id'])
             return service.remember(db,user,body,key,dict(batch=batch,ids=ids,status=status))
+
+    @app.get('/api/behaviour/lesson')
+    def lesson_marks(request:Request,lessonKey:str=Query(pattern=r'^[a-f0-9]{64}$'),day:date=Query(),workspace:Workspace='school'):
+        with service.context(request,workspace) as (db,user,snap):
+            lesson=service.lesson(db,user,snap,workspace,day,lessonKey)
+            levels=service.levels(db,user,snap,workspace)|{'teacher'}
+            rows=db.execute("""SELECT * FROM behaviour_notes WHERE workspace=? AND day=? AND status IN ('pending','published')
+                               AND json_extract(document,'$.lesson.key')=? ORDER BY seq""",(workspace,day.isoformat(),lessonKey)).fetchall()
+            pupils=set(lesson['studentIds'])
+            return dict(label=lesson['label'],canMark=not lesson['locked'],
+                        categories=[c for c in service.config(db,workspace)['categories'] if c['active'] and c['level'] in levels],
+                        notes=[dict(id=r['id'],studentId=r['student_id'],kind=r['kind'],category=json.loads(r['document'])['category'],status=r['status'],author=r['author_name'])
+                               for r in rows if r['student_id'] in pupils])
 
     @app.get('/api/behaviour/notes')
     def notes(request:Request,workspace:Workspace='school',classId:str|None=None,studentId:str|None=None,kind:str|None=Query(default=None,pattern='^(praise|remark)$'),

@@ -90,6 +90,7 @@ class NewNotes(Model):
     day:date
     text:str=Field(default='',max_length=2000)
     visible:bool=True
+    lessonKey:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.studentIds))!=len(self.studentIds):raise ValueError('Ученики не должны повторяться.')
@@ -178,6 +179,19 @@ class Behaviour:
         if level=='class_teacher':return all(pupils[id].classId in assigned for id in students)
         return all(id in teaching or pupils[id].classId in assigned for id in students)
 
+    def lesson(self,db,user,snap,workspace,day,key):
+        """The actual lesson of that day, if the user teaches it now (substitutes included) or is an administrator."""
+        from .calendar_ops import resolve_day
+        from .journal import key_for,staff_read
+        row=next((r for r in resolve_day(snap.state,day)[0] if r['activity']=='lesson' and key_for(r)==key),None)
+        if not row or not (user['role']=='admin' or staff_read(user,workspace,row)):raise HTTPException(404,'Урок не найден.')
+        if row['status']=='cancelled':raise HTTPException(409,'Урок отменён.')
+        closed=bool(db.execute("SELECT 1 FROM sqlite_master WHERE name='journal_periods'").fetchone())
+        if closed:
+            from .journal_periods import locks
+            closed=bool(locks(db,workspace,dict(date=row['date'],sourceKey=row['id'])))
+        return row|dict(locked=closed,label=f"{row['subject']}, {date.fromisoformat(row['date']).strftime('%d.%m.%Y')}, {row['start']}")
+
     def family(self,user,snap,workspace):
         if user['role'] not in ['parent','student']:return set()
         return {id for id in grant_ids(user,workspace,'student') if id in snap.entities['student'] and snap.entities['student'][id].active}
@@ -210,7 +224,7 @@ class Behaviour:
             level=data.get('level','teacher'),levelTitle=LEVELS[data.get('level','teacher')],
             studentId=row['student_id'],student=pupil.name if pupil else '',requireAck=data['requireAck'],
             acknowledged=bool(row['ack_at']),acknowledgedAt=row['ack_at'],acknowledgedBy=row['ack_by'],
-            letter=bool(data.get('letterNumber')),letterNumber=data.get('letterNumber',''))
+            letter=bool(data.get('letterNumber')),letterNumber=data.get('letterNumber',''),lesson=data.get('lesson',{}).get('label',''))
         if staff:
             classes={c.id:c.name for c in snap.state.classes}
             result.update(className=classes.get(row['class_id'],''),withdrawReason=data.get('withdrawReason',''),visible=bool(row['visible']),
