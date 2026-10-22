@@ -4,7 +4,17 @@ import type { Account } from "./auth";
 import "./BehaviourNotes.css";
 
 type Kind = "praise" | "remark";
-type Category = { id: string; kind: Kind; title: string; active: boolean };
+type Level = "teacher" | "class_teacher" | "director";
+type Category = {
+  id: string;
+  kind: Kind;
+  title: string;
+  active: boolean;
+  level: Level;
+  approval: boolean;
+  quick: boolean;
+  letter: boolean;
+};
 type Student = { id: string; name: string; classId: string; className: string };
 type Options = {
   admin: boolean;
@@ -12,23 +22,28 @@ type Options = {
   family: boolean;
   canAcknowledge: boolean;
   today: string;
-  kinds: Record<Kind, string>;
+  levels: Record<Level, string>;
+  myLevels: Level[];
   remarkAck: boolean;
   categories: Category[];
+  pending: number;
   configVersion: number | null;
   classes: { id: string; name: string }[];
   students: Student[];
 };
+type Status = "pending" | "published" | "rejected" | "withdrawn";
 type Note = {
   id: string;
   version: number;
-  status: "published" | "withdrawn";
+  status: Status;
   kind: Kind;
   day: string;
   categoryId: string;
   category: string;
   text: string;
   author: string;
+  level: Level;
+  levelTitle: string;
   studentId: string;
   student: string;
   className?: string;
@@ -36,8 +51,15 @@ type Note = {
   acknowledged: boolean;
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
+  letter: boolean;
+  letterNumber: string;
+  visible?: boolean;
+  approval?: boolean;
+  decision?: string;
+  approvedBy?: string;
   withdrawReason?: string;
   canChange?: boolean;
+  canDecide?: boolean;
 };
 type History = {
   seq: number;
@@ -53,15 +75,45 @@ type Summary = {
   praise: number;
   remark: number;
 }[];
+type Place = {
+  place: number;
+  studentId: string;
+  student: string;
+  className: string;
+  count: number;
+};
+type Letter = {
+  school: string;
+  number: string;
+  day: string;
+  student: string;
+  className: string;
+  kind: string;
+  title: string;
+  text: string;
+  level: string;
+  author: string;
+  approvedBy: string;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+};
 const kindLabels: Record<Kind, string> = {
   praise: "Похвала",
   remark: "Замечание",
+};
+const statusLabels: Record<Status, string> = {
+  pending: "На согласовании",
+  published: "Действует",
+  rejected: "Отклонена",
+  withdrawn: "Отозвана",
 };
 const actionLabels: Record<string, string> = {
   created: "Создана",
   edited: "Изменена",
   withdrawn: "Отозвана",
   acknowledged: "Родитель ознакомился",
+  approved: "Утверждена",
+  rejected: "Отклонена",
 };
 const stamp = (value: string | null) =>
   value
@@ -70,6 +122,14 @@ const stamp = (value: string | null) =>
         timeStyle: "short",
       })
     : "";
+const flagLabels = {
+  approval: "Согласование",
+  quick: "Быстрая отметка",
+  letter: "Письмо-решение",
+  active: "Действует",
+};
+const dayLabel = (day: string) =>
+  new Date(day + "T00:00").toLocaleDateString("ru-RU");
 
 export default function BehaviourNotes({
   user,
@@ -103,6 +163,8 @@ export default function BehaviourNotes({
     [next, setNext] = useState<number | null>(null),
     [totals, setTotals] = useState({ praise: 0, remark: 0 }),
     [summary, setSummary] = useState<Summary>([]),
+    [board, setBoard] = useState<Place[]>([]),
+    [boardKind, setBoardKind] = useState<Kind>("praise"),
     [history, setHistory] = useState<{ id: string; items: History } | null>(
       null,
     );
@@ -119,8 +181,10 @@ export default function BehaviourNotes({
     day: "",
     text: "",
     classId: "",
+    visible: true,
     students: [] as string[],
   });
+  const [letterView, setLetterView] = useState<Letter | null>(null);
   const [categories, setCategories] = useState<Category[]>([]),
     [remarkAck, setRemarkAck] = useState(true);
   const dialog = useRef<HTMLDialogElement>(null),
@@ -132,6 +196,9 @@ export default function BehaviourNotes({
   }, []);
   const staff = Boolean(options && (options.canWrite || options.admin));
   const dirty = Boolean(form.text.trim() || form.students.length);
+  const usable = (options?.categories || []).filter(
+    (c) => c.active && options?.myLevels.includes(c.level),
+  );
 
   function query(
     extra: Record<string, string | number> = {},
@@ -144,13 +211,16 @@ export default function BehaviourNotes({
     const text = params.toString();
     return text ? "?" + text : "";
   }
-  async function loadNotes(opts: Options, more = false) {
+  async function loadNotes(opts: Options, view = tab, more = false) {
     const token = sequence.current;
-    if (opts.canWrite || opts.admin) {
-      const result = await api(
-        "behaviour/notes" + query(more && next ? { before: next } : {}),
-        workspace,
-      );
+    const page: Record<string, number> = more && next ? { before: next } : {};
+    if (view === "queue" && opts.admin) {
+      const result = await api("behaviour/queue" + query(page, []), workspace);
+      if (token !== sequence.current) return;
+      setNotes((old) => (more ? [...old, ...result.items] : result.items));
+      setNext(result.nextBefore);
+    } else if (opts.canWrite || opts.admin) {
+      const result = await api("behaviour/notes" + query(page), workspace);
       if (token !== sequence.current) return;
       setNotes((old) => (more ? [...old, ...result.items] : result.items));
       setNext(result.nextBefore);
@@ -170,7 +240,7 @@ export default function BehaviourNotes({
       setNext(null);
     }
   }
-  async function load() {
+  async function load(view = tab) {
     const token = ++sequence.current;
     setBusy(true);
     setError("");
@@ -184,7 +254,11 @@ export default function BehaviourNotes({
         ...f,
         day: f.day || opts.today,
         categoryId:
-          f.categoryId || opts.categories.find((c) => c.active)?.id || "",
+          f.categoryId ||
+          opts.categories.find(
+            (c) => c.active && opts.myLevels.includes(c.level),
+          )?.id ||
+          "",
       }));
       if (
         !opts.canWrite &&
@@ -195,7 +269,9 @@ export default function BehaviourNotes({
         setFilters((f) => ({ ...f, studentId: opts.students[0].id }));
         return;
       }
-      await loadNotes(opts);
+      if (view === "board") await loadBoard(boardKind);
+      else if (view === "summary") await loadSummary();
+      else if (view !== "config") await loadNotes(opts, view);
     } catch (e: any) {
       if (token === sequence.current) {
         setOptions(null);
@@ -232,7 +308,7 @@ export default function BehaviourNotes({
   }
   async function refreshAfterChange() {
     try {
-      if (options) await loadNotes(options);
+      await load();
     } catch (e: any) {
       setError("Изменение сохранено, но список не обновился: " + e.message);
     }
@@ -243,25 +319,36 @@ export default function BehaviourNotes({
       window.confirm("Новая запись не сохранена. Отбросить её и закрыть?")
     );
   }
-  async function submit() {
+  async function submit(categoryId = form.categoryId, text = form.text) {
     const body = {
       studentIds: form.students,
-      categoryId: form.categoryId,
-      day: form.day,
-      text: form.text,
+      categoryId,
+      day: categoryId === form.categoryId ? form.day : options!.today,
+      text,
+      visible: form.visible,
     };
     const key = JSON.stringify(body);
     if (request.current.key !== key)
       request.current = { key, id: crypto.randomUUID() };
+    let status = "";
     await run(async () => {
-      await api("behaviour/notes", workspace, "POST", {
+      const result = await api("behaviour/notes", workspace, "POST", {
         requestId: request.current.id,
         ...body,
       });
+      status = result.status;
       request.current = { key: "", id: "" };
       setForm((f) => ({ ...f, text: "", students: [] }));
       await refreshAfterChange();
-    }, "Запись сохранена, семьи получили уведомление.");
+    }, "");
+    if (status)
+      setNotice(
+        status === "pending"
+          ? "Мера отправлена на согласование администрации."
+          : form.visible
+            ? "Запись сохранена, семьи получили уведомление."
+            : "Запись сохранена без показа семье.",
+      );
   }
   async function edit(note: Note) {
     const text = window.prompt("Комментарий к записи", note.text);
@@ -289,6 +376,26 @@ export default function BehaviourNotes({
       await refreshAfterChange();
     }, "Запись отозвана и скрыта от семьи.");
   }
+  async function decide(note: Note, approve: boolean) {
+    const reason = window.prompt(
+      approve
+        ? "Комментарий к решению (необязательно)"
+        : "Причина отказа (обязательно)",
+    );
+    if (reason === null || (!approve && !reason.trim())) return;
+    await run(
+      async () => {
+        await api(
+          `behaviour/notes/${note.id}/${approve ? "approve" : "reject"}`,
+          workspace,
+          "POST",
+          { version: note.version, reason },
+        );
+        await refreshAfterChange();
+      },
+      approve ? "Мера утверждена." : "Мера отклонена, автор получил решение.",
+    );
+  }
   async function acknowledge(note: Note) {
     await run(async () => {
       await api(`behaviour/notes/${note.id}/acknowledge`, workspace, "POST", {
@@ -297,6 +404,11 @@ export default function BehaviourNotes({
       await refreshAfterChange();
     }, "Подтверждение отправлено учителю.");
   }
+  async function letter(note: Note) {
+    await run(async () => {
+      setLetterView(await api(`behaviour/notes/${note.id}/letter`, workspace));
+    }, "");
+  }
   async function showHistory(note: Note) {
     await run(async () => {
       const result = await api(`behaviour/notes/${note.id}/history`, workspace);
@@ -304,13 +416,18 @@ export default function BehaviourNotes({
     }, "");
   }
   async function loadSummary() {
-    await run(async () => {
-      const result = await api(
-        "behaviour/summary" + query({}, ["classId", "start", "end"]),
-        workspace,
-      );
-      setSummary(result.items);
-    }, "");
+    const result = await api(
+      "behaviour/summary" + query({}, ["classId", "start", "end"]),
+      workspace,
+    );
+    setSummary(result.items);
+  }
+  async function loadBoard(kind: Kind) {
+    const result = await api(
+      "behaviour/board" + query({ kind }, ["classId", "start", "end"]),
+      workspace,
+    );
+    setBoard(result.items);
   }
   async function saveConfig() {
     const reason = window.prompt("Причина изменения категорий");
@@ -325,19 +442,75 @@ export default function BehaviourNotes({
       await load();
     }, "Категории сохранены.");
   }
+  function open(view: string) {
+    if (view !== tab && !leave()) return;
+    setTab(view);
+    setHistory(null);
+    void run(() => load(view), "");
+  }
+  function updateCategory(i: number, change: Partial<Category>) {
+    setCategories((all) =>
+      all.map((x, j) => (j === i ? { ...x, ...change } : x)),
+    );
+  }
 
   const pupils = options?.students || [];
   const visiblePupils = form.classId
     ? pupils.filter((s) => s.classId === form.classId)
     : pupils;
-  const exportQuery = query({ workspace }, [
-    "classId",
-    "studentId",
-    "kind",
-    "start",
-    "end",
-  ]);
-  const exportHref = "/api/behaviour/export" + exportQuery;
+  const exportHref =
+    "/api/behaviour/export" +
+    query({ workspace }, ["classId", "studentId", "kind", "start", "end"]);
+  const quick = usable.filter((c) => c.quick);
+  const tabs: [string, string][] = [
+    ["notes", "Записи"],
+    ...(options?.admin
+      ? [["queue", `На согласовании (${options.pending})`] as [string, string]]
+      : []),
+    ["board", "Табло"],
+    ["summary", "Сводка"],
+    ...(options?.admin ? [["config", "Категории"] as [string, string]] : []),
+  ];
+  const periodFilters = (
+    <>
+      <label>
+        Класс
+        <select
+          value={filters.classId}
+          onChange={(e) =>
+            setFilters((f) => ({
+              ...f,
+              classId: e.target.value,
+              studentId: "",
+            }))
+          }
+        >
+          <option value="">Все</option>
+          {options?.classes.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        С
+        <input
+          type="date"
+          value={filters.start}
+          onChange={(e) => setFilters((f) => ({ ...f, start: e.target.value }))}
+        />
+      </label>
+      <label>
+        По
+        <input
+          type="date"
+          value={filters.end}
+          onChange={(e) => setFilters((f) => ({ ...f, end: e.target.value }))}
+        />
+      </label>
+    </>
+  );
   return (
     <dialog
       className="behaviour"
@@ -350,8 +523,8 @@ export default function BehaviourNotes({
     >
       <header>
         <div>
-          <h2 id="behaviour-title">Похвалы и замечания</h2>
-          <p>Записи учителей о поведении и успехах учеников</p>
+          <h2 id="behaviour-title">Похвалы, замечания и меры</h2>
+          <p>Записи учителей, классных руководителей и администрации</p>
         </div>
         <button
           disabled={busy}
@@ -362,6 +535,35 @@ export default function BehaviourNotes({
           Закрыть
         </button>
       </header>
+      {letterView && (
+        <section className="bn-letter" aria-label="Письмо-решение">
+          <p>{letterView.school}</p>
+          <h3>
+            {letterView.kind}: {letterView.title}
+          </h3>
+          <p>
+            № {letterView.number} от {dayLabel(letterView.day)}
+          </p>
+          <p>
+            Ученик: {letterView.student}
+            {letterView.className ? `, ${letterView.className}` : ""}
+          </p>
+          {letterView.text && <p className="bn-text">{letterView.text}</p>}
+          <p className="bn-sign">
+            Назначил(а): {letterView.author} ({letterView.level})
+          </p>
+          {letterView.approvedBy && <p>Утвердил(а): {letterView.approvedBy}</p>}
+          <p className="bn-sign">
+            {letterView.acknowledgedAt
+              ? `С решением ознакомлен(а): ${letterView.acknowledgedBy || ""}, ${stamp(letterView.acknowledgedAt)}`
+              : "С решением ознакомлен(а): ____________________  Дата: ________"}
+          </p>
+          <div className="bn-controls bn-noprint">
+            <button onClick={() => window.print()}>Печать</button>
+            <button onClick={() => setLetterView(null)}>Закрыть письмо</button>
+          </div>
+        </section>
+      )}
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {busy && <p role="status">Загрузка…</p>}
@@ -392,22 +594,15 @@ export default function BehaviourNotes({
               ))}
             </select>
           </label>
-          <button onClick={() => void load()}>Обновить</button>
+          <button onClick={() => void run(() => load(), "")}>Обновить</button>
         </div>
         {options && staff && (
           <nav className="bn-controls" aria-label="Разделы">
-            {[
-              ["notes", "Записи"],
-              ["summary", "Сводка"],
-              ...(options.admin ? [["config", "Категории"]] : []),
-            ].map(([id, title]) => (
+            {tabs.map(([id, title]) => (
               <button
                 key={id}
                 aria-pressed={tab === id}
-                onClick={() => {
-                  setTab(id);
-                  if (id === "summary") void loadSummary();
-                }}
+                onClick={() => open(id)}
               >
                 {title}
               </button>
@@ -449,40 +644,11 @@ export default function BehaviourNotes({
         {options && staff && tab === "notes" && options.canWrite && (
           <section className="bn-form" aria-label="Новая запись">
             <h3>Новая запись</h3>
-            <div className="bn-controls">
-              <label>
-                Категория
-                <select
-                  value={form.categoryId}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, categoryId: e.target.value }))
-                  }
-                >
-                  {(["praise", "remark"] as Kind[]).map((kind) => (
-                    <optgroup key={kind} label={kindLabels[kind]}>
-                      {options.categories
-                        .filter((c) => c.kind === kind && c.active)
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.title}
-                          </option>
-                        ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Дата
-                <input
-                  type="date"
-                  max={options.today}
-                  value={form.day}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, day: e.target.value }))
-                  }
-                />
-              </label>
-              <label>
+            <fieldset className="bn-pupils">
+              <legend>
+                Ученики (выбрано {form.students.length}, не больше 40)
+              </legend>
+              <label className="bn-wide-row">
                 Класс
                 <select
                   value={form.classId}
@@ -498,11 +664,6 @@ export default function BehaviourNotes({
                   ))}
                 </select>
               </label>
-            </div>
-            <fieldset className="bn-pupils">
-              <legend>
-                Ученики (выбрано {form.students.length}, не больше 40)
-              </legend>
               {visiblePupils.map((s) => (
                 <label key={s.id}>
                   <input
@@ -522,8 +683,74 @@ export default function BehaviourNotes({
                 </label>
               ))}
             </fieldset>
+            {quick.length > 0 && (
+              <div className="bn-quick" aria-label="Быстрые отметки">
+                <span>Быстрая отметка сегодня:</span>
+                {quick.map((c) => (
+                  <button
+                    key={c.id}
+                    className={`bn-chip bn-${c.kind}`}
+                    disabled={
+                      !form.students.length || form.students.length > 40
+                    }
+                    onClick={() => void submit(c.id, "")}
+                  >
+                    {c.kind === "praise" ? "＋ " : "− "}
+                    {c.title}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="bn-controls">
+              <label>
+                Категория
+                <select
+                  value={form.categoryId}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, categoryId: e.target.value }))
+                  }
+                >
+                  {options.myLevels.map((level) => (
+                    <optgroup key={level} label={options.levels[level]}>
+                      {usable
+                        .filter((c) => c.level === level)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {kindLabels[c.kind]}: {c.title}
+                            {c.approval && !options.admin
+                              ? " · согласование"
+                              : ""}
+                            {c.letter ? " · письмо" : ""}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Дата
+                <input
+                  type="date"
+                  max={options.today}
+                  value={form.day}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, day: e.target.value }))
+                  }
+                />
+              </label>
+              <label className="bn-check">
+                <input
+                  type="checkbox"
+                  checked={form.visible}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, visible: e.target.checked }))
+                  }
+                />
+                Показать семье
+              </label>
+            </div>
             <label className="bn-wide">
-              Комментарий для семьи
+              Комментарий или основание
               <textarea
                 maxLength={2000}
                 value={form.text}
@@ -541,33 +768,14 @@ export default function BehaviourNotes({
               }
               onClick={() => void submit()}
             >
-              Сохранить и уведомить семьи
+              Сохранить
             </button>
           </section>
         )}
 
         {options && staff && tab === "notes" && (
           <section aria-label="Фильтры" className="bn-controls">
-            <label>
-              Класс
-              <select
-                value={filters.classId}
-                onChange={(e) =>
-                  setFilters((f) => ({
-                    ...f,
-                    classId: e.target.value,
-                    studentId: "",
-                  }))
-                }
-              >
-                <option value="">Все</option>
-                {options.classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {periodFilters}
             <label>
               Ученик
               <select
@@ -610,29 +818,12 @@ export default function BehaviourNotes({
                 }
               >
                 <option value="">Все</option>
-                <option value="published">Действующие</option>
-                <option value="withdrawn">Отозванные</option>
+                {(Object.keys(statusLabels) as Status[]).map((s) => (
+                  <option key={s} value={s}>
+                    {statusLabels[s]}
+                  </option>
+                ))}
               </select>
-            </label>
-            <label>
-              С
-              <input
-                type="date"
-                value={filters.start}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, start: e.target.value }))
-                }
-              />
-            </label>
-            <label>
-              По
-              <input
-                type="date"
-                value={filters.end}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, end: e.target.value }))
-                }
-              />
             </label>
             <a href={exportHref} download>
               Скачать CSV
@@ -640,18 +831,36 @@ export default function BehaviourNotes({
           </section>
         )}
 
-        {options && (tab === "notes" || !staff) && (
+        {options && (tab === "notes" || tab === "queue" || !staff) && (
           <section aria-label="Записи">
-            {!notes.length && <p>Записей пока нет.</p>}
+            {!notes.length && (
+              <p>
+                {tab === "queue"
+                  ? "Мер на согласовании нет."
+                  : "Записей пока нет."}
+              </p>
+            )}
             <ul className="bn-list">
               {notes.map((n) => (
                 <li
                   key={n.id}
-                  className={`bn-note bn-${n.kind}${n.status === "withdrawn" ? " bn-withdrawn" : ""}`}
+                  className={`bn-note bn-${n.kind}${n.status === "withdrawn" || n.status === "rejected" ? " bn-withdrawn" : ""}`}
                 >
                   <p>
                     <strong>{kindLabels[n.kind]}</strong> · {n.category} ·{" "}
-                    {new Date(n.day + "T00:00").toLocaleDateString("ru-RU")}
+                    {dayLabel(n.day)}
+                    {n.level !== "teacher" && ` · ${n.levelTitle}`}
+                    {staff && n.status !== "published" && (
+                      <span className="bn-badge">{statusLabels[n.status]}</span>
+                    )}
+                    {staff && n.visible === false && (
+                      <span className="bn-badge">Скрыта от семьи</span>
+                    )}
+                    {n.letterNumber && (
+                      <span className="bn-badge">
+                        Письмо № {n.letterNumber}
+                      </span>
+                    )}
                   </p>
                   {staff && (
                     <p>
@@ -662,7 +871,10 @@ export default function BehaviourNotes({
                   {n.text && <p className="bn-text">{n.text}</p>}
                   <p className="bn-meta">
                     Автор: {n.author}
+                    {n.approvedBy && ` · Утвердил(а): ${n.approvedBy}`}
+                    {n.decision && ` · Решение: ${n.decision}`}
                     {n.requireAck &&
+                      n.status === "published" &&
                       (n.acknowledged
                         ? ` · Родитель ознакомился ${stamp(n.acknowledgedAt)} (${n.acknowledgedBy})`
                         : " · Ожидает подтверждения родителя")}
@@ -670,6 +882,16 @@ export default function BehaviourNotes({
                       ` · Отозвана: ${n.withdrawReason || ""}`}
                   </p>
                   <div className="bn-controls">
+                    {n.canDecide && (
+                      <>
+                        <button onClick={() => void decide(n, true)}>
+                          Утвердить
+                        </button>
+                        <button onClick={() => void decide(n, false)}>
+                          Отклонить
+                        </button>
+                      </>
+                    )}
                     {options.canAcknowledge &&
                       n.requireAck &&
                       !n.acknowledged && (
@@ -677,6 +899,11 @@ export default function BehaviourNotes({
                           Ознакомлен
                         </button>
                       )}
+                    {n.letter && n.status === "published" && (
+                      <button onClick={() => void letter(n)}>
+                        Письмо-решение
+                      </button>
+                    )}
                     {staff && n.canChange && (
                       <>
                         <button
@@ -713,7 +940,7 @@ export default function BehaviourNotes({
             {next && (
               <button
                 onClick={() =>
-                  options && void run(() => loadNotes(options, true), "")
+                  options && void run(() => loadNotes(options, tab, true), "")
                 }
               >
                 Показать ещё
@@ -722,9 +949,65 @@ export default function BehaviourNotes({
           </section>
         )}
 
+        {options && staff && tab === "board" && (
+          <section aria-label="Табло">
+            <div className="bn-controls">
+              <label>
+                Вид
+                <select
+                  value={boardKind}
+                  onChange={(e) => {
+                    const kind = e.target.value as Kind;
+                    setBoardKind(kind);
+                    void run(() => loadBoard(kind), "");
+                  }}
+                >
+                  <option value="praise">Похвалы</option>
+                  <option value="remark">Замечания</option>
+                </select>
+              </label>
+              {periodFilters}
+            </div>
+            <ol className="bn-podium">
+              {board
+                .filter((r) => r.place <= 3)
+                .map((r) => (
+                  <li key={r.studentId} className={`bn-place-${r.place}`}>
+                    <strong>{r.place}</strong>
+                    <span>{r.student}</span>
+                    <small>
+                      {r.className} · {r.count}
+                    </small>
+                  </li>
+                ))}
+            </ol>
+            <table className="bn-table">
+              <thead>
+                <tr>
+                  <th>Место</th>
+                  <th>Ученик</th>
+                  <th>Класс</th>
+                  <th>{boardKind === "praise" ? "Похвалы" : "Замечания"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.map((r) => (
+                  <tr key={r.studentId}>
+                    <td>{r.place}</td>
+                    <td>{r.student}</td>
+                    <td>{r.className}</td>
+                    <td>{r.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!board.length && <p>Записей за период нет.</p>}
+          </section>
+        )}
+
         {options && staff && tab === "summary" && (
           <section aria-label="Сводка">
-            <p>Действующие записи за выбранный в фильтрах период и класс.</p>
+            <div className="bn-controls">{periodFilters}</div>
             <table className="bn-table">
               <thead>
                 <tr>
@@ -759,65 +1042,86 @@ export default function BehaviourNotes({
               />
               Замечания требуют подтверждения родителя
             </label>
-            <table className="bn-table">
-              <thead>
-                <tr>
-                  <th>Вид</th>
-                  <th>Название</th>
-                  <th>Действует</th>
-                </tr>
-              </thead>
-              <tbody>
-                {categories.map((c, i) => (
-                  <tr key={c.id}>
-                    <td>
-                      <select
-                        value={c.kind}
-                        onChange={(e) =>
-                          setCategories((all) =>
-                            all.map((x, j) =>
-                              j === i
-                                ? { ...x, kind: e.target.value as Kind }
-                                : x,
-                            ),
-                          )
-                        }
-                      >
-                        <option value="praise">Похвала</option>
-                        <option value="remark">Замечание</option>
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        maxLength={120}
-                        value={c.title}
-                        onChange={(e) =>
-                          setCategories((all) =>
-                            all.map((x, j) =>
-                              j === i ? { ...x, title: e.target.value } : x,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={"Действует: " + c.title}
-                        checked={c.active}
-                        onChange={(e) =>
-                          setCategories((all) =>
-                            all.map((x, j) =>
-                              j === i ? { ...x, active: e.target.checked } : x,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
+            <div className="bn-scroll">
+              <table className="bn-table">
+                <thead>
+                  <tr>
+                    <th>Вид</th>
+                    <th>Название</th>
+                    <th>Кто назначает</th>
+                    <th>Согласование</th>
+                    <th>Быстрая</th>
+                    <th>Письмо</th>
+                    <th>Действует</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {categories.map((c, i) => (
+                    <tr key={c.id}>
+                      <td>
+                        <select
+                          aria-label={"Вид: " + c.title}
+                          value={c.kind}
+                          onChange={(e) =>
+                            updateCategory(i, { kind: e.target.value as Kind })
+                          }
+                        >
+                          <option value="praise">Похвала</option>
+                          <option value="remark">Замечание</option>
+                        </select>
+                      </td>
+                      <td>
+                        <input
+                          aria-label="Название категории"
+                          maxLength={120}
+                          value={c.title}
+                          onChange={(e) =>
+                            updateCategory(i, { title: e.target.value })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <select
+                          aria-label={"Кто назначает: " + c.title}
+                          value={c.level}
+                          onChange={(e) =>
+                            updateCategory(i, {
+                              level: e.target.value as Level,
+                            })
+                          }
+                        >
+                          {(Object.keys(options.levels) as Level[]).map((l) => (
+                            <option key={l} value={l}>
+                              {options.levels[l]}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      {(["approval", "quick", "letter", "active"] as const).map(
+                        (field) => (
+                          <td key={field}>
+                            <input
+                              type="checkbox"
+                              aria-label={`${flagLabels[field]}: ${c.title}`}
+                              checked={c[field]}
+                              onChange={(e) =>
+                                updateCategory(i, { [field]: e.target.checked })
+                              }
+                            />
+                          </td>
+                        ),
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="bn-meta">
+              Меры уровня «Директор» назначает администрация. Согласование
+              нужно, когда меру назначает не администратор. Мера с письмом
+              получает номер при вступлении в силу и требует подтверждения
+              родителя.
+            </p>
             <div className="bn-controls">
               <button
                 disabled={categories.length >= 60}
@@ -829,6 +1133,10 @@ export default function BehaviourNotes({
                       kind: "praise",
                       title: "Новая категория",
                       active: true,
+                      level: "teacher",
+                      approval: false,
+                      quick: false,
+                      letter: false,
                     },
                   ])
                 }

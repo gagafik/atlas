@@ -117,3 +117,98 @@ def test_lost_teaching_scope_hides_notes_and_csv_is_safe(client):
     api.save('demo', state)
     assert signed('math').get(url('notes')).status_code == 403
     assert len(staff_list(client)) == 3
+
+
+def assign_class_teacher(client, account, cls='c-demo-a'):
+    current = ok(client.get('/api/access/class-staff?workspace=demo'))
+    ok(client.put('/api/access/class-staff?workspace=demo', json=dict(version=current['version'], revision=current['revision'], reason='Классный руководитель',
+                                                                       assignments={cls: [dict(accountId=account['id'], capabilities=['behaviour_notes'])]})))
+
+
+def test_approval_queue_publishes_numbered_letter_only_after_admin_decision(client):
+    enable(client); class_teacher = teacher(client, 'class', 't1'); guardian(client, 'mother', 's2')
+    t, mother = signed('class'), signed('mother'); assign_class_teacher(client, class_teacher)
+    created = ok(note(t, ['s2'], 'performance-warning', 'Три неудовлетворительные работы'))
+    assert created['status'] == 'pending'
+    assert ok(family(mother, 's2'))['items'] == [] and mother.get('/api/notifications/inbox').json()['unread'] == 0
+    assert client.get('/api/notifications/inbox').json()['unread'] == 1
+    queued = ok(client.get(url('queue')))['items']
+    assert len(queued) == 1 and queued[0]['canDecide'] and not queued[0]['letter']
+    assert t.post(url(f'notes/{queued[0]["id"]}/approve'), json=dict(version=queued[0]['version'])).status_code == 403
+    assert t.get(url(f'notes/{queued[0]["id"]}/letter')).status_code == 409
+    approved = ok(client.post(url(f'notes/{queued[0]["id"]}/approve'), json=dict(version=queued[0]['version'], reason='Согласовано')))
+    assert approved['status'] == 'published' and approved['letterNumber'] == f'{today().year}-0001' and approved['approvedBy'] == 'Администратор'
+    assert client.post(url(f'notes/{approved["id"]}/approve'), json=dict(version=approved['version'])).status_code == 409
+    seen = ok(family(mother, 's2'))['items'][0]
+    assert seen['requireAck'] and seen['letter'] and seen['levelTitle'] == 'Классный руководитель' and 'approvedBy' not in seen
+    letter = ok(mother.get(url(f'notes/{seen["id"]}/letter')))
+    assert letter['number'] == approved['letterNumber'] and letter['title'] == 'Предупреждение о неуспеваемости' and letter['student'] == 'Ученик 2 (пример)'
+    assert t.get('/api/notifications/inbox').json()['unread'] == 1
+    mine = staff_list(t)[0]
+    assert not mine['canChange'] and t.post(url(f'notes/{mine["id"]}/withdraw'), json=dict(version=mine['version'], reason='x')).status_code == 403
+    second = ok(note(t, ['s1'], 'performance-warning'))
+    pending = ok(client.get(url('queue')))['items'][0]
+    assert client.post(url(f'notes/{pending["id"]}/reject'), json=dict(version=pending['version'])).status_code == 422
+    rejected = ok(client.post(url(f'notes/{pending["id"]}/reject'), json=dict(version=pending['version'], reason='Недостаточно оснований')))
+    assert rejected['status'] == 'rejected' and rejected['decision'] == 'Недостаточно оснований' and second['ids'] == [pending['id']]
+    actions = [h['action'] for h in ok(t.get(url(f'notes/{approved["id"]}/history')))['items']]
+    assert actions == ['created', 'approved']
+
+
+def test_measure_levels_hidden_notes_and_teacher_limits(client):
+    enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2'); class_teacher = create(client, 'staff')
+    t, mother, ct = signed('math'), signed('mother'), signed('staff')
+    options = ok(t.get(url('options')))
+    assert options['myLevels'] == ['teacher'] and any(c['quick'] for c in options['categories'])
+    assert note(t, ['s2'], 'class-remark').status_code == 403 and note(t, ['s2'], 'director-remark').status_code == 403
+    assign_class_teacher(client, class_teacher)
+    assert ok(ct.get(url('options')))['myLevels'] == ['class_teacher', 'teacher']
+    assert ok(note(ct, ['s1', 's2'], 'class-remark'))['status'] == 'published'
+    assert note(ct, ['s3'], 'class-remark').status_code == 403
+    ok(note(t, ['s2'], 'unprepared', 'Внутренняя пометка', visible=False))
+    visible = ok(family(mother, 's2'))
+    assert visible['remark'] == 1 and all(n['text'] != 'Внутренняя пометка' for n in visible['items'])
+    hidden = next(n for n in staff_list(t) if n['text'] == 'Внутренняя пометка')
+    assert not hidden['visible']
+    assert mother.post(url(f'notes/{hidden["id"]}/acknowledge'), json=dict(version=hidden['version'])).status_code == 404
+    assert mother.get(url(f'notes/{hidden["id"]}/letter')).status_code == 404
+    director = ok(note(client, ['s2'], 'director-praise', 'За победу на олимпиаде'))
+    assert director['status'] == 'published'
+    praised = next(n for n in staff_list(client, kind='praise') if n['categoryId'] == 'director-praise')
+    assert praised['letterNumber'] == f'{today().year}-0001' and praised['approvedBy'] == ''
+    plain = next(n for n in staff_list(t) if n['categoryId'] == 'unprepared')
+    assert t.get(url(f'notes/{plain["id"]}/letter')).status_code == 409
+    assert t.post(url(f'notes/{plain["id"]}/edit'), json=dict(version=plain['version'], categoryId='class-remark', text='x', reason='y')).status_code == 403
+
+
+def test_board_ranks_published_notes_with_shared_places(client):
+    enable(client); teacher(client, 'math', 't1'); t = signed('math')
+    ok(note(t, ['s2', 's4'])); ok(note(t, ['s2'], 'help')); ok(note(t, ['s4'], 'help'))
+    ok(note(t, ['s2'], 'discipline'))
+    withdrawn = ok(note(t, ['s4'], 'achievement'))
+    row = next(n for n in staff_list(t) if n['id'] == withdrawn['ids'][0])
+    ok(t.post(url(f'notes/{row["id"]}/withdraw'), json=dict(version=row['version'], reason='Ошибка')))
+    praise = ok(t.get(url('board')))['items']
+    assert [(r['place'], r['studentId'], r['count']) for r in praise] == [(1, 's2', 2), (1, 's4', 2)]
+    remark = ok(t.get(url('board', kind='remark')))['items']
+    assert [(r['place'], r['studentId'], r['count']) for r in remark] == [(1, 's2', 1)]
+    assert ok(t.get(url('board', classId='c-demo-d')))['items'][0]['studentId'] == 's4'
+    guardian(client, 'mother', 's2')
+    assert signed('mother').get(url('board')).status_code == 403
+
+
+def test_old_rows_and_saved_categories_gain_measure_defaults(client):
+    import sqlite3
+    from backend import behaviour
+    enable(client)
+    db = sqlite3.connect(':memory:')
+    db.execute('CREATE TABLE behaviour_notes(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,batch TEXT,workspace TEXT,student_id TEXT,class_id TEXT,'
+               'version INTEGER,status TEXT,kind TEXT,category_id TEXT,day TEXT,author_id TEXT,author_name TEXT,created TEXT,updated TEXT,ack_at TEXT,ack_by TEXT,document TEXT)')
+    db.execute("INSERT INTO behaviour_notes(id,status) VALUES ('old','published')")
+    behaviour.tables(db)
+    assert db.execute("SELECT visible FROM behaviour_notes WHERE id='old'").fetchone()[0] == 1
+    options = ok(client.get(url('options')))
+    legacy = [dict(id=c['id'], kind=c['kind'], title=c['title'], active=c['active']) for c in options['categories']]
+    ok(client.put(url('config'), json=dict(version=options['configVersion'], reason='Прежний формат', categories=legacy)))
+    saved = ok(client.get(url('options')))['categories']
+    assert all(c['level'] == 'teacher' and not c['approval'] and not c['letter'] for c in saved)
