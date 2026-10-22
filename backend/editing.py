@@ -178,9 +178,29 @@ def issue_signature(issue):
     return json.dumps(issue, ensure_ascii=False, sort_keys=True)
 
 
+# Excess counters that an edit may reduce step by step. An issue of these types
+# is not new when the same workload already had it and no counter grew.
+REDUCIBLE = {
+    'daily': lambda old, new: all(d in old and n <= old[d] for d, n in new.items()),
+    'hours': lambda old, new: new['placed'] <= old['placed'],
+}
+
+
+def issue_identity(issue):
+    if issue['type'] in REDUCIBLE:
+        issue = {k: v for k, v in issue.items() if k not in ('observed', 'message')}
+    return issue_signature(issue)
+
+
 def new_issues(before, after):
-    previous = {issue_signature(i) for i in before['issues']}
-    return [i for i in after['issues'] if issue_signature(i) not in previous]
+    previous = {}
+    for issue in before['issues']:
+        previous.setdefault(issue_identity(issue), []).append(issue)
+    def known(issue):
+        signature, reducible = issue_signature(issue), REDUCIBLE.get(issue['type'])
+        return any(issue_signature(old) == signature or reducible and reducible(old['observed'], issue['observed'])
+                   for old in previous.get(issue_identity(issue), []))
+    return [i for i in after['issues'] if not known(i)]
 
 
 def placement_label(state, p):

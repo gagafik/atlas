@@ -1,5 +1,6 @@
 """Personal course preferences, reviewed before entering the planning state."""
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import hashlib
 import json
 from uuid import uuid4
@@ -107,7 +108,8 @@ def register_intake(app,Workspace,access,read,require_revision,save,connect,db_l
         groups={g.id:g for g in state.groups}
         return [c for c in state.courses if c.id in cfg.courseIds and any(pupil.classId in groups[s.groupId].classIds for s in c.sections)]
     def accepting(cfg):
-        return cfg.open and (cfg.closesOn is None or date.today()<=cfg.closesOn)
+        # The closing day ends at midnight school time, whatever the server time zone is.
+        return cfg.open and (cfg.closesOn is None or now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()<=cfg.closesOn)
     def in_plan(state,record):
         existing={r.id:r.model_dump(mode='json') for r in state.courseRequests}
         return bool(record.get('accepted')) and all(existing.get(r['id'])==r for r in record['accepted'])

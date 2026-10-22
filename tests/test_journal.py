@@ -229,3 +229,20 @@ def test_replacement_teacher_and_extra_lesson_permissions(client):
     value=entry(replacement,added['lessonKey'],day='2026-08-18')
     assert {r['studentId'] for r in value['document']['content']['records']}=={'s2','s4'}
     assert write(replacement,value,publish=True).status_code==200
+
+
+def test_replaced_teacher_cannot_withdraw_published_journal(client):
+    enable(client);create(client,'parent');create(client,'teacher');create(client,'teacher',login='replacement',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
+    original,replacement,parent=signed('teacher'),signed('replacement'),signed('parent')
+    saved=write(original,graded(entry(original,lesson(original)['lessonKey'])),publish=True).json()
+    state=api.read('demo')
+    state.datedLessons=[DatedLesson(id='replace',name='Замена',kind='change',placementId='eng',sourceDate=date(2026,8,17),onDate=date(2026,8,17),teacherIds=['t3'])]
+    api.save('demo',state)
+    old=entry(original,saved['lessonKey'])
+    assert not old['writable'] and not old['canWithdraw']
+    assert original.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=saved['lessonKey'],version=old['version'])).status_code==403
+    assert len(report(parent).json()['rows'])==1
+    current=entry(replacement,saved['lessonKey'])
+    assert current['canWithdraw']
+    assert replacement.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=saved['lessonKey'],version=current['version'])).status_code==200
+    assert report(parent).json()['rows']==[]

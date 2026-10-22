@@ -312,7 +312,7 @@ class Journal:
         else:
             excuses,closed=restrictions(db)
         return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
-                             canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,existing['document']['lesson'])))
+                             canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
 
     def recheck_account(self, db, user):
         if user['id']=='local':
@@ -439,13 +439,15 @@ class Journal:
                 row = db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,body.lessonKey)).fetchone()
                 if not row: raise HTTPException(404,'Запись не найдена.')
                 record = self.unpack(row)
-                if not staff_read(user,workspace,record['document']['lesson']): raise HTTPException(403,'Нет доступа к этой записи.')
+                # The current timetable decides who teaches the lesson; the saved draft only when the lesson is gone.
+                current = current_lesson(state,record['document']['lesson'])
+                if not staff_read(user,workspace,current or record['document']['lesson']): raise HTTPException(403,'Нет доступа к этой записи.')
                 if record['version']!=body.version: raise HTTPException(409,'Запись изменилась. Обновите журнал.')
                 if not record['published']: raise HTTPException(409,'Запись уже скрыта.')
                 revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
                 if not revision or revision[0]!=state.revision:raise HTTPException(409,'Расписание изменилось. Обновите журнал.')
                 from .journal_periods import require_open
-                require_open(db,workspace,record['document']['lesson'],record['published']['lesson'],current_lesson(state,record['document']['lesson']))
+                require_open(db,workspace,record['document']['lesson'],record['published']['lesson'],current)
                 updated,version = now().isoformat(),body.version+1
                 db.execute('UPDATE journal_entries SET version=?,updated=?,actor_name=?,published_document=NULL,published_version=NULL,published_at=NULL WHERE workspace=? AND lesson_key=?',(version,updated,user['name'],workspace,body.lessonKey))
                 db.execute('INSERT INTO journal_history(workspace,lesson_key,version,updated,actor_name,action,document) VALUES (?,?,?,?,?,?,?)',(workspace,body.lessonKey,version,updated,user['name'],'journal.withdrawn',encoded(record['document'])))

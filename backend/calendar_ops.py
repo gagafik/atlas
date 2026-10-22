@@ -1,4 +1,5 @@
 """Resolve weekly patterns into dated lessons, without mutating the template."""
+import json
 from collections import defaultdict, Counter
 from datetime import date, timedelta
 from typing import Literal
@@ -244,17 +245,19 @@ def substitute_options(state, body):
     if body.teacherId and body.teacherId not in row['teacherIds']: raise ValueError('Заменяемый учитель не ведёт этот урок.')
     candidates = []
     retained = [t for t in row['teacherIds'] if t != body.teacherId]
-    # Report only problems involving the proposed teacher; unrelated pre-existing
-    # pupil/room issues remain in the day's report and final edit preview.
-    for teacher in state.teachers:
-        if teacher.id in retained: continue
-        teachers = retained + [teacher.id]
+    def staffed(teachers):
         replacement = {**row, 'teacherIds': teachers}
         if row['groupIds'] and all(ctx.maps['groups'][id].kind == 'staff' for id in row['groupIds']): replacement['audienceSize'] = len(teachers)
         resolved = ([replacement if r['id'] == row['id'] else r for r in baseline['rows']], [])
-        report = day_report(state, body.day, ctx, resolved=resolved)
-        reasons = [i['message'] for i in report['issues'] if row['id'] in i['ids'] and (
-            teacher.id in i.get('teacherIds', []) or i['type'] in ['dated_availability', 'dated_rule', 'dated_travel'])]
+        return day_report(state, body.day, ctx, resolved=resolved)['issues']
+    # Report only problems the proposed teacher adds; issues the lesson already has
+    # without the replaced teacher (pupils, rooms, retained co-teachers) remain in
+    # the day's report and final edit preview.
+    signature = lambda issue: json.dumps(issue, ensure_ascii=False, sort_keys=True)
+    vacated = {signature(i) for i in staffed(retained)}
+    for teacher in state.teachers:
+        if teacher.id in retained: continue
+        reasons = [i['message'] for i in staffed(retained + [teacher.id]) if row['id'] in i['ids'] and signature(i) not in vacated]
         count = sum(teacher.id in r['teacherIds'] and r['status'] != 'cancelled' for r in baseline['rows'])
         candidates.append(dict(id=teacher.id, name=teacher.name, available=not reasons, reasons=list(dict.fromkeys(reasons)), lessons=count))
     return dict(revision=state.revision, candidates=sorted(candidates, key=lambda c: (not c['available'], c['lessons'], c['name'])), completeChecks=baseline['completeChecks'])

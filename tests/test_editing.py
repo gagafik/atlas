@@ -81,6 +81,17 @@ def test_worsening_existing_daily_violation_is_not_silently_allowed():
     assert any(i['type'] == 'daily' for i in result['newIssues'])
 
 
+
+def test_reducing_existing_daily_violation_can_be_applied_but_new_excess_cannot():
+    s = fixture_state()
+    s.workloads[0].maxPerDay = 1
+    s.placements += [Placement(id=f'a{i}', workloadId='w0', day=0, period=i, roomId='r0') for i in (2, 3)]
+    reduced = inspect_edit(s, edit(s, EditRequest(revision=0, action='move', ids=['a3'], day=3, period=1)))
+    assert reduced['canApply'] and reduced['newIssues'] == []
+    s.placements.append(Placement(id='a4', workloadId='w0', day=3, period=1, roomId='r0'))
+    shifted = inspect_edit(s, edit(s, EditRequest(revision=0, action='move', ids=['a3'], day=3, period=2)))
+    assert not shifted['canApply'] and any(i['type'] == 'daily' for i in shifted['newIssues'])
+
 def test_preview_does_not_write_and_stale_or_conflicting_apply_rejected(client):
     original = client.get('/api/state?workspace=demo').json()
     preview = client.post('/api/editor/preview?workspace=demo', json={'revision': 1, 'action': 'move', 'ids': ['a'], 'day': 4}).json()

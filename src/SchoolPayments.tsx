@@ -84,6 +84,7 @@ function PaymentsWorkspace({
     [dirty, setDirty] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
+    auxSequence = useRef(0),
     replay = useRef({ key: "", id: "" });
   const money = (v: string | number) =>
     formatMoney(
@@ -125,17 +126,23 @@ function PaymentsWorkspace({
     }
   }
   async function aux() {
+    const token = ++auxSequence.current;
     try {
-      if (tab === "plans") setPlans(await read(`plans?archived=${archived}`));
+      if (tab === "plans") {
+        const p = await read(`plans?archived=${archived}`);
+        if (token === auxSequence.current) setPlans(p);
+      }
       if (tab === "reports") {
         const [r, p] = await Promise.all([
           read("report" + (through ? `?through=${through}` : "")),
           read("periods"),
         ]);
+        if (token !== auxSequence.current) return;
         setReport(r);
         setPeriods(p);
       }
     } catch (e: any) {
+      if (token !== auxSequence.current) return;
       setError(e.message);
       setPlans({ items: [] });
       setReport(null);
@@ -146,6 +153,7 @@ function PaymentsWorkspace({
     dialog.current?.showModal();
     return () => {
       ++sequence.current;
+      ++auxSequence.current;
     };
   }, []);
   useEffect(() => {
