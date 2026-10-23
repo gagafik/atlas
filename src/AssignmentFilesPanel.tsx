@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 import type { JournalEntry } from "./journal";
 
@@ -94,7 +95,8 @@ export default function AssignmentFilesPanel({
 }) {
   const [items, setItems] = useState<Material[]>([]),
     [error, setError] = useState(""),
-    [uploading, setUploading] = useState(false);
+    [uploading, setUploading] = useState(false),
+    [serverBusy, setServerBusy] = useState(false);
   const controller = useRef<AbortController | null>(null),
     locked = useRef(false),
     alive = useRef(true);
@@ -148,25 +150,15 @@ export default function AssignmentFilesPanel({
           version: String(entry.version),
           filename: f.name,
         });
-        const response = await fetch(
+        const result = await uploadFile(
           `/api/journal/assignment-files?${params}`,
+          f,
           {
-            method: "POST",
-            headers: {
-              "X-Atlas-Request": "1",
-              "Content-Type": "application/octet-stream",
-            },
-            body: f,
             signal: controller.current.signal,
+            onBusy: (b) => alive.current && setServerBusy(b),
+            fallback: "Материал не принят.",
           },
         );
-        const result = await response.json();
-        if (!response.ok)
-          throw Error(
-            typeof result.detail === "string"
-              ? result.detail
-              : "Материал не принят.",
-          );
         if (!alive.current) return;
         setItems((old) => [...old, result]);
         selectedRef.current = [...selectedRef.current, result.id];
@@ -195,6 +187,7 @@ export default function AssignmentFilesPanel({
         </p>
       )}
       {uploading && <p role="status">Загружаю материалы…</p>}
+      {serverBusy && <p role="status">Сервер занят, повторяем…</p>}
       <label className="field">
         <span>Добавить материалы задания</span>
         <input

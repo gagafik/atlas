@@ -181,6 +181,20 @@ def test_file_validation_quota_draft_protection_and_retained_submission(client,s
     r2=new(f,c);monkeypatch.setattr(homework_files,'total_limit',lambda:10)
     assert upload(f,r2).status_code==413
 
+def test_unused_rows_limit_counts_only_deletable_files(client,setup):
+    c,*_=setup;f,_,_=signup(c);r=new(f,c)
+    kept=[ok(upload(f,r)) for _ in range(3)];r=save(f,r,filled(r)|dict(files=[dict(id=x['id'],kind='identity') for x in kept]))
+    loose=ok(upload(f,r))
+    with api.connect() as db:
+        db.execute('UPDATE admission_files SET created=?',((now()-timedelta(days=5)).isoformat(),))
+        db.execute('UPDATE admission_files SET created=? WHERE id=?',((now()-timedelta(days=2)).isoformat(),loose['id']))
+        # The older draft files come first by age but are in use: the limit must not be spent on them.
+        assert admission_files.unused_rows(db,1)==[(loose['id'],loose['size'])]
+        assert [x[0] for x in admission_files.unused_rows(db,-1)]==[loose['id']]
+        admission_files.collect_unused(db)
+        assert {x[0] for x in db.execute('SELECT id FROM admission_files')}=={x['id'] for x in kept}
+        assert not (admission_files.root_for(db)/(loose['id']+'.bin')).exists()
+
 def test_upload_rechecks_session_and_application_version(client,setup,monkeypatch):
     c,*_=setup;f,u,_=signup(c);r=new(f,c);validate=homework_files.validate_file
     def changed(path,name):

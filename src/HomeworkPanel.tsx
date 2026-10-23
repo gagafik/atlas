@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { downscalePhoto, uploadFile } from "./uploads";
 import { MaterialLinks, type Material } from "./AssignmentFilesPanel";
 import HomeworkDeadlinePanel, {
   type HomeworkDeadline,
@@ -132,6 +133,7 @@ function StudentWork({
   const [work, setWork] = useState<Work | null>(null),
     [error, setError] = useState(""),
     [operationBusy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false),
     [dirty, setDirty] = useState(false);
   const [deadlineActivity, setDeadlineActivity] = useState({
     dirty: false,
@@ -427,40 +429,30 @@ function StudentWork({
                     throw Error(
                       "В одном ответе может быть не больше пяти файлов.",
                     );
-                  if (picked.some((f) => f.size > 10 * 1024 * 1024))
+                  // Large photos shrink first, one at a time to bound memory;
+                  // the size limit applies to what is actually sent.
+                  const prepared: File[] = [];
+                  for (const f of picked)
+                    prepared.push(await downscalePhoto(f));
+                  if (!alive.current) return;
+                  if (prepared.some((f) => f.size > 10 * 1024 * 1024))
                     throw Error("Каждый файл должен быть не больше 10 МБ.");
                   upload.current = new AbortController();
-                  for (const f of picked) {
+                  for (const f of prepared) {
                     const params = new URLSearchParams({
                       workspace,
                       studentId,
                       filename: f.name,
                       assignment: work.assignment,
                     });
-                    const response = await fetch(
+                    const result = await uploadFile(
                       `/api/${endpoint}/files?${params}`,
+                      f,
                       {
-                        method: "POST",
-                        headers: {
-                          "X-Atlas-Request": "1",
-                          "Content-Type": "application/octet-stream",
-                        },
-                        body: f,
                         signal: upload.current.signal,
+                        onBusy: (b) => alive.current && setServerBusy(b),
                       },
                     );
-                    let result: any;
-                    try {
-                      result = await response.json();
-                    } catch {
-                      throw Error("Сервер не принял файл. Повторите загрузку.");
-                    }
-                    if (!response.ok)
-                      throw Error(
-                        typeof result.detail === "string"
-                          ? result.detail
-                          : "Файл не принят.",
-                      );
                     if (!alive.current) return;
                     setWork((old) =>
                       old
@@ -478,7 +470,11 @@ function StudentWork({
             />
             <small>
               До 5 файлов по 10 МБ: PDF, изображения, TXT, DOCX, XLSX, PPTX.
+              Большие фото уменьшаются перед отправкой.
             </small>
+            {serverBusy && (
+              <small role="status">Сервер занят, повторяем…</small>
+            )}
           </label>
           {!!work.availableFiles.length && (
             <fieldset className="dated-multi">

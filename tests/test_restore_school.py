@@ -141,3 +141,26 @@ def test_old_sqlite_reports_runtime_requirement_without_touching_backup(tmp_path
     monkeypatch.setattr(sqlite3,'sqlite_version_info',(3,40,1))
     with pytest.raises(ValueError,match='SQLite 3.42'):restore_school.verify_backup(directory)
     assert (directory/'manifest.json').read_bytes()==before
+
+
+def test_shared_blob_rows_are_backed_up_once(tmp_path):
+    from test_backup_school import shared_blob_database
+    source,path,data=shared_blob_database(tmp_path)
+    directory=tmp_path/'backup';manifest=backup_school.create_backup(source,directory)
+    assert [f['path'] for f in manifest['files']]==['school.files/assignments/'+path.name]
+    assert restore_school.verify_backup(directory)['files']==1
+    destination=tmp_path/'restored'
+    assert restore_school.restore_backup(directory,destination)['files']==1
+    assert (destination/'school.files/assignments'/path.name).read_bytes()==data
+    with closing(sqlite3.connect(destination/'school.db')) as db:
+        assert db.execute('SELECT count(*) FROM assignment_files').fetchone()[0]==2
+
+
+def test_rows_sharing_a_file_must_agree_about_its_bytes(tmp_path):
+    from test_backup_school import shared_blob_database
+    source,_,_=shared_blob_database(tmp_path)
+    directory=tmp_path/'backup';backup_school.create_backup(source,directory)
+    with closing(sqlite3.connect(directory/'school.db')) as db:
+        db.execute("UPDATE assignment_files SET sha256=? WHERE id=?",('0'*64,'f'*32));db.commit()
+    rewrite(directory,lambda m:m['database'].update(size=(directory/'school.db').stat().st_size,sha256=backup_school.digest(directory/'school.db')))
+    with pytest.raises(ValueError):restore_school.verify_backup(directory)

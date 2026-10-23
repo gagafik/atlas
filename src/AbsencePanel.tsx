@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 
 type FileItem = { id: string; filename: string; size: number };
@@ -63,6 +64,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   const [expanded, setExpanded] = useState(false),
     [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [items, setItems] = useState<Item[]>([]),
@@ -209,24 +211,14 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       draftId: requestId,
       filename: file.name,
     });
-    const r = await fetch(`/api/journal/absence-files?${query}`, {
-      method: "POST",
-      headers: {
-        "X-Atlas-Request": "1",
-        "Content-Type": "application/octet-stream",
+    const value = await uploadFile(
+      `/api/journal/absence-files?${query}`,
+      file,
+      {
+        onBusy: setServerBusy,
+        fallback: "Не удалось загрузить файл.",
       },
-      body: file,
-    });
-    const value = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      if (r.status === 401)
-        window.dispatchEvent(new Event("atlas-auth-required"));
-      throw new Error(
-        typeof value.detail === "string"
-          ? value.detail
-          : "Не удалось загрузить файл.",
-      );
-    }
+    );
     setFiles((old) => [...old, value]);
   };
   const decide = async (action: string) => {
@@ -464,6 +456,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       if (f) void run(() => upload(f));
                     }}
                   />
+                  {serverBusy && (
+                    <small role="status">Сервер занят, повторяем…</small>
+                  )}
                 </label>
                 {files.map((f) => (
                   <div className="absence-file" key={f.id}>

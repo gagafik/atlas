@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 import type { Account } from "./auth";
 import "./SchoolSite.css";
@@ -123,6 +124,7 @@ export default function SchoolSite({
   );
   const [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [tab, setTab] = useState("items"),
@@ -389,24 +391,15 @@ export default function SchoolSite({
     void run(async () => {
       if (file.size > 10 * 1024 * 1024)
         throw new Error("Фото должно быть не больше 10 МБ.");
-      const response = await fetch(
+      await uploadFile(
         `/api/school-site/items/${entry!.id}/photos?workspace=${workspace}&itemVersion=${entry!.version}`,
+        file,
         {
-          method: "POST",
-          headers: { "X-Atlas-Request": "1", "Content-Type": file.type },
-          body: file,
+          contentType: file.type,
+          onBusy: setServerBusy,
+          fallback: "Не удалось загрузить фото.",
         },
       );
-      const result = await response.json();
-      if (!response.ok)
-        throw Object.assign(
-          new Error(
-            typeof result.detail === "string"
-              ? result.detail
-              : "Не удалось загрузить фото.",
-          ),
-          { status: response.status },
-        );
       await loadPhotos(entry!.id);
       setNotice(
         "Фото загружено. Добавьте его в материал и заполните описание, затем сохраните черновик.",
@@ -938,6 +931,11 @@ export default function SchoolSite({
                                   До 10 МБ и 20 мегапикселей. Снимок будет
                                   уменьшен, исходные метаданные удалены.
                                 </small>
+                                {serverBusy && (
+                                  <small role="status">
+                                    Сервер занят, повторяем…
+                                  </small>
+                                )}
                               </label>
                               <div className="site-photo-pool">
                                 {photos
