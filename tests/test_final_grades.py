@@ -238,6 +238,12 @@ def test_reason_is_stored_only_for_return_reopen_and_withdraw(client):
     r=batch(client,[propose(client,r,s).json()],'approve').json()['items'][0]
     r=batch(client,[r],'publish',reason='остаток').json()['items'][0]
     assert last()['action']=='publish' and last()['reason']==''
+    # Reopening and withdrawing a published grade keep the audit reason.
+    r=batch(client,[r],'reopen',reason='Проверка итога').json()['items'][0]
+    assert last()['action']=='reopen' and last()['reason']=='Проверка итога'
+    r=publish(client,propose(client,r,s).json())
+    withdrawn=batch(client,[r],'withdraw',reason='Ошибочная публикация');assert withdrawn.status_code==200,withdrawn.text
+    assert last()['action']=='withdraw' and last()['reason']=='Ошибочная публикация'
 
 
 def test_reclose_preserves_assignment_and_proposal(client):

@@ -182,15 +182,18 @@ class SchoolForms:
         row=db.execute('SELECT document FROM school_form_answers WHERE form_id=? AND user_id=? AND entity_id=?',(form['id'],user['id'],entity)).fetchone()
         return json.loads(row[0]) if row else dict(id=str(uuid4()),version=0,status='draft',answers={},comment='',updated=None,entityId=entity)
 
-    def save_answer(self, db, form, user, answer, owner, action):
-        answer['version']+=1;answer['updated']=now().isoformat()
+    def save_answer(self, db, form, user, answer, owner, action, private=False):
+        stamp=now().isoformat();answer['version']+=1
+        # A private correction keeps the time and version staff see: 'hidden' counts the saves they never see.
+        if private: answer['hidden']=answer.get('hidden',0)+1;answer['draftUpdated']=stamp
+        else: answer['updated']=stamp;answer.pop('draftUpdated',None)
         db.execute('''INSERT INTO school_form_answers VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(form_id,user_id,entity_id)
             DO UPDATE SET version=excluded.version,status=excluded.status,updated=excluded.updated,document=excluded.document''',
             (answer['id'],form['id'],owner,answer['entityId'],answer['version'],answer['status'],answer['updated'],encoded(answer)))
         # An unsent correction ('draft') is private to the applicant and never enters the history.
-        base={k:v for k,v in answer.items() if k!='draft'}
+        base={k:v for k,v in answer.items() if k not in ['draft','draftUpdated']}|dict(updated=stamp)
         history=base|dict(answers={}) if action in ['save','withdraw'] else base
-        db.execute('INSERT INTO school_form_history(form_id,answer_id,created,actor_id,action,document) VALUES (?,?,?,?,?,?)',(form['id'],answer['id'],answer['updated'],user['id'],action,encoded(history)))
+        db.execute('INSERT INTO school_form_history(form_id,answer_id,created,actor_id,action,document) VALUES (?,?,?,?,?,?)',(form['id'],answer['id'],stamp,user['id'],action,encoded(history)))
         return dict(id=answer['id'],version=answer['version'],status=answer['status'])
 
     def ordered(self, db, form_id, snap, statuses, after=''):
@@ -362,8 +365,8 @@ class SchoolForms:
                 form=self.form(db,workspace,id);self.require_recipient(db,form,user,snap,workspace,entityId)
                 answer=self.answer(db,form,user,entityId)
                 # The applicant continues from their private correction; staff never receive it.
-                draft=answer.pop('draft',None)
-                if draft is not None: answer['answers']=draft
+                draft=answer.pop('draft',None);saved=answer.pop('draftUpdated',None);answer.pop('hidden',None)
+                if draft is not None: answer['answers']=draft;answer['updated']=saved or answer['updated']
                 history=[dict(version=d['version'],status=d['status'],updated=d['updated'],comment=d['comment']) for (document,) in db.execute('SELECT document FROM school_form_history WHERE form_id=? AND answer_id=? ORDER BY seq DESC LIMIT 30',(id,answer['id'])) for d in [json.loads(document)]]
                 return dict(answer=answer,history=history,formVersion=form['version'],accepting=accepting(form))
 
@@ -379,6 +382,7 @@ class SchoolForms:
                 correcting=answer['status']=='returned' and body.action in ['save','submit'] and form['status'] in ['open','closed']
                 if not accepting(form) and not correcting: raise HTTPException(409,'Приём ответов сейчас закрыт.')
                 if answer['version']!=body.version: raise HTTPException(409,'Ответ изменился в другом окне. Загрузите свежую версию.')
+                private=False
                 if body.action=='withdraw':
                     if answer['status']!='submitted': raise HTTPException(409,'Отозвать можно только ещё не рассмотренный ответ.')
                     answer['status']='withdrawn'
@@ -388,9 +392,9 @@ class SchoolForms:
                     # A decided application is archived in history; a new submission starts the next cycle.
                     if body.action=='submit': answer.pop('draft',None);answer['answers']=body.answers;answer['status']='submitted';answer['comment']=''
                     # An unsent correction stays private; staff keep the version they reviewed.
-                    elif answer['status'] in ['returned','approved','rejected']: answer['draft']=body.answers
+                    elif answer['status'] in ['returned','approved','rejected']: answer['draft']=body.answers;private=True
                     else: answer['answers']=body.answers;answer['status']='draft';answer['comment']=''
-                result=self.save_answer(db,form,user,answer,user['id'],body.action)
+                result=self.save_answer(db,form,user,answer,user['id'],body.action,private)
                 if body.action=='submit':
                     reviewers=[u for u in self.delegates(db,form,snap,workspace) if u['id']!=user['id']]
                     self.notifications.deliver(db,reviewers,workspace,answer['version'],'forms.submitted',topic='forms.submitted:'+form['id'])
@@ -405,7 +409,8 @@ class SchoolForms:
                 for key,answer_id,class_name,name,entity_name,role,owner,entity in rows[:limit]:
                     answer=json.loads(documents[answer_id])
                     if answer['status']=='withdrawn': answer['answers']={}
-                    answer.pop('draft',None)
+                    # Unsent corrections and the saves behind them stay with the applicant: staff keep the version and time they saw.
+                    answer.pop('draft',None);answer.pop('draftUpdated',None);answer['version']-=answer.pop('hidden',0)
                     # 'own' only hides the decision controls; user ids never leave the server.
                     items.append(answer|dict(name=name,entityName=entity_name,role=role,className=class_name,own=owner==user['id'] or bool(entity) and entity in mine))
                 return dict(items=items,nextAfter=rows[limit-1][1] if len(rows)>limit else None)
@@ -422,7 +427,7 @@ class SchoolForms:
                 if not row: raise HTTPException(404,'Ответ не найден.')
                 answer=json.loads(row[1])
                 if row[0]==user['id'] or answer['entityId'] and answer['entityId'] in grant_ids(user,workspace,'student'): raise HTTPException(403,'Свою заявку или заявку своего ребёнка рассматривает другой ответственный.')
-                if answer['status']!='submitted' or answer['version']!=body.version: raise HTTPException(409,'Ответ уже изменён или отозван. Обновите список.')
+                if answer['status']!='submitted' or answer['version']-answer.get('hidden',0)!=body.version: raise HTTPException(409,'Ответ уже изменён или отозван. Обновите список.')
                 answer['status']=body.action;answer['comment']=body.comment
                 result=self.save_answer(db,form,user,answer,row[0],body.action)
                 account=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(row[0],)).fetchone()
@@ -440,7 +445,7 @@ class SchoolForms:
                 # Draft text and draft-save activity never enter the staff history.
                 result=[]
                 for document,action in db.execute("SELECT document,action FROM school_form_history WHERE form_id=? AND answer_id=? AND action!='save' ORDER BY seq DESC LIMIT 30",(id,answer_id)):
-                    item=json.loads(document);result.append({k:item[k] for k in ['version','status','updated','comment']}|dict(action=action))
+                    item=json.loads(document);result.append({k:item[k] for k in ['status','updated','comment']}|dict(version=item['version']-item.get('hidden',0),action=action))
                 return result
 
         @app.get('/api/forms/items/{id}/summary')
