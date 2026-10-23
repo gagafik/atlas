@@ -608,6 +608,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         : "Запись доступна только для просмотра: урок отменён, удалён или назначен другому преподавателю."}
                     </p>
                   )}
+                  {entry.futureLesson && (
+                    <p className="info-line">
+                      Урок ещё не прошёл. Тему, домашнее задание и материалы
+                      можно опубликовать заранее; посещаемость и оценки
+                      публикуются в день урока.
+                    </p>
+                  )}
                   {entry.needsSync && entry.writable && (
                     <div className="info-line">
                       <p>
@@ -929,6 +936,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                     </p>
                     <button
                       type="button"
+                      disabled={!!entry.futureLesson}
                       onClick={() =>
                         content((c) => ({
                           ...c,

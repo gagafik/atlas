@@ -3,6 +3,7 @@ from datetime import date
 import hashlib
 import json
 from typing import Literal
+from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, Field, model_validator
 from .models import Model
@@ -95,6 +96,14 @@ class SaveEntry(Model):
 class Withdraw(Model):
     lessonKey: str = Field(min_length=64, max_length=64)
     version: int = Field(ge=1)
+
+
+def today():return now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()
+
+
+def has_marks(content):
+    """Attendance or grades exist only after the lesson took place."""
+    return any(r['attendance']!='unmarked' or r['lateMinutes'] or any(g['score'] is not None or g['label'] for g in r['grades']) for r in content['records'])
 
 
 def key_for(row):
@@ -314,6 +323,7 @@ class Journal:
         else:
             excuses,closed=restrictions(db)
         return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
+                             futureLesson=bool(lesson and lesson['date']>today().isoformat()),
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
 
     def recheck_account(self, db, user):
@@ -418,6 +428,8 @@ class Journal:
             expected = {s['id'] for s in record['document']['lesson']['students']}
             if {r.studentId for r in body.content.records}!=expected: raise HTTPException(422,'Список записей учеников должен совпадать с составом журнала.')
             document = dict(lesson=record['document']['lesson'],content=body.content.model_dump(mode='json'))
+            if body.publish and document['lesson']['date']>today().isoformat() and has_marks(document['content']):
+                raise HTTPException(422,'Урок ещё не прошёл. Посещаемость и оценки публикуются в день урока или позже; тему, домашнее задание и материалы можно опубликовать заранее без отметок.')
             created,version = now().isoformat(),body.version+1
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);self.access.tables(db)

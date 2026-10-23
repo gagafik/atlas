@@ -257,3 +257,11 @@ def test_substitute_marks_lesson_and_closed_period_blocks_marks(client):
     close(client, period(client))
     assert not ok(substitute.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['canMark']
     assert lesson_note(substitute, key, ['s1']).status_code == 403
+
+
+def test_future_lesson_cannot_be_marked(client, monkeypatch):
+    enable(client); create(client, 'teacher')
+    t = signed('teacher'); key = lesson_key(t)
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 16))
+    assert not ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['canMark']
+    assert lesson_note(t, key, ['s1']).status_code == 422

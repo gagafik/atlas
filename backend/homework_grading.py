@@ -64,6 +64,8 @@ class HomeworkGrading:
         day=date.fromisoformat(record['document']['lesson']['date'])
         if record['currentDate']!=day.isoformat() or not ctx['state'].settings.yearStart<=day<=ctx['state'].settings.yearEnd:
             return 'Дата урока изменилась или находится вне учебного года.'
+        from .journal import today
+        if day>today():return 'Урок ещё не прошёл: оценку можно перенести в журнал в день урока или позже.'
         if any(pupil_record(d,ctx['student']) is None for d in [record['document'],ctx['published']]):
             return 'Ученик отсутствует в одной из редакций журнала.'
         return ''

@@ -64,6 +64,7 @@ export interface JournalEntry {
   writable: boolean;
   needsSync: boolean;
   currentDate: string | null;
+  futureLesson?: boolean;
   hasPublished: boolean;
   publishedVersion: number | null;
   publishedAt: string | null;
