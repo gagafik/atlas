@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from backend import api,absence_bulk
 from test_access import client,create,signed
-from test_absences import setup,body,send,decide,url,mark,upload
+from test_absences import setup,body,send,decide,url,mark,upload,reviewers
 from test_journal import entry,report
 
 
@@ -92,7 +92,7 @@ def test_preview_and_receipt_bound_to_actor_and_workspace(client):
     assert client.post('/api/journal/absences/bulk/'+preview['id']+'/apply?workspace=school').status_code==404
     assert apply(teacher,dict(id='missing')).status_code==404
     assert apply(teacher,preview).status_code==200
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==200
+    reviewers({})
     assert apply(teacher,preview).status_code==404
 
 
@@ -113,7 +113,7 @@ def test_preview_invalidated_by_context_changes(client,monkeypatch,change):
     if change=='expiry':
         clock=absence_bulk.now();monkeypatch.setattr(absence_bulk,'now',lambda:clock+timedelta(minutes=15))
     elif change=='reviewers':
-        assert client.put(url('/reviewers'),json=dict(version=1,assignments={'c-demo-a':[person['id']]})).status_code==200
+        reviewers({'c-demo-a':[person['id']]})
     else:
         state=api.read('demo')
         if change=='school':state.settings.name='School revision changed'

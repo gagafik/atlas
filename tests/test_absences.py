@@ -4,15 +4,21 @@ import json
 from uuid import uuid4
 import pytest
 from backend import api,absence_files,homework_files
+from backend.absences import tables as absence_tables
 from test_access import client,enable,create,signed
 from test_journal import DAY,lesson,entry,write,graded,report
 
 
 def url(path=''):return '/api/journal/absences'+path+'?workspace=demo'
 def body(**values):return dict(requestId=str(uuid4()),studentId='s1',startDate=DAY,endDate=DAY,reason='Личная причина отсутствия',fileIds=[])|values
+def reviewers(assignments):
+    """Legacy reviewer document; the old HTTP route was removed."""
+    with api.connect() as db:
+        absence_tables(db)
+        db.execute("INSERT INTO absence_reviewers VALUES ('demo',1,?) ON CONFLICT(workspace) DO UPDATE SET version=version+1,document=excluded.document",(json.dumps(assignments),))
 def setup(client):
     enable(client);parent=create(client,'parent');teacher=create(client,'teacher');create(client,'student');create(client,'parent',login='other-parent');create(client,'teacher',login='other-teacher',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
-    assigned=client.put(url('/reviewers'),json=dict(version=0,assignments={'c-demo-a':[teacher['id']]}));assert assigned.status_code==200,assigned.text
+    reviewers({'c-demo-a':[teacher['id']]})
     return parent,teacher,signed('parent'),signed('teacher')
 def send(parent,payload=None):
     r=parent.post(url(),json=payload or body());assert r.status_code==200,r.text;return r.json()
@@ -65,12 +71,10 @@ def test_private_evidence_author_other_guardian_student_and_teacher_scopes(clien
 def test_current_coordinator_assignment_is_required_and_does_not_grant_other_grades(client):
     _,_,parent,teacher=setup(client);notice=send(parent);mark(client)
     other=signed('other-teacher');assert decide(other,notice).status_code==404
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==200
+    reviewers({})
     assert teacher.get(url('/'+notice['id'])).status_code==404
     assert decide(teacher,notice).status_code==404
-    assert teacher.put(url('/reviewers'),json=dict(version=2,assignments={})).status_code==403
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==409
-    assert client.put(url('/reviewers'),json=dict(version=2,assignments={'unknown':['bad']})).status_code==422
+    assert client.put(url('/reviewers'),json=dict(version=2,assignments={})).status_code in [404,405]
     assert decide(client,notice).status_code==200
 
 

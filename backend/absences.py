@@ -23,6 +23,7 @@ def tables(db):
         UNIQUE(workspace,author_id,request_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS absence_student ON absence_notices(workspace,student_id,status,start_at,end_at)')
     db.execute('CREATE INDEX IF NOT EXISTS absence_author ON absence_notices(workspace,author_id,created)')
+    # Legacy reviewer document, read only by class_staff.config() until the registry is saved.
     db.execute('CREATE TABLE IF NOT EXISTS absence_reviewers (workspace TEXT PRIMARY KEY,version INTEGER,document TEXT)')
     db.execute('''CREATE TABLE IF NOT EXISTS absence_history (
         id INTEGER PRIMARY KEY,notice_id TEXT,version INTEGER,created TEXT,actor_id TEXT,actor_name TEXT,
@@ -69,15 +70,6 @@ class Decision(Model):
     version: int = Field(ge=1)
     action: Literal['approve','reject','revoke','withdraw']
     comment: str = Field(default='',max_length=2000)
-
-
-class Reviewers(Model):
-    version: int = Field(ge=0)
-    assignments: dict[str,list[str]]
-    @model_validator(mode='after')
-    def bounded(self):
-        if len(self.assignments)>500 or any(len(v)>20 or len(set(v))!=len(v) for v in self.assignments.values()):raise ValueError('До 500 классов и 20 разных ответственных на класс.')
-        return self
 
 
 class Absences:
@@ -195,22 +187,6 @@ class Absences:
                     candidates=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")]
                     result.update(config=config,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],teachers=[dict(id=u['id'],name=u['name'],login=u['login']) for u in candidates if user_ids(u,workspace,'teacher')])
                 return result
-
-        @app.put('/api/journal/absences/reviewers')
-        def reviewers(body:Reviewers,request:Request,workspace:Workspace='school'):
-            user,snap=self.context(request,workspace)
-            if user['role']!='admin':raise HTTPException(403,'Назначение ответственных доступно администратору.')
-            with self.access.lock,self.access.connect() as db:
-                tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
-                if db.execute('SELECT 1 FROM class_staff_permissions WHERE workspace=?',(workspace,)).fetchone():
-                    raise HTTPException(409,'Полномочия уже разделены. Используйте «Права работы с классами» в разделе пользователей.')
-                if self.config(db,workspace)['version']!=body.version:raise HTTPException(409,'Назначения изменились. Обновите раздел.')
-                classes={c.id for c in snap.state.classes}
-                teachers={r[0]:self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")}
-                if set(body.assignments)-classes or any(a not in teachers or not user_ids(teachers[a],workspace,'teacher') for ids in body.assignments.values() for a in ids):raise HTTPException(422,'Выберите существующий класс и действующего учителя этого пространства.')
-                db.execute('INSERT INTO absence_reviewers VALUES (?,?,?) ON CONFLICT(workspace) DO UPDATE SET version=excluded.version,document=excluded.document',(workspace,body.version+1,encoded(body.assignments)))
-                self.access.record(db,'absence.reviewers_updated',workspace,detail=encoded(body.assignments))
-            return dict(version=body.version+1)
 
         @app.get('/api/journal/absences')
         def listing(request:Request,workspace:Workspace='school',status:Literal['all','pending','approved','rejected','withdrawn','revoked']='all',before:int|None=Query(default=None,ge=1)):
