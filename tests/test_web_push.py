@@ -170,6 +170,37 @@ def test_owner_isolation_versions_limits_and_rebinding(client,push):
     assert client.post(BASE+'/devices',json=data).status_code==200
 
 
+def test_device_limit_counts_only_active_subscriptions(client,push):
+    enable(client);device,data=subscribe(client)
+    for _ in range(9):subscribe(client)
+    with api.access.lock,api.connect() as db:db.execute('UPDATE push_devices SET active=0,version=version+1 WHERE id=?',(device['id'],))
+    newest,_=subscribe(client)
+    refused=client.post(BASE+'/devices',json=data|dict(version=2));assert refused.status_code==409 and '10 устройств' in refused.json()['detail']
+    listed=client.get(BASE+'/options').json()['devices']
+    assert len(listed)==11 and sum(d['active'] for d in listed)==10
+    # Inactive entries stay visible for removal but are bounded to ten per account.
+    with api.access.lock,api.connect() as db:
+        template=db.execute('SELECT * FROM push_devices WHERE id=?',(device['id'],)).fetchone()
+        for i in range(12):
+            db.execute('INSERT INTO push_devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,?,NULL)',(uuid4().hex,uuid4().hex,template[2],template[3],template[4],template[5],template[6],template[7],1,'Старое',template[10],template[11]-1-i,template[12],'enabled'))
+    client.post(BASE+'/devices/'+newest['id']+'/remove',json=dict(version=newest['version'])).raise_for_status()
+    latest,_=subscribe(client)
+    with api.connect() as db:
+        rows=db.execute('SELECT id,active FROM push_devices WHERE user_id=?',(template[5],)).fetchall()
+        assert sum(not r[1] for r in rows)==10 and latest['id'] in {r[0] for r in rows} and device['id'] in {r[0] for r in rows}
+        assert sum(r[1] for r in rows)==10
+
+
+def test_topic_notifications_keep_only_the_newest_push_target(client,push):
+    account=enable(client);subscribe(client)
+    def topic():
+        with api.access.lock,api.connect() as db:api.notifications.deliver(db,[account],'demo',1,'forms.submitted',topic='forms.submitted:one')
+    topic();topic()
+    with api.connect() as db:
+        newest=db.execute('SELECT max(id),count(*) FROM notifications WHERE topic=?',('forms.submitted:one',)).fetchone()
+        assert newest[1]==1 and db.execute('SELECT notification_id FROM push_outbox').fetchone()[0]==newest[0]
+
+
 @pytest.mark.parametrize('endpoint',[
     'http://fcm.googleapis.com/fcm/send/secret',
     'https://127.0.0.1/private','https://169.254.169.254/metadata',

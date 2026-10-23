@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 from .models import Model
 from .access import now
 from .journal import user_ids
+from .natural import natural
 from .notifications import encoded
 
 
@@ -193,9 +194,12 @@ class FinalGrades:
                 book=self.book(db,workspace,id)
                 choices=db.execute("SELECT DISTINCT r.class_id,json_extract(r.source,'$.student.className'),r.subject_id,json_extract(r.source,'$.subject') FROM grading_rows r WHERE "+base,params).fetchall()
                 where=base+' AND (?=\'\' OR r.class_id=?) AND (?=\'\' OR r.subject_id=?) AND (?=\'all\' OR r.status=?)';params+=[classId,classId,subjectId,subjectId,status,status]
-                total=db.execute('SELECT count(*) FROM grading_rows r WHERE '+where,params).fetchone()[0]
-                ids=db.execute('SELECT r.id FROM grading_rows r WHERE '+where+' ORDER BY r.class_id,r.student_id,r.subject_id LIMIT 50 OFFSET ?',params+[offset]).fetchall()
-                return dict(book=book,items=[self.row(db,workspace,r[0],user) for r in ids],total=total,nextOffset=offset+50 if total>offset+50 else None,classes=[dict(id=k,name=v) for k,v in sorted({(r[0],r[1]) for r in choices})],subjects=[dict(id=k,name=v) for k,v in sorted({(r[2],r[3]) for r in choices})])
+                # Names come from the frozen book source, so the order matches the cards; only short columns are sorted per request.
+                rows=db.execute("SELECT r.id,json_extract(r.source,'$.student.className'),json_extract(r.source,'$.student.name'),json_extract(r.source,'$.subject') FROM grading_rows r WHERE "+where,params).fetchall()
+                rows.sort(key=lambda x:(natural(x[1]),natural(x[2]),natural(x[3]),x[0]))
+                total=len(rows);ids=rows[offset:offset+50]
+                classes=sorted({(r[0],r[1] or '') for r in choices},key=lambda c:(natural(c[1]),c[0]));subjects=sorted({(r[2],r[3] or '') for r in choices},key=lambda c:(natural(c[1]),c[0]))
+                return dict(book=book,items=[self.row(db,workspace,r[0],user) for r in ids],total=total,nextOffset=offset+50 if total>offset+50 else None,classes=[dict(id=k,name=v) for k,v in classes],subjects=[dict(id=k,name=v) for k,v in subjects])
 
         @app.get('/api/final-grades/rows/{id}/evidence')
         def evidence(id:str,request:Request,workspace:Workspace='school',after:int=Query(0,ge=0)):
@@ -232,7 +236,9 @@ class FinalGrades:
                 calc=recommendation(row['source'],scale)
                 if body.outcome=='graded' and body.label not in [b['label'] for b in scale['bands']]:raise HTTPException(422,'Выберите итог из школьной шкалы.')
                 if body.outcome!='graded' and body.label:raise HTTPException(422,'У неаттестации или освобождения нет оценки.')
-                if (body.outcome!='graded' or not calc['recommended'] or body.label!=calc['recommended']) and len(body.explanation)<3:raise HTTPException(422,'Объясните итог без рекомендации или отклонение от неё.')
+                # A labels scale never computes a recommendation: choosing the grade by hand is its normal use.
+                manual=scale['kind']=='labels' and body.outcome=='graded'
+                if not manual and (body.outcome!='graded' or not calc['recommended'] or body.label!=calc['recommended']) and len(body.explanation)<3:raise HTTPException(422,'Объясните итог без рекомендации или отклонение от неё.')
                 row['proposal']=dict(outcome=body.outcome,label=body.label,comment=body.comment,explanation=body.explanation,scale=scale,calculation=calc,author=user['name'],preparedAt=now().isoformat())
                 row['status']='submitted' if body.submit else 'draft';self.save(db,workspace,row,user,'submitted' if body.submit else 'saved')
                 return row
@@ -259,7 +265,7 @@ class FinalGrades:
                         if row['proposal']:row['proposal'].pop('approval',None)
                     elif body.action=='publish':
                         if row['status']!='approved':raise HTTPException(409,'Публиковать можно только утверждённые итоги.')
-                        p=row['proposal'];public=dict(student=row['source']['student'],subjectId=row['subjectId'],subject=row['source']['subject'],periodId=book['period']['id'],period=book['period']['name'],closureVersion=book['closureVersion'],outcome=p['outcome'],label=p['label'],comment=p['comment'],scale=p['scale'],calculation=p['calculation'],publishedAt=now().isoformat())
+                        p=row['proposal'];public=dict(student=row['source']['student'],subjectId=row['subjectId'],subject=row['source']['subject'],periodId=book['period']['id'],period=book['period']['name'],closureVersion=book['closureVersion'],outcome=p['outcome'],label=p['label'],comment=p['comment'],scale=p['scale'],publishedAt=now().isoformat())
                         db.execute('INSERT INTO final_results VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace,period_id,student_id,subject_id) DO UPDATE SET row_id=excluded.row_id,version=excluded.version,document=excluded.document',(workspace,book['period']['id'],row['studentId'],row['subjectId'],row['id'],row['version']+1,encoded(public)))
                         row['status']='published';changed.add(row['studentId'])
                     elif body.action=='withdraw':
@@ -269,7 +275,8 @@ class FinalGrades:
                         row['status']='draft'
                         if row['proposal']:row['proposal'].pop('approval',None)
                         changed.add(row['studentId'])
-                    self.save(db,workspace,row,user,body.action,body.reason);results.append(row)
+                    # Only these actions carry a reason; approve, publish and assign never store a stale one.
+                    self.save(db,workspace,row,user,body.action,body.reason if body.action in ['return','reopen','withdraw'] else '');results.append(row)
                 if changed:
                     users=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role IN ('student','parent')")]
                     recipients=[u for u in users if user_ids(u,workspace,'student') & changed]
@@ -284,6 +291,9 @@ class FinalGrades:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace)
                 # Check ownership before revealing period existence or any result.
                 period=self.periods.find(db,workspace,periodId)
-                items=[json.loads(r[0]) for r in db.execute('SELECT document FROM final_results WHERE workspace=? AND period_id=? AND student_id=? ORDER BY subject_id',(workspace,periodId,studentId))]
-                for item in items:item['current']=period['status']=='closed' and period['version']==item['closureVersion']
+                items=[json.loads(r[0]) for r in db.execute('SELECT document FROM final_results WHERE workspace=? AND period_id=? AND student_id=?',(workspace,periodId,studentId))]
+                items.sort(key=lambda item:(natural(item.get('subject')),item['subjectId']))
+                for item in items:
+                    # Internal recommendation details stay with staff, including records published before this rule.
+                    item.pop('calculation',None);item['current']=period['status']=='closed' and period['version']==item['closureVersion']
                 return dict(period=period,items=items)
