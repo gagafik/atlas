@@ -249,7 +249,8 @@ export default function PushSettings({
             </>
           )}
           <h4>
-            Мои устройства ({options.devices.length}/{options.limit || 10})
+            Мои устройства ({options.devices.filter((d) => d.active).length}/
+            {options.limit || 10})
           </h4>
           {!options.devices.length && <p>Подключённых устройств пока нет.</p>}
           <ul className="push-devices">

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api } from "./api";
+import { defaultDraft, needsReason } from "./finalGrades";
 import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import { csvCell } from "./utils";
 
@@ -38,16 +39,17 @@ type Proposal = {
   calculation: Calculation;
   author: string;
   approval?: { actor: string; created: string };
+  carriedFrom?: { bookId: string };
 };
 type Published = {
   student: Named & { className: string };
+  subjectId: string;
   subject: string;
   label: string;
   outcome: string;
   comment: string;
   period: string;
   scale: Scale;
-  calculation: Calculation;
   closureVersion: number;
   publishedAt: string;
   current: boolean;
@@ -399,6 +401,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
       items: Published[];
     } | null>(null);
   const lock = useRef(false),
+    lastScale = useRef(""),
     reportRef = useRef<HTMLDivElement>(null);
   const leave = () =>
     !dirty ||
@@ -453,14 +456,14 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     setHistory([]);
     setNextHistory(null);
     const p = r.row.proposal as Proposal | null;
-    setDraft({
-      scaleId: p?.scale.id || "",
-      scaleVersion: p?.scale.version || 0,
-      outcome: p?.outcome || "graded",
-      label: p?.label || "",
-      comment: p?.comment || "",
-      explanation: p?.explanation || "",
-    });
+    setDraft(
+      defaultDraft(
+        p,
+        options?.scales || [],
+        r.recommendations,
+        lastScale.current,
+      ),
+    );
     setDirty(false);
   }
   async function act(action: string) {
@@ -479,8 +482,9 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
           .filter((r) => selected.includes(r.id))
           .map((r) => ({ id: r.id, version: r.version })),
         teacherId,
-        reason,
+        reason: needsReason(action) ? reason.trim() : "",
       });
+      setReason("");
       clearRow();
       await loadSheet(bookId, offset);
       setNotice(
@@ -577,6 +581,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                     if (!leave()) return;
                     await run(async () => {
                       clearRow();
+                      setReason("");
                       setFilter({ classId: "", subjectId: "", status: "all" });
                       await loadOptions();
                       await loadSheet(id, 0, {
@@ -604,6 +609,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                   onChange={(id) => {
                     if (!leave()) return;
                     clearRow();
+                    setReason("");
                     setBookId(id);
                     setSheet(null);
                     setFilter({ classId: "", subjectId: "", status: "all" });
@@ -909,7 +915,11 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                               updateDraft({
                                 scaleId: id,
                                 scaleVersion: s?.version || 0,
-                                label: "",
+                                label:
+                                  (s &&
+                                    calculations[`${id}:${s.version}`]
+                                      ?.recommended) ||
+                                  "",
                               });
                             }}
                           />
@@ -949,7 +959,10 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                               onChange={(e) =>
                                 updateDraft({
                                   outcome: e.target.value,
-                                  label: "",
+                                  label:
+                                    e.target.value === "graded"
+                                      ? calculation?.recommended || ""
+                                      : "",
                                 })
                               }
                             >
@@ -993,8 +1006,10 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                           </label>
                           <p>
                             Обоснование обязательно при отклонении от
-                            рекомендации, отсутствии рекомендации, неаттестации
-                            или освобождении. Оно не публикуется семье.
+                            рекомендации, отсутствии рекомендации по пороговой
+                            шкале, неаттестации или освобождении. Для шкалы с
+                            ручным выбором оценки оно необязательно. Оно не
+                            публикуется семье.
                           </p>
                           <div className="dated-toolbar">
                             {[false, true].map((submit) => (
@@ -1013,6 +1028,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                                         submit,
                                       },
                                     );
+                                    lastScale.current = draft.scaleId;
                                     await loadSheet(bookId, offset);
                                     await openRow(r);
                                     setNotice(
@@ -1030,6 +1046,13 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                             ))}
                           </div>
                         </fieldset>
+                        {row.proposal?.carriedFrom &&
+                          row.status === "draft" && (
+                            <p className="error">
+                              Итог перенесён из прошлого закрытия. Проверьте
+                              работы и отправьте заново.
+                            </p>
+                          )}
                         {row.proposal && (
                           <p>
                             Сохранённый итог: {finalLabel(row.proposal)}.
@@ -1183,7 +1206,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                         <p>Опубликованных итогов пока нет.</p>
                       )}
                       {report.items.map((r) => (
-                        <article key={r.subject}>
+                        <article key={r.subjectId}>
                           <h4>
                             {r.subject} — {finalLabel(r)}
                           </h4>

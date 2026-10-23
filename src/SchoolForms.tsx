@@ -55,7 +55,9 @@ type Answer = {
   entityId: string;
   name?: string;
   entityName?: string;
+  className?: string;
   role?: Role;
+  own?: boolean;
 };
 type History = {
   version: number;
@@ -428,11 +430,15 @@ export default function SchoolForms({
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  // A returned application stays correctable after the deadline or a manual close; a decided one needs open intake.
+  const returned = answer?.status === "returned";
+  const decided =
+    answer?.status === "approved" || answer?.status === "rejected";
   const editable =
     !!form &&
-    form.accepting &&
     !!answer &&
-    !["submitted", "approved", "rejected"].includes(answer.status);
+    answer.status !== "submitted" &&
+    (form.accepting || (returned && ["open", "closed"].includes(form.status)));
   return (
     <dialog
       ref={dialog}
@@ -1208,10 +1214,22 @@ export default function SchoolForms({
                       ))}
                     </select>
                   </label>
-                  {!form.accepting && (
+                  {!form.accepting &&
+                    (editable ? (
+                      <p className="school-forms-notice">
+                        Заявку, возвращённую на исправление, можно отправить
+                        повторно и после окончания приёма.
+                      </p>
+                    ) : (
+                      <p className="school-forms-notice">
+                        Сейчас ответы не принимаются. Начало:{" "}
+                        {date(form.definition.opensAt)}.
+                      </p>
+                    ))}
+                  {decided && editable && (
                     <p className="school-forms-notice">
-                      Сейчас ответы не принимаются. Начало:{" "}
-                      {date(form.definition.opensAt)}.
+                      Решение по прошлой заявке сохранено в истории. Отправка
+                      создаст новую заявку.
                     </p>
                   )}
                   {answer && (
@@ -1336,7 +1354,9 @@ export default function SchoolForms({
                             className="primary"
                             onClick={() => void run(() => sendAnswer("submit"))}
                           >
-                            Отправить ответ
+                            {decided
+                              ? "Отправить новую заявку"
+                              : "Отправить ответ"}
                           </button>
                         </div>
                         <p>* Обязательный вопрос. Черновик виден только вам.</p>
@@ -1415,6 +1435,7 @@ export default function SchoolForms({
                       <h4>
                         {r.name}
                         {r.entityName ? ` · ${r.entityName}` : ""}
+                        {r.className ? ` · ${r.className}` : ""}
                       </h4>
                       <p>
                         {r.role ? roleNames[r.role] : ""} · {statuses[r.status]}{" "}
@@ -1436,7 +1457,14 @@ export default function SchoolForms({
                       )}
                       {form.definition.kind === "application" &&
                         r.status === "submitted" &&
-                        form.status !== "archived" && (
+                        form.status !== "archived" &&
+                        r.own && (
+                          <p>Свою заявку рассматривает другой ответственный.</p>
+                        )}
+                      {form.definition.kind === "application" &&
+                        r.status === "submitted" &&
+                        form.status !== "archived" &&
+                        !r.own && (
                           <fieldset disabled={busy}>
                             <legend>Решение по заявке</legend>
                             <label>
