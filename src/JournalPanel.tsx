@@ -21,6 +21,7 @@ import {
   numberField,
   numberValue,
   contentProblem,
+  withKind,
   hasEarlierRevisions,
   type Assessment,
   type Grade,
@@ -820,11 +821,10 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   ...c,
                                   assessments: c.assessments.map((x) =>
                                     x.id === a.id
-                                      ? {
-                                          ...x,
-                                          kind: e.target
-                                            .value as Assessment["kind"],
-                                        }
+                                      ? withKind(
+                                          x,
+                                          e.target.value as Assessment["kind"],
+                                        )
                                       : x,
                                   ),
                                 }))

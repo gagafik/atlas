@@ -125,13 +125,26 @@ export function numberField(value: string): number {
 export function numberValue(value: number): number | "" {
   return Number.isNaN(value) ? "" : value;
 }
+const maxScoreOk = (v: number) => Number.isFinite(v) && v > 0 && v <= 10000;
+const weightOk = (v: number) => Number.isFinite(v) && v >= 0 && v <= 100;
+// The server validates both numbers for every format, but only points show them,
+// so switching to a text grade replaces an invalid hidden value with the default.
+export function withKind(a: Assessment, kind: Assessment["kind"]): Assessment {
+  if (kind === "points") return { ...a, kind };
+  return {
+    ...a,
+    kind,
+    maxScore: maxScoreOk(a.maxScore) ? a.maxScore : 10,
+    weight: weightOk(a.weight) ? a.weight : 1,
+  };
+}
 // First Russian problem that the server would reject, or "" when the content may be sent.
 export function contentProblem(c: JournalContent): string {
   for (const a of c.assessments) {
     if (a.kind !== "points") continue;
-    if (!Number.isFinite(a.maxScore) || a.maxScore <= 0 || a.maxScore > 10000)
+    if (!maxScoreOk(a.maxScore))
       return `«${a.name}»: укажите максимум баллов больше 0 и не больше 10000.`;
-    if (!Number.isFinite(a.weight) || a.weight < 0 || a.weight > 100)
+    if (!weightOk(a.weight))
       return `«${a.name}»: укажите вес работы от 0 до 100.`;
   }
   const units = c.curriculum?.units;

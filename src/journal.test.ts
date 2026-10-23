@@ -6,6 +6,7 @@ import {
   numberField,
   numberValue,
   contentProblem,
+  withKind,
   hasEarlierRevisions,
   type JournalDocument,
 } from "./journal";
@@ -97,6 +98,31 @@ describe("journal export", () => {
   });
 });
 describe("number fields", () => {
+  it("does not hide an invalid maximum or weight behind a text grade", () => {
+    const points = {
+      id: "w",
+      name: "Работа",
+      kind: "points" as const,
+      maxScore: Number.NaN,
+      weight: Number.NaN,
+    };
+    const label = withKind(points, "label");
+    expect(label).toMatchObject({ kind: "label", maxScore: 10, weight: 1 });
+    for (const maxScore of [0, -1, 10001]) {
+      expect(withKind({ ...points, maxScore }, "label").maxScore).toBe(10);
+    }
+    expect(withKind({ ...points, weight: 101 }, "label").weight).toBe(1);
+    // Valid values survive both ways, and points keep whatever the user typed.
+    const kept = withKind({ ...points, maxScore: 5, weight: 0 }, "label");
+    expect(kept).toMatchObject({ maxScore: 5, weight: 0 });
+    expect(withKind(label, "points")).toMatchObject({ kind: "points", maxScore: 10 });
+    expect(withKind(points, "points").maxScore).toBeNaN();
+    for (const a of [label, kept]) {
+      const c = structuredClone(document.content);
+      c.assessments = [a];
+      expect(contentProblem(c)).toBe("");
+    }
+  });
   it("keeps an erased field empty instead of turning it into zero", () => {
     expect(numberField("")).toBeNaN();
     expect(numberField("  ")).toBeNaN();
