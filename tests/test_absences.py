@@ -246,3 +246,46 @@ def test_same_child_other_guardian_sees_only_attendance_result(client):
     assert other.get(url('/'+notice['id'])).status_code==404
     assert any(r['action']=='journal.updated' for r in other.get('/api/notifications/inbox').json()['items'])
     assert not any(r['action']=='absence.updated' for r in other.get('/api/notifications/inbox').json()['items'])
+
+
+def test_decisions_refused_inside_closed_period(client,monkeypatch):
+    # Imported here: test_journal_periods imports test_journal_coverage, which imports this module.
+    from test_journal_periods import period,close,action
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);mark(client)
+    approved=decide(teacher,send(parent)).json();pending=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'))
+    assert client.get(url('/'+pending['id'])).json()['periodLocks']==[]
+    p=close(client,period(client,end='2026-08-18'))
+    def counts():
+        with api.connect() as db:return [db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['absence_history','notifications','audit']]
+    before=counts()
+    for item,operation in [(approved,'revoke'),(pending,'approve')]:
+        refused=decide(teacher,item,operation);assert refused.status_code==403 and 'Первая четверть' in refused.json()['detail']
+    assert counts()==before
+    for item in [approved,pending]:
+        current=client.get(url('/'+item['id'])).json();assert current['version']==item['version'] and current['periodLocks']==['Первая четверть']
+    assert parent.get(url('/'+pending['id'])).json()['periodLocks']==[]
+    # Reject and withdraw change no figures, so a closed period does not block them.
+    assert decide(teacher,pending,'reject').status_code==200
+    again=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'));assert decide(parent,again,'withdraw').status_code==200
+    action(client,p,'reopen').raise_for_status()
+    assert decide(teacher,approved,'revoke').status_code==200
+
+
+def test_period_lookup_tolerates_database_without_journal_tables():
+    import sqlite3
+    from backend.journal_periods import range_locks
+    assert range_locks(sqlite3.connect(':memory:'),'demo','2026-08-17','2026-08-17')==[]
+
+
+def test_replayed_decision_still_succeeds_after_period_closes(client,monkeypatch):
+    from test_journal_periods import period,close
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);mark(client);notice=send(parent)
+    decision=dict(requestId=str(uuid4()),version=1,action='approve',comment='Согласовано')
+    first=teacher.post(url('/'+notice['id']+'/decision'),json=decision);assert first.status_code==200
+    close(client,period(client))
+    replay=teacher.post(url('/'+notice['id']+'/decision'),json=decision);assert replay.status_code==200
+    assert replay.json()==first.json()|dict(periodLocks=['Первая четверть'])

@@ -53,6 +53,13 @@ def require_open(db,workspace,*lessons):
     if found:raise HTTPException(403,'Журнал закрыт в периоде: '+', '.join(p['name'] for p in found)+'. Для исправления администратор должен открыть период с указанием причины.')
 
 
+def range_locks(db,workspace,start,end):
+    """Closed periods overlapping the inclusive day range."""
+    # A fresh database may have no journal tables yet.
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_periods'").fetchone():return []
+    return [dict(id=r[0],name=r[1],start=r[2],end=r[3],version=r[4]) for r in db.execute("SELECT id,name,start_day,end_day,version FROM journal_periods WHERE workspace=? AND status='closed' AND start_day<=? AND end_day>=? ORDER BY start_day,id",(workspace,end,start))]
+
+
 class PeriodEdit(Model):
     version:int=Field(ge=0)
     name:str=Field(min_length=1,max_length=120)

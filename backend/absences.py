@@ -127,9 +127,15 @@ class Absences:
         if private:result['reason']=row[12]
         return result
 
+    def closed_periods(self,db,workspace,row):
+        """Closed journal periods whose days the notice overlaps; approving or revoking would change their figures."""
+        from .journal_periods import range_locks
+        return range_locks(db,workspace,row[10][:10],row[11][:10])
+
     def detail(self,db,row,user,snapshot,workspace):
-        result=self.item(row,True)
-        result.update(canReview=self.can_review(db,user,snapshot,workspace,row[3]),canWithdraw=user['role']=='parent' and row[2]==user['id'] and row[9]=='pending',files=self.files.linked(db,row[0]))
+        result=self.item(row,True);review=self.can_review(db,user,snapshot,workspace,row[3])
+        result.update(canReview=review,canWithdraw=user['role']=='parent' and row[2]==user['id'] and row[9]=='pending',files=self.files.linked(db,row[0]),
+                      periodLocks=[p['name'] for p in self.closed_periods(db,row[1],row)] if review else [])
         return result
 
     def notify(self,db,row,snapshot,action):
@@ -149,6 +155,9 @@ class Absences:
             allowed=row[9]==('approved' if action=='revoke' else 'pending')
             status=dict(approve='approved',reject='rejected',revoke='revoked')[action]
         if not allowed or row[8]!=version:raise HTTPException(409,'Состояние заявления изменилось. Откройте его заново.')
+        # Only approved notices change attendance figures; reject and withdraw move a pending notice and stay allowed.
+        if action in ['approve','revoke'] and (closed:=self.closed_periods(db,workspace,row)):
+            raise HTTPException(403,'Решение изменит посещаемость закрытого учебного периода: '+', '.join(p['name'] for p in closed)+'. Администратор должен сначала открыть период с указанием причины.')
         return status
 
     def apply_decision(self,db,row,user,snap,workspace,status,comment,request_id,fingerprint,*,notify=True):

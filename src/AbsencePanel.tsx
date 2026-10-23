@@ -15,6 +15,7 @@ type Item = {
   files?: FileItem[];
   canReview?: boolean;
   canWithdraw?: boolean;
+  periodLocks?: string[];
 };
 type Options = {
   parent: boolean;
@@ -798,6 +799,13 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                         }}
                       />
                     </label>
+                    {!!selected.periodLocks?.length && selected.canReview && (
+                      <p className="info-line">
+                        Период журнала закрыт: {selected.periodLocks.join(", ")}
+                        . Принять объяснительную или отменить решение можно
+                        после того, как администратор откроет период.
+                      </p>
+                    )}
                     <div className="dated-toolbar">
                       {selected.canWithdraw && (
                         <button
@@ -810,7 +818,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       {selected.canReview && selected.status === "pending" && (
                         <>
                           <button
-                            disabled={!comment.trim()}
+                            disabled={
+                              !comment.trim() || !!selected.periodLocks?.length
+                            }
                             onClick={() => void run(() => decide("approve"))}
                           >
                             Принять объяснительную
@@ -825,7 +835,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       )}
                       {selected.canReview && selected.status === "approved" && (
                         <button
-                          disabled={!comment.trim()}
+                          disabled={
+                            !comment.trim() || !!selected.periodLocks?.length
+                          }
                           onClick={() => void run(() => decide("revoke"))}
                         >
                           Отменить принятое решение

@@ -77,6 +77,13 @@ def register(service,app,Workspace):
         return [service.find(db,item.id,user,snap,workspace) for item in body.items]
 
     def validate(db,body,rows,user,snap,workspace):
+        if body.action in ['approve','revoke']:
+            # The batch is all-or-nothing, so name every notice that touches a closed period at once.
+            refused=[(row,closed) for row in rows if (closed:=service.closed_periods(db,workspace,row))]
+            if refused:
+                raise HTTPException(403,'Общее решение не применено: заявления затрагивают закрытые учебные периоды — '
+                    +'; '.join(f"{row[5]}, {row[10].replace('T',' ')} — {row[11].replace('T',' ')}: {', '.join(p['name'] for p in closed)}" for row,closed in refused)
+                    +'. Снимите их с выбора или попросите администратора открыть период с указанием причины.')
         return [service.decision_status(db,row,user,snap,workspace,item.version,body.action)
                 for item,row in zip(body.items,rows)]
 

@@ -185,3 +185,26 @@ def test_fifty_notice_bound_and_current_account_recheck(client,monkeypatch):
     monkeypatch.setattr(api.absences,'recheck',original)
     result=apply(teacher,preview);assert result.status_code==200,result.text
     assert result.json()['count']==50
+
+
+def test_bulk_refuses_notices_in_closed_period_without_partial_writes(client,monkeypatch):
+    # Imported here: test_journal_periods imports test_journal_coverage, which imports test_absences.
+    from test_journal_periods import period,close
+    from datetime import datetime,timezone
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);notices=two(parent);prepared=prepare(teacher,notices)
+    close(client,period(client))
+    before=counts();response=teacher.post(url('/bulk/preview'),json=batch(notices))
+    assert response.status_code==403,response.text
+    detail=response.json()['detail'];assert '2026-08-17 00:00' in detail and 'Первая четверть' in detail and '2026-08-18' not in detail
+    assert counts()==before
+    def untouched():
+        for n in notices:
+            item=client.get(url('/'+n['id'])).json();assert item['status']=='pending' and item['version']==1
+    untouched();before=counts()
+    # A preview prepared before the period closed is refused when applied.
+    assert apply(teacher,prepared).status_code==403 and counts()==before
+    # Rejection changes no figures, so the same notices can still be rejected in bulk.
+    rejected=apply(teacher,prepare(teacher,notices,action='reject'));assert rejected.status_code==200,rejected.text
+    assert [n['status'] for n in rejected.json()['items']]==['rejected','rejected']
