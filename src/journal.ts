@@ -64,6 +64,7 @@ export interface JournalEntry {
   writable: boolean;
   needsSync: boolean;
   currentDate: string | null;
+  futureLesson?: boolean;
   hasPublished: boolean;
   publishedVersion: number | null;
   publishedAt: string | null;
@@ -116,6 +117,44 @@ export function gradeLabel(grade: Grade | undefined, assessment: Assessment) {
         ? "—"
         : `${grade.score} / ${assessment.maxScore}`
       : grade.label || "—";
+}
+// An erased number input is "", which Number() would silently turn into 0.
+export function numberField(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+export function numberValue(value: number): number | "" {
+  return Number.isNaN(value) ? "" : value;
+}
+const maxScoreOk = (v: number) => Number.isFinite(v) && v > 0 && v <= 10000;
+const weightOk = (v: number) => Number.isFinite(v) && v >= 0 && v <= 100;
+// The server validates both numbers for every format, but only points show them,
+// so switching to a text grade replaces an invalid hidden value with the default.
+export function withKind(a: Assessment, kind: Assessment["kind"]): Assessment {
+  if (kind === "points") return { ...a, kind };
+  return {
+    ...a,
+    kind,
+    maxScore: maxScoreOk(a.maxScore) ? a.maxScore : 10,
+    weight: weightOk(a.weight) ? a.weight : 1,
+  };
+}
+// First Russian problem that the server would reject, or "" when the content may be sent.
+export function contentProblem(c: JournalContent): string {
+  for (const a of c.assessments) {
+    if (a.kind !== "points") continue;
+    if (!maxScoreOk(a.maxScore))
+      return `«${a.name}»: укажите максимум баллов больше 0 и не больше 10000.`;
+    if (!weightOk(a.weight))
+      return `«${a.name}»: укажите вес работы от 0 до 100.`;
+  }
+  const units = c.curriculum?.units;
+  if (c.curriculum && !(Number.isInteger(units) && units! >= 1 && units! <= 12))
+    return "Укажите часы по теме целым числом от 1 до 12.";
+  return "";
+}
+// The server pages history 50 at a time, newest first; a full page ending above version 1 may have more.
+export function hasEarlierRevisions(page: { version: number }[]): boolean {
+  return page.length === 50 && page[page.length - 1].version > 1;
 }
 export function journalCsv(
   rows: JournalRow[],

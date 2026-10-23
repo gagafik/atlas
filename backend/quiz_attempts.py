@@ -111,8 +111,13 @@ def register(app,quizzes,Workspace):
             if set(body.marks)-set(questions):raise HTTPException(422,'Оценка относится к другому вопросу.')
             marks=deepcopy(attempt['document']['marks'])
             for key,mark in body.marks.items():
-                if mark.score>questions[key]['points']:raise HTTPException(422,'Баллы превышают максимум вопроса.')
-                if questions[key]['kind']!='essay' and not mark.comment:raise HTTPException(422,'Для изменения автоматической проверки укажите объяснение.')
+                question=questions[key]
+                if mark.score>question['points']:raise HTTPException(422,'Баллы превышают максимум вопроса.')
+                # Compare with the fresh automatic result, not the stored mark, which may be an earlier override.
+                automatic=models.auto_mark(question,attempt['document']['answers'].get(key,{}))
+                if automatic and not mark.comment:
+                    if round(mark.score,6)!=round(automatic['score'],6):raise HTTPException(422,'Для изменения автоматической проверки укажите объяснение.')
+                    marks[key]=automatic;continue
                 marks[key]=dict(score=mark.score,comment=mark.comment,automatic=False)
             if set(marks)!=set(questions):raise HTTPException(422,'Оцените все вопросы с ручной проверкой.')
             attempt['document'].update(marks=marks,comment=body.comment,reviewedAt=now().isoformat(),reviewer=ctx['user']['name'],correctionReason=body.reason)

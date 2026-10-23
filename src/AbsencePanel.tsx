@@ -16,6 +16,7 @@ type Item = {
   files?: FileItem[];
   canReview?: boolean;
   canWithdraw?: boolean;
+  periodLocks?: string[];
 };
 type Options = {
   parent: boolean;
@@ -24,6 +25,7 @@ type Options = {
   students: { id: string; name: string }[];
   yearStart: string;
   yearEnd: string;
+  defaultDate: string;
   config?: { version: number; assignments: Record<string, string[]> };
   classes?: { id: string; name: string }[];
   teachers?: { id: string; name: string; login: string }[];
@@ -125,8 +127,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     const r: Options = await api("journal/absences/options", workspace);
     setOptions(r);
     setStudent((old) => old || r.students[0]?.id || "");
-    setStart((old) => old || r.yearStart);
-    setEnd((old) => old || r.yearStart);
+    setStart((old) => old || r.defaultDate);
+    setEnd((old) => old || r.defaultDate);
   };
   const list = async (before?: number) => {
     const r = await api(
@@ -168,8 +170,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
         if (!live) return;
         setOptions(o);
         setStudent((old) => old || o.students[0]?.id || "");
-        setStart((old) => old || o.yearStart);
-        setEnd((old) => old || o.yearStart);
+        setStart((old) => old || o.defaultDate);
+        setEnd((old) => old || o.defaultDate);
         setItems(r.items);
         setNext(r.nextBefore);
       })
@@ -225,7 +227,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       !window.confirm(
         action === "approve"
           ? "Принять объяснительную? Отсутствие на полностью включённых в период уроках будет учитываться как уважительная причина."
-          : "Сохранить это решение с указанным объяснением?",
+          : action === "withdraw"
+            ? "Отозвать заявление? Школа увидит, что оно отозвано."
+            : "Сохранить это решение с указанным объяснением?",
       )
     )
       return;
@@ -786,7 +790,11 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     ["pending", "approved"].includes(selected.status))) && (
                   <>
                     <label className="field">
-                      <span>Объяснение решения</span>
+                      <span>
+                        {selected.canWithdraw && !selected.canReview
+                          ? "Комментарий (необязательно)"
+                          : "Объяснение решения"}
+                      </span>
                       <textarea
                         maxLength={2000}
                         value={comment}
@@ -796,10 +804,16 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                         }}
                       />
                     </label>
+                    {!!selected.periodLocks?.length && selected.canReview && (
+                      <p className="info-line">
+                        Период журнала закрыт: {selected.periodLocks.join(", ")}
+                        . Принять объяснительную или отменить решение можно
+                        после того, как администратор откроет период.
+                      </p>
+                    )}
                     <div className="dated-toolbar">
                       {selected.canWithdraw && (
                         <button
-                          disabled={!comment.trim()}
                           onClick={() => void run(() => decide("withdraw"))}
                         >
                           Отозвать заявление
@@ -808,7 +822,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       {selected.canReview && selected.status === "pending" && (
                         <>
                           <button
-                            disabled={!comment.trim()}
+                            disabled={
+                              !comment.trim() || !!selected.periodLocks?.length
+                            }
                             onClick={() => void run(() => decide("approve"))}
                           >
                             Принять объяснительную
@@ -823,7 +839,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       )}
                       {selected.canReview && selected.status === "approved" && (
                         <button
-                          disabled={!comment.trim()}
+                          disabled={
+                            !comment.trim() || !!selected.periodLocks?.length
+                          }
                           onClick={() => void run(() => decide("revoke"))}
                         >
                           Отменить принятое решение
@@ -846,7 +864,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     {labels[h.action] || h.action} · редакция {h.version}
                     {h.batchId && " · общее решение"}
                   </p>
-                  <p className="journal-text">{h.comment}</p>
+                  {h.comment && <p className="journal-text">{h.comment}</p>}
                 </div>
               ))}
               {historyNext !== null && (

@@ -18,6 +18,11 @@ import {
   gradeLabel,
   journalCsv,
   documentRows,
+  numberField,
+  numberValue,
+  contentProblem,
+  withKind,
+  hasEarlierRevisions,
   type Assessment,
   type Grade,
   type JournalContent,
@@ -156,6 +161,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   }, [entry]);
   const [report, setReport] = useState<JournalReport | null>(null),
     [history, setHistory] = useState<History[]>([]),
+    [historyMore, setHistoryMore] = useState(false),
     [historical, setHistorical] = useState<History | null>(null);
   const [error, setError] = useState(""),
     [message, setMessage] = useState(""),
@@ -264,6 +270,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     setDirty(false);
     setSyncRoster(false);
     setHistory([]);
+    setHistoryMore(false);
     setHistorical(null);
     setMessage("");
   }
@@ -282,6 +289,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       setSyncRoster(sync);
       setDirty(sync);
       setHistory([]);
+      setHistoryMore(false);
       setHistorical(null);
     } catch (e: any) {
       setError(e.message);
@@ -324,6 +332,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     });
   }
   async function save(publish: boolean) {
+    const problem = entry && contentProblem(entry.document.content);
+    if (problem) {
+      setError(problem);
+      setMessage("");
+      return;
+    }
     if (!entry || saveLock.current) return;
     saveLock.current = true;
     setBusy(true);
@@ -344,6 +358,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       setSyncRoster(false);
       setEpoch((n) => n + 1);
       setHistory([]);
+      setHistoryMore(false);
       setHistorical(null);
       setMessage(
         publish
@@ -367,6 +382,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
         workspace,
       );
       setHistory((rows) => (before ? [...rows, ...r] : r));
+      setHistoryMore(hasEarlierRevisions(r));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -608,6 +624,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         : "Запись доступна только для просмотра: урок отменён, удалён или назначен другому преподавателю."}
                     </p>
                   )}
+                  {entry.futureLesson && (
+                    <p className="info-line">
+                      Урок ещё не прошёл. Тему, домашнее задание и материалы
+                      можно опубликовать заранее; посещаемость и оценки
+                      публикуются в день урока.
+                    </p>
+                  )}
                   {entry.needsSync && entry.writable && (
                     <div className="info-line">
                       <p>
@@ -798,11 +821,10 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   ...c,
                                   assessments: c.assessments.map((x) =>
                                     x.id === a.id
-                                      ? {
-                                          ...x,
-                                          kind: e.target
-                                            .value as Assessment["kind"],
-                                        }
+                                      ? withKind(
+                                          x,
+                                          e.target.value as Assessment["kind"],
+                                        )
                                       : x,
                                   ),
                                 }))
@@ -821,7 +843,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   min="0.01"
                                   max="10000"
                                   step="0.01"
-                                  value={a.maxScore}
+                                  value={numberValue(a.maxScore)}
                                   onChange={(e) =>
                                     content((c) => ({
                                       ...c,
@@ -829,7 +851,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                         x.id === a.id
                                           ? {
                                               ...x,
-                                              maxScore: Number(e.target.value),
+                                              maxScore: numberField(
+                                                e.target.value,
+                                              ),
                                             }
                                           : x,
                                       ),
@@ -844,7 +868,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   min="0"
                                   max="100"
                                   step="0.01"
-                                  value={a.weight}
+                                  value={numberValue(a.weight)}
                                   onChange={(e) =>
                                     content((c) => ({
                                       ...c,
@@ -852,7 +876,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                         x.id === a.id
                                           ? {
                                               ...x,
-                                              weight: Number(e.target.value),
+                                              weight: numberField(
+                                                e.target.value,
+                                              ),
                                             }
                                           : x,
                                       ),
@@ -929,6 +955,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                     </p>
                     <button
                       type="button"
+                      disabled={!!entry.futureLesson}
                       onClick={() =>
                         content((c) => ({
                           ...c,
@@ -1043,7 +1070,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   <label className="field">
                                     <span>
                                       {a.name}
-                                      {a.kind === "points"
+                                      {a.kind === "points" &&
+                                      Number.isFinite(a.maxScore)
                                         ? ` (из ${a.maxScore})`
                                         : ""}
                                     </span>
@@ -1051,7 +1079,11 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                       <input
                                         type="number"
                                         min="0"
-                                        max={a.maxScore}
+                                        max={
+                                          Number.isFinite(a.maxScore)
+                                            ? a.maxScore
+                                            : undefined
+                                        }
                                         step="0.01"
                                         value={g?.score ?? ""}
                                         onChange={(e) =>
@@ -1200,7 +1232,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           </button>
                         </div>
                       ))}
-                      {history.length % 50 === 0 && (
+                      {historyMore && (
                         <button
                           disabled={busy}
                           onClick={() =>

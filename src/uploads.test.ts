@@ -107,6 +107,16 @@ describe("uploadFile", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("asks for a new sign-in when the session has expired", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    fetchMock.mockResolvedValue(json({ detail: "Войдите снова." }, 401));
+    const error = await settle(uploadFile("/u", new Blob(["a"])));
+    expect(error.status).toBe(401);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent.mock.calls[0][0].type).toBe("atlas-auth-required");
+  });
+
   it("uses the fallback when the detail is not text", async () => {
     fetchMock.mockResolvedValue(json({ detail: [{ msg: "bad" }] }, 422));
     const error = await settle(

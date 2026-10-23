@@ -97,7 +97,7 @@ def main():
         with httpx.Client(base_url=url,trust_env=False,timeout=60,headers={'Cookie':cookie,'X-Atlas-Request':'1'}) as client:
             state=client.get('/api/state').json()
             client.get('/api/journal/attendance/options').raise_for_status()
-            client.put('/api/journal/absences/reviewers',json=dict(version=0,assignments={f'c{i}':[f'teacher{i}'] for i in range(55)})).raise_for_status()
+            current=client.get('/api/access/class-staff').json();client.put('/api/access/class-staff',json=dict(version=current['version'],revision=current['revision'],reason='Синтетическая нагрузка',assignments={f'c{i}':[dict(accountId=f'teacher{i}',capabilities=['absence_review','attendance_read','journal_coverage'])] for i in range(55)})).raise_for_status()
             period,index=seed(Path(os.environ['TIMETABLE_DB']),state,args.days)
             print(json.dumps(dict(phase='index_ready',**index)),flush=True)
             result=asyncio.run(probe(url,identities,cookie,period,args.days))

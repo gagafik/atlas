@@ -23,6 +23,7 @@ def tables(db):
         UNIQUE(workspace,author_id,request_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS absence_student ON absence_notices(workspace,student_id,status,start_at,end_at)')
     db.execute('CREATE INDEX IF NOT EXISTS absence_author ON absence_notices(workspace,author_id,created)')
+    # Legacy reviewer document, read only by class_staff.config() until the registry is saved.
     db.execute('CREATE TABLE IF NOT EXISTS absence_reviewers (workspace TEXT PRIMARY KEY,version INTEGER,document TEXT)')
     db.execute('''CREATE TABLE IF NOT EXISTS absence_history (
         id INTEGER PRIMARY KEY,notice_id TEXT,version INTEGER,created TEXT,actor_id TEXT,actor_name TEXT,
@@ -68,16 +69,7 @@ class Decision(Model):
     requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
     version: int = Field(ge=1)
     action: Literal['approve','reject','revoke','withdraw']
-    comment: str = Field(min_length=1,max_length=2000)
-
-
-class Reviewers(Model):
-    version: int = Field(ge=0)
-    assignments: dict[str,list[str]]
-    @model_validator(mode='after')
-    def bounded(self):
-        if len(self.assignments)>500 or any(len(v)>20 or len(set(v))!=len(v) for v in self.assignments.values()):raise ValueError('До 500 классов и 20 разных ответственных на класс.')
-        return self
+    comment: str = Field(default='',max_length=2000)
 
 
 class Absences:
@@ -127,9 +119,15 @@ class Absences:
         if private:result['reason']=row[12]
         return result
 
+    def closed_periods(self,db,workspace,row):
+        """Closed journal periods whose days the notice overlaps; approving or revoking would change their figures."""
+        from .journal_periods import range_locks
+        return range_locks(db,workspace,row[10][:10],row[11][:10])
+
     def detail(self,db,row,user,snapshot,workspace):
-        result=self.item(row,True)
-        result.update(canReview=self.can_review(db,user,snapshot,workspace,row[3]),canWithdraw=user['role']=='parent' and row[2]==user['id'] and row[9]=='pending',files=self.files.linked(db,row[0]))
+        result=self.item(row,True);review=self.can_review(db,user,snapshot,workspace,row[3])
+        result.update(canReview=review,canWithdraw=user['role']=='parent' and row[2]==user['id'] and row[9]=='pending',files=self.files.linked(db,row[0]),
+                      periodLocks=[p['name'] for p in self.closed_periods(db,row[1],row)] if review else [])
         return result
 
     def notify(self,db,row,snapshot,action):
@@ -149,6 +147,9 @@ class Absences:
             allowed=row[9]==('approved' if action=='revoke' else 'pending')
             status=dict(approve='approved',reject='rejected',revoke='revoked')[action]
         if not allowed or row[8]!=version:raise HTTPException(409,'Состояние заявления изменилось. Откройте его заново.')
+        # Only approved notices change attendance figures; reject and withdraw move a pending notice and stay allowed.
+        if action in ['approve','revoke'] and (closed:=self.closed_periods(db,workspace,row)):
+            raise HTTPException(403,'Решение изменит посещаемость закрытого учебного периода: '+', '.join(p['name'] for p in closed)+'. Администратор должен сначала открыть период с указанием причины.')
         return status
 
     def apply_decision(self,db,row,user,snap,workspace,status,comment,request_id,fingerprint,*,notify=True):
@@ -174,32 +175,18 @@ class Absences:
         register(self,app,Workspace)
         @app.get('/api/journal/absences/options')
         def options(request:Request,workspace:Workspace='school'):
+            from .journal import today
             user,snap=self.context(request,workspace)
+            settings=snap.state.settings;default=min(max(today(),settings.yearStart),settings.yearEnd)
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.recheck(db,user,snap,workspace)
                 config=self.config(db,workspace);classes=self.classes(db,user,snap,workspace)
                 pupils=[dict(id=s.id,name=s.name) for s in snap.state.students if s.active and s.id in user_ids(user,workspace,'student')] if user['role']=='parent' else []
-                result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd)
+                result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=settings.yearStart,yearEnd=settings.yearEnd,defaultDate=default.isoformat())
                 if user['role']=='admin':
                     candidates=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")]
                     result.update(config=config,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],teachers=[dict(id=u['id'],name=u['name'],login=u['login']) for u in candidates if user_ids(u,workspace,'teacher')])
                 return result
-
-        @app.put('/api/journal/absences/reviewers')
-        def reviewers(body:Reviewers,request:Request,workspace:Workspace='school'):
-            user,snap=self.context(request,workspace)
-            if user['role']!='admin':raise HTTPException(403,'Назначение ответственных доступно администратору.')
-            with self.access.lock,self.access.connect() as db:
-                tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
-                if db.execute('SELECT 1 FROM class_staff_permissions WHERE workspace=?',(workspace,)).fetchone():
-                    raise HTTPException(409,'Полномочия уже разделены. Используйте «Права работы с классами» в разделе пользователей.')
-                if self.config(db,workspace)['version']!=body.version:raise HTTPException(409,'Назначения изменились. Обновите раздел.')
-                classes={c.id for c in snap.state.classes}
-                teachers={r[0]:self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")}
-                if set(body.assignments)-classes or any(a not in teachers or not user_ids(teachers[a],workspace,'teacher') for ids in body.assignments.values() for a in ids):raise HTTPException(422,'Выберите существующий класс и действующего учителя этого пространства.')
-                db.execute('INSERT INTO absence_reviewers VALUES (?,?,?) ON CONFLICT(workspace) DO UPDATE SET version=excluded.version,document=excluded.document',(workspace,body.version+1,encoded(body.assignments)))
-                self.access.record(db,'absence.reviewers_updated',workspace,detail=encoded(body.assignments))
-            return dict(version=body.version+1)
 
         @app.get('/api/journal/absences')
         def listing(request:Request,workspace:Workspace='school',status:Literal['all','pending','approved','rejected','withdrawn','revoked']='all',before:int|None=Query(default=None,ge=1)):
@@ -270,7 +257,7 @@ class Absences:
         @app.post('/api/journal/absences/{id}/decision')
         def decision(id:str,body:Decision,request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace);fingerprint=hashlib.sha256(encoded(body.model_dump()).encode()).hexdigest()
-            if not body.comment.strip():raise HTTPException(422,'Объясните решение.')
+            if body.action!='withdraw' and not body.comment.strip():raise HTTPException(422,'Объясните решение.')
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.files.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace);row=self.find(db,id,user,snap,workspace)
                 previous=db.execute('SELECT request_hash FROM absence_history WHERE notice_id=? AND actor_id=? AND request_id=?',(id,user['id'],body.requestId)).fetchone()

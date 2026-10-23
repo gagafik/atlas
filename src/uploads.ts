@@ -80,6 +80,8 @@ export async function uploadFile<T = any>(
   options: UploadOptions & { fallback?: string; unreadable?: string } = {},
 ): Promise<T> {
   const response = await uploadWithRetry(url, body, options);
+  if (response.status === 401)
+    window.dispatchEvent(new Event("atlas-auth-required"));
   let result: any;
   try {
     result = await response.json();

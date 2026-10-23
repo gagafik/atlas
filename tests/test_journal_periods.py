@@ -151,13 +151,15 @@ def test_failed_close_rolls_back_snapshots_lock_and_history(client,monkeypatch):
     assert entry(client,record['lessonKey'])['writable']
 
 def test_archive_pages_remain_stable_after_live_journal_withdrawal(client):
-    for week in range(27):
-        day=(date(2026,8,17)+timedelta(days=7*week)).isoformat()
-        for row in client.get('/api/journal/day',params=dict(workspace='demo',day=day)).json()['lessons']:
-            record=entry(client,row['lessonKey'],day=day);write(client,graded(record),publish=True).raise_for_status()
+    from unittest.mock import patch
+    # Marks for future lessons are refused in production; the school date moves past the whole term here.
+    with patch('backend.journal.today',return_value=date(2027,3,1)):
+        for week in range(27):
+            day=(date(2026,8,17)+timedelta(days=7*week)).isoformat()
+            for row in client.get('/api/journal/day',params=dict(workspace='demo',day=day)).json()['lessons']:
+                record=entry(client,row['lessonKey'],day=day);write(client,graded(record),publish=True).raise_for_status()
     p=period(client,end='2027-02-15')
     # Future dates are rejected in production; advance both clocks in this fixture.
-    from unittest.mock import patch
     from datetime import datetime,timezone
     clock=datetime(2027,3,1,tzinfo=timezone.utc)
     with patch('backend.journal_periods.now',return_value=clock),patch('backend.journal_coverage.now',return_value=clock):p=close(client,p)

@@ -1,3 +1,11 @@
+export function errorText(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail))
+    return detail
+      .map((x: any) => String(x?.msg ?? "").replace(/^Value error, /, ""))
+      .join("\n");
+  return "Не удалось выполнить действие.";
+}
 export async function api(
   path: string,
   workspace: string,
@@ -21,17 +29,9 @@ export async function api(
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith("auth/"))
       window.dispatchEvent(new Event("atlas-auth-required"));
-    const detail = result.detail;
-    throw Object.assign(
-      new Error(
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((x: any) => x.msg).join("\n")
-            : "Не удалось выполнить действие.",
-      ),
-      { status: response.status },
-    );
+    throw Object.assign(new Error(errorText(result.detail)), {
+      status: response.status,
+    });
   }
   return result;
 }

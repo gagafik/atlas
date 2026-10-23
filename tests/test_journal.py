@@ -246,3 +246,44 @@ def test_replaced_teacher_cannot_withdraw_published_journal(client):
     assert current['canWithdraw']
     assert replacement.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=saved['lessonKey'],version=current['version'])).status_code==200
     assert report(parent).json()['rows']==[]
+
+
+def test_future_lesson_allows_planning_but_not_marks(client,monkeypatch):
+    from backend import journal
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,16))
+    record=entry(client,lesson(client)['lessonKey']);content=record['document']['content']
+    content.update(topic='План урока',homework='Прочитать страницу 12',dueDate='2026-08-19',assessments=[dict(id='work',name='Проверочная',kind='points',maxScore=10,weight=1)])
+    planned=write(client,record,publish=True);assert planned.status_code==200,planned.text
+    assert entry(client,record['lessonKey'])['futureLesson'] is True
+    saved=planned.json();saved['document']['content']['records'][0]['attendance']='present'
+    refused=write(client,saved,publish=True);assert refused.status_code==422 and 'Урок ещё не прошёл' in refused.json()['detail']
+    drafted=write(client,saved);assert drafted.status_code==200,drafted.text
+    saved=drafted.json();pupil=saved['document']['content']['records'][0]
+    pupil.update(attendance='unmarked',grades=[dict(assessmentId='work',score=5,label='',comment='')])
+    assert write(client,saved,publish=True).status_code==422
+    pupil['grades']=[dict(assessmentId='work',score=None,label='',comment='Подготовиться')]
+    commented=write(client,saved,publish=True);assert commented.status_code==200,commented.text
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
+    saved=commented.json();saved['document']['content']['records'][0]['attendance']='present'
+    published=write(client,saved,publish=True);assert published.status_code==200,published.text
+    assert entry(client,record['lessonKey'])['futureLesson'] is False
+
+
+@pytest.mark.parametrize('field,value,fragment',[('maxScore',0,'Максимум баллов'),('maxScore',None,'Максимум баллов'),('maxScore','10','Максимум баллов'),('maxScore',True,'Максимум баллов'),('maxScore',10001,'Максимум баллов'),('weight',None,'Вес работы'),('weight',101,'Вес работы'),('weight',-1,'Вес работы')])
+def test_assessment_numbers_have_russian_messages(client,field,value,fragment):
+    record=graded(entry(client,lesson(client)['lessonKey']))
+    record['document']['content']['assessments'][0][field]=value
+    r=write(client,record);assert r.status_code==422
+    assert fragment in str(r.json()['detail']) and 'Input should' not in str(r.json()['detail'])
+    record['document']['content']['assessments'][0][field]=0 if field=='weight' else 10
+    assert write(client,record).status_code==200
+
+
+def test_assessment_and_topic_models_reject_nan_infinity_and_fractional_hours():
+    from pydantic import ValidationError
+    from backend.journal import Assessment,TopicReference
+    for field,value in [('maxScore',float('nan')),('maxScore',float('inf')),('weight',float('nan')),('weight',float('-inf'))]:
+        with pytest.raises(ValidationError,match='Максимум баллов|Вес работы'):Assessment(id='a',name='Работа',**{field:value})
+    for units in [1.5,0,13,None,'2']:
+        with pytest.raises(ValidationError,match='Часов по теме'):TopicReference(planId='a'*32,version=1,topicId='intro',units=units)
+    assert TopicReference(planId='a'*32,version=1,topicId='intro',units=12).units==12
