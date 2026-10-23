@@ -76,6 +76,33 @@ def reserve(db,workspace,user,filename):
     return id,name,root_for(db)
 
 
+# Bank packages touch storage quotas only through these three functions.
+def package_quota(db,user,total):
+    own=db.execute('SELECT coalesce(sum(size),0) FROM quiz_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
+    if files.total_stored(db)+total>files.total_limit() or own+total>250*1024*1024:
+        mb=f'{total/1048576:.1f}'.replace('.',',')
+        raise HTTPException(413,f'Лимит хранилища достигнут: вложения пакета занимают {mb} МБ. Обратитесь к администратору.')
+
+
+def reserve_package(db,workspace,user,package_files):
+    package_quota(db,user,sum(f.size for f in package_files))
+    pending=db.execute("SELECT count(*) FROM quiz_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
+    if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+    reserved={}
+    for file in package_files:
+        reserved[file.id]=id=uuid4().hex
+        db.execute('INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)',(id,workspace,user['id'],file.filename,file.size,now().isoformat(),'uploading'))
+    return reserved,root_for(db)
+
+
+def release_reserved(db,ids):
+    root=root_for(db)
+    for id in ids:
+        if db.execute("SELECT 1 FROM quiz_files WHERE id=? AND status='uploading'",(id,)).fetchone():
+            files.file_path(root,id).unlink(missing_ok=True)
+            db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
+
+
 class QuizFiles:
     def __init__(self,quizzes):
         self.quizzes,self.access=quizzes,quizzes.access

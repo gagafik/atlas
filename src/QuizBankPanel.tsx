@@ -8,6 +8,17 @@ import {
   type BankItem,
   type Question,
 } from "./quiz";
+import {
+  MAX_SELECTION,
+  exportPackage,
+  packageError,
+  previewSummary,
+  saveBlob,
+  sendPackage,
+  toggleSelected,
+  type ImportResult,
+  type PackagePreview,
+} from "./quizBankPackage";
 
 export default function QuizBankPanel({
   workspace,
@@ -30,6 +41,12 @@ export default function QuizBankPanel({
     [editing, setEditing] = useState<BankItem | null>(null),
     [dirty, setDirty] = useState(false);
   const [tagsText, setTagsText] = useState("");
+  const [selecting, setSelecting] = useState(false),
+    [selected, setSelected] = useState<Map<string, number>>(new Map()),
+    [preview, setPreview] = useState<PackagePreview | null>(null),
+    [importFile, setImportFile] = useState<File | null>(null),
+    [importRequest, setImportRequest] = useState(""),
+    [notice, setNotice] = useState("");
   const alive = useRef(true);
   const uploadLock = useRef(false),
     uploadAbort = useRef<AbortController | null>(null);
@@ -56,6 +73,14 @@ export default function QuizBankPanel({
         if (live) {
           setItems(r.items);
           setNext(r.nextAfter);
+          // A saved edit raises the version; export selects by identity.
+          setSelected((old) => {
+            if (!old.size) return old;
+            const fresh = new Map(old);
+            for (const item of r.items as BankItem[])
+              if (fresh.has(item.id)) fresh.set(item.id, item.version);
+            return fresh;
+          });
         }
       })
       .catch((e) => {
@@ -113,6 +138,87 @@ export default function QuizBankPanel({
     } finally {
       if (alive.current) setBusy(false);
     }
+  }
+  async function transfer(work: (signal: AbortSignal) => Promise<void>) {
+    if (busy || uploadLock.current) return;
+    uploadLock.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const controller = new AbortController();
+    uploadAbort.current = controller;
+    try {
+      await work(controller.signal);
+    } catch (e: any) {
+      if (alive.current && e.name !== "AbortError") setError(e.message);
+    } finally {
+      uploadLock.current = false;
+      uploadAbort.current = null;
+      if (alive.current) setBusy(false);
+    }
+  }
+  function toggle(item: BankItem) {
+    const result = toggleSelected(selected, item);
+    setSelected(result.selected);
+    setError(result.error);
+  }
+  function exportSelected() {
+    void transfer(async (signal) => {
+      const { blob, filename } = await exportPackage(
+        workspace,
+        selected,
+        signal,
+      );
+      saveBlob(blob, filename);
+      if (alive.current) setNotice("Пакет сохранён.");
+    });
+  }
+  function choosePackage(file: File | undefined) {
+    if (!file || busy || uploadLock.current) return;
+    const problem = packageError(file);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setPreview(null);
+    setImportFile(null);
+    void transfer(async (signal) => {
+      const result = await sendPackage(
+        "import/preview",
+        workspace,
+        file,
+        {},
+        signal,
+      );
+      if (alive.current) {
+        setPreview(result);
+        setImportFile(file);
+        setImportRequest(crypto.randomUUID());
+      }
+    });
+  }
+  function confirmImport() {
+    if (!preview || !importFile) return;
+    void transfer(async (signal) => {
+      const result: ImportResult = await sendPackage(
+        "import",
+        workspace,
+        importFile,
+        { requestId: importRequest, packageHash: preview.packageHash },
+        signal,
+      );
+      if (alive.current) {
+        setNotice(
+          `Импортировано вопросов: ${result.imported}` +
+            (result.archived ? `, из них в архиве: ${result.archived}` : ""),
+        );
+        setPreview(null);
+        setImportFile(null);
+        setImportRequest("");
+        setAfter("");
+        setEpoch((v) => v + 1);
+      }
+    });
   }
   const q = editing?.question;
   async function upload(files: FileList | null, solution: boolean) {
@@ -189,6 +295,7 @@ export default function QuizBankPanel({
           {error}
         </p>
       )}
+      {notice && <p role="status">{notice}</p>}
       {!editing && (
         <>
           <form
@@ -242,6 +349,108 @@ export default function QuizBankPanel({
               </button>
             )}
           </form>
+          {!onPick && (
+            <div className="dated-toolbar">
+              {selecting ? (
+                <>
+                  <span role="status">
+                    Выбрано: {selected.size} из {MAX_SELECTION}
+                  </span>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy || !selected.size}
+                    onClick={exportSelected}
+                  >
+                    Экспорт
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !selected.size}
+                    onClick={() => setSelected(new Map())}
+                  >
+                    Снять выбор
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setSelecting(false)}
+                  >
+                    Готово
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSelecting(true)}
+                >
+                  Выбрать для экспорта
+                  {selected.size ? ` (${selected.size})` : ""}
+                </button>
+              )}
+              <label className="field">
+                <span>Импорт пакета (ZIP или JSON)</span>
+                <input
+                  type="file"
+                  accept=".zip,.json"
+                  disabled={busy}
+                  onChange={(e) => {
+                    choosePackage(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <a
+                href={`/api/journal/quiz-bank/template?workspace=${encodeURIComponent(workspace)}`}
+                download
+              >
+                Шаблон JSON
+              </a>
+            </div>
+          )}
+          {preview && !onPick && (
+            <section className="quiz-card" aria-live="polite">
+              <h3>Предпросмотр импорта</h3>
+              <p>{previewSummary(preview)}</p>
+              {preview.archived > 0 && (
+                <p>Архивные вопросы попадут в «Архив банка».</p>
+              )}
+              <ul>
+                {preview.items.slice(0, 10).map((item, index) => (
+                  <li key={index}>
+                    {questionKinds[item.kind as keyof typeof questionKinds] ??
+                      item.kind}
+                    : {item.text}
+                  </li>
+                ))}
+              </ul>
+              {preview.items.length > 10 && (
+                <small>Показаны первые 10 из {preview.items.length}.</small>
+              )}
+              <div className="dated-toolbar">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy}
+                  onClick={confirmImport}
+                >
+                  Импортировать вопросы
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setPreview(null);
+                    setImportFile(null);
+                    setImportRequest("");
+                  }}
+                >
+                  Отмена
+                </button>
+              </div>
+            </section>
+          )}
           {busy ? (
             <p role="status">Загружаем банк…</p>
           ) : (
@@ -272,6 +481,16 @@ export default function QuizBankPanel({
                   >
                     Добавить в вариант
                   </button>
+                ) : selecting ? (
+                  <label className="check-line">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(item.id)}
+                      disabled={busy}
+                      onChange={() => toggle(item)}
+                    />
+                    Выбрать вопрос
+                  </label>
                 ) : (
                   <div className="dated-toolbar">
                     <button

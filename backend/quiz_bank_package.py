@@ -3,10 +3,10 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 from typing import Literal
-from zipfile import ZipFile, BadZipFile, ZIP_STORED
+import zlib
+from zipfile import ZipFile, BadZipFile, ZIP_STORED, ZIP_DEFLATED, _EndRecData, _ECD_ENTRIES_TOTAL, _ECD_SIZE
 
 from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
@@ -18,6 +18,9 @@ from .notifications import encoded
 MAX_ARCHIVE=55*1024*1024
 MAX_TOTAL=50*1024*1024
 MAX_MANIFEST=2*1024*1024
+MAX_FILES=200
+MAX_ENTRIES=MAX_FILES+1
+MAX_DIRECTORY=256*1024
 
 
 class Entry(Model):
@@ -45,7 +48,7 @@ class Package(Model):
     format: Literal['atlas.quiz-bank']
     version: Literal[1]
     questions: list[Entry]=Field(min_length=1,max_length=100)
-    files: list[PackageFile]=Field(default_factory=list,max_length=200)
+    files: list[PackageFile]=Field(default_factory=list,max_length=MAX_FILES)
 
     @model_validator(mode='after')
     def valid(self):
@@ -54,7 +57,9 @@ class Package(Model):
         if len(ids)!=len(set(ids)) or used!=set(ids):raise ValueError('Файлы должны быть уникальными и точно соответствовать ссылкам в вопросах.')
         if sum(f.size for f in self.files)>MAX_TOTAL:raise ValueError('Общий размер вложений не должен превышать 50 МБ.')
         for file in self.files:
-            if media.name_for(file.filename)!=file.filename:raise ValueError('Имя файла не должно содержать путь.')
+            try:name=media.name_for(file.filename)
+            except HTTPException as exc:raise ValueError(f'Файл «{file.filename}»: {exc.detail}') from None
+            if name!=file.filename:raise ValueError(f'Файл «{file.filename}»: имя файла не должно содержать путь.')
         return self
 
 
@@ -66,20 +71,37 @@ class Selection(Model):
         return self
 
 
+def describe(e):
+    loc=list(e['loc']);label=''
+    if len(loc)>1 and loc[0] in ('questions','files') and isinstance(loc[1],int):label=f"{'Вопрос' if loc[0]=='questions' else 'Файл'} {loc[1]+1}";loc=loc[2:]
+    message={'missing':'Поле не заполнено.','extra_forbidden':'Лишнее поле.','json_invalid':'Файл не является корректным JSON.'}.get(e['type']) or e['msg'].removeprefix('Value error, ')
+    where=' · '.join(filter(None,[label,'.'.join(map(str,loc))]))
+    return f'{where}: {message}' if where else message
+
+
 def parse_manifest(data):
+    data=data.removeprefix(b'\xef\xbb\xbf')
     if len(data)>MAX_MANIFEST:raise HTTPException(413,'Описание пакета должно быть не больше 2 МБ.')
     try:return Package.model_validate_json(data)
     except ValidationError as exc:
-        errors=[' / '.join(map(str,e['loc']))+': '+e['msg'] for e in exc.errors(include_input=False)[:10]]
-        raise HTTPException(422,'Проверьте пакет:\n'+'\n'.join(errors)) from None
+        raise HTTPException(422,'Проверьте пакет:\n'+'\n'.join(describe(e) for e in exc.errors(include_input=False)[:10])) from None
 
 
 @contextmanager
 def archive(path):
     try:
         with ZipFile(path) as z:yield z
-    except (BadZipFile,RuntimeError,NotImplementedError,EOFError,ValueError) as exc:
+    except (BadZipFile,RuntimeError,NotImplementedError,EOFError,ValueError,zlib.error) as exc:
         raise HTTPException(422,'ZIP повреждён, зашифрован или использует неподдерживаемое сжатие.') from exc
+
+
+def check_directory(path):
+    # ZipFile parses size_cd bytes regardless of the declared count, so bound it first.
+    try:
+        with open(path,'rb') as f:endrec=_EndRecData(f)
+    except BadZipFile:endrec=None
+    if not endrec:raise HTTPException(422,'ZIP повреждён, зашифрован или использует неподдерживаемое сжатие.')
+    if endrec[_ECD_ENTRIES_TOTAL]>MAX_ENTRIES or endrec[_ECD_SIZE]>MAX_DIRECTORY:raise HTTPException(422,'Нужен manifest.json и до 200 уникальных файлов.')
 
 
 def inspect_package(path,filename):
@@ -89,12 +111,15 @@ def inspect_package(path,filename):
         if package.files:raise HTTPException(422,'JSON переносит только вопросы без файлов. Для вложений используйте ZIP-пакет.')
         return package
     if not filename.lower().endswith('.zip'):raise HTTPException(422,'Выберите ZIP-пакет Атласа или JSON по шаблону.')
+    check_directory(path)
     with archive(path) as z:
         entries=z.infolist();names=[i.filename for i in entries]
-        if len(entries)>201 or len(names)!=len(set(names)) or 'manifest.json' not in names:
+        if len(entries)>MAX_ENTRIES or len(names)!=len(set(names)) or 'manifest.json' not in names:
             raise HTTPException(422,'Нужен manifest.json и до 200 уникальных файлов.')
         for info in entries:
             if info.is_dir() or info.flag_bits&1 or stat.S_ISLNK(info.external_attr>>16):raise HTTPException(422,'Папки, символические ссылки и зашифрованные файлы не поддерживаются.')
+            if info.orig_filename!=info.filename:raise HTTPException(422,'Пакет содержит лишние файлы, пути или отсутствующие вложения.')
+            if info.compress_type not in (ZIP_STORED,ZIP_DEFLATED):raise HTTPException(422,'Используйте ZIP без сжатия или со сжатием Deflate.')
         manifest=z.getinfo('manifest.json')
         if manifest.file_size>MAX_MANIFEST:raise HTTPException(413,'Описание пакета должно быть не больше 2 МБ.')
         with z.open(manifest) as stream:data=stream.read(MAX_MANIFEST+1)
@@ -107,32 +132,57 @@ def inspect_package(path,filename):
 
 def extract_files(path,package,destinations):
     if not package.files:return
-    with archive(path) as z:
-        for file in package.files:
-            target=destinations[file.id];target.parent.mkdir(parents=True,exist_ok=True)
-            size=0;digest=hashlib.sha256()
-            with z.open('files/'+file.id) as source,target.open('xb') as output:
-                while chunk:=source.read(64*1024):
-                    size+=len(chunk)
-                    if size>file.size:raise HTTPException(422,'Размер вложения превышает описание пакета.')
-                    digest.update(chunk);output.write(chunk)
-                output.flush();os.fsync(output.fileno())
-            if size!=file.size or digest.hexdigest()!=file.sha256:raise HTTPException(422,'Проверка целостности вложения не пройдена.')
-            media.validate_file(target,file.filename)
+    created=[]
+    try:
+        with archive(path) as z:
+            for file in package.files:
+                target=destinations[file.id];target.parent.mkdir(parents=True,exist_ok=True)
+                size=0;digest=hashlib.sha256()
+                with z.open('files/'+file.id) as source,target.open('xb') as output:
+                    created.append(target)
+                    while chunk:=source.read(64*1024):
+                        size+=len(chunk)
+                        if size>file.size:raise HTTPException(422,'Размер вложения превышает описание пакета.')
+                        digest.update(chunk);output.write(chunk)
+                    output.flush();os.fsync(output.fileno())
+                if size!=file.size or digest.hexdigest()!=file.sha256:raise HTTPException(422,'Проверка целостности вложения не пройдена.')
+                media.validate_file(target,file.filename)
+    except BaseException:
+        for target in created:target.unlink(missing_ok=True)
+        raise
+
+
+def manifest_bytes(package,pretty=False):
+    data=package.model_dump(mode='json',exclude={'questions':{'__all__':{'question':{'attachments','solutionAttachments'}}}})
+    result=json.dumps(data,ensure_ascii=False,indent=2).encode() if pretty else encoded(data).encode()
+    if len(result)>MAX_MANIFEST:raise HTTPException(413,'Описание выбранных вопросов превышает 2 МБ. Уменьшите выборку.')
+    return result
 
 
 def write_package(path,package,sources):
-    manifest=encoded(package.model_dump(mode='json',exclude={'questions':{'__all__':{'question':{'attachments','solutionAttachments'}}}})).encode()
-    if len(manifest)>MAX_MANIFEST:raise HTTPException(413,'Описание выбранных вопросов превышает 2 МБ. Уменьшите выборку.')
+    manifest=manifest_bytes(package)
     with ZipFile(path,'w',compression=ZIP_STORED) as z:
         z.writestr('manifest.json',manifest)
         for file in package.files:
             size=0;digest=hashlib.sha256()
-            try:
-                with sources[file.id].open('rb') as source,z.open('files/'+file.id,'w') as output:
-                    while chunk:=source.read(64*1024):
-                        size+=len(chunk)
-                        if size>file.size:raise HTTPException(409,'Вложение изменилось в хранилище. Обратитесь к администратору.')
-                        digest.update(chunk);output.write(chunk)
+            try:source=sources[file.id].open('rb')
             except OSError:raise HTTPException(409,'Вложение отсутствует в хранилище. Обратитесь к администратору.') from None
+            with source,z.open('files/'+file.id,'w') as output:
+                while chunk:=source.read(64*1024):
+                    size+=len(chunk)
+                    if size>file.size:raise HTTPException(409,'Вложение изменилось в хранилище. Обратитесь к администратору.')
+                    digest.update(chunk);output.write(chunk)
             if size!=file.size or digest.hexdigest()!=file.sha256:raise HTTPException(409,'Вложение повреждено. Обратитесь к администратору.')
+
+
+TEMPLATE=dict(format='atlas.quiz-bank',version=1,files=[],questions=[
+    dict(subject='География',tags=['пример'],archived=False,question=dict(kind='single',text='Какой город является столицей Великобритании?',points=1,
+         options=[dict(id='a',text='Лондон'),dict(id='b',text='Париж')],correctIds=['a'],explanation='Лондон — столица Великобритании.')),
+    dict(subject='Математика',tags=['пример'],question=dict(kind='number',text='Чему равно число π, округлённое до сотых?',number=3.14,tolerance=0.005)),
+    dict(subject='Английский язык',tags=['пример'],question=dict(kind='short',text='Переведите на английский: «книга».',accepted=['book','a book'])),
+    dict(subject='Литература',tags=['пример'],question=dict(kind='essay',text='Напишите небольшое рассуждение о любимой книге.',points=5)),
+])
+
+
+def template_bytes():
+    return json.dumps(TEMPLATE,ensure_ascii=False,indent=2).encode()

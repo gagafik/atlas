@@ -202,10 +202,11 @@ class Quizzes:
         from .quiz_files import QuizFiles
         QuizFiles(self).register(app,Workspace)
         from .quiz_bank import register as register_bank
+        from .quiz_bank_exchange import register as register_exchange
         from .quiz_attempts import register as register_attempts
         from .quiz_catalog import register as register_catalog
         from .quiz_grading import register as register_grading
-        register_bank(app,self,Workspace);register_catalog(app,self,Workspace);register_attempts(app,self,Workspace);register_grading(app,self,Workspace)
+        register_bank(app,self,Workspace);register_exchange(app,self,Workspace);register_catalog(app,self,Workspace);register_attempts(app,self,Workspace);register_grading(app,self,Workspace)
 
         @app.put('/api/journal/quizzes/{id}')
         def save(id:str,body:models.QuizWrite,request:Request,workspace:Workspace='school'):
