@@ -122,15 +122,20 @@ def survey(db, key, table, root, module, days):
 
 def apply_module(db, table, root, module, days, leftovers, report):
     # Each batch re-checks its predicate inside BEGIN IMMEDIATE, which shares the API's writer lock.
+    # A row whose file cannot be removed stays in the table; it is set aside so it never blocks the rows behind it.
+    skipped = set()
     while True:
         db.execute('BEGIN IMMEDIATE')
-        deleted = 0
-        for id, size in module.unused_rows(db, BATCH, days):
+        tried = 0
+        for id, size in module.unused_rows(db, BATCH + len(skipped), days):
+            if id in skipped: continue
+            tried += 1
             try: report['freedBytes'] += release(db, table, root, id, size)
-            except OSError: report['failed'] += 1
-            else: deleted += 1
+            except OSError:
+                report['failed'] += 1
+                skipped.add(id)
         db.commit()
-        if not deleted: break
+        if not tried: break
     for start in range(0, len(leftovers), BATCH):
         db.execute('BEGIN IMMEDIATE')
         for blob, size in leftovers[start:start + BATCH]:

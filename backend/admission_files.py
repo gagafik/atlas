@@ -17,9 +17,12 @@ def referenced(db,id,application_id):
     return bool(db.execute("SELECT 1 FROM admission_applications a,json_each(a.document,'$.files') f WHERE a.id=? AND json_extract(f.value,'$.id')=? LIMIT 1",(application_id,id)).fetchone())
 
 def unused_rows(db,limit=20,days=1):
+    # Draft documents keep their files (linked stays 0 until submit). The filter is part of the query so that
+    # LIMIT counts deletable rows only: many older draft files must not hide an abandoned upload behind them.
     stale,old=storage.cutoffs(days)
-    rows=db.execute("SELECT id,size,application_id FROM admission_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?)) ORDER BY created LIMIT ?",(stale,old,limit)).fetchall()
-    return [(r[0],r[1]) for r in rows if not referenced(db,r[0],r[2])]
+    return [(r[0],r[1]) for r in db.execute("""SELECT id,size FROM admission_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?))
+        AND NOT EXISTS(SELECT 1 FROM admission_applications a,json_each(a.document,'$.files') f WHERE a.id=admission_files.application_id AND json_extract(f.value,'$.id')=admission_files.id)
+        ORDER BY created LIMIT ?""",(stale,old,limit))]
 
 def collect_unused(db):
     root=root_for(db)

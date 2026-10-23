@@ -12,9 +12,10 @@ import time
 from uuid import uuid4
 
 import pytest
-from backend import api, assignment_files, homework_files, message_files
+from backend import admission_files, api, assignment_files, homework_files, message_files
 from backend.access import now
-from test_access import client
+from test_access import client, create, enable
+from test_admissions import action as open_campaign, campaign as new_campaign, filled, new as new_application, ok as admissions_ok, save as save_application, signup, upload as admission_upload
 from test_assignment_files import upload as upload_material, download as download_material, save_materials
 from test_homework import setup, get, answer, upload, download
 from tools import cleanup_files
@@ -162,3 +163,91 @@ def test_cli_prints_counts_only(client):
     assert report['applied'] is False and report['modules']['homework']['unused']['files'] == 1
     assert 'answer.txt' not in result.stdout and 'note.txt' not in result.stdout and not re.search(r'[a-f0-9]{32}', result.stdout)
     assert s['abandoned'] not in result.stdout and counts()['homework_files'] == 2
+
+
+def age_blobs(age=7200):
+    # Real uploads are normally older than an hour: only the reference check protects them from the orphan sweep.
+    with api.connect() as db:
+        roots = [module.root_for(db) for module in (homework_files, message_files, assignment_files)]
+    for root in roots:
+        for path in root.glob('*.bin'): os.utime(path, (time.time() - age, time.time() - age))
+
+
+def test_referenced_blobs_older_than_an_hour_are_never_orphans(client):
+    s = scenario(client)
+    age_blobs()
+    report = cleanup_files.run(api.DB)
+    # Only the two planted files count (the fresh one is now old too); no referenced blob is reported.
+    assert report['modules']['homework']['orphans'] == dict(files=2, bytes=len(b'old orphan') + len(b'fresh orphan'))
+    assert report['modules']['messages']['orphans']['files'] == 0 and report['modules']['assignments']['orphans']['files'] == 0
+    applied = cleanup_files.run(api.DB, apply=True)
+    assert applied['freedBytes'] == len(b'Abandoned attempt') + len(b'old orphan') + len(b'fresh orphan') + len(b'Never sent')
+    with api.connect() as db:
+        root = homework_files.root_for(db)
+        assert not s['orphan'].exists() and not s['fresh'].exists() and s['notes'].exists()
+        assert (root / (s['submitted'] + '.bin')).is_file()
+        assert (message_files.root_for(db) / (s['protected'] + '.bin')).is_file()
+        assert (assignment_files.root_for(db) / (s['first'] + '.bin')).is_file()  # kept alive by the second row only
+    assert download(s['pupil'], s['key'], s['submitted']).content == b'Submitted answer'
+    assert download_material(s['parent'], s['second'], 's1').content == b'Same worksheet'
+
+
+def test_apply_rechecks_leftovers_that_became_referenced_since_the_survey(client):
+    s = scenario(client)
+    age_blobs()
+    with api.connect() as db:
+        root = homework_files.root_for(db)
+    report = dict(freedBytes=0, failed=0)
+    with closing(sqlite3.connect(api.DB)) as db:
+        db.row_factory = sqlite3.Row
+        # The leftover list is stale: this blob is now used by a submitted answer.
+        cleanup_files.apply_module(db, 'homework_files', root, homework_files, 30, [(s['submitted'], 16)], report)
+    assert (root / (s['submitted'] + '.bin')).is_file() and report == dict(freedBytes=0, failed=0)
+
+
+def test_apply_skips_rows_whose_file_cannot_be_removed(client, monkeypatch):
+    record, pupil, parent, teacher = setup(client)
+    key = record['lessonKey']
+    ids = [upload(pupil, key, get(pupil, key)['assignment'], body=b'Abandoned %d' % n).json()['id'] for n in range(3)]
+    with api.connect() as db:
+        for n, id in enumerate(ids):
+            db.execute('UPDATE homework_files SET created=? WHERE id=?', ((now() - timedelta(days=5 - n)).isoformat(), id))
+    real = homework_files.release_row
+
+    def release_row(db, table, root, id):
+        if id in ids[:2]: raise PermissionError('file is in use')
+        return real(db, table, root, id)
+
+    monkeypatch.setattr(homework_files, 'release_row', release_row)
+    monkeypatch.setattr(cleanup_files, 'BATCH', 2)
+    report = cleanup_files.run(api.DB, apply=True)['modules']['homework']
+    # The two oldest rows block a whole batch, yet the row behind them is still reached.
+    assert report['failed'] == 2 and report['freedBytes'] == len(b'Abandoned 2')
+    with api.connect() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM homework_files')} == set(ids[:2])
+
+
+def test_apply_reaches_abandoned_admission_upload_behind_many_draft_files(client, monkeypatch):
+    enable(client)
+    create(client, 'teacher')
+    create(client, 'staff')
+    create(client, 'parent')
+    admission = open_campaign(client, new_campaign(client))
+    family, _, _ = signup(admission)
+    draft = new_application(family, admission)
+    kept = [admissions_ok(admission_upload(family, draft)) for _ in range(5)]
+    draft = save_application(family, draft, filled(draft) | dict(files=[dict(id=f['id'], kind='identity') for f in kept]))
+    loose = admissions_ok(admission_upload(family, draft))
+    with api.connect() as db:
+        db.execute('UPDATE admission_files SET created=?', ((now() - timedelta(days=5)).isoformat(),))
+        db.execute('UPDATE admission_files SET created=? WHERE id=?', ((now() - timedelta(days=2)).isoformat(), loose['id']))
+    monkeypatch.setattr(cleanup_files, 'BATCH', 2)  # smaller than the number of older draft files
+    size = loose['size']
+    assert cleanup_files.run(api.DB)['modules']['admissions']['unused'] == dict(files=1, bytes=size)
+    report = cleanup_files.run(api.DB, apply=True)['modules']['admissions']
+    assert report['freedBytes'] == size and report['failed'] == 0
+    with api.connect() as db:
+        assert {r[0] for r in db.execute('SELECT id FROM admission_files')} == {f['id'] for f in kept}
+        assert not (admission_files.root_for(db) / (loose['id'] + '.bin')).exists()
+        assert all((admission_files.root_for(db) / (f['id'] + '.bin')).is_file() for f in kept)
+    assert cleanup_files.run(api.DB)['modules']['admissions']['unused']['files'] == 0
