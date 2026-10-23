@@ -183,12 +183,14 @@ class Absences:
         register(self,app,Workspace)
         @app.get('/api/journal/absences/options')
         def options(request:Request,workspace:Workspace='school'):
+            from .journal import today
             user,snap=self.context(request,workspace)
+            settings=snap.state.settings;default=min(max(today(),settings.yearStart),settings.yearEnd)
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.recheck(db,user,snap,workspace)
                 config=self.config(db,workspace);classes=self.classes(db,user,snap,workspace)
                 pupils=[dict(id=s.id,name=s.name) for s in snap.state.students if s.active and s.id in user_ids(user,workspace,'student')] if user['role']=='parent' else []
-                result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd)
+                result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=settings.yearStart,yearEnd=settings.yearEnd,defaultDate=default.isoformat())
                 if user['role']=='admin':
                     candidates=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")]
                     result.update(config=config,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],teachers=[dict(id=u['id'],name=u['name'],login=u['login']) for u in candidates if user_ids(u,workspace,'teacher')])

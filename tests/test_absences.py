@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime,timedelta,timezone
+from datetime import date,datetime,timedelta,timezone
 import json
 from uuid import uuid4
 import pytest
@@ -289,3 +289,11 @@ def test_replayed_decision_still_succeeds_after_period_closes(client,monkeypatch
     close(client,period(client))
     replay=teacher.post(url('/'+notice['id']+'/decision'),json=decision);assert replay.status_code==200
     assert replay.json()==first.json()|dict(periodLocks=['Первая четверть'])
+
+
+def test_options_default_date_is_school_today_clamped(client,monkeypatch):
+    _,_,parent,_=setup(client)
+    for today,expected in [(date(2026,10,20),'2026-10-20'),(date(2026,7,1),'2026-08-17'),(date(2027,9,1),'2027-06-11')]:
+        monkeypatch.setattr('backend.journal.today',lambda today=today:today)
+        options=parent.get(url('/options')).json();assert options['defaultDate']==expected
+        assert options['yearStart']=='2026-08-17' and options['yearEnd']=='2027-06-11'

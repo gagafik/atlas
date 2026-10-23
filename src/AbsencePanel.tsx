@@ -24,6 +24,7 @@ type Options = {
   students: { id: string; name: string }[];
   yearStart: string;
   yearEnd: string;
+  defaultDate: string;
   config?: { version: number; assignments: Record<string, string[]> };
   classes?: { id: string; name: string }[];
   teachers?: { id: string; name: string; login: string }[];
@@ -124,8 +125,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     const r: Options = await api("journal/absences/options", workspace);
     setOptions(r);
     setStudent((old) => old || r.students[0]?.id || "");
-    setStart((old) => old || r.yearStart);
-    setEnd((old) => old || r.yearStart);
+    setStart((old) => old || r.defaultDate);
+    setEnd((old) => old || r.defaultDate);
   };
   const list = async (before?: number) => {
     const r = await api(
@@ -167,8 +168,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
         if (!live) return;
         setOptions(o);
         setStudent((old) => old || o.students[0]?.id || "");
-        setStart((old) => old || o.yearStart);
-        setEnd((old) => old || o.yearStart);
+        setStart((old) => old || o.defaultDate);
+        setEnd((old) => old || o.defaultDate);
         setItems(r.items);
         setNext(r.nextBefore);
       })
