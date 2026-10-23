@@ -113,7 +113,7 @@ def test_plan_binding_rejects_wrong_scope_stale_version_missing_topic_atomically
     p=new(client);p2=save(client,p,title='Changed').json()
     assert attach(client,p).status_code==409
     assert attach(client,p2,topic='missing').status_code==422
-    assert attach(client,p2,units=0).status_code==422
+    zero=attach(client,p2,units=0);assert zero.status_code==422 and 'Часов по теме' in str(zero.json()['detail'])
     math=entry(client,lesson(client,subject='Математика')['lessonKey'])
     assert attach(client,p2,math).status_code==422
     r=attach(client,p2);assert r.status_code==200,r.text

@@ -53,7 +53,7 @@ def main():
     with synthetic_server() as (url,identities,counts,cookie):
         with httpx.Client(base_url=url,trust_env=False,timeout=120,headers={'Cookie':cookie,'X-Atlas-Request':'1'}) as client:
             before=client.get('/api/state').json();day='2026-10-13'
-            assigned=client.put('/api/journal/absences/reviewers',json=dict(version=0,assignments={f'c{i}':[f'teacher{i}'] for i in range(args.families)}));assigned.raise_for_status()
+            current=client.get('/api/access/class-staff').json();client.put('/api/access/class-staff',json=dict(version=current['version'],revision=current['revision'],reason='Синтетическая нагрузка',assignments={f'c{i}':[dict(accountId=f'teacher{i}',capabilities=['absence_review','attendance_read','journal_coverage'])] for i in range(args.families)})).raise_for_status()
             rows=client.get('/api/journal/day',params=dict(day=day)).json()['lessons']
             for i in range(args.families):
                 key=next(r['lessonKey'] for r in rows if r['lesson']['group']==f'Class {i}' and r['lesson']['subject']=='Subject 0')

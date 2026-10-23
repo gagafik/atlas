@@ -38,7 +38,7 @@ def test_legacy_assignment_keeps_real_rights_until_explicit_split(client):
     assert coverage(reader).status_code==403
     assert reader.get(url('/'+notice['id'])).status_code==404
     # Old UI/API cannot silently restore the formerly bundled rights.
-    assert client.put(url('/reviewers'),json=dict(version=2,assignments={A:[teacher['id']]})).status_code==409
+    assert client.put(url('/reviewers'),json=dict(version=2,assignments={A:[teacher['id']]})).status_code in [404,405]
     assert settings(client)['assignments']=={A:[item(teacher,'attendance_read')]}
     assert reader.get('/api/journal/coverage/options?workspace=demo').json()['modes']==['teaching']
 

@@ -1,18 +1,24 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime,timedelta,timezone
+from datetime import date,datetime,timedelta,timezone
 import json
 from uuid import uuid4
 import pytest
 from backend import api,absence_files,homework_files
+from backend.absences import tables as absence_tables
 from test_access import client,enable,create,signed
 from test_journal import DAY,lesson,entry,write,graded,report
 
 
 def url(path=''):return '/api/journal/absences'+path+'?workspace=demo'
 def body(**values):return dict(requestId=str(uuid4()),studentId='s1',startDate=DAY,endDate=DAY,reason='Личная причина отсутствия',fileIds=[])|values
+def reviewers(assignments):
+    """Legacy reviewer document; the old HTTP route was removed."""
+    with api.connect() as db:
+        absence_tables(db)
+        db.execute("INSERT INTO absence_reviewers VALUES ('demo',1,?) ON CONFLICT(workspace) DO UPDATE SET version=version+1,document=excluded.document",(json.dumps(assignments),))
 def setup(client):
     enable(client);parent=create(client,'parent');teacher=create(client,'teacher');create(client,'student');create(client,'parent',login='other-parent');create(client,'teacher',login='other-teacher',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
-    assigned=client.put(url('/reviewers'),json=dict(version=0,assignments={'c-demo-a':[teacher['id']]}));assert assigned.status_code==200,assigned.text
+    reviewers({'c-demo-a':[teacher['id']]})
     return parent,teacher,signed('parent'),signed('teacher')
 def send(parent,payload=None):
     r=parent.post(url(),json=payload or body());assert r.status_code==200,r.text;return r.json()
@@ -65,12 +71,10 @@ def test_private_evidence_author_other_guardian_student_and_teacher_scopes(clien
 def test_current_coordinator_assignment_is_required_and_does_not_grant_other_grades(client):
     _,_,parent,teacher=setup(client);notice=send(parent);mark(client)
     other=signed('other-teacher');assert decide(other,notice).status_code==404
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==200
+    reviewers({})
     assert teacher.get(url('/'+notice['id'])).status_code==404
     assert decide(teacher,notice).status_code==404
-    assert teacher.put(url('/reviewers'),json=dict(version=2,assignments={})).status_code==403
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==409
-    assert client.put(url('/reviewers'),json=dict(version=2,assignments={'unknown':['bad']})).status_code==422
+    assert client.put(url('/reviewers'),json=dict(version=2,assignments={})).status_code in [404,405]
     assert decide(client,notice).status_code==200
 
 
@@ -246,3 +250,72 @@ def test_same_child_other_guardian_sees_only_attendance_result(client):
     assert other.get(url('/'+notice['id'])).status_code==404
     assert any(r['action']=='journal.updated' for r in other.get('/api/notifications/inbox').json()['items'])
     assert not any(r['action']=='absence.updated' for r in other.get('/api/notifications/inbox').json()['items'])
+
+
+def test_decisions_refused_inside_closed_period(client,monkeypatch):
+    # Imported here: test_journal_periods imports test_journal_coverage, which imports this module.
+    from test_journal_periods import period,close,action
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);mark(client)
+    approved=decide(teacher,send(parent)).json();pending=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'))
+    assert client.get(url('/'+pending['id'])).json()['periodLocks']==[]
+    p=close(client,period(client,end='2026-08-18'))
+    def counts():
+        with api.connect() as db:return [db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['absence_history','notifications','audit']]
+    before=counts()
+    for item,operation in [(approved,'revoke'),(pending,'approve')]:
+        refused=decide(teacher,item,operation);assert refused.status_code==403 and 'Первая четверть' in refused.json()['detail']
+    assert counts()==before
+    for item in [approved,pending]:
+        current=client.get(url('/'+item['id'])).json();assert current['version']==item['version'] and current['periodLocks']==['Первая четверть']
+    assert parent.get(url('/'+pending['id'])).json()['periodLocks']==[]
+    # Reject and withdraw change no figures, so a closed period does not block them.
+    assert decide(teacher,pending,'reject').status_code==200
+    again=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'));assert decide(parent,again,'withdraw').status_code==200
+    action(client,p,'reopen').raise_for_status()
+    assert decide(teacher,approved,'revoke').status_code==200
+
+
+def test_period_lookup_tolerates_database_without_journal_tables():
+    import sqlite3
+    from backend.journal_periods import range_locks
+    assert range_locks(sqlite3.connect(':memory:'),'demo','2026-08-17','2026-08-17')==[]
+
+
+def test_replayed_decision_still_succeeds_after_period_closes(client,monkeypatch):
+    from test_journal_periods import period,close
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);mark(client);notice=send(parent)
+    decision=dict(requestId=str(uuid4()),version=1,action='approve',comment='Согласовано')
+    first=teacher.post(url('/'+notice['id']+'/decision'),json=decision);assert first.status_code==200
+    close(client,period(client))
+    replay=teacher.post(url('/'+notice['id']+'/decision'),json=decision);assert replay.status_code==200
+    assert replay.json()==first.json()|dict(periodLocks=['Первая четверть'])
+
+
+def test_options_default_date_is_school_today_clamped(client,monkeypatch):
+    _,_,parent,_=setup(client)
+    for today,expected in [(date(2026,10,20),'2026-10-20'),(date(2026,7,1),'2026-08-17'),(date(2027,9,1),'2027-06-11')]:
+        monkeypatch.setattr('backend.journal.today',lambda today=today:today)
+        options=parent.get(url('/options')).json();assert options['defaultDate']==expected
+        assert options['yearStart']=='2026-08-17' and options['yearEnd']=='2027-06-11'
+
+
+def test_withdraw_comment_is_optional(client):
+    _,_,parent,teacher=setup(client);notice=send(parent)
+    for operation in ['approve','reject']:
+        for values in [dict(comment=''),dict(comment='   ')]:
+            refused=decide(teacher,notice,operation,**values);assert refused.status_code==422 and 'Объясните решение' in refused.json()['detail']
+    missing=teacher.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='approve'))
+    assert missing.status_code==422 and 'Объясните решение' in missing.json()['detail']
+    withdrawn=parent.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='withdraw'))
+    assert withdrawn.status_code==200 and withdrawn.json()['status']=='withdrawn',withdrawn.text
+    history=parent.get(url('/'+notice['id']+'/history')).json()['items'][0]
+    assert history['action']=='withdrawn' and history['comment']==''
+    blank=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'));request=str(uuid4())
+    payload=dict(requestId=request,version=1,action='withdraw',comment='   ')
+    first=parent.post(url('/'+blank['id']+'/decision'),json=payload);assert first.status_code==200,first.text
+    assert parent.post(url('/'+blank['id']+'/decision'),json=payload).json()==first.json()
+    assert parent.get(url('/'+blank['id']+'/history')).json()['items'][0]['comment']==''

@@ -8,7 +8,7 @@ import pytest
 from backend import api,attendance_projection
 from backend.models import Student,DatedLesson
 from test_access import client,create,signed
-from test_absences import setup,mark,send,decide,body,url
+from test_absences import setup,mark,send,decide,body,url,reviewers
 from test_journal import DAY,lesson,entry,write,graded
 
 
@@ -139,7 +139,7 @@ def test_student_pagination_token_catches_changed_publication_and_reviewer_scope
     record=entry(client,lesson(client)['lessonKey']);assert write(client,record,publish=True).status_code==200
     assert report(teacher,offset=50,token=first['token']).status_code==409
     current=report(teacher).json()
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==200
+    reviewers({})
     assert report(teacher,token=current['token']).status_code==409
     assert report(teacher).status_code==403
     assert teacher.get('/api/journal/attendance/options?workspace=demo').json()['students']==[]

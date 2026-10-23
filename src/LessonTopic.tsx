@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { numberField, numberValue } from "./journal";
 import type { PlanDetail, TopicReference } from "./curriculum";
 import { MaterialView } from "./LessonMaterials";
 import type { MaterialSnapshot } from "./teachingMaterials";
@@ -280,10 +281,10 @@ export default function LessonTopic({
               type="number"
               min={1}
               max={12}
-              value={value.units}
+              value={numberValue(value.units)}
               disabled={disabled}
               onChange={(e) =>
-                onChange({ ...value, units: Number(e.target.value) })
+                onChange({ ...value, units: numberField(e.target.value) })
               }
             />
           </label>

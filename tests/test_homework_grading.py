@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import date
 import json
 
 import pytest
@@ -227,3 +228,19 @@ def test_new_assessment_respects_limit_and_return_preserves_recorded_grade(clien
     new=answer(pupil,key,get(pupil,key));new.raise_for_status()
     assert 'grading' not in new.json()['submitted']
     assert current_grade(entry(client,key)['document'])['score']==9
+
+
+def test_future_lesson_cannot_receive_a_grade(client,monkeypatch):
+    record,sent,_,_,teacher=ready(client);key=record['lessonKey'];mark=payload(options(teacher,key));version=entry(client,key)['version']
+    monkeypatch.setattr('backend.journal.today',lambda:date(2026,8,16))
+    o=options(teacher,key);assert not o['allowed'] and 'ещё не прошёл' in o['reason']
+    response=grade(teacher,key,sent,mark);assert response.status_code==409 and o['reason'] in response.text
+    assert entry(client,key)['version']==version
+    assert review(teacher,key,sent).status_code==200
+
+
+def test_grade_can_be_transferred_on_the_lesson_day(client,monkeypatch):
+    record,sent,_,_,teacher=ready(client);key=record['lessonKey']
+    monkeypatch.setattr('backend.journal.today',lambda:date.fromisoformat(DAY))
+    o=options(teacher,key);assert o['allowed'] and not o['reason']
+    assert grade(teacher,key,sent,payload(o)).status_code==200

@@ -102,7 +102,7 @@ def register(service,app,Workspace):
             rows=db.execute("""SELECT * FROM behaviour_notes WHERE workspace=? AND day=? AND status IN ('pending','published')
                                AND json_extract(document,'$.lesson.key')=? ORDER BY seq""",(workspace,day.isoformat(),lessonKey)).fetchall()
             pupils=set(lesson['studentIds'])
-            return dict(label=lesson['label'],canMark=not lesson['locked'],
+            return dict(label=lesson['label'],canMark=not lesson['locked'] and day<=today(),
                         categories=[c for c in service.config(db,workspace)['categories'] if c['active'] and c['level'] in levels],
                         notes=[dict(id=r['id'],studentId=r['student_id'],kind=r['kind'],category=json.loads(r['document'])['category'],status=r['status'],author=r['author_name'])
                                for r in rows if r['student_id'] in pupils])
