@@ -208,3 +208,20 @@ def test_bulk_refuses_notices_in_closed_period_without_partial_writes(client,mon
     # Rejection changes no figures, so the same notices can still be rejected in bulk.
     rejected=apply(teacher,prepare(teacher,notices,action='reject'));assert rejected.status_code==200,rejected.text
     assert [n['status'] for n in rejected.json()['items']]==['rejected','rejected']
+
+
+def test_bulk_revoke_names_every_notice_in_closed_periods(client,monkeypatch):
+    from test_journal_periods import period,close
+    from datetime import datetime,timezone
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);approved=apply(teacher,prepare(teacher,two(parent))).json()['items']
+    close(client,period(client));close(client,period(client,name='Вторая четверть',start='2026-08-18',end='2026-08-18'))
+    before=counts();response=teacher.post(url('/bulk/preview'),json=batch(approved,action='revoke'))
+    assert response.status_code==403,response.text
+    detail=response.json()['detail']
+    assert 'Общее решение не применено' in detail
+    for fragment in ['2026-08-17 00:00','2026-08-18 00:00','Первая четверть','Вторая четверть']:assert fragment in detail,detail
+    assert counts()==before
+    for n in approved:
+        item=client.get(url('/'+n['id'])).json();assert item['status']=='approved' and item['version']==n['version']
