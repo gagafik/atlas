@@ -6,6 +6,7 @@ import {
   numberField,
   numberValue,
   contentProblem,
+  hasEarlierRevisions,
   type JournalDocument,
 } from "./journal";
 import { download } from "./utils";
@@ -137,5 +138,15 @@ describe("number fields", () => {
       topic.curriculum.units = units;
       expect(contentProblem(topic)).toContain("часы по теме");
     }
+  });
+});
+describe("history paging", () => {
+  const page = (count: number, newest: number) =>
+    Array.from({ length: count }, (_, i) => ({ version: newest - i }));
+  it("offers earlier revisions only after a full page that does not reach version 1", () => {
+    expect(hasEarlierRevisions([])).toBe(false);
+    expect(hasEarlierRevisions(page(49, 49))).toBe(false);
+    expect(hasEarlierRevisions(page(50, 50))).toBe(false);
+    expect(hasEarlierRevisions(page(50, 100))).toBe(true);
   });
 });

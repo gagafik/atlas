@@ -21,6 +21,7 @@ import {
   numberField,
   numberValue,
   contentProblem,
+  hasEarlierRevisions,
   type Assessment,
   type Grade,
   type JournalContent,
@@ -159,6 +160,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   }, [entry]);
   const [report, setReport] = useState<JournalReport | null>(null),
     [history, setHistory] = useState<History[]>([]),
+    [historyMore, setHistoryMore] = useState(false),
     [historical, setHistorical] = useState<History | null>(null);
   const [error, setError] = useState(""),
     [message, setMessage] = useState(""),
@@ -267,6 +269,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     setDirty(false);
     setSyncRoster(false);
     setHistory([]);
+    setHistoryMore(false);
     setHistorical(null);
     setMessage("");
   }
@@ -285,6 +288,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       setSyncRoster(sync);
       setDirty(sync);
       setHistory([]);
+      setHistoryMore(false);
       setHistorical(null);
     } catch (e: any) {
       setError(e.message);
@@ -353,6 +357,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       setSyncRoster(false);
       setEpoch((n) => n + 1);
       setHistory([]);
+      setHistoryMore(false);
       setHistorical(null);
       setMessage(
         publish
@@ -376,6 +381,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
         workspace,
       );
       setHistory((rows) => (before ? [...rows, ...r] : r));
+      setHistoryMore(hasEarlierRevisions(r));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -1226,7 +1232,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           </button>
                         </div>
                       ))}
-                      {history.length % 50 === 0 && (
+                      {historyMore && (
                         <button
                           disabled={busy}
                           onClick={() =>

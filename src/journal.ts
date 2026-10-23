@@ -139,6 +139,10 @@ export function contentProblem(c: JournalContent): string {
     return "Укажите часы по теме целым числом от 1 до 12.";
   return "";
 }
+// The server pages history 50 at a time, newest first; a full page ending above version 1 may have more.
+export function hasEarlierRevisions(page: { version: number }[]): boolean {
+  return page.length === 50 && page[page.length - 1].version > 1;
+}
 export function journalCsv(
   rows: JournalRow[],
   filename = "Учебный журнал.csv",
