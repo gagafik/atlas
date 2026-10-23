@@ -217,13 +217,16 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       },
       body: file,
     });
-    const value = await r.json();
-    if (!r.ok)
+    const value = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (r.status === 401)
+        window.dispatchEvent(new Event("atlas-auth-required"));
       throw new Error(
         typeof value.detail === "string"
           ? value.detail
           : "Не удалось загрузить файл.",
       );
+    }
     setFiles((old) => [...old, value]);
   };
   const decide = async (action: string) => {
