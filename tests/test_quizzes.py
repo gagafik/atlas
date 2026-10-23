@@ -142,7 +142,18 @@ def test_autograding_types_manual_marks_and_hidden_results(client):
     marked=teacher.post(url,json=dict(version=submitted['version'],marks={'essay':dict(score=1,comment='Не хватает примера')},comment='Прочитайте разбор'))
     assert marked.status_code==200,marked.text
     assert marked.json()['score']==7 and marked.json()['status']=='reviewed'
-    assert teacher.post(url,json=dict(version=marked.json()['version'],marks={'multi':dict(score=0)})).status_code==422
+    refused=teacher.post(url,json=dict(version=marked.json()['version'],marks={'multi':dict(score=0)}))
+    assert refused.status_code==422 and 'объяснение' in refused.json()['detail']
+    # The automatic score needs no comment and keeps the mark automatic; a comment makes it a teacher's mark.
+    same=teacher.post(url,json=dict(version=marked.json()['version'],marks={'multi':dict(score=2)}))
+    assert same.status_code==200,same.text
+    assert same.json()['score']==7 and same.json()['marks']['multi']['automatic'] is True
+    commented=teacher.post(url,json=dict(version=same.json()['version'],marks={'multi':dict(score=2,comment='Проверено вручную')}))
+    assert commented.status_code==200 and commented.json()['marks']['multi']==dict(score=2,comment='Проверено вручную',automatic=False)
+    restored=teacher.post(url,json=dict(version=commented.json()['version'],marks={'multi':dict(score=2)}))
+    assert restored.status_code==200 and restored.json()['marks']['multi']['automatic'] is True and restored.json()['marks']['multi']['comment']==''
+    bare=teacher.post(url,json=dict(version=restored.json()['version'],marks={'essay':dict(score=1)}));assert bare.status_code==200
+    teacher.post(url,json=dict(version=bare.json()['version'],marks={'essay':dict(score=1,comment='Не хватает примера')})).raise_for_status()
     closed=action(teacher,quiz,'close').json();assert action(teacher,closed,'release').status_code==200
     result=attempt(parent,submitted);assert result['score']==7 and result['marks']['essay']['comment']=='Не хватает примера'
 
