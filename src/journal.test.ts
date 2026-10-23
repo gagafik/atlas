@@ -3,6 +3,9 @@ import {
   journalCsv,
   documentRows,
   gradeLabel,
+  numberField,
+  numberValue,
+  contentProblem,
   type JournalDocument,
 } from "./journal";
 import { download } from "./utils";
@@ -90,5 +93,49 @@ describe("journal export", () => {
     expect(csv.split("\r\n")).toHaveLength(2);
     expect(csv).toContain('"Опоздание";"5"');
     expect(csv).toContain('"2026-10-14"');
+  });
+});
+describe("number fields", () => {
+  it("keeps an erased field empty instead of turning it into zero", () => {
+    expect(numberField("")).toBeNaN();
+    expect(numberField("  ")).toBeNaN();
+    expect(numberField("2.5")).toBe(2.5);
+    expect(numberField("0")).toBe(0);
+    expect(numberValue(Number.NaN)).toBe("");
+    expect(numberValue(0)).toBe(0);
+  });
+  it("names the first invalid assessment number or topic hours", () => {
+    const content = () => structuredClone(document.content);
+    expect(contentProblem(content())).toBe("");
+    for (const maxScore of [Number.NaN, 0, -1, 10001]) {
+      const c = content();
+      c.assessments[0].maxScore = maxScore;
+      expect(contentProblem(c)).toContain("максимум баллов");
+    }
+    for (const weight of [Number.NaN, 101, -1]) {
+      const c = content();
+      c.assessments[0].weight = weight;
+      expect(contentProblem(c)).toContain("вес работы");
+    }
+    const labelOnly = content();
+    labelOnly.assessments[1].maxScore = Number.NaN;
+    labelOnly.assessments[1].weight = Number.NaN;
+    expect(contentProblem(labelOnly)).toBe("");
+    const topic = content();
+    topic.curriculum = {
+      planId: "p",
+      version: 1,
+      topicId: "t",
+      units: 1,
+      planTitle: "План",
+      title: "Тема",
+      standard: "",
+      plannedHours: 2,
+    };
+    expect(contentProblem(topic)).toBe("");
+    for (const units of [Number.NaN, 0, 13, 1.5]) {
+      topic.curriculum.units = units;
+      expect(contentProblem(topic)).toContain("часы по теме");
+    }
   });
 });

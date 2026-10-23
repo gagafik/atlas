@@ -18,6 +18,9 @@ import {
   gradeLabel,
   journalCsv,
   documentRows,
+  numberField,
+  numberValue,
+  contentProblem,
   type Assessment,
   type Grade,
   type JournalContent,
@@ -324,6 +327,12 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     });
   }
   async function save(publish: boolean) {
+    const problem = entry && contentProblem(entry.document.content);
+    if (problem) {
+      setError(problem);
+      setMessage("");
+      return;
+    }
     if (!entry || saveLock.current) return;
     saveLock.current = true;
     setBusy(true);
@@ -828,7 +837,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   min="0.01"
                                   max="10000"
                                   step="0.01"
-                                  value={a.maxScore}
+                                  value={numberValue(a.maxScore)}
                                   onChange={(e) =>
                                     content((c) => ({
                                       ...c,
@@ -836,7 +845,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                         x.id === a.id
                                           ? {
                                               ...x,
-                                              maxScore: Number(e.target.value),
+                                              maxScore: numberField(
+                                                e.target.value,
+                                              ),
                                             }
                                           : x,
                                       ),
@@ -851,7 +862,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   min="0"
                                   max="100"
                                   step="0.01"
-                                  value={a.weight}
+                                  value={numberValue(a.weight)}
                                   onChange={(e) =>
                                     content((c) => ({
                                       ...c,
@@ -859,7 +870,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                         x.id === a.id
                                           ? {
                                               ...x,
-                                              weight: Number(e.target.value),
+                                              weight: numberField(
+                                                e.target.value,
+                                              ),
                                             }
                                           : x,
                                       ),
@@ -1051,7 +1064,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                   <label className="field">
                                     <span>
                                       {a.name}
-                                      {a.kind === "points"
+                                      {a.kind === "points" &&
+                                      Number.isFinite(a.maxScore)
                                         ? ` (из ${a.maxScore})`
                                         : ""}
                                     </span>
@@ -1059,7 +1073,11 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                       <input
                                         type="number"
                                         min="0"
-                                        max={a.maxScore}
+                                        max={
+                                          Number.isFinite(a.maxScore)
+                                            ? a.maxScore
+                                            : undefined
+                                        }
                                         step="0.01"
                                         value={g?.score ?? ""}
                                         onChange={(e) =>

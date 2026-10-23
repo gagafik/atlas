@@ -5,7 +5,7 @@ import json
 from typing import Literal
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from .models import Model
 from .access import LOCAL, now
 from .calendar_ops import resolve_day, DayContext
@@ -18,6 +18,14 @@ class Assessment(Model):
     kind: Literal['points', 'label'] = 'points'
     maxScore: float = Field(default=10, gt=0, le=10000, allow_inf_nan=False)
     weight: float = Field(default=1, ge=0, le=100, allow_inf_nan=False)
+    @field_validator('maxScore', 'weight', mode='before')
+    @classmethod
+    def number(cls, value, info):
+        # Say what is wrong in Russian; the Field limits stay as a backstop.
+        points = info.field_name=='maxScore'
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not (0<value<=10000 if points else 0<=value<=100):
+            raise ValueError('Максимум баллов — число больше 0 и не больше 10000.' if points else 'Вес работы — число от 0 до 100.')
+        return value
 
 
 class Grade(Model):
@@ -49,6 +57,11 @@ class TopicReference(Model):
     version: int = Field(ge=1)
     topicId: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,80}$')
     units: int = Field(default=1, ge=1, le=12)
+    @field_validator('units', mode='before')
+    @classmethod
+    def whole_hours(cls, value):
+        if isinstance(value,bool) or not isinstance(value,int) or not 1<=value<=12:raise ValueError('Часов по теме в уроке — целое число от 1 до 12.')
+        return value
 
 
 class Content(Model):

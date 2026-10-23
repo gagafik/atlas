@@ -118,6 +118,27 @@ export function gradeLabel(grade: Grade | undefined, assessment: Assessment) {
         : `${grade.score} / ${assessment.maxScore}`
       : grade.label || "—";
 }
+// An erased number input is "", which Number() would silently turn into 0.
+export function numberField(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+export function numberValue(value: number): number | "" {
+  return Number.isNaN(value) ? "" : value;
+}
+// First Russian problem that the server would reject, or "" when the content may be sent.
+export function contentProblem(c: JournalContent): string {
+  for (const a of c.assessments) {
+    if (a.kind !== "points") continue;
+    if (!Number.isFinite(a.maxScore) || a.maxScore <= 0 || a.maxScore > 10000)
+      return `«${a.name}»: укажите максимум баллов больше 0 и не больше 10000.`;
+    if (!Number.isFinite(a.weight) || a.weight < 0 || a.weight > 100)
+      return `«${a.name}»: укажите вес работы от 0 до 100.`;
+  }
+  const units = c.curriculum?.units;
+  if (c.curriculum && !(Number.isInteger(units) && units! >= 1 && units! <= 12))
+    return "Укажите часы по теме целым числом от 1 до 12.";
+  return "";
+}
 export function journalCsv(
   rows: JournalRow[],
   filename = "Учебный журнал.csv",
