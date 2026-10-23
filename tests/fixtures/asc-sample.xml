@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Invented aSc Timetables 2012 export for tests: no real school, people or contacts. -->
+<timetable importtype="database" options="groupstype1,decimalseparatordot" defaultexport="1" displayname="aSc Timetables 2012 XML" displaycountries="">
+  <periods options="canadd,export:silent" columns="period,name,short,starttime,endtime">
+    <period name="0" short="0" period="0" starttime="7:00" endtime="7:45"/>
+    <period name="1" short="1" period="1" starttime="8:00" endtime="8:40"/>
+    <period name="2" short="2" period="2" starttime="8:45" endtime="9:25"/>
+    <period name="3" short="3" period="3" starttime="10:20" endtime="11:00"/>
+    <period name="4" short="4" period="4" starttime="11:05" endtime="11:45"/>
+  </periods>
+  <breaks options="canadd,export:silent" columns="name,short"/>
+  <daysdefs options="canadd,canremove,canupdate,silent" columns="id,days,name,short">
+    <daysdef id="DDABCDEFABCDEF01" name="Monday" short="Mo" days="10000"/>
+    <daysdef id="DDABCDEFABCDEF02" name="Tuesday" short="Tu" days="01000"/>
+    <daysdef id="DDABCDEFABCDEF03" name="Wednesday" short="We" days="00100"/>
+    <daysdef id="DDABCDEFABCDEF04" name="Thursday" short="Th" days="00010"/>
+    <daysdef id="DDABCDEFABCDEF05" name="Friday" short="Fr" days="00001"/>
+    <daysdef id="DDABCDEFABCDEF06" name="Any day" short="X" days="10000,01000,00100,00010,00001"/>
+    <daysdef id="DDABCDEFABCDEF07" name="Every day" short="E" days="11111"/>
+  </daysdefs>
+  <weeksdefs options="canadd,canremove,canupdate,silent" columns="id,weeks,name,short">
+    <weeksdef id="EEABCDEFABCDEF01" name="All weeks" short="All" weeks="1"/>
+  </weeksdefs>
+  <termsdefs options="canadd,canremove,canupdate,silent" columns="id,terms,name,short">
+    <termsdef id="FFABCDEFABCDEF01" name="Whole year" short="Y" terms="1"/>
+  </termsdefs>
+  <subjects options="canadd,export:silent" columns="id,name,short,partner_id">
+    <subject id="5BABCDEFABCDEF01" name="Mathematics" short="Ma" partner_id=""/>
+    <subject id="5BABCDEFABCDEF02" name="English" short="En" partner_id=""/>
+    <subject id="5BABCDEFABCDEF03" name="Physical Education" short="PE" partner_id=""/>
+    <subject id="5BABCDEFABCDEF04" name="Science" short="Sc" partner_id=""/>
+    <subject id="5BABCDEFABCDEF05" name="Science" short="Sc2" partner_id=""/>
+  </subjects>
+  <teachers options="canadd,export:silent" columns="id,firstname,lastname,name,short,gender,color,email,mobile,partner_id">
+    <teacher id="7EABCDEFABCDEF01" firstname="Teacher" lastname="Alpha" name="Teacher Alpha" short="ALP" gender="" color="" email="" mobile="" partner_id=""/>
+    <teacher id="7EABCDEFABCDEF02" firstname="Teacher" lastname="Beta" name="Teacher Beta" short="" gender="F" color="#123456" email="x@example.invalid" mobile="000" partner_id=""/>
+    <teacher id="7EABCDEFABCDEF03" firstname="" lastname="" name="" short="" gender="" color="" email="" mobile="" partner_id=""/>
+    <teacher id="7EABCDEFABCDEF04" firstname="Teacher" lastname="Delta" name="" short="" gender="" color="" email="" mobile="" partner_id=""/>
+  </teachers>
+  <buildings options="canadd,export:silent" columns="id,name,partner_id"/>
+  <classrooms options="canadd,export:silent" columns="id,name,short,capacity,buildingid,partner_id">
+    <classroom id="2CABCDEFABCDEF01" name="Room 101" short="101" capacity="*" buildingid="" partner_id=""/>
+    <classroom id="2CABCDEFABCDEF02" name="Lab" short="Lab" capacity="*" buildingid="" partner_id=""/>
+    <classroom id="2CABCDEFABCDEF03" name="Hall" short="Hall" capacity="30" buildingid="" partner_id=""/>
+  </classrooms>
+  <grades options="canadd,export:silent" columns="grade,name,short">
+    <grade name="Grade 7" short="7" grade="7"/>
+  </grades>
+  <classes options="canadd,export:silent" columns="id,name,short,classroomids,teacherid,grade,partner_id">
+    <class id="C1ABCDEFABCDEF01" name="7X" short="7X" teacherid="7EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF01" grade="7" partner_id=""/>
+    <class id="C1ABCDEFABCDEF02" name="7Y" short="7Y" teacherid="" classroomids="2CABCDEFABCDEF02" grade="" partner_id=""/>
+    <class id="C1ABCDEFABCDEF03" name="1Z" short="1Z" teacherid="" classroomids="" grade="" partner_id=""/>
+  </classes>
+  <groups options="canadd,export:silent" columns="id,classid,name,entireclass,divisiontag,studentcount,studentids">
+    <group id="A9ABCDEFABCDEF01" name="Entire class" classid="C1ABCDEFABCDEF01" studentids="" entireclass="1" divisiontag="0"/>
+    <group id="A9ABCDEFABCDEF02" name="Entire class" classid="C1ABCDEFABCDEF02" studentids="" entireclass="1" divisiontag="0"/>
+    <group id="A9ABCDEFABCDEF03" name="Entire class" classid="C1ABCDEFABCDEF03" studentids="" entireclass="1" divisiontag="0"/>
+    <group id="A9ABCDEFABCDEF04" name="Half 1" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="1"/>
+    <group id="A9ABCDEFABCDEF05" name="Half 2" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="1"/>
+    <group id="A9ABCDEFABCDEF06" name="Stream A" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="2"/>
+    <group id="A9ABCDEFABCDEF07" name="Stream B" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="2"/>
+    <group id="A9ABCDEFABCDEF08" name="Lang 1" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="3"/>
+    <group id="A9ABCDEFABCDEF09" name="Lang 2" classid="C1ABCDEFABCDEF01" studentids="" entireclass="0" divisiontag="3"/>
+    <group id="A9ABCDEFABCDEF0A" name="Stream A" classid="C1ABCDEFABCDEF02" studentids="" entireclass="0" divisiontag="1"/>
+    <group id="A9ABCDEFABCDEF0B" name="Stream B" classid="C1ABCDEFABCDEF02" studentids="" entireclass="0" divisiontag="1"/>
+  </groups>
+  <students options="canadd,export:silent" columns="id,classid,name,number,email,mobile,partner_id"/>
+  <studentsubjects options="canadd,export:silent" columns="studentid,subjectid,seminargroup,importance,alternatefor"/>
+  <lessons options="canadd,export:silent" columns="id,subjectid,classids,groupids,teacherids,classroomids,periodspercard,periodsperweek,daysdefid,weeksdefid,termsdefid,seminargroup,capacity,partner_id">
+    <lesson id="1EABCDEFABCDEF01" classids="C1ABCDEFABCDEF01" subjectid="5BABCDEFABCDEF01" periodspercard="1" periodsperweek="3.0" teacherids="7EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF01,2CABCDEFABCDEF02" groupids="A9ABCDEFABCDEF01" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF02" classids="C1ABCDEFABCDEF02" subjectid="5BABCDEFABCDEF04" periodspercard="2" periodsperweek="2.0" teacherids="7EABCDEFABCDEF04" classroomids="2CABCDEFABCDEF02" groupids="A9ABCDEFABCDEF02" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF03" classids="C1ABCDEFABCDEF03" subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="2.0" teacherids="" classroomids="2CABCDEFABCDEF01" groupids="A9ABCDEFABCDEF03" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF04" classids="C1ABCDEFABCDEF03" subjectid="5BABCDEFABCDEF03" periodspercard="1" periodsperweek="2.0" teacherids="7EABCDEFABCDEF03" classroomids="" groupids="A9ABCDEFABCDEF03" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF07" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF05" classids="C1ABCDEFABCDEF01,C1ABCDEFABCDEF02" subjectid="5BABCDEFABCDEF01" periodspercard="1" periodsperweek="1.0" teacherids="7EABCDEFABCDEF04" classroomids="2CABCDEFABCDEF03" groupids="A9ABCDEFABCDEF06,A9ABCDEFABCDEF0A" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF06" classids="C1ABCDEFABCDEF01,C1ABCDEFABCDEF02" subjectid="5BABCDEFABCDEF01" periodspercard="1" periodsperweek="1.0" teacherids="7EABCDEFABCDEF02" classroomids="2CABCDEFABCDEF01" groupids="A9ABCDEFABCDEF07,A9ABCDEFABCDEF0B" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF07" classids="C1ABCDEFABCDEF01" subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="1.0" teacherids="7EABCDEFABCDEF04" classroomids="2CABCDEFABCDEF02" groupids="A9ABCDEFABCDEF08" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF08" classids="C1ABCDEFABCDEF01" subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="1.0" teacherids="7EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF01" groupids="A9ABCDEFABCDEF09" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF09" classids="C1ABCDEFABCDEF02" subjectid="5BABCDEFABCDEF02" periodspercard="1" periodsperweek="1.0" teacherids="7EABCDEFABCDEF01,7EABCDEFABCDEF04" classroomids="2CABCDEFABCDEF03" groupids="A9ABCDEFABCDEF02" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+    <lesson id="1EABCDEFABCDEF0A" classids="C1ABCDEFABCDEF01" subjectid="5BABCDEFABCDEF01" periodspercard="1" periodsperweek="2.0" teacherids="7EABCDEFABCDEF02" classroomids="2CABCDEFABCDEF01" groupids="A9ABCDEFABCDEF01" capacity="*" seminargroup="" termsdefid="FFABCDEFABCDEF01" weeksdefid="EEABCDEFABCDEF01" daysdefid="DDABCDEFABCDEF06" partner_id=""/>
+  </lessons>
+  <cards options="canadd,export:silent" columns="lessonid,period,days,weeks,terms,classroomids">
+    <card lessonid="1EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF01" period="1" weeks="1" terms="1" days="10000"/>
+    <card lessonid="1EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF01" period="2" weeks="1" terms="1" days="01000"/>
+    <card lessonid="1EABCDEFABCDEF01" classroomids="2CABCDEFABCDEF02" period="1" weeks="1" terms="1" days="00100"/>
+    <card lessonid="1EABCDEFABCDEF02" classroomids="2CABCDEFABCDEF02" period="2" weeks="1" terms="1" days="10000"/>
+    <card lessonid="1EABCDEFABCDEF02" classroomids="2CABCDEFABCDEF02" period="3" weeks="1" terms="1" days="10000"/>
+    <card lessonid="1EABCDEFABCDEF03" classroomids="2CABCDEFABCDEF01" period="2" weeks="1" terms="1" days="10000"/>
+    <card lessonid="1EABCDEFABCDEF03" classroomids="2CABCDEFABCDEF01" period="1" weeks="1" terms="1" days="01000"/>
+    <card lessonid="1EABCDEFABCDEF04" classroomids="" period="2" weeks="1" terms="1" days="00100"/>
+    <card lessonid="1EABCDEFABCDEF04" classroomids="" period="1" weeks="1" terms="1" days="00100"/>
+    <card lessonid="1EABCDEFABCDEF05" classroomids="2CABCDEFABCDEF03" period="3" weeks="1" terms="1" days="00010"/>
+    <card lessonid="1EABCDEFABCDEF06" classroomids="2CABCDEFABCDEF01" period="3" weeks="1" terms="1" days="00010"/>
+    <card lessonid="1EABCDEFABCDEF07" classroomids="2CABCDEFABCDEF02" period="1" weeks="1" terms="1" days="00001"/>
+    <card lessonid="1EABCDEFABCDEF08" classroomids="2CABCDEFABCDEF01" period="1" weeks="1" terms="1" days="00001"/>
+    <card lessonid="1EABCDEFABCDEF09" classroomids="2CABCDEFABCDEF03" period="3" weeks="1" terms="1" days="01000"/>
+    <card lessonid="1EABCDEFABCDEF0A" classroomids="2CABCDEFABCDEF01" period="0" weeks="1" terms="1" days="10000"/>
+    <card lessonid="1EABCDEFABCDEF0A" classroomids="2CABCDEFABCDEF01" period="0" weeks="1" terms="1" days="01000"/>
+  </cards>
+  <classroomsupervisions options="canadd,export:silent" columns="classroomid,period,days,weeks,teacherid"/>
+</timetable>
