@@ -89,8 +89,9 @@ def register(service,app,Workspace):
 
     def fresh(db,batch,snap,workspace):
         if batch[6]<=now().isoformat():raise HTTPException(409,'Предпросмотр истёк. Обновите заявления и подготовьте решение заново.')
-        if batch[8]!=snap.state.revision or batch[9]!=service.config(db,workspace)['version']:
-            raise HTTPException(409,'Школьные данные или назначения ответственных изменились. Подготовьте новый предпросмотр.')
+        # Timetable saves do not matter: every row is re-resolved against the current pupils and assignments.
+        if batch[9]!=service.config(db,workspace)['version']:
+            raise HTTPException(409,'Назначения ответственных изменились. Подготовьте новый предпросмотр.')
 
     def prepared(db,batch,body,rows,user,snap,workspace):
         if batch[10]=='applied':return json.loads(batch[11])

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { attendanceNames } from "./journal";
+import { attendanceNames, defaultAttendancePeriod } from "./journal";
 import { download } from "./utils";
 
 type Counts = {
@@ -28,6 +28,8 @@ type Options = {
   admin: boolean;
   yearStart: string;
   yearEnd: string;
+  today: string;
+  period: { name: string; start: string; end: string } | null;
   classes: { id: string; name: string }[];
   students: { id: string; name: string; classId: string; active: boolean }[];
   subjects: { id: string; name: string }[];
@@ -148,8 +150,14 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
       .then((value: Options) => {
         if (!live) return;
         setOptions(value);
-        setStart((old) => old || value.yearStart);
-        setEnd((old) => old || value.yearEnd);
+        const range = defaultAttendancePeriod(
+          value.today,
+          value.yearStart,
+          value.yearEnd,
+          value.period,
+        );
+        setStart((old) => old || range.start);
+        setEnd((old) => old || range.end);
       })
       .catch((e) => {
         if (live) setError(e.message);
@@ -273,7 +281,8 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
             показаны по текущему составу, включая неактивных учеников.
             Неотмечено — опубликованные записи без отметки; уроки без
             опубликованного журнала в эти числа не входят. Процент посещаемости
-            по ним не рассчитывается.
+            по ним не рассчитывается. По умолчанию показан текущий учебный
+            период или месяц по времени школы.
           </p>
           {error && (
             <p role="alert" className="error-banner">
@@ -284,7 +293,8 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
           {options && !options.available && (
             <p>
               Для сводки нужно назначение ответственным за класс. Администратор
-              задаёт его в разделе объяснительных.
+              назначает его в разделе «Пользователи и доступ» → «Права работы с
+              классами».
             </p>
           )}
           {options?.available && (

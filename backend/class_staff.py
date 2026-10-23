@@ -58,7 +58,7 @@ class Assignment(Model):
 
 class Change(Model):
     version:int=Field(ge=0)
-    revision:int=Field(ge=0)
+    revision:int|None=Field(default=None,ge=0)  # old clients still send it; it is ignored
     reason:str=Field(min_length=1,max_length=500)
     assignments:dict[str,list[Assignment]]
     @model_validator(mode='after')
@@ -93,8 +93,10 @@ def register(service,app,Workspace):
         with access.lock,access.connect() as db:
             prepare(db);db.execute('BEGIN IMMEDIATE');service.recheck(db,user,snap,workspace)
             current=config(db,workspace)
-            if current['version']!=body.version or snap.state.revision!=body.revision:
-                raise HTTPException(409,'Назначения или школьные данные изменились. Обновите список и повторите проверку.')
+            # Classes and accounts of the body are validated below against the current school data,
+            # so a timetable save between loading and saving does not matter.
+            if current['version']!=body.version:
+                raise HTTPException(409,'Назначения изменились. Обновите список и повторите проверку.')
             accounts={r[0]:access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role IN ('teacher','staff')")}
             if {id for id,entries in body.assignments.items() if entries}-set(snap.entities['class_']) or any(r.accountId not in accounts or not eligible(accounts[r.accountId],snap,workspace) for entries in body.assignments.values() for r in entries):
                 raise HTTPException(422,'Выберите действующие классы и сотрудников с доступом к этому пространству. Удалите недействующие назначения.')

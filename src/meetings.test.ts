@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { schoolInput, schoolISO, blankDefinition } from "./meetings";
+import {
+  schoolInput,
+  schoolISO,
+  blankDefinition,
+  groupByDay,
+} from "./meetings";
 describe("school meeting time", () => {
   it("keeps 17:00 school time independently of device zone", () => {
     expect(schoolISO("2027-04-05T17:00")).toBe("2027-04-05T12:00:00.000Z");
@@ -16,5 +21,21 @@ describe("school meeting time", () => {
     expect(schoolInput(d.startsAt).slice(11)).toBe("17:00");
     expect(schoolInput(d.endsAt).slice(11)).toBe("19:00");
     expect(d.slotMinutes).toBe(10);
+  });
+});
+describe("meeting agenda grouping", () => {
+  it("groups by school day and keeps the order", () => {
+    const items = [
+      { id: "a", startsAt: "2027-04-05T12:00:00Z" },
+      { id: "b", startsAt: "2027-04-05T19:30:00Z" },
+      { id: "c", startsAt: "2027-04-06T12:00:00Z" },
+    ];
+    expect(
+      groupByDay(items).map(([day, rows]) => [day, rows.map((r) => r.id)]),
+    ).toEqual([
+      ["2027-04-05", ["a"]],
+      ["2027-04-06", ["b", "c"]],
+    ]);
+    expect(groupByDay([])).toEqual([]);
   });
 });

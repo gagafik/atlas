@@ -41,17 +41,17 @@ def test_add_exposes_history_only_after_confirmation_and_current_scope(client):
     for user,code in [(parent,403),(client,404),(late_user,404)]:
         assert roster(user,thread).status_code==code
         assert candidates(user,thread).status_code==code
-        assert add(user,thread,[late['id']],2).status_code==code
-    assert add(teacher,thread,[late['id']],2,shareHistory=False).status_code==422
-    assert add(teacher,thread,[late['id'],outsider['id']],2).status_code==403
+        assert add(user,thread,[late['id']],1).status_code==code
+    assert add(teacher,thread,[late['id']],1,shareHistory=False).status_code==422
+    assert add(teacher,thread,[late['id'],outsider['id']],1).status_code==403
     assert late_user.get(url('threads/'+thread)).status_code==404
     request=str(uuid4())
-    assert add(teacher,thread,[late['id']],2,requestId=request).status_code==200
-    assert add(teacher,thread,[late['id']],2,requestId=request).status_code==200
-    value=detail(late_user,thread);assert value['version']==3 and len(value['posts'])==3
+    assert add(teacher,thread,[late['id']],1,requestId=request).status_code==200
+    assert add(teacher,thread,[late['id']],1,requestId=request).status_code==200
+    value=detail(late_user,thread);assert value['version']==2 and len(value['posts'])==3
     assert download(late_user,file).content==b'Private attachment'
     assert late_user.get('/api/notifications/inbox').json()['items'][-1]['action']=='message.received'
-    assert add(teacher,thread,[late['id']],3).status_code==409
+    assert add(teacher,thread,[late['id']],1).status_code==409
     assert api.read('demo').model_dump()==before
 
 
@@ -158,9 +158,9 @@ def test_concurrent_add_reply_and_handoff_removal_are_versioned(client):
         addition=pool.submit(add,teacher,thread,[next_user['id']],1)
         reply=pool.submit(parent.post,url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Одновременный ответ'))
         results=[addition.result(),reply.result()]
-    assert sorted(r.status_code for r in results)==[200,409]
-    value=detail(teacher,thread);assert value['version']==2 and len(value['posts'])==2
-    if results[0].status_code!=200:assert add(teacher,thread,[next_user['id']],2).status_code==200
+    # A reply neither waits for nor invalidates the membership change: both are stored.
+    assert [r.status_code for r in results]==[200,200]
+    value=detail(teacher,thread);assert value['version']==2 and len(value['posts'])==3
     version=detail(teacher,thread)['version']
     with ThreadPoolExecutor(max_workers=2) as pool:
         handoff=pool.submit(transfer,teacher,thread,next_user['id'],version)

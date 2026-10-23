@@ -3,7 +3,8 @@ import io
 import json
 import hashlib
 from copy import deepcopy
-from datetime import date,timedelta
+from datetime import date,datetime,timedelta,timezone
+from uuid import uuid4
 import pytest
 from backend import api,attendance_projection
 from backend.models import Student,DatedLesson
@@ -60,7 +61,8 @@ def test_notice_approval_reversal_only_effective_absence_and_no_private_fields(c
     _,_,parent,teacher=setup(client);mark(client);notice=send(parent)
     before=report(teacher).json();assert pupil(before)['attendance']['absent']==1
     accepted=decide(teacher,notice).json()
-    assert report(teacher,token=before['token']).status_code==409
+    assert report(teacher,token=before['token']).status_code==200
+    api.attendance_reports.cache.clear();assert report(teacher,token=before['token']).status_code==409
     after=report(teacher).json();assert pupil(after)['attendance']['excused']==1
     lesson_row=details(teacher).json()['items'][0]
     assert lesson_row['rawAttendance']=='absent' and lesson_row['attendance']=='excused' and lesson_row['excusedByNotice']
@@ -88,7 +90,8 @@ def test_draft_edits_publication_withdrawal_and_replication_are_atomic(client,mo
     assert pupil(report(teacher).json())['attendance']['absent']==1
     monkeypatch.setattr(api.journal,'notify',original)
     published=write(client,draft,publish=True).json()
-    assert report(teacher,token=first['token']).status_code==409
+    assert pupil(report(teacher,token=first['token']).json())['attendance']['absent']==1
+    api.attendance_reports.cache.clear();assert report(teacher,token=first['token']).status_code==409
     assert pupil(report(teacher).json())['attendance']['present']==1
     assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=published['lessonKey'],version=published['version'])).status_code==200
     assert report(teacher).json()['totals']['records']==0
@@ -137,7 +140,8 @@ def test_student_pagination_token_catches_changed_publication_and_reviewer_scope
     assert not {s['id'] for s in first['students']} & {s['id'] for s in second['students']}
     assert len(list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';')))==68
     record=entry(client,lesson(client)['lessonKey']);assert write(client,record,publish=True).status_code==200
-    assert report(teacher,offset=50,token=first['token']).status_code==409
+    again=report(teacher,offset=50,token=first['token']);assert again.status_code==200 and again.json()['students']==second['students']
+    api.attendance_reports.cache.clear();assert report(teacher,offset=50,token=first['token']).status_code==409
     current=report(teacher).json()
     reviewers({})
     assert report(teacher,token=current['token']).status_code==409
@@ -208,3 +212,45 @@ def test_moved_and_cancelled_timetable_does_not_silently_rewrite_published_repor
     assert details(teacher,start='2026-08-18',end='2026-08-18').json()['items']
     assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=saved['lessonKey'],version=published.json()['version'])).status_code==200
     assert details(teacher,start='2026-08-18',end='2026-08-18').json()['items']==[]
+
+
+def test_unrelated_changes_keep_class_report_token(client):
+    _,_,parent,teacher=setup(client);first=report(teacher).json();assert len(first['token'])==64
+    api.attendance_reports.cache.clear()
+    state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
+    assert report(teacher,token=first['token']).status_code==200
+    other='2026-08-24'
+    write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
+    assert report(teacher,token=first['token']).status_code==200
+    far=report(client,classId='c-demo-d').json();api.attendance_reports.cache.clear()
+    mark(client)
+    assert report(client,classId='c-demo-d',token=far['token']).status_code==200
+    assert report(teacher,token=first['token']).status_code==409
+
+
+def test_other_account_token_and_scope_on_details_and_export(client):
+    _,person,parent,teacher=setup(client);mark(client)
+    with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
+    reviewers({'c-demo-a':[person['id']],'c-demo-d':[other_id]});other=signed('other-teacher')
+    first=report(teacher).json();own=report(other).json();assert first['token'][:32]!=own['token'][:32]
+    for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
+        assert call(other,token=first['token'],**extra).status_code==409
+    assert details(other,token=own['token'],studentId='s1').status_code==404
+    assert details(other,token=own['token'],studentId='s3').status_code==200
+    assert details(teacher,token=first['token'],studentId='s3').status_code==404
+    assert export(teacher,token=first['token'],view='lessons',studentId='s3').status_code==404
+    assert details(teacher,token=first['token'],studentId='s1').status_code==200
+
+
+def test_options_report_today_and_current_period(client,monkeypatch):
+    _,_,parent,teacher=setup(client)
+    stamp=datetime(2026,10,14,20,30,tzinfo=timezone.utc);monkeypatch.setattr('backend.attendance_reports.now',lambda:stamp)
+    def options(account):return account.get('/api/journal/attendance/options?workspace=demo').json()
+    def create_period(name,start,end):
+        response=client.put(f'/api/journal/periods/{uuid4().hex}?workspace=demo',json=dict(name=name,start=start,end=end,kind='custom',version=0,reason='Создание периода'));assert response.status_code==200,response.text
+    value=options(client);assert value['today']=='2026-10-15' and value['period'] is None
+    create_period('Первая четверть','2026-09-01','2026-10-31');create_period('Прошлая неделя','2026-10-05','2026-10-11')
+    assert options(teacher)['period']==dict(name='Первая четверть',start='2026-09-01',end='2026-10-31')
+    create_period('Текущая неделя','2026-10-12','2026-10-18')
+    assert options(client)['period']==dict(name='Текущая неделя',start='2026-10-12',end='2026-10-18')
+

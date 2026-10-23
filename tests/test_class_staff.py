@@ -137,13 +137,22 @@ def test_stale_versions_school_changes_and_invalid_assignments_are_atomic(client
     assert client.put(BASE,json=stale).status_code==409
     stale=payload(client,{})
     state=api.read('demo');state.classes[0].name+=' updated';api.save('demo',state)
-    assert client.put(BASE,json=stale).status_code==409
+    assert client.put(BASE,json=stale).status_code==200
     invalid=[{A:[item(staff,'absence_review','absence_review')]},{A:[item(staff,'everything')]},{A:[item(staff)]},
              {A:[item(staff,'attendance_read'),item(staff,'absence_review')]},{'missing':[item(staff,'attendance_read')]},
              {A:[dict(accountId='missing',capabilities=['attendance_read'])]}]
     for value in invalid:assert client.put(BASE,json=payload(client,value)).status_code==422
-    assert settings(client)['assignments']=={A:[item(teacher,'journal_coverage')]}
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM class_staff_history').fetchone()[0]==1
+    assert settings(client)['assignments']=={}
+    with api.connect() as db:assert db.execute('SELECT count(*) FROM class_staff_history').fetchone()[0]==2
+
+
+def test_revision_is_optional_and_a_deleted_class_is_still_refused(client):
+    enable(client);staff=create(client,'staff');value=payload(client,{A:[item(staff,'attendance_read')]})
+    del value['revision'];response=client.put(BASE,json=value);assert response.status_code==200,response.text
+    state=api.read('demo');state.placements=[];state.datedLessons=[];state.students=[]
+    for group in state.groups:group.studentIds=[]
+    state.classes=[];state.groups=[];state.workloads=[];api.save('demo',state)
+    assert client.put(BASE,json=payload(client,{A:[item(staff,'attendance_read')]})).status_code==422
 
 
 def test_current_account_and_existing_teacher_record_are_required(client):

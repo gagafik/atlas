@@ -1,6 +1,5 @@
 """Expected lessons compared with publications, scoped before exposing any pupil."""
 from collections import OrderedDict
-from copy import deepcopy
 from datetime import date,datetime,timedelta
 import hashlib,json,time
 from threading import RLock
@@ -12,12 +11,18 @@ from .models import Model
 from .access import now
 from .calendar_ops import DayContext,dates,resolve_day
 from .journal import key_for,staff_read,user_ids
-from .notifications import encoded
+from .notifications import encoded,permission_key
 from .resources import teacher_ids
 from .attendance_reports import csv_response
 
 LABELS=dict(missing='Журнал не создан',draft='Нет публикации',incomplete='Заполнен не полностью',stale='Расписание или состав изменились',complete='Заполнен',upcoming='Урок ещё не закончился',orphaned='Публикация вне текущего расписания')
 PAGE=50
+CACHE_ENTRIES=4
+CACHE_ROWS=200000
+CACHE_SECONDS=600
+KEYS=('lessonKey','date','start','end','subject','group','teachers','classNames','status','due','pupils','missingPupils','unmarkedPupils','rosterUnknown','topicFilled','needsSync','version','publishedVersion','hasDraftChanges','canOpen')
+STATUS=KEYS.index('status')
+STALE='Журнал или доступ изменились. Повторите проверку.'
 
 
 class CoverageQuery(Model):
@@ -49,10 +54,35 @@ class JournalCoverage:
         self.reports,self.access,self.journal,self.absences=reports,reports.access,reports.journal,reports.absences
         self.cache=OrderedDict();self.lock=RLock()
 
-    def token(self,db,user,snap,workspace):
-        base=self.reports.token(db,user,snap,workspace)
-        versions=db.execute('SELECT count(*),coalesce(sum(version),0) FROM journal_entries WHERE workspace=?',(workspace,)).fetchone()
-        return hashlib.sha256(encoded([base,versions]).encode()).hexdigest()
+    def scope_key(self,db,user,snap,workspace,body):
+        """Access half of the token: account, permissions and the unfiltered class/pupil scope."""
+        self.journal.recheck_account(db,user)
+        base=body.model_copy(update=dict(classId='',teacherId=''))
+        try:classes,own=self.scope(db,user,snap,workspace,base)
+        except HTTPException as error:return None,error
+        pupils=sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)
+        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),body.mode,sorted(classes),sorted(own),pupils]).encode()).hexdigest()[:32],None
+
+    def data_key(self,db,workspace,body,pupils,revision):
+        """Data half: only journals and publications of the requested days (and pupils)."""
+        drafts="SELECT count(*),coalesce(sum(e.version),0),coalesce(max(e.updated),'') FROM journal_entries e WHERE e.workspace=? AND json_extract(e.document,'$.lesson.date') BETWEEN ? AND ?"
+        published="SELECT count(*),coalesce(sum(l.version),0),coalesce(max(l.published_at),'') FROM journal_attendance_lessons l WHERE l.workspace=? AND l.day BETWEEN ? AND ?"
+        args=[workspace,body.start.isoformat(),body.end.isoformat()]
+        if pupils is not None:
+            member=' AND EXISTS(SELECT 1 FROM journal_members m WHERE m.workspace={0}.workspace AND m.lesson_key={0}.lesson_key{1} AND m.student_id IN (SELECT value FROM json_each(?)))'
+            drafts+=member.format('e','');published+=member.format('l'," AND m.kind='published'");args.append(encoded(pupils))
+        found=[tuple(db.execute(query,args).fetchone()) for query in [drafts,published]]
+        return hashlib.sha256(encoded([revision,*found]).encode()).hexdigest()[:32]
+
+    def token(self,db,user,snap,workspace,body):
+        """64 characters: access half + data half. A sent token must keep the same access half."""
+        key,error=self.scope_key(db,user,snap,workspace,body)
+        if body.token and (key is None or body.token[:32]!=key):raise HTTPException(409,STALE)
+        if error:raise error
+        classes,_=self.scope(db,user,snap,workspace,body)
+        pupils=None if user['role']=='admin' and not body.classId else sorted(s.id for s in snap.state.students if s.classId in classes)
+        current=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
+        return key+self.data_key(db,workspace,body,pupils,current[0] if current else 0)
 
     def scope(self,db,user,snap,workspace,body):
         own=user_ids(user,workspace,'teacher');state=snap.state
@@ -168,24 +198,33 @@ class JournalCoverage:
         return dict(counts=counts,rows=rows)
 
     def finish(self,db_user,snap,workspace,token,body,action):
+        # Only access is rechecked: a save elsewhere during a long calculation must not fail the page.
         with self.access.lock,self.access.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            if self.token(db,db_user,snap,workspace)!=token:raise HTTPException(409,'Журнал или доступ изменились. Повторите проверку.')
+            key,error=self.scope_key(db,db_user,snap,workspace,body)
+            if error or key!=token[:32]:raise HTTPException(409,STALE)
             self.scope(db,db_user,snap,workspace,body)
             self.access.record(db,action,workspace,detail=encoded(body.model_dump(mode='json',exclude={'token','offset'})))
 
     def result(self,db,user,snap,workspace,body,token):
-        key=(db.execute('PRAGMA database_list').fetchone()[2],token,encoded(body.model_dump(mode='json',exclude={'offset','status','token'})))
+        """Counts and compact rows (tuples in KEYS order) of a consistent snapshot, paged without recalculation."""
+        path=db.execute('PRAGMA database_list').fetchone()[2]
+        filters=encoded(body.model_dump(mode='json',exclude={'offset','status','token'}))
         with self.lock:
             stamp=time.monotonic()
-            for k in [k for k,v in self.cache.items() if stamp-v[0]>60]:self.cache.pop(k)
-            if key in self.cache:self.cache.move_to_end(key);return deepcopy(self.cache[key][1])
+            for k in [k for k,v in self.cache.items() if stamp-v[0]>CACHE_SECONDS]:self.cache.pop(k)
+            for candidate in dict.fromkeys([body.token,token]):
+                if candidate and (path,candidate,filters) in self.cache:
+                    self.cache.move_to_end((path,candidate,filters));return self.cache[(path,candidate,filters)][1]|dict(token=candidate)
+        if body.token and body.token!=token:raise HTTPException(409,STALE)
         value=self.calculate(db,user,snap,workspace,body)
-        if len(value['rows'])<=20000:
+        rows=tuple(tuple(tuple(r[k]) if k=='classNames' else r[k] for k in KEYS) for r in value['rows'])
+        value=dict(counts=value['counts'],rows=rows)
+        if len(rows)<=CACHE_ROWS:
             with self.lock:
-                self.cache[key]=(time.monotonic(),deepcopy(value))
-                while len(self.cache)>4:self.cache.popitem(last=False)
-        return value
+                self.cache[(path,token,filters)]=(time.monotonic(),value)
+                while len(self.cache)>CACHE_ENTRIES or sum(len(v[1]['rows']) for v in self.cache.values())>CACHE_ROWS:self.cache.popitem(last=False)
+        return value|dict(token=token)
 
     def register(self,app,Workspace):
         @app.get('/api/journal/coverage/options')
@@ -203,18 +242,21 @@ class JournalCoverage:
             if not body.asOf:body=body.model_copy(update={'asOf':now()})
             if detail and not body.start<=body.day<=body.end:raise HTTPException(422,'Дата урока должна входить в проверяемый период.')
             with self.access.read_connect() as db:
-                db.execute('BEGIN');token=self.token(db,user,snap,workspace)
-                if body.token and body.token!=token:raise HTTPException(409,'Журнал или доступ изменились. Повторите проверку.')
-                if detail:value=self.calculate(db,user,snap,workspace,body,detail=body)
+                db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
+                token=self.token(db,user,snap,workspace,body)
+                if detail:
+                    # Drill-downs are live: only the access half of a sent token was checked.
+                    value=self.calculate(db,user,snap,workspace,body,detail=body);used=body.token or token
                 else:
-                    value=self.result(db,user,snap,workspace,body,token)
-                    rows=[r for r in value['rows'] if body.status=='all' or body.status=='issues' and r['status'] not in ['complete','upcoming'] or r['status']==body.status]
+                    cached=self.result(db,user,snap,workspace,body,token);used=cached['token']
+                    rows=[r for r in cached['rows'] if body.status=='all' or body.status=='issues' and r[STATUS] not in ['complete','upcoming'] or r[STATUS]==body.status]
                     if export:
                         if len(rows)>100000:raise HTTPException(422,'Более 100 000 уроков: сократите период выгрузки.')
+                        rows=[dict(zip(KEYS,r)) for r in rows]
                         value=csv_response([['Дата','Начало','Конец','Предмет','Группа','Классы','Учителя','Состояние','Ученики в области проверки','Нет записи','Не отмечено','Состав требует проверки','Тема заполнена','Редакция публикации','Проверено на момент']]+[[r['date'],r['start'],r['end'],r['subject'],r['group'],', '.join(r['classNames']),r['teachers'],LABELS[r['status']],r['pupils'],r['missingPupils'],r['unmarkedPupils'],'Да' if r['rosterUnknown'] else 'Нет','Да' if r['topicFilled'] else 'Нет',r['publishedVersion'],body.asOf.isoformat()] for r in rows])
-                    else:value=dict(counts=value['counts'],total=len(rows),items=rows[body.offset:body.offset+PAGE],nextOffset=body.offset+PAGE if len(rows)>body.offset+PAGE else None)
-            self.finish(user,snap,workspace,token,body,'journal.coverage_exported' if export else 'journal.coverage_read')
-            return value if export else value|dict(token=token,asOf=body.asOf.isoformat(),membership='current',source='current_schedule_and_published_journals')
+                    else:value=dict(counts=cached['counts'],total=len(rows),items=[dict(zip(KEYS,r)) for r in rows[body.offset:body.offset+PAGE]],nextOffset=body.offset+PAGE if len(rows)>body.offset+PAGE else None)
+            self.finish(user,snap,workspace,used,body,'journal.coverage_exported' if export else 'journal.coverage_read')
+            return value if export else value|dict(token=used,asOf=body.asOf.isoformat(),membership='current',source='current_schedule_and_published_journals')
 
         @app.post('/api/journal/coverage/report')
         def report(body:CoverageQuery,request:Request,workspace:Workspace='school'):return read(body,request,workspace)

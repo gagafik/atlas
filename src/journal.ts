@@ -156,6 +156,25 @@ export function contentProblem(c: JournalContent): string {
 export function hasEarlierRevisions(page: { version: number }[]): boolean {
   return page.length === 50 && page[page.length - 1].version > 1;
 }
+// Opening range of the attendance summary: the current journal period, else the school month of today, kept inside the school year.
+export function defaultAttendancePeriod(
+  today: string,
+  yearStart: string,
+  yearEnd: string,
+  period?: { start: string; end: string } | null,
+) {
+  const clamp = (day: string) =>
+    day < yearStart ? yearStart : day > yearEnd ? yearEnd : day;
+  if (period) return { start: clamp(period.start), end: clamp(period.end) };
+  const day = clamp(today);
+  const last = new Date(
+    Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0),
+  ).getUTCDate();
+  return {
+    start: clamp(day.slice(0, 8) + "01"),
+    end: clamp(day.slice(0, 8) + String(last).padStart(2, "0")),
+  };
+}
 export function journalCsv(
   rows: JournalRow[],
   filename = "Учебный журнал.csv",

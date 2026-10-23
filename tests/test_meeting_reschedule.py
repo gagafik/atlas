@@ -30,6 +30,8 @@ def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypat
     eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
     before=api.read('demo').model_dump(mode='json');body['blockSource']=block
     moved=ok(transfer(client,bid,body));after=records()
+    assert moved['eventVersion']==body['eventVersion']
+    with api.connect() as db:assert db.execute('SELECT version FROM meeting_events WHERE id=?',(eid,)).fetchone()[0]==body['eventVersion']
     assert ok(transfer(client,bid,body))==moved and records()==after
     assert transfer(client,bid,body|dict(reason='Different')).status_code==409
     item=bookings(parent,eid)[0]
@@ -52,6 +54,13 @@ def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypat
     exported=client.get(path('events/'+eid+'/export'))
     assert body['reason'] in exported.text and 'Причина последнего переноса' in exported.text
     assert api.read('demo').model_dump(mode='json')==before
+
+
+def test_transfer_does_not_invalidate_other_families_booking(client,monkeypatch):
+    eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch);ok(transfer(client,bid,body))
+    create(client,'parent',login='other',grants=[dict(workspace='demo',view='student',entityIds=['s2'])]);other=signed('other')
+    free=next(s for s in slots(other,eid) if s['status']=='available')
+    ok(other.post(path('slots/'+free['id']+'/book'),json=request(version=free['version'],eventVersion=body['eventVersion'],studentId='s2')))
 
 
 @pytest.mark.parametrize('field',['version','eventVersion','sourceSlotVersion','targetSlotVersion'])
