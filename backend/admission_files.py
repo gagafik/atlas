@@ -1,6 +1,5 @@
 """Private applicant documents; authorization is rechecked when an upload finishes."""
 import asyncio, os
-from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 from fastapi import HTTPException, Query, Request
@@ -17,13 +16,16 @@ def meta(r):return dict(id=r['id'],filename=r['filename'],size=r['size'],created
 def referenced(db,id,application_id):
     return bool(db.execute("SELECT 1 FROM admission_applications a,json_each(a.document,'$.files') f WHERE a.id=? AND json_extract(f.value,'$.id')=? LIMIT 1",(application_id,id)).fetchone())
 
+def unused_rows(db,limit=20,days=1):
+    stale,old=storage.cutoffs(days)
+    rows=db.execute("SELECT id,size,application_id FROM admission_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?)) ORDER BY created LIMIT ?",(stale,old,limit)).fetchall()
+    return [(r[0],r[1]) for r in rows if not referenced(db,r[0],r[2])]
+
 def collect_unused(db):
-    rows=db.execute("SELECT * FROM admission_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?)) ORDER BY created LIMIT 20",((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
-    for r in rows:
-        if referenced(db,r['id'],r['application_id']):continue
-        try:storage.file_path(root_for(db),r['id']).unlink(missing_ok=True)
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try:storage.release_row(db,'admission_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM admission_files WHERE id=?',(r['id'],))
 
 def register(s,app,Workspace):
     def writable(db,u,id,expected):
@@ -33,14 +35,15 @@ def register(s,app,Workspace):
     async def upload(id:str,request:Request,applicationVersion:int=Query(ge=1),filename:str=Query(min_length=1,max_length=180)):
         name=storage.name_for(filename)
         if Path(name).suffix.lower() not in ['.pdf','.png','.jpg','.jpeg']:raise HTTPException(422,'Выберите PDF, JPG или PNG.')
-        if not storage.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Сервер принимает другие файлы. Повторите позже.')
+        slots=await storage.acquire_slot()
         reservation=None;handle=None;complete=False
         def prepare():
             with s.family(request,True) as (db,u):
                 writable(db,u,id,applicationVersion);collect_unused(db)
                 used,pending=db.execute("SELECT coalesce(sum(size),0),count(CASE WHEN status='uploading' THEN 1 END) FROM admission_files WHERE owner_id=?",(u['id'],)).fetchone()
-                if used+storage.MAX_FILE>100*1024*1024 or storage.total_stored(db)+storage.MAX_FILE>storage.total_limit():raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь в школу.')
-                if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+                if used+storage.MAX_FILE>100*1024*1024:raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь в школу.')
+                storage.require_capacity(db,'admissions')
+                if pending>=2:raise storage.busy('Дождитесь окончания текущих загрузок.')
                 if db.execute('SELECT count(*) FROM admission_files WHERE application_id=?',(id,)).fetchone()[0]>=40:raise HTTPException(413,'Достигнут предел 40 документов с учётом истории. Удалите неиспользованные загрузки.')
                 file_id=uuid4().hex
                 db.execute('INSERT INTO admission_files VALUES (?,?,?,?,?,?,?,NULL,0)',(file_id,id,u['id'],name,storage.MAX_FILE,now().isoformat(),'uploading'))
@@ -81,7 +84,7 @@ def register(s,app,Workspace):
                             except OSError:return
                             db.execute('DELETE FROM admission_files WHERE id=?',(file_id,))
                     await run_in_threadpool(discard)
-            finally:storage.UPLOAD_SLOTS.release()
+            finally:slots.release()
 
     @app.get('/admissions-api/applications/{id}/files')
     def files(id:str,request:Request):

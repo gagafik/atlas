@@ -71,7 +71,6 @@ class Homework:
         self.journal=journal
         self.access=journal.access
         self.snapshots=PortalSnapshots(self.access.read,stamp)
-        self.upload_slots=files.UPLOAD_SLOTS
 
     def tables(self,db):
         self.journal.tables(db);self.access.tables(db)
@@ -282,7 +281,7 @@ class Homework:
 
         @app.post('/api/journal/homework/{key}/files')
         async def upload(key:str,studentId:str,filename:str,assignment:str,request:Request,workspace:Workspace='school'):
-            if not self.upload_slots.acquire(blocking=False): raise HTTPException(429,'Сервер принимает другие файлы. Повторите немного позже.')
+            slots=await files.acquire_slot()
             reservation=None;handle=None;complete=False
             def prepare():
                 ctx=self.context(request,workspace,key,studentId)
@@ -343,7 +342,7 @@ class Homework:
                                 except OSError: return
                                 db.execute('DELETE FROM homework_files WHERE id=?',(id,))
                         await run_in_threadpool(discard)
-                finally: self.upload_slots.release()
+                finally: slots.release()
 
         @app.get('/api/journal/homework/{key}/files/{id}')
         def download(key:str,id:str,studentId:str,request:Request,workspace:Workspace='school'):

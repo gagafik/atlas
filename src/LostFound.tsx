@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 import type { Account } from "./auth";
 import { displayTime } from "./meetings";
@@ -191,6 +192,7 @@ export default function LostFound({
   );
   const [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [tab, setTab] = useState("catalog"),
@@ -386,20 +388,15 @@ export default function LostFound({
       file.size > 10 * 1024 * 1024
     )
       throw new Error("Выберите JPG или PNG не больше 10 МБ.");
-    const response = await fetch(
+    const data = await uploadFile(
       `/api/lost-found/items/${draft.id}/photos?workspace=${encodeURIComponent(workspace)}&itemVersion=${draft.version}`,
+      file,
       {
-        method: "POST",
-        headers: { "X-Atlas-Request": "1", "Content-Type": file.type },
-        body: file,
+        contentType: file.type,
+        onBusy: setServerBusy,
+        fallback: "Не удалось загрузить фото.",
       },
     );
-    const data = await response.json();
-    if (!response.ok)
-      throw Object.assign(
-        new Error(data.detail || "Не удалось загрузить фото."),
-        { status: response.status },
-      );
     setPhotos([...photos, data]);
     updateData("photoIds", [...draft.data.photoIds, data.id]);
   }
@@ -760,6 +757,11 @@ export default function LostFound({
                               if (file) void run(() => upload(file));
                             }}
                           />
+                          {serverBusy && (
+                            <small role="status">
+                              Сервер занят, повторяем…
+                            </small>
+                          )}
                         </label>
                         <div className="lf-photos">
                           {photos.map((f) => (

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadWithRetry } from "./uploads";
 import {
   admissionRequest as request,
   admissionResponse,
@@ -37,7 +38,8 @@ export default function ApplicantPortal({
   >([]);
   const [current, setCurrent] = useState<Application | null>(null),
     [draft, setDraft] = useState<ApplicationData | null>(null),
-    [files, setFiles] = useState<DocumentFile[]>([]);
+    [files, setFiles] = useState<DocumentFile[]>([]),
+    [serverBusy, setServerBusy] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]),
     [moreHistory, setMoreHistory] = useState(false);
   const [busy, setBusy] = useState(false),
@@ -543,22 +545,15 @@ export default function ApplicantPortal({
                                         "Размер документа не должен превышать 10 МБ.",
                                       );
                                     const result = await admissionResponse(
-                                      await fetch(
+                                      await uploadWithRetry(
                                         "/admissions-api/applications/" +
                                           current.id +
                                           "/files?applicationVersion=" +
                                           current.version +
                                           "&filename=" +
                                           encodeURIComponent(file.name),
-                                        {
-                                          method: "POST",
-                                          headers: {
-                                            "X-Atlas-Request": "1",
-                                            "Content-Type":
-                                              "application/octet-stream",
-                                          },
-                                          body: file,
-                                        },
+                                        file,
+                                        { onBusy: setServerBusy },
                                       ),
                                     );
                                     setFiles((old) => [...old, result]);
@@ -578,6 +573,11 @@ export default function ApplicantPortal({
                                   });
                                 }}
                               />
+                              {serverBusy && (
+                                <small role="status">
+                                  Сервер занят, повторяем…
+                                </small>
+                              )}
                             </label>
                           </div>
                           {files.map((f) => {

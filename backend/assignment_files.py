@@ -1,6 +1,6 @@
 """Teacher materials: immutable files, journal-history retention and scoped delivery."""
 import asyncio
-from datetime import date, timedelta
+from datetime import date
 import os
 from pathlib import Path
 from urllib.parse import quote
@@ -23,6 +23,11 @@ def tables(db):
     db.execute('''CREATE TABLE IF NOT EXISTS assignment_files (
         id TEXT PRIMARY KEY,workspace TEXT,lesson_key TEXT,owner_id TEXT,
         filename TEXT,size INTEGER,created TEXT,status TEXT,sha256 TEXT,day TEXT)''')
+    # NULL = legacy row whose bytes are <id>.bin; otherwise the bytes of the identical first upload.
+    if 'blob_id' not in {r[1] for r in db.execute('PRAGMA table_info(assignment_files)')}:
+        db.execute('ALTER TABLE assignment_files ADD COLUMN blob_id TEXT')
+    db.execute('CREATE INDEX IF NOT EXISTS assignment_files_blob ON assignment_files(blob_id)')
+    db.execute('CREATE INDEX IF NOT EXISTS assignment_files_digest ON assignment_files(sha256,size)')
     db.execute('CREATE INDEX IF NOT EXISTS assignment_files_target ON assignment_files(workspace,lesson_key,status)')
     db.execute('CREATE INDEX IF NOT EXISTS assignment_files_owner ON assignment_files(owner_id,status)')
     db.execute('CREATE INDEX IF NOT EXISTS assignment_files_created ON assignment_files(status,created)')
@@ -53,30 +58,35 @@ def bind(db, ids, workspace, key, owner):
     db.executemany('INSERT OR IGNORE INTO assignment_file_links VALUES (?)',[(id,) for id in ids])
 
 
-def collect_unused(db):
-    rows=db.execute('''SELECT f.id FROM assignment_files f WHERE
+def unused_rows(db, limit=20, days=1):
+    stale,old=files.cutoffs(days)
+    return [(r[0],r[1]) for r in db.execute('''SELECT f.id,f.size FROM assignment_files f WHERE
         ((status='uploading' AND created<?) OR (status='ready' AND created<?))
         AND NOT EXISTS(SELECT 1 FROM assignment_file_links l WHERE l.file_id=f.id)
-        ORDER BY created LIMIT 20''',((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
-    for (id,) in rows:
-        try: files.file_path(root_for(db),id).unlink(missing_ok=True)
+        ORDER BY created LIMIT ?''',(stale,old,limit))]
+
+
+def collect_unused(db):
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try: files.release_row(db,'assignment_files',root,id)
         except OSError: continue
-        db.execute('DELETE FROM assignment_files WHERE id=?',(id,))
 
 
 def reserve(db, ctx, filename):
     name=files.name_for(filename)
     owner=ctx['user']['id']
-    size=db.execute('SELECT coalesce(sum(size),0) FROM assignment_files WHERE owner_id=?',(owner,)).fetchone()[0]
+    # Identical content stored once counts once per owner.
+    size=db.execute('SELECT coalesce(sum(size),0) FROM (SELECT max(size) size FROM assignment_files WHERE owner_id=? GROUP BY coalesce(blob_id,id))',(owner,)).fetchone()[0]
     count=db.execute('SELECT count(*) FROM assignment_files WHERE workspace=? AND lesson_key=?',(ctx['workspace'],ctx['key'])).fetchone()[0]
     pending=db.execute("SELECT count(*) FROM assignment_files WHERE owner_id=? AND status='uploading'",(owner,)).fetchone()[0]
-    if files.total_stored(db)+files.MAX_FILE>files.total_limit() or size+files.MAX_FILE>MAX_OWNER:
-        raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
+    if size+files.MAX_FILE>MAX_OWNER: raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
+    files.require_capacity(db,'assignments')
     if count>=MAX_TASK: raise HTTPException(413,'Достигнут лимит материалов урока с учётом истории.')
-    if pending>=2: raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+    if pending>=2: raise files.busy('Дождитесь окончания текущих загрузок.')
     id=uuid4().hex
-    db.execute('INSERT INTO assignment_files VALUES (?,?,?,?,?,?,?,?,NULL,?)',
-               (id,ctx['workspace'],ctx['key'],owner,name,files.MAX_FILE,now().isoformat(),'uploading',ctx['day'].isoformat()))
+    db.execute('INSERT INTO assignment_files (id,workspace,lesson_key,owner_id,filename,size,created,status,sha256,day,blob_id) VALUES (?,?,?,?,?,?,?,?,NULL,?,?)',
+               (id,ctx['workspace'],ctx['key'],owner,name,files.MAX_FILE,now().isoformat(),'uploading',ctx['day'].isoformat(),id))
     return id,name,root_for(db)
 
 
@@ -117,7 +127,7 @@ class AssignmentFiles:
 
         @app.post('/api/journal/assignment-files')
         async def upload(request:Request,lessonKey:str,day:date,filename:str,revision:int=Query(ge=0),version:int=Query(ge=0),workspace:Workspace='school'):
-            if not files.UPLOAD_SLOTS.acquire(blocking=False): raise HTTPException(429,'Сервер принимает другие файлы. Повторите позже.')
+            slots=await files.acquire_slot()
             reservation=None;handle=None;complete=False
             def prepare():
                 ctx=self.context(request,workspace,lessonKey,day,writable=True)
@@ -132,9 +142,17 @@ class AssignmentFiles:
                 digest=files.validate_file(files.file_path(root,id),name)
                 with self.access.lock,self.access.connect() as db:
                     db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
-                    db.execute("UPDATE assignment_files SET status='ready',size=?,sha256=? WHERE id=?",(size,digest,id))
+                    # Identical bytes already stored (and present on disk) are shared: only the metadata row is new.
+                    shared=next((b for (b,) in db.execute("SELECT DISTINCT coalesce(blob_id,id) FROM assignment_files WHERE sha256=? AND size=? AND status='ready' AND id<>? LIMIT 5",(digest,size,id))
+                                 if (p:=files.file_path(root,b)).is_file() and p.stat().st_size==size),None)
+                    db.execute("UPDATE assignment_files SET status='ready',size=?,sha256=?,blob_id=? WHERE id=?",(size,digest,shared or id,id))
                     self.access.record(db,'homework.material_uploaded',workspace,detail=id)
-                    return meta(db.execute('SELECT * FROM assignment_files WHERE id=?',(id,)).fetchone())
+                    result=meta(db.execute('SELECT * FROM assignment_files WHERE id=?',(id,)).fetchone())
+                # The duplicate is removed only after the commit, so a crash never leaves a row without bytes.
+                if shared:
+                    try: files.file_path(root,id).unlink(missing_ok=True)
+                    except OSError: pass  # An unreferenced leftover is reported and removed by tools.cleanup_files.
+                return result
             try:
                 try: length=int(request.headers.get('content-length','0'))
                 except ValueError: raise HTTPException(422,'Некорректный размер файла.')
@@ -168,12 +186,11 @@ class AssignmentFiles:
                                 db.execute('BEGIN IMMEDIATE')
                                 row=db.execute('SELECT status FROM assignment_files WHERE id=?',(id,)).fetchone()
                                 if row and row[0]=='uploading':
-                                    try: files.file_path(root,id).unlink(missing_ok=True)
+                                    try: files.release_row(db,'assignment_files',root,id)
                                     except OSError: return
-                                    db.execute('DELETE FROM assignment_files WHERE id=?',(id,))
                         await run_in_threadpool(discard)
                 finally:
-                    files.UPLOAD_SLOTS.release()
+                    slots.release()
 
         @app.get('/api/journal/assignment-files/{id}')
         def download(id:str,request:Request,workspace:Workspace='school',studentId:str|None=None):
@@ -196,7 +213,7 @@ class AssignmentFiles:
                 if not visible: raise HTTPException(404,'Материал не найден.')
                 # GC may have removed an abandoned upload since the first lookup.
                 if not db.execute("SELECT 1 FROM assignment_files WHERE id=? AND status='ready'",(id,)).fetchone(): raise HTTPException(404,'Материал не найден.')
-                path=files.file_path(root_for(db),id)
+                path=files.file_path(root_for(db),row[10] or row[0])
                 try: stat=path.stat()
                 except OSError: raise HTTPException(404,'Материал недоступен в хранилище.') from None
             return FileResponse(path,stat_result=stat,media_type='application/octet-stream',headers={

@@ -25,13 +25,16 @@ def root_for(db):return Path(db.execute('PRAGMA database_list').fetchone()[2]).r
 def meta(row):return dict(id=row[0],filename=row[5],size=row[6],created=row[7])
 
 
+def unused_rows(db,limit=50,days=1):
+    cutoff=(now()-timedelta(days=days)).isoformat()
+    return [(r[0],r[1]) for r in db.execute('SELECT id,size FROM absence_files WHERE notice_id IS NULL AND created<? LIMIT ?',(cutoff,limit))]
+
+
 def cleanup(db):
-    cutoff=(now()-timedelta(days=1)).isoformat()
-    rows=db.execute('SELECT id FROM absence_files WHERE notice_id IS NULL AND created<? LIMIT 50',(cutoff,)).fetchall()
-    for row in rows:
-        try:storage.file_path(root_for(db),row[0]).unlink(missing_ok=True)
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try:storage.release_row(db,'absence_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM absence_files WHERE id=?',(row[0],))
 
 
 class AbsenceFiles:
@@ -53,7 +56,7 @@ class AbsenceFiles:
     def register(self,app,Workspace):
         @app.post('/api/journal/absence-files')
         async def upload(request:Request,filename:str,studentId:str,draftId:str=Query(pattern=r'^[a-f0-9-]{36}$'),workspace:Workspace='school'):
-            if not storage.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Сервер принимает другие файлы. Повторите позже.')
+            slots=await storage.acquire_slot()
             reservation=None;handle=None;complete=False
             def prepare():
                 user,snap=self.absences.context(request,workspace)
@@ -61,9 +64,10 @@ class AbsenceFiles:
                     tables(db);db.execute('BEGIN IMMEDIATE');self.check(db,user,snap,workspace,studentId);cleanup(db)
                     name=storage.name_for(filename)
                     used,count,pending=db.execute("SELECT coalesce(sum(size),0),count(CASE WHEN notice_id IS NULL THEN 1 END),count(CASE WHEN status='uploading' THEN 1 END) FROM absence_files WHERE workspace=? AND owner_id=?",(workspace,user['id'])).fetchone()
-                    if used+storage.MAX_FILE>storage.MAX_STUDENT or storage.total_stored(db)+storage.MAX_FILE>storage.total_limit():raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к школе.')
+                    if used+storage.MAX_FILE>storage.MAX_STUDENT:raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к школе.')
+                    storage.require_capacity(db,'absences')
                     if count>=50:raise HTTPException(413,'Удалите ненужные неотправленные файлы.')
-                    if pending>=2:raise HTTPException(429,'Дождитесь завершения текущих загрузок.')
+                    if pending>=2:raise storage.busy('Дождитесь завершения текущих загрузок.')
                     id=uuid4().hex;root=root_for(db)
                     db.execute('INSERT INTO absence_files VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)',(id,workspace,user['id'],draftId,studentId,name,storage.MAX_FILE,now().isoformat(),'uploading'))
                 return user,snap,id,name,root
@@ -107,7 +111,7 @@ class AbsenceFiles:
                                 except OSError:return
                                 db.execute('DELETE FROM absence_files WHERE id=?',(id,))
                         await run_in_threadpool(discard)
-                finally:storage.UPLOAD_SLOTS.release()
+                finally:slots.release()
 
         @app.get('/api/journal/absence-files')
         def available(request:Request,studentId:str,draftId:str=Query(pattern=r'^[a-f0-9-]{36}$'),workspace:Workspace='school'):
