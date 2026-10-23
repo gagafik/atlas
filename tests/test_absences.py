@@ -297,3 +297,21 @@ def test_options_default_date_is_school_today_clamped(client,monkeypatch):
         monkeypatch.setattr('backend.journal.today',lambda today=today:today)
         options=parent.get(url('/options')).json();assert options['defaultDate']==expected
         assert options['yearStart']=='2026-08-17' and options['yearEnd']=='2027-06-11'
+
+
+def test_withdraw_comment_is_optional(client):
+    _,_,parent,teacher=setup(client);notice=send(parent)
+    for operation in ['approve','reject']:
+        for values in [dict(comment=''),dict(comment='   ')]:
+            refused=decide(teacher,notice,operation,**values);assert refused.status_code==422 and 'Объясните решение' in refused.json()['detail']
+    missing=teacher.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='approve'))
+    assert missing.status_code==422 and 'Объясните решение' in missing.json()['detail']
+    withdrawn=parent.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='withdraw'))
+    assert withdrawn.status_code==200 and withdrawn.json()['status']=='withdrawn',withdrawn.text
+    history=parent.get(url('/'+notice['id']+'/history')).json()['items'][0]
+    assert history['action']=='withdrawn' and history['comment']==''
+    blank=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'));request=str(uuid4())
+    payload=dict(requestId=request,version=1,action='withdraw',comment='   ')
+    first=parent.post(url('/'+blank['id']+'/decision'),json=payload);assert first.status_code==200,first.text
+    assert parent.post(url('/'+blank['id']+'/decision'),json=payload).json()==first.json()
+    assert parent.get(url('/'+blank['id']+'/history')).json()['items'][0]['comment']==''

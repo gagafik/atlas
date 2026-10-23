@@ -68,7 +68,7 @@ class Decision(Model):
     requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
     version: int = Field(ge=1)
     action: Literal['approve','reject','revoke','withdraw']
-    comment: str = Field(min_length=1,max_length=2000)
+    comment: str = Field(default='',max_length=2000)
 
 
 class Reviewers(Model):
@@ -281,7 +281,7 @@ class Absences:
         @app.post('/api/journal/absences/{id}/decision')
         def decision(id:str,body:Decision,request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace);fingerprint=hashlib.sha256(encoded(body.model_dump()).encode()).hexdigest()
-            if not body.comment.strip():raise HTTPException(422,'Объясните решение.')
+            if body.action!='withdraw' and not body.comment.strip():raise HTTPException(422,'Объясните решение.')
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.files.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace);row=self.find(db,id,user,snap,workspace)
                 previous=db.execute('SELECT request_hash FROM absence_history WHERE notice_id=? AND actor_id=? AND request_id=?',(id,user['id'],body.requestId)).fetchone()

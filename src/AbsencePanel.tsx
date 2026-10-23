@@ -232,7 +232,9 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       !window.confirm(
         action === "approve"
           ? "Принять объяснительную? Отсутствие на полностью включённых в период уроках будет учитываться как уважительная причина."
-          : "Сохранить это решение с указанным объяснением?",
+          : action === "withdraw"
+            ? "Отозвать заявление? Школа увидит, что оно отозвано."
+            : "Сохранить это решение с указанным объяснением?",
       )
     )
       return;
@@ -790,7 +792,11 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     ["pending", "approved"].includes(selected.status))) && (
                   <>
                     <label className="field">
-                      <span>Объяснение решения</span>
+                      <span>
+                        {selected.canWithdraw && !selected.canReview
+                          ? "Комментарий (необязательно)"
+                          : "Объяснение решения"}
+                      </span>
                       <textarea
                         maxLength={2000}
                         value={comment}
@@ -810,7 +816,6 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     <div className="dated-toolbar">
                       {selected.canWithdraw && (
                         <button
-                          disabled={!comment.trim()}
                           onClick={() => void run(() => decide("withdraw"))}
                         >
                           Отозвать заявление
@@ -861,7 +866,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     {labels[h.action] || h.action} · редакция {h.version}
                     {h.batchId && " · общее решение"}
                   </p>
-                  <p className="journal-text">{h.comment}</p>
+                  {h.comment && <p className="journal-text">{h.comment}</p>}
                 </div>
               ))}
               {historyNext !== null && (
