@@ -8,7 +8,14 @@ import {
   contentProblem,
   withKind,
   hasEarlierRevisions,
+  defaultReportPeriod,
+  mergeReportPage,
+  loadRemainingReport,
+  journalPanels,
   type JournalDocument,
+  type JournalReport,
+  type JournalReportPage,
+  type JournalRow,
 } from "./journal";
 import { download } from "./utils";
 vi.mock("./utils", async (original) => ({
@@ -174,5 +181,113 @@ describe("history paging", () => {
     expect(hasEarlierRevisions(page(49, 49))).toBe(false);
     expect(hasEarlierRevisions(page(50, 50))).toBe(false);
     expect(hasEarlierRevisions(page(50, 100))).toBe(true);
+  });
+});
+describe("report period and paging", () => {
+  it("opens on the last 30 days and the next 14, inside the school year", () => {
+    const year = ["2026-08-17", "2027-06-11"] as const;
+    expect(defaultReportPeriod("2026-10-23", ...year)).toEqual({
+      start: "2026-09-23",
+      end: "2026-11-06",
+    });
+    expect(defaultReportPeriod("2026-08-01", ...year)).toEqual({
+      start: "2026-08-17",
+      end: "2026-08-31",
+    });
+    expect(defaultReportPeriod("2027-07-01", ...year)).toEqual({
+      start: "2027-05-12",
+      end: "2027-06-11",
+    });
+    expect(defaultReportPeriod("2026-12-31", ...year)).toEqual({
+      start: "2026-12-01",
+      end: "2027-01-14",
+    });
+  });
+  const row = (lessonKey: string, student = "s1"): JournalRow => ({
+    ...documentRows(document, lessonKey, 1)[0],
+    student: { id: student, name: "Ученик" },
+  });
+  const summary = (present: number) => ({
+    attendance: { present },
+    lateMinutes: 0,
+    subjects: [],
+  });
+  const first = (nextAfter: string | null): JournalReport => ({
+    rows: [row("a"), row("b")],
+    summary: summary(3),
+    nextAfter,
+  });
+  it("replaces the report with a first page and appends later pages without duplicates", () => {
+    const old = first("x");
+    const replaced = mergeReportPage(old, {
+      rows: [row("z")],
+      summary: summary(1),
+      nextAfter: null,
+    });
+    expect(replaced.rows.map((r) => r.lessonKey)).toEqual(["z"]);
+    expect(replaced.summary.attendance.present).toBe(1);
+    const next = mergeReportPage(old, {
+      rows: [row("b"), row("c"), row("c", "s2")],
+      summary: null,
+      nextAfter: "y",
+    });
+    expect(next.rows.map((r) => r.lessonKey + r.student.id)).toEqual([
+      "as1",
+      "bs1",
+      "cs1",
+      "cs2",
+    ]);
+    expect(next.summary).toBe(old.summary);
+    expect(next.nextAfter).toBe("y");
+    expect(old.rows).toHaveLength(2);
+  });
+  it("loads every remaining page for export and stops at the end", async () => {
+    const pages: Record<string, JournalReportPage> = {
+      a: { rows: [row("c")], summary: null, nextAfter: "b" },
+      b: { rows: [row("d")], summary: null, nextAfter: null },
+    };
+    const fetchPage = vi.fn(async (after: string) => pages[after]);
+    const all = await loadRemainingReport(first("a"), fetchPage);
+    expect(fetchPage.mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
+    expect(all.rows.map((r) => r.lessonKey)).toEqual(["a", "b", "c", "d"]);
+    expect(all.nextAfter).toBeNull();
+    const done = first(null);
+    expect(await loadRemainingReport(done, fetchPage)).toBe(done);
+    expect(fetchPage).toHaveBeenCalledTimes(2);
+  });
+  it("refuses to download an endless period", async () => {
+    const endless = vi.fn(async (after: string) => ({
+      rows: [row(after)],
+      summary: null,
+      nextAfter: after + "x",
+    }));
+    await expect(loadRemainingReport(first("a"), endless, 3)).rejects.toThrow(
+      "Слишком много записей: сократите период.",
+    );
+    expect(endless).toHaveBeenCalledTimes(3);
+  });
+});
+describe("management panels", () => {
+  it("lists only the panels the server enabled, after the lesson list, in a fixed order", () => {
+    const all = {
+      finalGrades: true,
+      absences: true,
+      attendance: true,
+      coverage: true,
+      periods: true,
+    };
+    expect(journalPanels({ panels: all })).toEqual([
+      "finalGrades",
+      "absences",
+      "periods",
+      "coverage",
+      "attendance",
+    ]);
+    expect(journalPanels({ panels: { coverage: true, periods: true } })).toEqual(
+      ["periods", "coverage"],
+    );
+    expect(journalPanels({ panels: { absences: true } })).toEqual(["absences"]);
+    expect(journalPanels({ panels: { absences: false } })).toEqual([]);
+    expect(journalPanels({})).toEqual([]);
   });
 });

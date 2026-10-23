@@ -368,7 +368,7 @@ from .families import Families
 families = Families(access, notifications)
 families.register(app, Workspace)
 from .journal import Journal
-journal = Journal(access, notifications)
+journal = Journal(access, notifications, portal_stamp)
 journal.register(app, Workspace)
 from .homework import Homework
 homework = Homework(journal, portal_stamp)

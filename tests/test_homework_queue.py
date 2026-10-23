@@ -1,10 +1,16 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
 from backend import api, homework_queue
 from backend.models import DatedLesson
 from test_access import client, create, signed
 from test_homework import setup, get, answer, review
 from test_journal import DAY, lesson, entry, graded, write
+
+
+# Explicit dates select range mode (ascending by deadline); without dates a pupil gets the default window.
+RANGE=dict(start='2026-08-17',end='2027-06-11')
 
 
 def queue(client, **params):
@@ -89,16 +95,17 @@ def test_removed_pupil_retains_only_historical_access(client):
 def test_cursor_order_filter_binding_and_private_draft_stability(client):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']
     publish(client,'2026-08-24','2026-08-19');publish(client,'2026-08-31')
-    first=queue(pupil,limit=1).json();assert first['nextCursor']
+    first=queue(pupil,limit=1,**RANGE).json();assert first['nextCursor']
     assert answer(pupil,key,get(pupil,key),'draft','secret').status_code==200
-    second=queue(pupil,limit=1,cursor=first['nextCursor']).json()
-    third=queue(pupil,limit=1,cursor=second['nextCursor']).json()
+    second=queue(pupil,limit=1,cursor=first['nextCursor'],**RANGE).json()
+    third=queue(pupil,limit=1,cursor=second['nextCursor'],**RANGE).json()
     keys=[page['items'][0]['lessonKey'] for page in [first,second,third]]
     assert len(set(keys))==3 and third['nextCursor'] is None
     assert third['items'][0]['dueDate'] is None and third['items'][0]['lessonDate']=='2026-08-31'
-    assert queue(pupil,limit=1,cursor=first['nextCursor'],filter='all').status_code==409
+    assert queue(pupil,limit=1,cursor=first['nextCursor'],filter='all',**RANGE).status_code==409
+    # The pupil's own answer changes no sort key: the cursor keeps working and the answered row drops out.
     assert answer(pupil,key,get(pupil,key)).status_code==200
-    assert queue(pupil,cursor=first['nextCursor']).status_code==409
+    assert queue(pupil,cursor=first['nextCursor'],**RANGE).status_code==200
 
 
 def test_school_timezone_deadline_and_due_date_search(client,monkeypatch):
@@ -152,8 +159,8 @@ def test_candidate_scan_is_bounded_and_does_not_materialize_answers(client,monke
     api.save('demo',state);monkeypatch.setattr(homework_queue,'SCAN',1)
     def unexpected(*args,**kwargs):raise AssertionError('Queue must not read private answer documents')
     monkeypatch.setattr(api.homework,'load',unexpected)
-    first=queue(pupil).json();assert first['items']==[] and first['nextCursor']
-    second=queue(pupil,cursor=first['nextCursor']).json()
+    first=queue(pupil,**RANGE).json();assert first['items']==[] and first['nextCursor']
+    second=queue(pupil,cursor=first['nextCursor'],**RANGE).json()
     assert len(second['items'])==1 and not second['nextCursor']
 
 
@@ -204,3 +211,100 @@ def test_opaque_cursor_hides_rejected_candidates_and_expires(client,monkeypatch)
     clock=homework_queue.monotonic
     monkeypatch.setattr(homework_queue,'monotonic',lambda:clock()+901)
     assert queue(replacement,filter='all',cursor=first_cursor).status_code==409
+
+
+def test_cursor_survives_unrelated_journal_save_and_own_answers(client):
+    record,pupil,parent,teacher=setup(client)
+    publish(client,'2026-08-24','2026-08-25');publish(client,'2026-08-31')
+    first=queue(pupil,limit=1,**RANGE).json();assert first['nextCursor']
+    # A draft of another lesson used to bump the global queue version and invalidate every pupil's page 2.
+    other=entry(client,lesson(client,'Математика')['lessonKey'])
+    assert write(client,other).status_code==200
+    second=queue(pupil,limit=1,cursor=first['nextCursor'],**RANGE);assert second.status_code==200,second.text
+    second=second.json();assert second['items'][0]['lessonKey']!=first['items'][0]['lessonKey']
+    key=second['items'][0]['lessonKey']
+    assert answer(pupil,key,get(pupil,key)).status_code==200
+    third=queue(pupil,limit=1,cursor=second['nextCursor'],**RANGE);assert third.status_code==200,third.text
+    third=third.json();keys=[page['items'][0]['lessonKey'] for page in [first,second,third]]
+    assert len(set(keys))==3 and third['nextCursor'] is None
+
+
+def test_cursor_still_invalidated_by_schedule_and_conditions(client):
+    record,pupil,parent,teacher=setup(client)
+    publish(client,'2026-08-24','2026-08-25')
+    first=queue(pupil,limit=1,**RANGE).json();cursor=first['nextCursor'];assert cursor
+    assert queue(pupil,limit=1,cursor=cursor,search='англ',**RANGE).status_code==409
+    assert queue(pupil,limit=1,cursor=cursor,history='true',**RANGE).status_code==409
+    assert queue(pupil,limit=1,cursor=cursor,start='2026-08-18',end='2027-06-11').status_code==409
+    assert queue(parent,limit=1,cursor=cursor,**RANGE).status_code==409
+    assert queue(pupil,limit=1,cursor=cursor).status_code==409
+    api.save('demo',api.read('demo'))
+    assert queue(pupil,limit=1,cursor=cursor,**RANGE).status_code==409
+
+
+def test_cursor_store_is_thread_safe(client):
+    store=api.homework.queue
+    def work(worker):
+        for i in range(2000):
+            key=store.cursor_save([worker,i])
+            try:assert store.cursor_read(key)==[worker,i]
+            except HTTPException as exc:assert exc.status_code==409  # already evicted by the other workers
+    with ThreadPoolExecutor(8) as pool:list(pool.map(work,range(8)))
+    assert len(store.cursors)<=4096
+
+
+def default_window_data(client,monkeypatch):
+    record,pupil,parent,teacher=setup(client)
+    publish(client,'2026-08-24','2026-08-25');publish(client,'2026-08-31');publish(client,'2026-09-14','2026-09-15')
+    # 11:00 on 2026-08-26 in the school time zone.
+    monkeypatch.setattr(homework_queue,'now',lambda:datetime(2026,8,26,6,0,tzinfo=timezone.utc))
+    return pupil,parent,teacher
+
+
+def test_default_pupil_window_is_recent_undone_then_two_weeks(client,monkeypatch):
+    pupil,parent,teacher=default_window_data(client,monkeypatch)
+    result=queue(pupil).json()
+    assert result['window']=='upcoming' and result['filter']=='todo'
+    assert [r['lessonDate'] for r in result['items']]==['2026-08-24','2026-08-17','2026-08-31']
+    assert result['yearStart']=='2026-08-17' and result['yearEnd']=='2027-06-11' and result['start']=='2026-08-17' and result['end']=='2026-09-09'
+    assert [r['lessonDate'] for r in items(parent)]==['2026-08-24','2026-08-17','2026-08-31']
+    assert [r['dueDate'] for r in items(pupil,filter='overdue')]==['2026-08-25','2026-08-19']
+    ranged=queue(pupil,**RANGE).json()
+    assert ranged['window']=='range' and [r['lessonDate'] for r in ranged['items']]==['2026-08-17','2026-08-24','2026-08-31','2026-09-14']
+    # One explicit date is enough to leave the default window.
+    assert queue(pupil,start='2026-08-24').json()['window']=='range'
+    assert queue(pupil,end='2026-08-24').json()['window']=='range'
+
+
+def test_default_window_paging_crosses_phases(client,monkeypatch):
+    pupil,parent,teacher=default_window_data(client,monkeypatch)
+    expected=[r['lessonKey'] for r in items(pupil)]
+    paged=[];cursor=None
+    for _ in range(10):
+        page=queue(pupil,limit=1,**(dict(cursor=cursor) if cursor else {}));assert page.status_code==200,page.text
+        page=page.json();paged.extend(r['lessonKey'] for r in page['items']);cursor=page['nextCursor']
+        if not cursor:break
+    assert paged==expected and len(set(paged))==3
+    # The cursor of the default window belongs to the school day and the window.
+    cursor=queue(pupil,limit=1).json()['nextCursor']
+    monkeypatch.setattr(homework_queue,'now',lambda:datetime(2026,8,27,6,0,tzinfo=timezone.utc))
+    assert queue(pupil,limit=1,cursor=cursor).status_code==409
+
+
+def test_default_window_edges_before_and_after_the_year(client,monkeypatch):
+    pupil,parent,teacher=default_window_data(client,monkeypatch)
+    monkeypatch.setattr(homework_queue,'now',lambda:datetime(2026,8,1,6,0,tzinfo=timezone.utc))
+    empty=queue(pupil).json();assert empty['items']==[] and empty['end']=='2026-08-17' and empty['nextCursor'] is None
+    monkeypatch.setattr(homework_queue,'now',lambda:datetime(2026,8,10,6,0,tzinfo=timezone.utc))
+    early=queue(pupil).json();assert early['end']=='2026-08-24'
+    assert [r['lessonDate'] for r in early['items']]==['2026-08-17']
+    monkeypatch.setattr(homework_queue,'now',lambda:datetime(2027,7,1,6,0,tzinfo=timezone.utc))
+    late=queue(pupil).json();assert [r['lessonDate'] for r in late['items']]==['2026-09-14','2026-08-31','2026-08-24','2026-08-17']
+
+
+def test_staff_default_unchanged(client,monkeypatch):
+    pupil,parent,teacher=default_window_data(client,monkeypatch)
+    result=queue(teacher).json()
+    assert result['window']=='range' and result['filter']=='submitted' and result['start']=='2026-08-17' and result['end']=='2027-06-11'
+    result=queue(client,filter='all').json()
+    assert result['window']=='range' and [r['lessonDate'] for r in result['items']][:2]==['2026-08-17','2026-08-17']

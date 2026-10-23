@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import LessonMaterials from "./LessonMaterials";
@@ -23,20 +24,27 @@ import {
   contentProblem,
   withKind,
   hasEarlierRevisions,
+  defaultReportPeriod,
+  mergeReportPage,
+  loadRemainingReport,
+  journalPanels,
   type Assessment,
   type Grade,
   type JournalContent,
   type JournalDocument,
   type JournalEntry,
   type JournalLesson,
+  type JournalPanelName,
   type JournalReport,
+  type JournalReportPage,
   type JournalRow,
   type PupilRecord,
 } from "./journal";
 
 interface Options {
   staff: boolean;
-  absenceNotices?: boolean;
+  // Which management panels have anything for this account; the server still enforces rights.
+  panels?: Partial<Record<JournalPanelName, boolean>>;
   yearStart: string;
   yearEnd: string;
   students: { id: string; name: string }[];
@@ -169,7 +177,10 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     [busy, setBusy] = useState(false),
     [epoch, setEpoch] = useState(0);
   const sequence = useRef(0),
-    saveLock = useRef(false);
+    saveLock = useRef(false),
+    // Changes whenever the report selection does, so a late page or export is dropped.
+    reportScope = useRef(0);
+  const [paging, setPaging] = useState(false);
   useEffect(() => {
     let live = true;
     setError("");
@@ -187,8 +198,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
               ? r.yearEnd
               : today,
         );
-        setStart(r.yearStart);
-        setEnd(r.yearEnd);
+        const period = defaultReportPeriod(today, r.yearStart, r.yearEnd);
+        setStart(period.start);
+        setEnd(period.end);
       })
       .catch((e) => {
         if (live) setError(e.message);
@@ -220,13 +232,14 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   useEffect(() => {
     if (!options || !student || !start || !end || mode !== "report") return;
     let live = true;
+    ++reportScope.current;
     setLoading(true);
+    setPaging(false);
     setReport(null);
     setError("");
-    const params = new URLSearchParams({ studentId: student, start, end });
-    api(`journal/report?${params}`, workspace)
-      .then((r) => {
-        if (live) setReport(r);
+    api(`journal/report?${reportParams()}`, workspace)
+      .then((r: JournalReportPage) => {
+        if (live) setReport(mergeReportPage(null, r));
       })
       .catch((e) => {
         if (live) setError(e.message);
@@ -238,6 +251,53 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       live = false;
     };
   }, [workspace, options, student, start, end, mode, epoch]);
+  function reportParams(after?: string, limit?: number) {
+    const params = new URLSearchParams({ studentId: student, start, end });
+    if (after) params.set("after", after);
+    if (limit) params.set("limit", String(limit));
+    return params;
+  }
+  async function reportPage(after: string, limit?: number) {
+    return (await api(
+      `journal/report?${reportParams(after, limit)}`,
+      workspace,
+    )) as JournalReportPage;
+  }
+  // One page more of the same selection; a page that arrives after the selection changed is dropped.
+  async function moreReport() {
+    if (!report?.nextAfter || paging) return;
+    const scope = reportScope.current;
+    setPaging(true);
+    setError("");
+    try {
+      const page = await reportPage(report.nextAfter);
+      if (reportScope.current === scope)
+        setReport((current) => mergeReportPage(current, page));
+    } catch (e: any) {
+      if (reportScope.current === scope) setError(e.message);
+    } finally {
+      if (reportScope.current === scope) setPaging(false);
+    }
+  }
+  // CSV and print cover the whole period, not just the pages on screen.
+  async function wholeReport(use: (all: JournalReport) => void) {
+    if (!report || paging) return;
+    const scope = reportScope.current;
+    setPaging(true);
+    setError("");
+    try {
+      const all = await loadRemainingReport(report, (after) =>
+        reportPage(after, 200),
+      );
+      if (reportScope.current !== scope) return;
+      flushSync(() => setReport(all));
+      use(all);
+    } catch (e: any) {
+      if (reportScope.current === scope) setError(e.message);
+    } finally {
+      if (reportScope.current === scope) setPaging(false);
+    }
+  }
   useEffect(() => {
     const leave = (e: BeforeUnloadEvent) => {
       if (dirty || busy) {
@@ -390,66 +450,74 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     }
   }
   const editable = !!entry?.writable && !entry.needsSync && !busy;
+  function adminPanel(name: JournalPanelName) {
+    switch (name) {
+      case "finalGrades":
+        return (
+          <FinalGradesPanel
+            key={`final-grades-${workspace}`}
+            workspace={workspace}
+          />
+        );
+      case "absences":
+        return <AbsencePanel key={workspace} workspace={workspace} />;
+      case "periods":
+        return (
+          <JournalPeriodsPanel
+            key={`periods-${workspace}`}
+            workspace={workspace}
+            onChanged={() => {
+              setEpoch((x) => x + 1);
+              if (entry) {
+                const key = entry.lessonKey;
+                api(
+                  `journal/entry?${new URLSearchParams({ lessonKey: key, day })}`,
+                  workspace,
+                )
+                  .then((fresh: JournalEntry) => {
+                    setEntry((old) =>
+                      old?.lessonKey === key
+                        ? {
+                            ...old,
+                            writable: fresh.writable,
+                            canWithdraw: fresh.canWithdraw,
+                            periodLocks: fresh.periodLocks,
+                          }
+                        : old,
+                    );
+                  })
+                  .catch((e) => setError(e.message));
+              }
+            }}
+          />
+        );
+      case "coverage":
+        return (
+          <JournalCoveragePanel
+            key={`coverage-${workspace}`}
+            workspace={workspace}
+            onOpen={(key, date) => {
+              if (!canLeave()) return;
+              coverageOpened.current = true;
+              clearEditor();
+              setMode("day");
+              setDay(date);
+              void openEntry(key, false, date);
+            }}
+          />
+        );
+      case "attendance":
+        return (
+          <AttendancePanel
+            key={`attendance-${workspace}`}
+            workspace={workspace}
+          />
+        );
+    }
+  }
+  const panels = options ? journalPanels(options) : [];
   return (
     <section className="journal-panel">
-      {options && (
-        <FinalGradesPanel
-          key={`final-grades-${workspace}`}
-          workspace={workspace}
-        />
-      )}
-      {options?.absenceNotices && (
-        <AbsencePanel key={workspace} workspace={workspace} />
-      )}
-      {options?.staff && (
-        <JournalPeriodsPanel
-          key={`periods-${workspace}`}
-          workspace={workspace}
-          onChanged={() => {
-            setEpoch((x) => x + 1);
-            if (entry) {
-              const key = entry.lessonKey;
-              api(
-                `journal/entry?${new URLSearchParams({ lessonKey: key, day })}`,
-                workspace,
-              )
-                .then((fresh: JournalEntry) => {
-                  setEntry((old) =>
-                    old?.lessonKey === key
-                      ? {
-                          ...old,
-                          writable: fresh.writable,
-                          canWithdraw: fresh.canWithdraw,
-                          periodLocks: fresh.periodLocks,
-                        }
-                      : old,
-                  );
-                })
-                .catch((e) => setError(e.message));
-            }
-          }}
-        />
-      )}
-      {options?.staff && (
-        <JournalCoveragePanel
-          key={`coverage-${workspace}`}
-          workspace={workspace}
-          onOpen={(key, date) => {
-            if (!canLeave()) return;
-            coverageOpened.current = true;
-            clearEditor();
-            setMode("day");
-            setDay(date);
-            void openEntry(key, false, date);
-          }}
-        />
-      )}
-      {options?.staff && (
-        <AttendancePanel
-          key={`attendance-${workspace}`}
-          workspace={workspace}
-        />
-      )}
       <p>
         Посещаемость, оценки, темы и домашние задания. Записи журнала
         сохраняются отдельно от расписания; переносы и правки групп не удаляют
@@ -1335,6 +1403,29 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                     onChange={(e) => setEnd(e.target.value)}
                   />
                 </label>
+                <button
+                  disabled={paging}
+                  onClick={() => {
+                    const period = defaultReportPeriod(
+                      new Date().toLocaleDateString("sv-SE"),
+                      options.yearStart,
+                      options.yearEnd,
+                    );
+                    setStart(period.start);
+                    setEnd(period.end);
+                  }}
+                >
+                  Последние 30 дней
+                </button>
+                <button
+                  disabled={paging}
+                  onClick={() => {
+                    setStart(options.yearStart);
+                    setEnd(options.yearEnd);
+                  }}
+                >
+                  Весь учебный год
+                </button>
               </div>
               {student && (
                 <GradeFeed
@@ -1364,17 +1455,28 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                   </p>
                   <div className="dated-toolbar journal-controls">
                     <button
-                      disabled={!report.rows.length}
+                      disabled={!report.rows.length || paging}
                       onClick={() =>
-                        journalCsv(report.rows, "Личный журнал.csv")
+                        void wholeReport((all) =>
+                          journalCsv(all.rows, "Личный журнал.csv"),
+                        )
                       }
                     >
                       Скачать журнал CSV
                     </button>
-                    <button onClick={() => window.print()}>
+                    <button
+                      disabled={paging}
+                      onClick={() => void wholeReport(() => window.print())}
+                    >
                       Печать журнала
                     </button>
                   </div>
+                  <p role="status" className="info-line">
+                    Показано записей: {report.rows.length}
+                    {report.nextAfter && " · ещё есть"}
+                    {paging && " · загружаю…"}
+                  </p>
+                  <h3>Итоги за выбранный период</h3>
                   <div className="journal-summary">
                     {Object.entries(report.summary.attendance).map(
                       ([key, value]) => (
@@ -1412,11 +1514,29 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                     </p>
                   )}
                   <PublishedRows rows={report.rows} workspace={workspace} />
+                  {report.nextAfter && (
+                    <div className="dated-toolbar journal-controls">
+                      <button
+                        disabled={paging}
+                        onClick={() => void moreReport()}
+                      >
+                        Показать ещё
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </>
           )}
         </>
+      )}
+      {!!panels.length && (
+        <section
+          className="journal-admin-panels"
+          aria-label="Отчёты и управление журналом"
+        >
+          {panels.map(adminPanel)}
+        </section>
       )}
     </section>
   );

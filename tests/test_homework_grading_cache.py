@@ -40,7 +40,9 @@ def test_journal_entry_resolves_only_the_needed_day(client,monkeypatch,persisted
     original=journal.resolve_day;days=[]
     def counted(state,day,*args,**kwargs):
         days.append(day.isoformat());return original(state,day,*args,**kwargs)
-    monkeypatch.setattr(journal,'resolve_day',counted)
+    # Reads resolve through the shared schedule cache (portal_cache); start it cold to count the days it computes.
+    monkeypatch.setattr(journal,'resolve_day',counted);monkeypatch.setattr(portal_cache,'resolve_day',counted)
+    api.journal.snapshots.get('demo').lesson_days.clear()
     result=entry(client,key)
     assert days==[expected] and result['currentDate']==expected
     assert bool(result['version'])==persisted

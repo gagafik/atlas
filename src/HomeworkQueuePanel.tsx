@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { queueParams } from "./homeworkQueue";
 
 interface Item {
   lessonKey: string;
@@ -29,8 +30,12 @@ interface Result {
   nextCursor: string | null;
   staff: boolean;
   filter: string;
+  // "upcoming" is the default window of pupils and parents; explicit dates give "range".
+  window: "upcoming" | "range";
   start: string;
   end: string;
+  yearStart: string;
+  yearEnd: string;
   schoolToday: string;
 }
 const labels: Record<string, string> = {
@@ -76,23 +81,16 @@ export default function HomeworkQueuePanel({
     setBusy(true);
     setError("");
     setResult(null);
-    const params = new URLSearchParams({
-      history: String(applied.history),
-      search: applied.search,
-    });
-    for (const name of ["start", "end", "filter"] as const)
-      if (applied[name]) params.set(name, applied[name]);
-    if (cursor) params.set("cursor", cursor);
-    api(`journal/homework-queue?${params}`, workspace)
+    api(`journal/homework-queue?${queueParams(applied, cursor)}`, workspace)
       .then((r: Result) => {
         if (!live) return;
         setResult(r);
         if (!initialized.current) {
           initialized.current = true;
+          // The default window has no dates of its own: leave the fields empty to keep it.
           setFields((v) => ({
             ...v,
-            start: r.start,
-            end: r.end,
+            ...(r.window === "range" ? { start: r.start, end: r.end } : {}),
             filter: r.filter,
           }));
         }
@@ -110,6 +108,13 @@ export default function HomeworkQueuePanel({
   function refresh() {
     setCursor("");
     setEpoch((v) => v + 1);
+  }
+  function wholeYear(year: Result) {
+    if (!canLeaveHomework()) return;
+    setSelected(null);
+    setCursor("");
+    setFields((v) => ({ ...v, start: year.yearStart, end: year.yearEnd }));
+    setApplied((v) => ({ ...v, start: year.yearStart, end: year.yearEnd }));
   }
   function changePage(next: string) {
     if (!canLeaveHomework()) return;
@@ -137,7 +142,6 @@ export default function HomeworkQueuePanel({
           <span>С даты</span>
           <input
             type="date"
-            required
             value={fields.start}
             onChange={(e) => setFields({ ...fields, start: e.target.value })}
           />
@@ -146,7 +150,6 @@ export default function HomeworkQueuePanel({
           <span>По дату</span>
           <input
             type="date"
-            required
             value={fields.end}
             onChange={(e) => setFields({ ...fields, end: e.target.value })}
           />
@@ -231,9 +234,25 @@ export default function HomeworkQueuePanel({
       {busy && <p role="status">Загружаем работы…</p>}
       {result && (
         <>
+          {result.window === "upcoming" && (
+            <div className="homework-queue-window">
+              <p className="info-line">
+                Сначала работы с прошедшим сроком — от недавних к ранним, затем
+                сроки на 14 дней вперёд. Для другого периода укажите даты.
+              </p>
+              <button
+                type="button"
+                disabled={busy || activity.busy}
+                onClick={() => wholeYear(result)}
+              >
+                Весь учебный год
+              </button>
+            </div>
+          )}
           <p role="status">
-            На этой странице: {result.items.length}. Сначала ближайшие сроки,
-            затем более поздние.{" "}
+            На этой странице: {result.items.length}.{" "}
+            {result.window === "range" &&
+              "Сначала ближайшие сроки, затем более поздние. "}
             {result.staff
               ? "Личные черновики учеников здесь не показываются."
               : "Показаны только доступные вам ученики."}

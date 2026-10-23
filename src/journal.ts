@@ -88,19 +88,105 @@ export interface JournalRow {
   publishedAt: string;
   absenceApproval?: { id: string; version: number };
 }
+export interface JournalSummary {
+  attendance: Record<string, number>;
+  lateMinutes: number;
+  subjects: {
+    subjectId: string;
+    subject: string;
+    pointsCount: number;
+    labelCount: number;
+    percentage: number | null;
+  }[];
+}
 export interface JournalReport {
   rows: JournalRow[];
-  summary: {
-    attendance: Record<string, number>;
-    lateMinutes: number;
-    subjects: {
-      subjectId: string;
-      subject: string;
-      pointsCount: number;
-      labelCount: number;
-      percentage: number | null;
-    }[];
+  summary: JournalSummary;
+  nextAfter: string | null;
+}
+// The server sends the summary of the whole period only with the first page.
+export interface JournalReportPage {
+  rows: JournalRow[];
+  summary: JournalSummary | null;
+  nextAfter: string | null;
+}
+const DAY_MS = 86_400_000;
+function shiftDay(day: string, days: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+}
+// The report opens on the last 30 days and the next 14, kept inside the school year.
+export function defaultReportPeriod(
+  today: string,
+  yearStart: string,
+  yearEnd: string,
+): { start: string; end: string } {
+  const anchor =
+    today < yearStart ? yearStart : today > yearEnd ? yearEnd : today;
+  const start = shiftDay(anchor, -30),
+    end = shiftDay(anchor, 14);
+  return {
+    start: start < yearStart ? yearStart : start,
+    end: end > yearEnd ? yearEnd : end,
   };
+}
+const emptySummary = (): JournalSummary => ({
+  attendance: { unmarked: 0, present: 0, absent: 0, late: 0, excused: 0 },
+  lateMinutes: 0,
+  subjects: [],
+});
+const rowKey = (row: JournalRow) => `${row.lessonKey}:${row.student.id}`;
+// A first page replaces the report; later pages are appended without duplicates
+// (a publication between two requests can repeat a row) and keep the period summary.
+export function mergeReportPage(
+  current: JournalReport | null,
+  page: JournalReportPage,
+): JournalReport {
+  if (page.summary !== null || !current)
+    return {
+      rows: page.rows,
+      summary: page.summary ?? emptySummary(),
+      nextAfter: page.nextAfter,
+    };
+  const seen = new Set(current.rows.map(rowKey));
+  return {
+    rows: [
+      ...current.rows,
+      ...page.rows.filter((row) => !seen.has(rowKey(row))),
+    ],
+    summary: current.summary,
+    nextAfter: page.nextAfter,
+  };
+}
+// CSV and print cover the whole period: fetch every remaining page, with a hard stop.
+export async function loadRemainingReport(
+  report: JournalReport,
+  fetchPage: (after: string) => Promise<JournalReportPage>,
+  maxPages = 40,
+): Promise<JournalReport> {
+  let current = report;
+  for (let loaded = 0; current.nextAfter; loaded++) {
+    if (loaded >= maxPages)
+      throw new Error("Слишком много записей: сократите период.");
+    current = mergeReportPage(current, await fetchPage(current.nextAfter));
+  }
+  return current;
+}
+export type JournalPanelName =
+  "finalGrades" | "absences" | "periods" | "coverage" | "attendance";
+// The server says which management panels have anything for this account; they follow the lesson list.
+export function journalPanels(options: {
+  panels?: Partial<Record<JournalPanelName, boolean>>;
+}): JournalPanelName[] {
+  const order: JournalPanelName[] = [
+    "finalGrades",
+    "absences",
+    "periods",
+    "coverage",
+    "attendance",
+  ];
+  return order.filter((name) => options.panels?.[name]);
 }
 export const attendanceNames: Record<string, string> = {
   unmarked: "Не отмечено",

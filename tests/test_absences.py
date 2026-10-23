@@ -319,3 +319,17 @@ def test_withdraw_comment_is_optional(client):
     first=parent.post(url('/'+blank['id']+'/decision'),json=payload);assert first.status_code==200,first.text
     assert parent.post(url('/'+blank['id']+'/decision'),json=payload).json()==first.json()
     assert parent.get(url('/'+blank['id']+'/history')).json()['items'][0]['comment']==''
+
+
+def test_approved_absence_applies_to_every_report_page_and_the_first_page_summary(client):
+    _,_,parent,teacher=setup(client)
+    for day in [DAY,'2026-08-24','2026-08-31']:
+        record=graded(entry(client,lesson(client,day=day)['lessonKey'],day=day))
+        for pupil in record['document']['content']['records']:pupil['attendance']='absent'
+        assert write(client,record,publish=True).status_code==200
+    notice=send(parent,body(startDate=DAY,endDate='2026-08-31'));assert decide(teacher,notice).status_code==200
+    params=dict(workspace='demo',studentId='s1',start='2026-08-01',end='2026-09-30',limit=2)
+    first=parent.get('/api/journal/report',params=params).json()
+    assert first['summary']['attendance']['excused']==3 and [r['record']['attendance'] for r in first['rows']]==['excused','excused']
+    second=parent.get('/api/journal/report',params=params|dict(after=first['nextAfter'])).json()
+    assert second['summary'] is None and second['rows'][0]['record']['attendance']=='excused' and second['rows'][0]['absenceApproval']['id']==notice['id']

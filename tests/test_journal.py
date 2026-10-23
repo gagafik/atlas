@@ -287,3 +287,60 @@ def test_assessment_and_topic_models_reject_nan_infinity_and_fractional_hours():
     for units in [1.5,0,13,None,'2']:
         with pytest.raises(ValidationError,match='Часов по теме'):TopicReference(planId='a'*32,version=1,topicId='intro',units=units)
     assert TopicReference(planId='a'*32,version=1,topicId='intro',units=12).units==12
+
+
+def pages(reader,student='s1',**params):
+    return reader.get('/api/journal/report',params=dict(workspace='demo',studentId=student,start='2026-08-01',end='2026-09-30')|params)
+
+
+def test_report_pages_by_keyset_with_summary_on_first_page(client):
+    for day in [DAY,'2026-08-24','2026-08-31']:
+        assert write(client,graded(entry(client,lesson(client,day=day)['lessonKey'],day=day)),publish=True).status_code==200
+    first=pages(client,limit=2);assert first.status_code==200,first.text;first=first.json()
+    assert [r['lesson']['date'] for r in first['rows']]==[DAY,'2026-08-24'] and first['nextAfter']
+    assert first['summary']['attendance']['present']==3 and first['source']=='published'
+    second=pages(client,limit=2,after=first['nextAfter']);assert second.status_code==200,second.text;second=second.json()
+    assert [r['lesson']['date'] for r in second['rows']]==['2026-08-31'] and second['summary'] is None and second['nextAfter'] is None
+    keys=[r['lessonKey'] for r in first['rows']+second['rows']];assert len(set(keys))==3
+    whole=pages(client).json();assert [r['lessonKey'] for r in whole['rows']]==keys and whole['nextAfter'] is None and whole['summary']==first['summary']
+    # A page of exactly the remaining size ends the sequence without an empty extra page.
+    assert pages(client,limit=3).json()['nextAfter'] is None
+    stale=pages(client,limit=1,after=f'{DAY}|00:00|'+'0'*64);assert stale.status_code==200 and len(stale.json()['rows'])==1
+    assert pages(client,after='bad').status_code==422
+    assert pages(client,limit=0).status_code==422 and pages(client,limit=201).status_code==422
+    assert pages(client,end='2027-09-30').status_code==422
+
+
+def test_report_paging_respects_teacher_scope_and_withdrawn_lessons(client):
+    enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
+    published=[write(client,graded(entry(client,lesson(client,day=day)['lessonKey'],day=day)),publish=True).json() for day in [DAY,'2026-08-24']]
+    unrelated=pages(signed('unrelated'),limit=1).json()
+    assert unrelated['rows']==[] and unrelated['nextAfter'] is None and unrelated['summary']['attendance']['present']==0
+    teacher=signed('teacher');first=pages(teacher,limit=1).json()
+    assert len(first['rows'])==1 and first['nextAfter'] and first['summary']['attendance']['present']==2
+    second=pages(teacher,limit=1,after=first['nextAfter']).json()
+    assert len(second['rows'])==1 and second['nextAfter'] is None and second['rows'][0]['lessonKey']!=first['rows'][0]['lessonKey']
+    assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=published[0]['lessonKey'],version=published[0]['version'])).status_code==200
+    assert [r['lesson']['date'] for r in pages(teacher).json()['rows']]==['2026-08-24']
+
+
+def test_options_panels_by_role(client):
+    from backend import final_grades
+    enable(client);teacher=create(client,'teacher');create(client,'student');create(client,'parent')
+    def panels(reader):
+        response=reader.get('/api/journal/options?workspace=demo');assert response.status_code==200,response.text
+        assert response.json()['absenceNotices']==response.json()['panels']['absences']
+        return response.json()['panels']
+    def flags(**on):return dict(finalGrades=False,absences=False,attendance=False,coverage=False,periods=False)|on
+    assert panels(client)==dict(finalGrades=True,absences=True,attendance=True,coverage=True,periods=True)
+    assert panels(signed('teacher'))==flags(coverage=True,periods=True)
+    assert panels(signed('parent'))==flags(absences=True)
+    assert panels(signed('student'))==flags()
+    with api.connect() as db:
+        final_grades.tables(db)
+        db.execute("INSERT INTO grading_rows VALUES ('demo','row1','book1','s2','sub0','c-demo-a',?,1,'draft','{}',NULL)",(teacher['id'],))
+    assert panels(signed('teacher'))['finalGrades'] is True and panels(signed('student'))['finalGrades'] is False
+    with api.connect() as db:
+        db.execute("INSERT INTO final_results VALUES ('demo','period1','s1','sub0','row2',1,'{}')")
+    assert panels(signed('student'))['finalGrades'] is True and panels(signed('parent'))['finalGrades'] is True
+    assert panels(signed('teacher'))['finalGrades'] is True
