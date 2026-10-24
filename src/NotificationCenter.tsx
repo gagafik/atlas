@@ -70,6 +70,8 @@ const titles: Record<string, string> = {
   "documents.changed": "Изменилось состояние школьного документа",
   "documents.revoked": "Школьный документ отозван",
   "push.test": "Проверка фоновых уведомлений",
+  "hall.link_issued": "Выдана новая ссылка информационного экрана",
+  "hall.link_revoked": "Ссылка информационного экрана отозвана",
   "absence.submitted": "Поступило заявление об отсутствии",
   "absence.updated": "Изменилось решение по объяснительной",
   "message.received": "Новое сообщение",

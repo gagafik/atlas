@@ -462,6 +462,9 @@ handover.register(app, Workspace)
 from .live_lessons import LiveLessons
 live_lessons = LiveLessons(access, portal_stamp)
 live_lessons.register(app, Workspace)
+from .hall_screen import HallScreen
+hall_screen = HallScreen(access, notifications, portal_stamp)
+hall_screen.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

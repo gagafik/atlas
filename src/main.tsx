@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "./styles.css";
 const AuthShell = React.lazy(() => import("./AuthShell"));
 const ApplicantPortal = React.lazy(() => import("./ApplicantPortal"));
+const HallDisplay = React.lazy(() => import("./HallDisplay"));
 const applicationEntry = new URLSearchParams(window.location.search);
 if (
   import.meta.env.PROD &&
@@ -22,7 +23,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.Suspense
       fallback={<main className="auth-screen">Открываю Атлас…</main>}
     >
-      {applicationEntry.has("apply") ? (
+      {applicationEntry.has("hall") ? (
+        <HallDisplay />
+      ) : applicationEntry.has("apply") ? (
         <ApplicantPortal
           initialCampaign={applicationEntry.get("apply") || null}
         />

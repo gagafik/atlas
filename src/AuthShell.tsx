@@ -31,6 +31,7 @@ const Canteen = lazy(() => import("./Canteen"));
 const Handover = lazy(() => import("./Handover"));
 const LiveLessons = lazy(() => import("./LiveLessons"));
 const LiveProjector = lazy(() => import("./LiveProjector"));
+const HallScreens = lazy(() => import("./HallScreens"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
 const RecoveryForm = lazy(() =>
@@ -135,6 +136,13 @@ export default function AuthShell() {
     window.addEventListener("atlas-open-staff-time", open);
     return () => window.removeEventListener("atlas-open-staff-time", open);
   }, []);
+  const [hallWorkspace, setHallWorkspace] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setHallWorkspace((event as CustomEvent).detail?.workspace || "school");
+    window.addEventListener("atlas-open-hall", open);
+    return () => window.removeEventListener("atlas-open-hall", open);
+  }, []);
   const [meetingsWorkspace, setMeetingsWorkspace] = useState<string | null>(
     null,
   );
@@ -163,6 +171,7 @@ export default function AuthShell() {
     setOperationsPanel(false);
     setFormsWorkspace(null);
     setMeetingsWorkspace(null);
+    setHallWorkspace(null);
     setStaffTimeWorkspace(null);
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
@@ -459,9 +468,14 @@ export default function AuthShell() {
             </button>
           )}
           {session.user.role === "admin" && (
-            <button onClick={() => setOperationsPanel(true)}>
-              Состояние сервера
-            </button>
+            <>
+              <button onClick={() => setHallWorkspace("school")}>
+                Информационные экраны
+              </button>
+              <button onClick={() => setOperationsPanel(true)}>
+                Состояние сервера
+              </button>
+            </>
           )}
         </>
       )}
@@ -688,6 +702,18 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={meetingsWorkspace}
             onClose={() => setMeetingsWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {hallWorkspace && session.user?.role === "admin" && (
+        <Suspense
+          fallback={<p role="status">Открываю информационные экраны…</p>}
+        >
+          <HallScreens
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={hallWorkspace}
+            onClose={() => setHallWorkspace(null)}
           />
         </Suspense>
       )}
