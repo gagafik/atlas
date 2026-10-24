@@ -10,6 +10,10 @@ def tables(db):
         workspace TEXT,id TEXT,version INTEGER,owner_id TEXT,updated TEXT,subject TEXT,archived INTEGER,document TEXT,
         PRIMARY KEY(workspace,id))''')
     db.execute('CREATE INDEX IF NOT EXISTS quiz_question_owner ON quiz_questions(workspace,owner_id,archived,id)')
+    # Replays of bank package imports; only used inside write transactions after tables().
+    db.execute('''CREATE TABLE IF NOT EXISTS quiz_bank_imports (
+        workspace TEXT,owner_id TEXT,request_id TEXT,package_hash TEXT,created TEXT,result TEXT,
+        PRIMARY KEY(workspace,owner_id,request_id))''')
     db.execute('''CREATE TABLE IF NOT EXISTS quizzes (
         workspace TEXT,id TEXT,version INTEGER,owner_id TEXT,updated TEXT,status TEXT,closes TEXT,lesson_key TEXT,
         document TEXT,published_document TEXT,released INTEGER,summary TEXT,PRIMARY KEY(workspace,id))''')

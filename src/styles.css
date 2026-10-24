@@ -4604,6 +4604,9 @@ main {
 .quiz-card { border: 1px solid var(--line, #dce3e9); border-radius: 14px; background: var(--surface, #fff); padding: 18px; min-width: 0; overflow-wrap: anywhere; }
 .quiz-card h2, .quiz-card h3 { margin: 0 0 10px; font-size: 1.1rem; }
 .quiz-card button { margin-top: 8px; max-width: 100%; white-space: normal; }
+.quiz-bank > .dated-toolbar { margin-top: 14px; }
+.quiz-bank > .quiz-card { margin: 16px 0; }
+.quiz-bank > .quiz-card ul { padding-left: 22px; }
 .quiz-question-list { padding-left: 28px; }
 .quiz-question-list > li { padding: 18px; border: 1px solid var(--line, #dce3e9); border-radius: 12px; margin: 16px 0; overflow-wrap: anywhere; }
 .quiz-question-list h4 { margin: 0 0 10px; font-size: 1rem; }

@@ -9,6 +9,19 @@ import {
   type BankItem,
   type Question,
 } from "./quiz";
+import {
+  MAX_SELECTION,
+  exportFailure,
+  exportPackage,
+  packageError,
+  previewSummary,
+  refreshSelected,
+  saveBlob,
+  sendPackage,
+  toggleSelected,
+  type ImportResult,
+  type PackagePreview,
+} from "./quizBankPackage";
 
 export default function QuizBankPanel({
   workspace,
@@ -32,7 +45,14 @@ export default function QuizBankPanel({
     [editing, setEditing] = useState<BankItem | null>(null),
     [dirty, setDirty] = useState(false);
   const [tagsText, setTagsText] = useState("");
-  const alive = useRef(true);
+  const [selecting, setSelecting] = useState(false),
+    [selected, setSelected] = useState<Map<string, number>>(new Map()),
+    [preview, setPreview] = useState<PackagePreview | null>(null),
+    [importFile, setImportFile] = useState<File | null>(null),
+    [importRequest, setImportRequest] = useState(""),
+    [notice, setNotice] = useState("");
+  const alive = useRef(true),
+    staleMessage = useRef("");
   const uploadLock = useRef(false),
     uploadAbort = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -58,10 +78,17 @@ export default function QuizBankPanel({
         if (live) {
           setItems(r.items);
           setNext(r.nextAfter);
+          setSelected((old) =>
+            old.size ? refreshSelected(old, r.items as BankItem[]) : old,
+          );
+          // The reload clears the banner, so a refused export reports after it.
+          if (staleMessage.current) setError(staleMessage.current);
+          staleMessage.current = "";
         }
       })
       .catch((e) => {
         if (live) setError(e.message);
+        staleMessage.current = "";
       })
       .finally(() => {
         if (live) setBusy(false);
@@ -90,7 +117,7 @@ export default function QuizBankPanel({
     setBusy(true);
     setError("");
     try {
-      await api(
+      const saved: BankItem = await api(
         `journal/quiz-bank/${encodeURIComponent(editing.id)}`,
         workspace,
         "PUT",
@@ -106,6 +133,10 @@ export default function QuizBankPanel({
         },
       );
       if (alive.current) {
+        // The edit may take the question out of the list that refreshes versions.
+        setSelected((old) =>
+          old.has(saved.id) ? refreshSelected(old, [saved]) : old,
+        );
         setEditing(null);
         setDirty(false);
         setEpoch((v) => v + 1);
@@ -115,6 +146,101 @@ export default function QuizBankPanel({
     } finally {
       if (alive.current) setBusy(false);
     }
+  }
+  async function transfer(
+    work: (options: {
+      signal: AbortSignal;
+      onBusy: (busy: boolean) => void;
+    }) => Promise<void>,
+  ) {
+    if (busy || uploadLock.current) return;
+    uploadLock.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const controller = new AbortController();
+    uploadAbort.current = controller;
+    try {
+      await work({
+        signal: controller.signal,
+        onBusy: (b) => alive.current && setServerBusy(b),
+      });
+    } catch (e: any) {
+      if (alive.current && e.name !== "AbortError") setError(e.message);
+    } finally {
+      uploadLock.current = false;
+      uploadAbort.current = null;
+      if (alive.current) setBusy(false);
+    }
+  }
+  function toggle(item: BankItem) {
+    const result = toggleSelected(selected, item);
+    setSelected(result.selected);
+    setError(result.error);
+  }
+  function exportSelected() {
+    void transfer(async (options) => {
+      try {
+        const { blob, filename } = await exportPackage(
+          workspace,
+          selected,
+          options,
+        );
+        saveBlob(blob, filename);
+        if (alive.current) setNotice("Пакет сохранён.");
+      } catch (e: any) {
+        if (e.status !== 409 || !alive.current) throw e;
+        staleMessage.current = exportFailure(e);
+        setEpoch((v) => v + 1);
+      }
+    });
+  }
+  function choosePackage(file: File | undefined) {
+    if (!file || busy || uploadLock.current) return;
+    const problem = packageError(file);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setPreview(null);
+    setImportFile(null);
+    void transfer(async (options) => {
+      const result = await sendPackage(
+        "import/preview",
+        workspace,
+        file,
+        {},
+        options,
+      );
+      if (alive.current) {
+        setPreview(result);
+        setImportFile(file);
+        setImportRequest(crypto.randomUUID());
+      }
+    });
+  }
+  function confirmImport() {
+    if (!preview || !importFile) return;
+    void transfer(async (options) => {
+      const result: ImportResult = await sendPackage(
+        "import",
+        workspace,
+        importFile,
+        { requestId: importRequest, packageHash: preview.packageHash },
+        options,
+      );
+      if (alive.current) {
+        setNotice(
+          `Импортировано вопросов: ${result.imported}` +
+            (result.archived ? `, из них в архиве: ${result.archived}` : ""),
+        );
+        setPreview(null);
+        setImportFile(null);
+        setImportRequest("");
+        setAfter("");
+        setEpoch((v) => v + 1);
+      }
+    });
   }
   const q = editing?.question;
   async function upload(files: FileList | null, solution: boolean) {
@@ -183,6 +309,8 @@ export default function QuizBankPanel({
           {error}
         </p>
       )}
+      {notice && <p role="status">{notice}</p>}
+      {!editing && serverBusy && <p role="status">Сервер занят, повторяем…</p>}
       {!editing && (
         <>
           <form
@@ -236,6 +364,108 @@ export default function QuizBankPanel({
               </button>
             )}
           </form>
+          {!onPick && (
+            <div className="dated-toolbar">
+              {selecting ? (
+                <>
+                  <span role="status">
+                    Выбрано: {selected.size} из {MAX_SELECTION}
+                  </span>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={busy || !selected.size}
+                    onClick={exportSelected}
+                  >
+                    Экспорт
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !selected.size}
+                    onClick={() => setSelected(new Map())}
+                  >
+                    Снять выбор
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setSelecting(false)}
+                  >
+                    Готово
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSelecting(true)}
+                >
+                  Выбрать для экспорта
+                  {selected.size ? ` (${selected.size})` : ""}
+                </button>
+              )}
+              <label className="field">
+                <span>Импорт пакета (ZIP или JSON)</span>
+                <input
+                  type="file"
+                  accept=".zip,.json"
+                  disabled={busy}
+                  onChange={(e) => {
+                    choosePackage(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <a
+                href={`/api/journal/quiz-bank/template?workspace=${encodeURIComponent(workspace)}`}
+                download
+              >
+                Шаблон JSON
+              </a>
+            </div>
+          )}
+          {preview && !onPick && (
+            <section className="quiz-card" aria-live="polite">
+              <h3>Предпросмотр импорта</h3>
+              <p>{previewSummary(preview)}</p>
+              {preview.archived > 0 && (
+                <p>Архивные вопросы попадут в «Архив банка».</p>
+              )}
+              <ul>
+                {preview.items.slice(0, 10).map((item, index) => (
+                  <li key={index}>
+                    {questionKinds[item.kind as keyof typeof questionKinds] ??
+                      item.kind}
+                    : {item.text}
+                  </li>
+                ))}
+              </ul>
+              {preview.items.length > 10 && (
+                <small>Показаны первые 10 из {preview.items.length}.</small>
+              )}
+              <div className="dated-toolbar">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy}
+                  onClick={confirmImport}
+                >
+                  Импортировать вопросы
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setPreview(null);
+                    setImportFile(null);
+                    setImportRequest("");
+                  }}
+                >
+                  Отмена
+                </button>
+              </div>
+            </section>
+          )}
           {busy ? (
             <p role="status">Загружаем банк…</p>
           ) : (
@@ -266,6 +496,16 @@ export default function QuizBankPanel({
                   >
                     Добавить в вариант
                   </button>
+                ) : selecting ? (
+                  <label className="check-line">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(item.id)}
+                      disabled={busy}
+                      onChange={() => toggle(item)}
+                    />
+                    Выбрать вопрос
+                  </label>
                 ) : (
                   <div className="dated-toolbar">
                     <button
