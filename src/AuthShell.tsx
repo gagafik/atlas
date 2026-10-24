@@ -23,6 +23,7 @@ const StaffTime = lazy(() => import("./StaffTime"));
 const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const LostFound = lazy(() => import("./LostFound"));
 const BehaviourNotes = lazy(() => import("./BehaviourNotes"));
+const AssessmentPanel = lazy(() => import("./AssessmentPanel"));
 const Clubs = lazy(() => import("./Clubs"));
 const SchoolSite = lazy(() => import("./SchoolSite"));
 const Admissions = lazy(() => import("./AdmissionOffice"));
@@ -99,6 +100,17 @@ export default function AuthShell() {
     window.addEventListener("atlas-open-behaviour", open);
     return () => window.removeEventListener("atlas-open-behaviour", open);
   }, []);
+  const [assessmentsWorkspace, setAssessmentsWorkspace] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    const open = (event: Event) =>
+      setAssessmentsWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-assessments", open);
+    return () => window.removeEventListener("atlas-open-assessments", open);
+  }, []);
   useEffect(() => {
     const open = (event: Event) =>
       setLostFoundWorkspace(
@@ -172,6 +184,7 @@ export default function AuthShell() {
     setPaymentsWorkspace(null);
     setLostFoundWorkspace(null);
     setBehaviourWorkspace(null);
+    setAssessmentsWorkspace(null);
     setClubsWorkspace(null);
     setSiteWorkspace(null);
     setAdmissionsWorkspace(null);
@@ -415,6 +428,13 @@ export default function AuthShell() {
               Похвалы и замечания
             </button>
           )}
+          {["admin", "teacher", "staff", "student", "parent"].includes(
+            session.user.role,
+          ) && (
+            <button onClick={() => setAssessmentsWorkspace("school")}>
+              Календарь контрольных
+            </button>
+          )}
           <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
           <button onClick={() => setCanteenWorkspace("school")}>
             Столовая
@@ -654,6 +674,18 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={behaviourWorkspace}
             onClose={() => setBehaviourWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {assessmentsWorkspace && session.user && (
+        <Suspense
+          fallback={<p role="status">Открываю календарь контрольных…</p>}
+        >
+          <AssessmentPanel
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={assessmentsWorkspace}
+            onClose={() => setAssessmentsWorkspace(null)}
           />
         </Suspense>
       )}
