@@ -1,9 +1,13 @@
 """Quiz bank packages: format hardening, export and import with attachments."""
+from datetime import timedelta
 import hashlib
 import io
 import json
+import os
+import sqlite3
 import stat
 import struct
+import threading
 import time
 from uuid import uuid4
 import warnings
@@ -11,7 +15,8 @@ from zipfile import ZipFile, ZipInfo, ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED
 
 from fastapi import HTTPException
 import pytest
-from backend import api, homework_files, quiz_bank_package as pkg, quiz_files, teaching_media
+from starlette.requests import ClientDisconnect
+from backend import api, homework_files, quiz_bank_exchange as exchange, quiz_bank_package as pkg, quiz_files, teaching_media
 from test_access import client, signed
 from test_homework import setup
 from test_quiz_files import ok, upload, file_get
@@ -213,22 +218,33 @@ def test_manifest_bytes_strips_projections_pretty_and_limited(monkeypatch):
     assert caught.value.status_code==413 and 'Уменьшите выборку' in caught.value.detail
 
 
-def test_huge_central_directory_with_small_declared_count_is_rejected(tmp_path):
+@pytest.fixture
+def unopened(monkeypatch):
+    """ZipFile parses the whole central directory, so every bound must fire before the archive is opened."""
+    def forbidden(path):raise AssertionError('the archive was opened before the directory bound')
+    monkeypatch.setattr(pkg,'archive',forbidden)
+
+
+def test_huge_central_directory_with_small_declared_count_is_rejected(tmp_path,unopened):
+    # Only the size bound can catch this: the declared count (1) is within MAX_ENTRIES.
     path=tmp_path/'big.zip';directory=central_entries(20000)
+    assert len(directory)>pkg.MAX_DIRECTORY
     path.write_bytes(directory+end_record(1,len(directory)))
     error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
 
 
-def test_zip64_entry_count_is_checked(tmp_path):
-    path=tmp_path/'z64.zip';path.write_bytes(central_entries(1)+zip64_end(400000,47))
+@pytest.mark.parametrize('case',['plain','zip64'])
+def test_oversized_declared_entry_count_is_rejected(tmp_path,unopened,case):
+    # Only the count bound can catch this: the directory itself is tiny.
+    path=tmp_path/'count.zip';directory=central_entries(1)
+    path.write_bytes(directory+(end_record(pkg.MAX_ENTRIES+1,len(directory)) if case=='plain' else zip64_end(400000,len(directory))))
     error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
 
 
-def test_400k_entries_fail_fast(tmp_path):
+def test_400k_entries_are_rejected_before_the_archive_is_opened(tmp_path,unopened):
     path=tmp_path/'huge.zip';directory=central_entries(400000)
     path.write_bytes(directory+zip64_end(400000,len(directory)))
-    started=time.perf_counter();error=rejected(path)
-    assert time.perf_counter()-started<1 and error.status_code==422
+    error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
 
 
 def test_missing_end_record_is_a_corrupt_zip(tmp_path):
@@ -656,3 +672,165 @@ def test_imported_files_and_replays_survive_a_backup(client,tmp_path):
     with api.connect() as live,closing(sqlite3.connect(target/manifest['database']['path'])) as restored:
         assert restored.execute('SELECT * FROM quiz_bank_imports').fetchall()==live.execute('SELECT * FROM quiz_bank_imports').fetchall()!=[]
     assert len(list(target.rglob('*.bin')))==4
+
+
+# ---- recovery, revoked accounts and transfer limits ----
+
+def deactivate(login):
+    with api.connect() as db:db.execute('UPDATE accounts SET active=0 WHERE login=?',(login,))
+
+
+def uploading():
+    with api.connect() as db:return db.execute("SELECT count(*) FROM quiz_files WHERE status='uploading'").fetchone()[0]
+
+
+def strand(login,count,minutes=45):
+    """What a crash leaves behind: reserved 'uploading' rows with their bytes."""
+    created=(quiz_files.now()-timedelta(minutes=minutes)).isoformat();ids=[]
+    with api.connect() as db:
+        api.quizzes.tables(db);root=quiz_files.root_for(db);root.mkdir(parents=True,exist_ok=True)
+        for _ in range(count):
+            ids.append(uuid4().hex);homework_files.file_path(root,ids[-1]).write_bytes(b'stranded')
+            db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(ids[-1],'demo',account(login),'x.txt',10,created,'uploading'))
+    return ids
+
+
+def revoking(monkeypatch,owner,name,login):
+    """Wraps owner.name so the account is deactivated right after the original returns."""
+    original=getattr(owner,name)
+    def wrapper(*args,**kwargs):
+        result=original(*args,**kwargs);deactivate(login);return result
+    monkeypatch.setattr(owner,name,wrapper)
+
+
+def test_account_revoked_during_extraction_rolls_back_and_cleans_up(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files())
+    revoking(monkeypatch,pkg,'extract_files','unrelated')
+    response=apply(signed('unrelated'),package)
+    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail']
+    assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
+
+
+def test_account_revoked_before_the_reservation_writes_nothing(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files())
+    revoking(monkeypatch,pkg,'inspect_package','unrelated');extracted=[]
+    monkeypatch.setattr(pkg,'extract_files',lambda *args,**kwargs:extracted.append(1))
+    response=apply(signed('unrelated'),package)
+    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail']
+    # The reservation step itself must refuse: nothing is reserved or extracted, not merely rolled back later.
+    assert extracted==[] and (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
+
+
+def test_account_revoked_during_preview_is_409(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path)
+    revoking(monkeypatch,pkg,'inspect_package','unrelated')
+    response=preview(signed('unrelated'),package)
+    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail'] and temp_children()==[]
+
+
+def test_account_revoked_before_export_reads_nothing(client,monkeypatch):
+    pupil,teacher,source,*_=exported(client)
+    revoking(monkeypatch,api.quizzes.journal,'scope','teacher')
+    response=export(teacher,source)
+    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail'] and temp_children()==[]
+
+
+def test_stranded_reservations_do_not_lock_their_owner_out(client,tmp_path):
+    record,pupil,parent,teacher=setup(client);other=signed('unrelated');package=two_file_package(tmp_path)
+    # collect_unused frees only 20 school-wide per call, and a 429 used to roll even that back.
+    ids=strand('unrelated',25);assert uploading()==25
+    result=ok(apply(other,package));assert result['files']==2 and uploading()==0
+    with api.connect() as db:root=quiz_files.root_for(db)
+    assert not any(homework_files.file_path(root,id).exists() for id in ids) and len(stored_files())==2
+    ids=strand('unrelated',25);ok(upload(other,b'Question material','task.txt'))
+    assert uploading()==0 and not any(homework_files.file_path(root,id).exists() for id in ids)
+
+
+def test_fresh_reservations_are_not_collected_and_other_owners_are_untouched(client,tmp_path):
+    record,pupil,parent,teacher=setup(client);other=signed('unrelated')
+    strand('unrelated',2,minutes=5);before=counts()
+    assert apply(other,two_file_package(tmp_path)).status_code==429 and counts()==before and uploading()==2
+    # A neighbour's abandoned rows go through the school-wide cleanup of every import.
+    strand('teacher',3);ok(apply(client,two_file_package(tmp_path)))
+    with api.connect() as db:left=db.execute("SELECT owner_id FROM quiz_files WHERE status='uploading'").fetchall()
+    assert {r[0] for r in left}=={account('unrelated')} and len(left)==2
+
+
+def test_release_removes_orphaned_bytes_but_never_a_committed_file(client):
+    record,pupil,parent,teacher=setup(client);gone,pending=strand('unrelated',2);ready=strand('unrelated',1)[0]
+    with api.connect() as db:
+        db.execute("UPDATE quiz_files SET status='ready' WHERE id=?",(ready,))
+        db.execute('DELETE FROM quiz_files WHERE id=?',(gone,));root=quiz_files.root_for(db)
+        quiz_files.release_reserved(db,[gone,pending,ready,uuid4().hex])
+        remaining={r[0] for r in db.execute('SELECT id FROM quiz_files')}
+    assert remaining=={ready} and homework_files.file_path(root,ready).exists()
+    assert not homework_files.file_path(root,gone).exists() and not homework_files.file_path(root,pending).exists()
+
+
+def test_reservations_deleted_during_extraction_abort_the_import_cleanly(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files());original=pkg.extract_files
+    def vanishing(*args,**kwargs):
+        original(*args,**kwargs)
+        with api.connect() as db:db.execute("DELETE FROM quiz_files WHERE status='uploading'")
+    monkeypatch.setattr(pkg,'extract_files',vanishing)
+    response=apply(signed('unrelated'),package)
+    assert response.status_code==409 and 'Импорт прерван' in response.json()['detail']
+    assert (counts(),stored_files())==before and temp_children()==[]
+
+
+def test_release_waits_out_a_busy_database(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files())
+    def broken(*args,**kwargs):raise HTTPException(422,'Сбой извлечения.')
+    original=quiz_files.release_reserved;busy=[]
+    def locked(*args):
+        if len(busy)<2:
+            busy.append(1);raise sqlite3.OperationalError('database is locked')
+        return original(*args)
+    monkeypatch.setattr(pkg,'extract_files',broken);monkeypatch.setattr(quiz_files,'release_reserved',locked)
+    monkeypatch.setattr(exchange,'RELEASE_PAUSE',0)
+    response=apply(signed('unrelated'),package)
+    assert response.status_code==422 and 'Сбой извлечения' in response.json()['detail'] and len(busy)==2
+    assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
+
+
+def test_export_of_a_damaged_bank_document_is_409(client):
+    record,pupil,parent,teacher=setup(client);put_question(teacher,'broken')
+    with api.connect() as db:
+        db.execute('UPDATE quiz_questions SET document=? WHERE id=?',(json.dumps(dict(tags=[],question=dict(kind='single',text='Без вариантов'))),'broken'))
+    response=export(teacher,dict(id='broken',version=1))
+    assert response.status_code==409 and 'повреждён' in response.json()['detail'] and temp_children()==[]
+
+
+def test_no_free_transfer_slot_is_a_429_and_slots_are_not_over_released(client,monkeypatch,tmp_path):
+    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;plain=put_question(teacher,'plain')
+    slots=threading.BoundedSemaphore(1);slots.acquire();monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
+    other=signed('unrelated');before=(counts(),stored_files())
+    for response in (export(teacher,source),preview(other,package),apply(other,package)):
+        assert response.status_code==429 and 'Слишком много загрузок' in response.json()['detail']
+    assert export(teacher,plain).status_code==200
+    assert (counts(),stored_files())==before and temp_children()==[]
+    # A refused request must not release a slot it never took: a bounded semaphore would raise here.
+    slots.release()
+    with pytest.raises(ValueError):slots.release()
+    assert export(teacher,source).status_code==200 and preview(other,package).status_code==200
+    with pytest.raises(ValueError):slots.release()
+
+
+@pytest.mark.parametrize('error,status,text',[(TimeoutError,408,'по времени'),(ClientDisconnect,400,'прервана')])
+def test_interrupted_uploads_are_readable_errors_and_leave_nothing(client,monkeypatch,error,status,text):
+    record,pupil,parent,teacher=setup(client);put_question(teacher,'seed');before=(counts(),stored_files(),homework_files.UPLOAD_SLOTS._value)
+    async def interrupted(*args,**kwargs):raise error()
+    monkeypatch.setattr(exchange,'receive',interrupted)
+    for call in (preview,apply):
+        response=call(teacher,pkg.template_bytes(),'t.json')
+        assert response.status_code==status and text in response.json()['detail']
+    assert (counts(),stored_files(),homework_files.UPLOAD_SLOTS._value)==before and temp_children()==[]
+
+
+def test_old_temp_folders_are_swept_and_fresh_ones_kept(client):
+    record,pupil,parent,teacher=setup(client)
+    with api.connect() as db:base=quiz_files.root_for(db).parent/'quiz-bank-tmp'
+    base.mkdir(parents=True);stale,fresh=base/'stale',base/'fresh';stale.mkdir();fresh.mkdir();(stale/'package').write_bytes(b'abandoned')
+    old=time.time()-7200;os.utime(stale,(old,old))
+    ok(preview(teacher,pkg.template_bytes(),'t.json'))
+    assert [p.name for p in temp_children()]==['fresh']

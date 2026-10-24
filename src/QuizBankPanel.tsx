@@ -10,9 +10,11 @@ import {
 } from "./quiz";
 import {
   MAX_SELECTION,
+  exportFailure,
   exportPackage,
   packageError,
   previewSummary,
+  refreshSelected,
   saveBlob,
   sendPackage,
   toggleSelected,
@@ -47,7 +49,8 @@ export default function QuizBankPanel({
     [importFile, setImportFile] = useState<File | null>(null),
     [importRequest, setImportRequest] = useState(""),
     [notice, setNotice] = useState("");
-  const alive = useRef(true);
+  const alive = useRef(true),
+    staleMessage = useRef("");
   const uploadLock = useRef(false),
     uploadAbort = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -73,18 +76,17 @@ export default function QuizBankPanel({
         if (live) {
           setItems(r.items);
           setNext(r.nextAfter);
-          // A saved edit raises the version; export selects by identity.
-          setSelected((old) => {
-            if (!old.size) return old;
-            const fresh = new Map(old);
-            for (const item of r.items as BankItem[])
-              if (fresh.has(item.id)) fresh.set(item.id, item.version);
-            return fresh;
-          });
+          setSelected((old) =>
+            old.size ? refreshSelected(old, r.items as BankItem[]) : old,
+          );
+          // The reload clears the banner, so a refused export reports after it.
+          if (staleMessage.current) setError(staleMessage.current);
+          staleMessage.current = "";
         }
       })
       .catch((e) => {
         if (live) setError(e.message);
+        staleMessage.current = "";
       })
       .finally(() => {
         if (live) setBusy(false);
@@ -113,7 +115,7 @@ export default function QuizBankPanel({
     setBusy(true);
     setError("");
     try {
-      await api(
+      const saved: BankItem = await api(
         `journal/quiz-bank/${encodeURIComponent(editing.id)}`,
         workspace,
         "PUT",
@@ -129,6 +131,10 @@ export default function QuizBankPanel({
         },
       );
       if (alive.current) {
+        // The edit may take the question out of the list that refreshes versions.
+        setSelected((old) =>
+          old.has(saved.id) ? refreshSelected(old, [saved]) : old,
+        );
         setEditing(null);
         setDirty(false);
         setEpoch((v) => v + 1);
@@ -164,13 +170,19 @@ export default function QuizBankPanel({
   }
   function exportSelected() {
     void transfer(async (signal) => {
-      const { blob, filename } = await exportPackage(
-        workspace,
-        selected,
-        signal,
-      );
-      saveBlob(blob, filename);
-      if (alive.current) setNotice("Пакет сохранён.");
+      try {
+        const { blob, filename } = await exportPackage(
+          workspace,
+          selected,
+          signal,
+        );
+        saveBlob(blob, filename);
+        if (alive.current) setNotice("Пакет сохранён.");
+      } catch (e: any) {
+        if (e.status !== 409 || !alive.current) throw e;
+        staleMessage.current = exportFailure(e);
+        setEpoch((v) => v + 1);
+      }
     });
   }
   function choosePackage(file: File | undefined) {

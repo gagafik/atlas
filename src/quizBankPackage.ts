@@ -32,6 +32,16 @@ export interface ImportResult {
 }
 
 const GENERIC = "Не удалось выполнить действие.";
+const STALE_HINT =
+  "Список обновлён. Если ошибка повторится, нажмите «Снять выбор» и отметьте вопросы заново.";
+
+export class PackageError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export function packageError(file: { name: string; size: number }) {
   const name = file.name.toLowerCase();
@@ -70,6 +80,23 @@ export function toggleSelected(
   return { selected: next, error: "" };
 }
 
+// A saved edit raises the version, and export selects by identity.
+export function refreshSelected(
+  selected: ReadonlyMap<string, number>,
+  items: { id: string; version: number }[],
+) {
+  const next = new Map(selected);
+  for (const item of items)
+    if (next.has(item.id)) next.set(item.id, item.version);
+  return next;
+}
+
+export function exportFailure(error: { message: string; status?: number }) {
+  return error.status === 409
+    ? `${error.message} ${STALE_HINT}`
+    : error.message;
+}
+
 export function previewSummary(p: PackagePreview) {
   return [
     `Вопросов: ${p.questions}` +
@@ -100,12 +127,13 @@ async function failure(response: Response) {
   } catch {
     detail = undefined;
   }
-  return new Error(
+  return new PackageError(
     typeof detail === "string"
       ? detail
       : Array.isArray(detail)
         ? detail.map((x: any) => x.msg).join("\n")
         : GENERIC,
+    response.status,
   );
 }
 

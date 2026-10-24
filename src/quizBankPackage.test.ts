@@ -2,10 +2,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   MAX_SELECTION,
   downloadName,
+  exportFailure,
   exportPackage,
   formatSize,
   packageError,
   previewSummary,
+  refreshSelected,
   sendPackage,
   toggleSelected,
   type PackagePreview,
@@ -215,4 +217,54 @@ it("sends the raw file with the request identity in the address", async () => {
   expect(init.body).toBe(file);
   expect(init.headers["X-Atlas-Request"]).toBe("1");
   expect(init.headers["Content-Type"]).toBe("application/octet-stream");
+});
+
+it("refreshes the versions of selected questions only and never adds or mutates", () => {
+  const selected = new Map([
+    ["a", 1],
+    ["b", 4],
+  ]);
+  const saved = refreshSelected(selected, [
+    { id: "a", version: 2 },
+    { id: "other", version: 9 },
+  ]);
+  expect([...saved]).toEqual([
+    ["a", 2],
+    ["b", 4],
+  ]);
+  expect(selected.get("a")).toBe(1);
+  expect(refreshSelected(selected, []).size).toBe(2);
+});
+
+it("keeps the selection exportable after the edit leaves the list", () => {
+  // The saved question is archived, so the reloaded page no longer contains it;
+  // the version returned by the save still has to reach the selection.
+  const afterSave = refreshSelected(new Map([["q", 1]]), [
+    { id: "q", version: 2 },
+  ]);
+  const reloadedPage = refreshSelected(afterSave, []);
+  expect(reloadedPage.get("q")).toBe(2);
+});
+
+it("marks a refused export as stale only for conflicts", async () => {
+  const refuse = (status: number, detail: string) =>
+    vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ detail }), { status }));
+  vi.stubGlobal(
+    "fetch",
+    refuse(409, "Вопрос в банке изменился. Обновите банк."),
+  );
+  const conflict = await exportPackage("demo", new Map([["q", 1]])).catch(
+    (e) => e,
+  );
+  expect(conflict.status).toBe(409);
+  expect(exportFailure(conflict)).toContain("Вопрос в банке изменился.");
+  expect(exportFailure(conflict)).toContain("Снять выбор");
+  vi.stubGlobal("fetch", refuse(403, "Вопрос отсутствует в доступном банке."));
+  const denied = await exportPackage("demo", new Map([["q", 1]])).catch(
+    (e) => e,
+  );
+  expect(denied.status).toBe(403);
+  expect(exportFailure(denied)).toBe("Вопрос отсутствует в доступном банке.");
 });

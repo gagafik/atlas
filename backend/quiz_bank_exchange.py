@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import tempfile
 import time
 from uuid import uuid4
@@ -21,6 +22,7 @@ from .access import now
 from .notifications import encoded
 
 HEADERS={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}
+RELEASE_TRIES=6;RELEASE_PAUSE=1
 
 
 def temp_folder(root):
@@ -60,6 +62,18 @@ async def receive(request,path,limit,message):
         await run_in_threadpool(stream.flush)
     finally:await run_in_threadpool(stream.close)
     return digest.hexdigest(),size
+
+
+def release(quizzes,ids):
+    """A failed import must not leave reservations: wait out a long writer lock (a backup snapshot holds it up to 30 s)."""
+    for attempt in range(RELEASE_TRIES):
+        try:
+            with quizzes.access.lock,quizzes.access.connect() as db:
+                db.execute('BEGIN IMMEDIATE');quiz_files.release_reserved(db,ids)
+            return
+        except sqlite3.OperationalError:
+            if attempt==RELEASE_TRIES-1:raise
+        time.sleep(RELEASE_PAUSE)
 
 
 def register(app,quizzes,Workspace):
@@ -207,11 +221,7 @@ def register(app,quizzes,Workspace):
         except ClientDisconnect:raise HTTPException(400,'Загрузка прервана.') from None
         finally:
             try:
-                if reserved and not committed:
-                    def release():
-                        with quizzes.access.lock,quizzes.access.connect() as db:
-                            db.execute('BEGIN IMMEDIATE');quiz_files.release_reserved(db,list(reserved.values()))
-                    await run_in_threadpool(release)
+                if reserved and not committed:await run_in_threadpool(release,quizzes,list(reserved.values()))
             finally:
                 try:
                     if folder:await run_in_threadpool(shutil.rmtree,folder,True)

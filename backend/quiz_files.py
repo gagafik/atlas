@@ -76,7 +76,17 @@ def reserve(db,workspace,user,filename):
     return id,name,root_for(db)
 
 
-# Bank packages touch storage quotas only through these three functions.
+# Bank packages touch storage quotas only through these functions.
+def collect_own_stale(db,user):
+    """A crash can strand up to 200 reservations, but collect_unused frees only 20 school-wide per call
+    and a later 429 would roll even that back: the caller's own abandoned rows are freed at once."""
+    root=root_for(db)
+    for (id,) in db.execute("SELECT id FROM quiz_files WHERE owner_id=? AND status='uploading' AND created<?",(user['id'],(now()-timedelta(minutes=30)).isoformat())).fetchall():
+        try:files.file_path(root,id).unlink(missing_ok=True)
+        except OSError:continue
+        db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
+
+
 def package_quota(db,user,total):
     own=db.execute('SELECT coalesce(sum(size),0) FROM quiz_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
     if files.total_stored(db)+total>files.total_limit() or own+total>250*1024*1024:
@@ -85,6 +95,7 @@ def package_quota(db,user,total):
 
 
 def reserve_package(db,workspace,user,package_files):
+    collect_own_stale(db,user)
     package_quota(db,user,sum(f.size for f in package_files))
     pending=db.execute("SELECT count(*) FROM quiz_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
     if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
@@ -98,9 +109,11 @@ def reserve_package(db,workspace,user,package_files):
 def release_reserved(db,ids):
     root=root_for(db)
     for id in ids:
-        if db.execute("SELECT 1 FROM quiz_files WHERE id=? AND status='uploading'",(id,)).fetchone():
-            files.file_path(root,id).unlink(missing_ok=True)
-            db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
+        row=db.execute('SELECT status FROM quiz_files WHERE id=?',(id,)).fetchone()
+        # The ids are ours alone: a vanished row still leaves its bytes to remove, a ready one is committed.
+        if row and row[0]!='uploading':continue
+        files.file_path(root,id).unlink(missing_ok=True)
+        db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
 
 
 class QuizFiles:
@@ -117,7 +130,7 @@ class QuizFiles:
                 def prepare():
                     with self.access.lock,self.access.connect() as db:
                         self.quizzes.tables(db);db.execute('BEGIN IMMEDIATE');self.quizzes.journal.recheck_account(db,user)
-                        collect_unused(db)
+                        collect_unused(db);collect_own_stale(db,user)
                         return reserve(db,workspace,user,filename)
                 id,name,root=await run_in_threadpool(prepare)
                 path=files.file_path(root,id)
