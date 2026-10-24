@@ -12,6 +12,8 @@ from .notifications import encoded
 from .journal import user_ids
 from .journal_coverage import CoverageQuery
 
+STALE='Проверка устарела. Проверьте период перед закрытием ещё раз.'
+
 
 def tables(db):
     db.execute('''CREATE TABLE IF NOT EXISTS journal_periods (workspace TEXT,id TEXT,name TEXT,start_day TEXT,end_day TEXT,kind TEXT,
@@ -21,6 +23,7 @@ def tables(db):
     db.execute('CREATE INDEX IF NOT EXISTS period_history ON journal_period_history(workspace,period_id,id)')
     db.execute('''CREATE TABLE IF NOT EXISTS journal_period_previews (id TEXT PRIMARY KEY,workspace TEXT,period_id TEXT,period_version INTEGER,
         actor_id TEXT,expires TEXT,token TEXT,counts TEXT,draft_changes INTEGER,published_count INTEGER)''')
+    if 'school_revision' not in {r[1] for r in db.execute('PRAGMA table_info(journal_period_previews)')}:db.execute('ALTER TABLE journal_period_previews ADD COLUMN school_revision INTEGER')
     db.execute('''CREATE TABLE IF NOT EXISTS journal_period_closures (workspace TEXT,period_id TEXT,version INTEGER,created TEXT,actor TEXT,
         reason TEXT,school_revision INTEGER,counts TEXT,published_count INTEGER,draft_changes INTEGER,state_document TEXT,
         PRIMARY KEY(workspace,period_id,version))''')
@@ -108,6 +111,12 @@ class JournalPeriods:
         if version is not None and version!=value['version']:raise HTTPException(409,'Учебный период изменился. Обновите список.')
         return value
 
+    def preview_row(self,db,workspace,id,user,body):
+        return db.execute('SELECT * FROM journal_period_previews WHERE id=? AND workspace=? AND period_id=? AND actor_id=?',(body.previewId,workspace,id,user['id'])).fetchone()
+
+    def fresh(self,value,preview,body):
+        if value['status']!='open' or not preview or preview[3]!=body.version or preview[5]<now().isoformat():raise HTTPException(409,STALE)
+
     def record(self,db,workspace,value,action,user,reason):
         stamp=now().isoformat()
         db.execute('INSERT INTO journal_period_history(workspace,period_id,version,action,created,actor,reason,document) VALUES (?,?,?,?,?,?,?,?)',
@@ -155,21 +164,23 @@ class JournalPeriods:
         def preview(id:str,body:PeriodVersion,request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace,True)
             with self.access.read_connect() as db:
-                db.execute('BEGIN');token=self.coverage.token(db,user,snap,workspace)
+                db.execute('BEGIN');self.recheck(db,user,snap,workspace)
                 value=self.find(db,workspace,id,body.version)
                 if value['status']!='open':raise HTTPException(409,'Период уже закрыт.')
                 query=CoverageQuery(start=value['start'],end=value['end'],status='all',asOf=now())
-                counts=self.coverage.result(db,user,snap,workspace,query,token)['counts']
+                token=self.coverage.token(db,user,snap,workspace,query)
+                cached=self.coverage.result(db,user,snap,workspace,query,token);counts=cached['counts'];token=cached['token']
                 published,drafts=db.execute('''SELECT count(*),coalesce(sum(e.version!=e.published_version),0)
                     FROM journal_attendance_lessons l CROSS JOIN journal_entries e ON e.workspace=l.workspace AND e.lesson_key=l.lesson_key
                     WHERE l.workspace=? AND l.day BETWEEN ? AND ?''',(workspace,value['start'],value['end'])).fetchone()
             preview_id=uuid4().hex;expires=(now()+timedelta(minutes=15)).isoformat()
             with self.access.lock,self.access.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
-                if self.coverage.token(db,user,snap,workspace)!=token:raise HTTPException(409,'Журналы или расписание изменились. Повторите проверку.')
+                if self.coverage.token(db,user,snap,workspace,query)!=token:raise HTTPException(409,'Журналы или расписание изменились. Повторите проверку.')
                 self.find(db,workspace,id,body.version)
                 db.execute('DELETE FROM journal_period_previews WHERE expires<? OR (workspace=? AND period_id=? AND actor_id=?)',(now().isoformat(),workspace,id,user['id']))
-                db.execute('INSERT INTO journal_period_previews VALUES (?,?,?,?,?,?,?,?,?,?)',(preview_id,workspace,id,body.version,user['id'],expires,token,encoded(counts),drafts,published))
+                db.execute('INSERT INTO journal_period_previews(id,workspace,period_id,period_version,actor_id,expires,token,counts,draft_changes,published_count,school_revision) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    (preview_id,workspace,id,body.version,user['id'],expires,token,encoded(counts),drafts,published,snap.state.revision))
             pending=counts['upcoming']>0 or value['end']>now().astimezone(ZoneInfo('Asia/Qyzylorda')).date().isoformat()
             issues=any(counts[s] for s in ['missing','draft','incomplete','stale','orphaned']) or bool(drafts) or not counts['expected']
             return dict(previewId=preview_id,expires=expires,counts=counts,published=published,draftChanges=drafts,requiresAcknowledgement=issues,canClose=not pending)
@@ -177,11 +188,23 @@ class JournalPeriods:
         @app.post('/api/journal/periods/{id}/close')
         def close(id:str,body:ClosePeriod,request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace,True)
+            # Strict only for journals, access and the period itself. A timetable change is accepted when
+            # the period's recalculated counts stay the same; this runs on a read connection, outside the write lock.
+            with self.access.read_connect() as db:
+                db.execute('BEGIN');self.recheck(db,user,snap,workspace)
+                value=self.find(db,workspace,id,body.version);preview=self.preview_row(db,workspace,id,user,body)
+                self.fresh(value,preview,body)
+                query=CoverageQuery(start=value['start'],end=value['end'],status='all',asOf=now())
+                live=self.coverage.token(db,user,snap,workspace,query);expected=preview[6]
+                if live!=expected:
+                    if preview[10] is None or live[:32]!=expected[:32] or self.coverage.data_key(db,workspace,query,None,preview[10])!=expected[32:]:raise HTTPException(409,STALE)
+                    if self.coverage.result(db,user,snap,workspace,query,live)['counts']!=json.loads(preview[7]):raise HTTPException(409,'Расписание изменилось и меняет итоги периода. Проверьте период перед закрытием ещё раз.')
+                    expected=live
             with self.access.lock,self.access.connect() as db:
                 db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
-                value=self.find(db,workspace,id,body.version)
-                preview=db.execute('SELECT * FROM journal_period_previews WHERE id=? AND workspace=? AND period_id=? AND actor_id=?',(body.previewId,workspace,id,user['id'])).fetchone()
-                if value['status']!='open' or not preview or preview[3]!=body.version or preview[5]<now().isoformat() or preview[6]!=self.coverage.token(db,user,snap,workspace):raise HTTPException(409,'Проверка устарела. Проверьте период перед закрытием ещё раз.')
+                value=self.find(db,workspace,id,body.version);preview=self.preview_row(db,workspace,id,user,body)
+                self.fresh(value,preview,body)
+                if self.coverage.token(db,user,snap,workspace,query)!=expected:raise HTTPException(409,STALE)
                 counts=json.loads(preview[7]);drafts,published=preview[8:10]
                 if counts['upcoming'] or value['end']>now().astimezone(ZoneInfo('Asia/Qyzylorda')).date().isoformat():raise HTTPException(422,'Период ещё не закончился или содержит незавершённые уроки.')
                 issues=any(counts[s] for s in ['missing','draft','incomplete','stale','orphaned']) or drafts or not counts['expected']

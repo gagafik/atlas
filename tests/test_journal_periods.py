@@ -2,7 +2,7 @@ from datetime import date,datetime,timedelta,timezone
 from uuid import uuid4
 import pytest
 from backend import api,journal_periods
-from backend.models import DatedLesson
+from backend.models import DatedLesson,Event,SchoolClass,Student
 from test_access import client,enable,create,signed
 from test_journal import entry,lesson,write,graded,DAY
 from test_journal_coverage import known
@@ -95,11 +95,61 @@ def test_period_preview_stale_on_journal_state_period_or_account_change(client,m
     p=period(client);preview=action(client,p,'preview-close').json()
     write(client,entry(client,lesson(client)['lessonKey']))
     assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
-    preview=action(client,p,'preview-close').json();api.save('demo',api.read('demo'))
-    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
-    preview=action(client,p,'preview-close').json();actual=journal_periods.now
+    p=period(client);preview=action(client,p,'preview-close').json();actual=journal_periods.now
     monkeypatch.setattr(journal_periods,'now',lambda:actual()+timedelta(minutes=16))
     assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
+    monkeypatch.setattr(journal_periods,'now',actual)
+    # An unrelated timetable save does not change the result of the period.
+    p=period(client);preview=action(client,p,'preview-close').json();api.save('demo',api.read('demo'))
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==200
+
+def test_period_close_ignores_journal_saves_outside_the_period(client):
+    known();p=period(client);preview=action(client,p,'preview-close').json()
+    other='2026-08-24';write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
+    closed=action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True);assert closed.status_code==200,closed.text
+    assert client.get(f"{BASE}/{p['id']}/closures?workspace=demo").json()['items'][0]['counts']==preview['counts']
+
+def test_timetable_change_affecting_period_requires_new_preview(client):
+    known();p=period(client);preview=action(client,p,'preview-close').json()
+    state=api.read('demo');state.events=[Event(id='close',name='Closed',start=date(2026,8,17),end=date(2026,8,17),kind='holiday',effect='cancel',classIds=['c-demo-a'])];api.save('demo',state)
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
+    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
+    assert close(client,p)['status']=='closed'
+
+def test_period_close_rejects_journal_edit_that_keeps_the_counts(client):
+    known();saved=write(client,entry(client,lesson(client)['lessonKey'])).json()
+    p=period(client);preview=action(client,p,'preview-close').json();assert preview['counts']['draft']==1
+    saved['document']['content']['topic']='Другая тема';assert write(client,saved).status_code==200
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
+    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
+
+def test_period_close_rejects_access_change_since_the_preview(client,monkeypatch):
+    # No admin permission can change without ending the session; the access half still has to be compared.
+    p=period(client);preview=action(client,p,'preview-close').json()
+    monkeypatch.setattr('backend.journal_coverage.permission_key',lambda user:'changed')
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
+    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
+
+def test_journal_save_between_the_precheck_and_the_write_transaction_is_rechecked(client,monkeypatch):
+    known();p=period(client);preview=action(client,p,'preview-close').json();calls=[];original=api.journal_periods.coverage.token
+    def racing(*args,**kwargs):
+        value=original(*args,**kwargs);calls.append(1)
+        if len(calls)==1:write(client,entry(client,lesson(client)['lessonKey'])).raise_for_status()
+        return value
+    monkeypatch.setattr(api.journal_periods.coverage,'token',racing)
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409 and len(calls)==2
+    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
+
+def test_roster_change_without_lessons_in_the_period_keeps_the_preview(client):
+    known();p=period(client);preview=action(client,p,'preview-close').json()
+    state=api.read('demo');state.classes.append(SchoolClass(id='c-new',name='Новый класс'));state.students.append(Student(id='newcomer',name='Новый ученик',classId='c-new'));api.save('demo',state)
+    closed=action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True);assert closed.status_code==200,closed.text
+    assert client.get(f"{BASE}/{p['id']}/closures?workspace=demo").json()['items'][0]['counts']==preview['counts']
+
+def test_preview_table_gets_school_revision_column_once(client):
+    with api.connect() as db:
+        db.execute('DROP TABLE IF EXISTS journal_period_previews');journal_periods.tables(db);journal_periods.tables(db)
+        assert [r[1] for r in db.execute('PRAGMA table_info(journal_period_previews)')].count('school_revision')==1
 
 def test_future_period_and_year_bounds_and_version_validation(client):
     p=period(client,end='2027-06-11');preview=action(client,p,'preview-close').json()

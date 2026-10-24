@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Account, type Role } from "./auth";
+import { keepTyped } from "./formAnswers";
 import "./SchoolForms.css";
 
 type Question = {
@@ -212,7 +213,7 @@ export default function SchoolForms({
     setAnswerDirty(false);
     setPreview(null);
   }
-  async function run(task: () => Promise<void>) {
+  async function run(task: () => Promise<unknown>) {
     setBusy(true);
     setError("");
     setNotice("");
@@ -252,6 +253,7 @@ export default function SchoolForms({
     setHistory(result.history);
     setAnswerDirty(false);
     setEntity(entityId);
+    return result.answer as Answer;
   }
   async function loadResponses(
     selected: Form,
@@ -299,8 +301,9 @@ export default function SchoolForms({
           ? "manage"
           : "answer");
     setMode(view);
+    let fresh: Answer | null = null;
     if (view === "answer" && selected.contexts.length)
-      await loadAnswer(
+      fresh = await loadAnswer(
         selected,
         selected.id === form?.id &&
           selected.contexts.some((c) => c.entityId === entity)
@@ -308,6 +311,29 @@ export default function SchoolForms({
           : selected.contexts[0].entityId,
       );
     if (view === "responses") await loadResponses(selected);
+    return { selected, answer: fresh };
+  }
+  // The fresh form replaces what was loaded, but answers typed since then stay on screen.
+  async function reloadKeepingAnswers() {
+    if (!form) return;
+    const typed = values,
+      baseline = answer?.answers || {},
+      before = answer?.version;
+    const { selected, answer: fresh } = await open(form.id, "answer");
+    setValues((old) =>
+      keepTyped(
+        old,
+        typed,
+        baseline,
+        selected.definition.questions.map((q) => q.id),
+      ),
+    );
+    setAnswerDirty(true);
+    setNotice(
+      fresh && fresh.version !== before
+        ? "Ответ изменён в другом окне. Ваш несохранённый текст оставлен на экране — проверьте поля перед отправкой."
+        : "Загружена свежая версия формы. Несохранённые ответы оставлены на экране.",
+    );
   }
   async function completed(
     id: string,
@@ -629,7 +655,15 @@ export default function SchoolForms({
                 <button
                   disabled={busy}
                   onClick={() => {
-                    if (mayLeave()) void run(() => open(form.id, mode));
+                    if (
+                      mode === "answer" &&
+                      answerDirty &&
+                      !definitionDirty &&
+                      !accessDirty &&
+                      !Object.values(comments).some(Boolean)
+                    )
+                      void run(reloadKeepingAnswers);
+                    else if (mayLeave()) void run(() => open(form.id, mode));
                   }}
                 >
                   Загрузить свежую версию

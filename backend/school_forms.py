@@ -68,6 +68,14 @@ def version(form, expected):
     if form['version']!=expected: raise HTTPException(409,'Форма изменилась. Обновите её перед действием.')
 
 
+def compatible(db, form, expected):
+    """An older view stays valid while questions, kind and audience are unchanged."""
+    if form['version']==expected: return
+    row=db.execute("SELECT document FROM school_form_history WHERE form_id=? AND answer_id='' AND json_extract(document,'$.version')=? ORDER BY seq DESC LIMIT 1",(form['id'],expected)).fetchone()
+    old=json.loads(row[0])['definition'] if row else None
+    if not old or any(old[k]!=form['definition'][k] for k in ['kind','questions','audience']): raise HTTPException(409,'Вопросы или аудитория формы изменились. Загрузите свежую версию: введённый текст останется на экране.')
+
+
 class SchoolForms:
     def __init__(self, access, notifications, stamp):
         self.access,self.notifications=access,notifications
@@ -376,7 +384,7 @@ class SchoolForms:
                 form=self.form(db,workspace,id);self.require_recipient(db,form,user,snap,workspace,body.entityId)
                 fingerprint,old=self.replay(db,user,body,'answer:'+id)
                 if old: return old
-                version(form,body.formVersion)
+                compatible(db,form,body.formVersion)
                 answer=self.answer(db,form,user,body.entityId)
                 # A returned application may be corrected after the deadline or a manual close: staff can still decide it.
                 correcting=answer['status']=='returned' and body.action in ['save','submit'] and form['status'] in ['open','closed']
@@ -421,7 +429,7 @@ class SchoolForms:
                 form=self.form(db,workspace,id);self.require(db,form,user)
                 fingerprint,old=self.replay(db,user,body,'review:'+id+':'+answer_id)
                 if old: return old
-                version(form,body.formVersion)
+                compatible(db,form,body.formVersion)
                 if form['definition']['kind']!='application' or form['status']=='archived': raise HTTPException(409,'Решения доступны для неархивированных заявок.')
                 row=db.execute('SELECT user_id,document FROM school_form_answers WHERE form_id=? AND id=?',(id,answer_id)).fetchone()
                 if not row: raise HTTPException(404,'Ответ не найден.')

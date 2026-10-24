@@ -94,7 +94,7 @@ def register(service,app,Workspace):
                 db.execute("UPDATE meeting_reminders SET status='cancelled' WHERE booking_id=?",(id,))
             def interval(slot):return dict(slotId=slot['id'],startsAt=slot['starts_at'],endsAt=slot['ends_at'])
             service.history(db,event,user,'rescheduled',dict(version=version,reason=body.reason,source=interval(source),target=interval(target),sourceBlocked=body.blockSource),id)
-            # Changing availability invalidates open availability previews as well.
-            result=service.save_event(db,event,user,'rescheduled',dict(bookingId=id,version=version,sourceBlocked=body.blockSource))
+            # A transfer changes slots, not the event: the slot versions already invalidate open availability previews.
+            result=service.note_event(db,event,user,'rescheduled',dict(bookingId=id,version=version,sourceBlocked=body.blockSource))
             service.notifications.deliver(db,[owner,host['user']],workspace,version,'meeting.rescheduled')
             return service.remember(db,user,body,fingerprint,dict(id=id,version=version,status='scheduled',startsAt=target['starts_at'],endsAt=target['ends_at'],eventVersion=result['version']))

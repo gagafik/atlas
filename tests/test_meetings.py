@@ -215,6 +215,60 @@ def test_teacher_cannot_omit_physical_teacher_and_versions_recheck(client,monkey
     assert len(slots(client,id))==6
 
 
+def test_availability_and_reschedule_do_not_invalidate_parent_booking(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch,2);publish(client,id);parent=signed('parent')
+    v=event(client,id)['version'];second=next(h['accountId'] for h in event(client,id)['hosts'] if h['accountId']!=t['id'])
+    assert apply(client,id,action='block',hostIds=[second],reason='x')['affectedSlots']==12
+    assert event(client,id)['version']==v
+    with api.connect() as db:assert db.execute('SELECT version FROM meeting_events WHERE id=?',(id,)).fetchone()[0]==v
+    slot=next(s for s in slots(parent,id) if s['hostId']==t['id'])
+    ok(parent.post(path('slots/'+slot['id']+'/book'),json=request(version=slot['version'],eventVersion=v,studentId='s1')))
+    ok(transition(client,id,'close'))
+    create(client,'parent',login='other',grants=[dict(workspace='demo',view='student',entityIds=['s2'])]);other=signed('other')
+    free=next(s for s in slots(client,id) if s['hostId']==t['id'] and s['status']=='available')
+    late=other.post(path('slots/'+free['id']+'/book'),json=request(version=free['version'],eventVersion=v,studentId='s2'))
+    assert late.status_code==409 and late.json()['detail'].startswith('Запись изменилась')
+
+
+def test_availability_preview_survives_timetable_save(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);body,preview=availability(client,id);assert preview['affectedSlots']==12
+    state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
+    ok(client.post(path('events/'+id+'/availability'),json=body));assert len(slots(client,id))==12
+
+
+def test_range_operations_skip_started_slots(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch,2);first=t['id'];second=next(h['accountId'] for h in event(client,id)['hosts'] if h['accountId']!=first)
+    apply(client,id,hostIds=[first]);ok(transition(client,id,'publish'))
+    clock=BASE+timedelta(minutes=30)
+    for module in [meetings,meeting_routes]:monkeypatch.setattr(module,'now',lambda:clock)
+    def statuses(host):
+        with api.connect() as db:return [r[0] for r in db.execute('SELECT status FROM meeting_slots WHERE event_id=? AND host_id=? ORDER BY starts_at',(id,host))]
+    body,preview=availability(client,id,action='block',hostIds=[first],reason='Учитель придёт позже')
+    assert preview['skippedPast']==4 and preview['affectedSlots']==8
+    result=ok(client.post(path('events/'+id+'/availability'),json=body));assert result['affectedSlots']==8 and result['skippedPast']==4
+    assert statuses(first)==['open']*4+['blocked']*8
+    body,preview=availability(client,id,hostIds=[second]);assert preview['skippedPast']==4 and preview['affectedSlots']==8
+    assert ok(client.post(path('events/'+id+'/availability'),json=body))['affectedSlots']==8 and len(statuses(second))==8
+    body,preview=availability(client,id,action='block',hostIds=[first],end=BASE+timedelta(minutes=20),reason='Поздно')
+    assert preview['affectedSlots']==0 and preview['skippedPast']==2
+    response=client.post(path('events/'+id+'/availability'),json=body)
+    assert response.status_code==422 and 'уже начались или прошли' in response.json()['detail']
+    assert statuses(first)==['open']*4+['blocked']*8
+
+
+def test_bookings_from_date_lists_all_upcoming_for_own_family(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent')
+    day=BASE+timedelta(days=1);second=new(client,[hosts(t)],startsAt=day.isoformat(),endsAt=(day+timedelta(hours=2)).isoformat())
+    apply(client,second,start=day,end=day+timedelta(hours=2));ok(transition(client,second,'publish'))
+    ok(book(parent,id,slots(parent,id)[0]));ok(book(parent,second,slots(parent,second)[0]))
+    def listing(account,**params):return ok(account.get('/api/meetings/bookings',params=dict(workspace='demo')|params))['items']
+    assert len(listing(parent))==2 and len(listing(parent,fromDate='2027-04-05'))==2
+    later=listing(parent,fromDate='2027-04-06');assert len(later)==1 and later[0]['eventId']==second
+    assert listing(parent,fromDate='2027-04-07')==[] and len(listing(signed('teacher'),fromDate='2027-04-06'))==1
+    create(client,'parent',login='other',grants=[dict(workspace='demo',view='student',entityIds=['s2'])])
+    assert listing(signed('other'),fromDate='2027-04-05')==[]
+
+
 def test_existing_slots_recheck_new_room_booking_before_parent_reservation(client,monkeypatch):
     id,t,p=setup(client,monkeypatch)
     e=event(client,id);definition=e['definition']|dict(hosts=[hosts(t,roomId='r0')])

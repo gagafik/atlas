@@ -162,6 +162,12 @@ class Meetings:
         self.history(db,event,user,action,detail or dict(version=event['version'],status=event['status']))
         return dict(id=event['id'],version=event['version'],status=event['status'])
 
+    def note_event(self,db,event,user,action,detail):
+        """Slots and transfers change availability, not the event: keep its version."""
+        event['updated']=utc(now());db.execute('UPDATE meeting_events SET updated=? WHERE id=?',(event['updated'],event['id']))
+        self.history(db,event,user,action,detail)
+        return dict(id=event['id'],version=event['version'],status=event['status'])
+
     def registration_open(self,event):
         doc=event['definition'];instant=now()
         return event['status']=='open' and (not doc['bookingOpensAt'] or datetime.fromisoformat(doc['bookingOpensAt'])<=instant) and (not doc['bookingClosesAt'] or instant<datetime.fromisoformat(doc['bookingClosesAt'])) and instant<datetime.fromisoformat(doc['endsAt'])
@@ -181,7 +187,7 @@ class Meetings:
         if body.startsAt<datetime.fromisoformat(event['definition']['startsAt']) or body.endsAt>datetime.fromisoformat(event['definition']['endsAt']):raise HTTPException(422,'Интервалы должны входить в период мероприятия.')
         hosts=self.hosts(db,event,snap,workspace)
         if set(body.hostIds)-hosts.keys():raise HTTPException(422,'Выберите ведущих этого мероприятия.')
-        occupancy=Occupancy(snap);slots=[];bookings=[];conflicts=[];proposed={}
+        occupancy=Occupancy(snap);slots=[];bookings=[];conflicts=[];proposed={};skipped=0
         def proposal_conflict(slot):
             found=False
             for column in ['host_id','teacher_id','room_id']:
@@ -198,25 +204,28 @@ class Meetings:
                 if not host['current']:raise HTTPException(422,'Доступ ведущего изменился; проверьте назначение.')
                 instant=body.startsAt
                 while instant+duration<=body.endsAt:
-                    if instant<=now():raise HTTPException(422,'Новые интервалы должны быть в будущем.')
+                    # Intervals that already started are skipped and counted, not a reason to refuse the range.
+                    if instant<=now():skipped+=1;instant+=step;continue
                     slot=dict(id='',event_id=event['id'],workspace=workspace,host_id=id,teacher_id=host['teacherId'],room_id=host['roomId'],starts_at=utc(instant),ends_at=utc(instant+duration),version=0,status='open',reason='')
                     if problem:=self.slot_conflict(db,slot,occupancy):conflicts.append(dict(host=host['name'],startsAt=slot['starts_at'],reason=problem))
                     # Newly proposed slots may conflict with each other even before insertion.
                     if proposal_conflict(slot):conflicts.append(dict(host=host['name'],startsAt=slot['starts_at'],reason='В выбранных интервалах пересекается ведущий или кабинет.'))
                     slots.append(slot);instant+=step
                     if len(slots)>5000:raise HTTPException(422,'За одно действие можно добавить до 5000 интервалов.')
-            if not slots:raise HTTPException(422,'В выбранное время не помещается ни один полный интервал.')
+            if not slots:raise HTTPException(422,'Все интервалы выбранного времени уже начались или прошли.' if skipped else 'В выбранное время не помещается ни один полный интервал.')
             count=db.execute('SELECT count(*) FROM meeting_slots WHERE event_id=?',(event['id'],)).fetchone()[0]
             if count+len(slots)>20000:raise HTTPException(422,'На мероприятие допускается до 20 000 интервалов.')
         else:
             rows=db.execute('SELECT * FROM meeting_slots WHERE event_id=? AND host_id IN (SELECT value FROM json_each(?)) AND starts_at<? AND ends_at>? ORDER BY starts_at,id',(event['id'],encoded(body.hostIds),utc(body.endsAt),utc(body.startsAt)))
-            slots=[dict(r) for r in rows if r['status']==('open' if body.action=='block' else 'blocked')]
+            found=[dict(r) for r in rows if r['status']==('open' if body.action=='block' else 'blocked')];instant=now()
+            # Started and past intervals (and meetings in progress) are left alone and only counted.
+            slots=[r for r in found if datetime.fromisoformat(r['starts_at'])>instant];skipped=len(found)-len(slots)
             for slot in slots:
                 if body.action=='unblock':
-                    if not hosts[slot['host_id']]['current'] or datetime.fromisoformat(slot['starts_at'])<=now():raise HTTPException(422,'Нельзя открыть прошедший интервал или интервал недоступного ведущего.')
+                    if not hosts[slot['host_id']]['current']:raise HTTPException(422,'Нельзя открыть интервал недоступного ведущего.')
                     if problem:=self.slot_conflict(db,slot,occupancy,slot['id']):conflicts.append(dict(host=hosts[slot['host_id']]['name'],startsAt=slot['starts_at'],reason=problem))
                 row=db.execute("SELECT id,version,status FROM meeting_bookings WHERE slot_id=? AND status!='cancelled'",(slot['id'],)).fetchone()
-                if body.action=='block' and (datetime.fromisoformat(slot['ends_at'])<=now() or row and row['status']!='scheduled'):raise HTTPException(422,'Прошедшие и отмеченные встречи нельзя отменить через интервалы.')
+                if body.action=='block' and row and row['status']!='scheduled':raise HTTPException(422,'Отмеченные встречи нельзя отменить через интервалы.')
                 if row:bookings.append(dict(row))
             if body.action=='unblock':
                 for slot in slots:
@@ -224,8 +233,9 @@ class Meetings:
         offers=[]
         if body.action=='block':
             offers=[dict(r) for r in db.execute("SELECT id,version,expires_at FROM meeting_waitlist WHERE event_id=? AND status='offered' AND slot_id IN (SELECT value FROM json_each(?)) ORDER BY id",(event['id'],encoded([s['id'] for s in slots])))]
-        key=hashlib.sha256(encoded([body.action,slots,bookings,offers,conflicts,snap.state.revision]).encode()).hexdigest()
-        return dict(affectedSlots=len(slots),bookingsToCancel=len(bookings),offersToRevoke=len(offers),conflicts=conflicts[:30],conflictCount=len(conflicts),previewHash=key),slots,bookings
+        # Calendar conflicts are recomputed here at every call, so the school revision is not part of the hash.
+        key=hashlib.sha256(encoded([body.action,slots,bookings,offers,conflicts,skipped]).encode()).hexdigest()
+        return dict(affectedSlots=len(slots),bookingsToCancel=len(bookings),offersToRevoke=len(offers),skippedPast=skipped,conflicts=conflicts[:30],conflictCount=len(conflicts),previewHash=key),slots,bookings
 
     def booking_owner(self,db,booking,snap,workspace):
         row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(booking['parent_id'],)).fetchone()

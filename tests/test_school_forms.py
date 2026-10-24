@@ -97,6 +97,30 @@ def test_preview_detects_audience_changes_and_no_response_created_by_invalid_pub
     publish(client,id)
 
 
+def test_collaborator_and_deadline_changes_do_not_block_answers_or_reviews(client):
+    enable(client);create(client,role='parent');reviewer=create(client,role='staff');helper=create(client,role='teacher')
+    id=new(client,'application');configure(client,id,questions=[dict(id='q',title='Reason',kind='text')],closesAt=(now()+timedelta(hours=1)).isoformat());assign(client,id,reviewer,'review');v=publish(client,id)['version']
+    changed=client.put(route(id,'/access'),json=request(version=get(client,id)['version'],collaborators=[dict(userId=reviewer['id'],permission='review'),dict(userId=helper['id'],permission='manage')]))
+    assert changed.status_code==200,changed.text
+    form=get(client,id);assert form['version']>v
+    parent=signed('parent');sent=answer(parent,id,formVersion=v,answers={'q':'Text'})
+    assert sent.status_code==200,sent.text
+    assert client.post(route(id,'/transition'),json=request(version=form['version'],action='close')).status_code==200
+    form=get(client,id)
+    assert client.post(route(id,'/transition'),json=request(version=form['version'],action='reopen',closesAt=(now()+timedelta(hours=5)).isoformat())).status_code==200
+    review=signed('staff').post(route(id,'/responses/'+sent.json()['id']+'/review'),json=request(version=sent.json()['version'],formVersion=v,action='approved'))
+    assert review.status_code==200,review.text
+
+
+def test_changed_questions_still_block_stale_submit(client):
+    enable(client);create(client,role='parent');id=new(client);configure(client,id);v=publish(client,id)['version'];parent=signed('parent')
+    with api.connect() as db:db.execute("UPDATE school_forms SET version=version+1,document=json_set(document,'$.questions[0].title','Другой вопрос') WHERE id=?",(id,))
+    assert answer(parent,id,formVersion=v).status_code==409
+    assert answer(parent,id,formVersion=999).status_code==409
+    assert answer(parent,id,formVersion=get(client,id)['version']).status_code==200
+    with api.connect() as db:assert db.execute('SELECT count(*) FROM school_form_answers').fetchone()[0]==1
+
+
 def test_idempotent_submission_and_notification_rollback(client,monkeypatch):
     enable(client);create(client,role='parent');id=new(client);configure(client,id);form=publish(client,id);parent=signed('parent')
     body=request(version=0,formVersion=form['version'],entityId='s1',action='submit',answers={'q':'First'})

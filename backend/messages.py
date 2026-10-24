@@ -38,7 +38,7 @@ class NewThread(Model):
 
 class Reply(Model):
     requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
-    version: int = Field(ge=1)
+    version: int | None = Field(default=None,ge=1)  # old clients still send it; replies do not lock the conversation
     text: str = Field(default='',max_length=10000)
     draftId: str | None = Field(default=None,pattern=r'^[a-f0-9-]{36}$')
     fileIds: list[str] = Field(default_factory=list,max_length=5)
@@ -365,16 +365,15 @@ class Messages:
                 accounts=self.thread_accounts(db,id,user);thread,_=self.find(db,id,user,directory,accounts)
                 prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,id=id,body=body.model_dump(exclude={'draftVersion'} if body.draftVersion is None else set())))
                 if prior: return dict(id=prior)
-                if thread['version']!=body.version: raise HTTPException(409,'В переписке появились изменения. Обновите её; текст ответа сохранён в поле ввода.')
+                # Simultaneous replies are all kept in commit order; only closing, membership and management check versions.
                 if thread['kind'] not in ['direct','group'] or thread['status']!='open': raise HTTPException(409,'Ответы в этой переписке закрыты.')
                 self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,id)
                 post=self.post(db,thread,user,body.text)
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post)
-                db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
                 targets=[u for uid,u in accounts.items() if uid!=user['id'] and self.member(db,thread,u,directory,accounts)]
-                self.notifications.deliver(db,targets,workspace,thread['version']+1,'message.received')
+                self.notifications.deliver(db,targets,workspace,thread['version'],'message.received')
                 self.access.record(db,'message.replied',workspace,detail=id)
             return dict(id=id)
 

@@ -85,6 +85,7 @@ export type Preview = {
   affectedSlots: number;
   bookingsToCancel: number;
   offersToRevoke?: number;
+  skippedPast?: number;
   conflictCount: number;
   previewHash: string;
   conflicts: { host: string; startsAt: string; reason: string }[];
@@ -138,6 +139,19 @@ export const displayTime = (iso: string) =>
     minute: "2-digit",
   }).format(new Date(iso));
 export const clockTime = (iso: string) => schoolInput(iso).slice(11);
+// Groups items by school day, keeping the order of the input (the server sorts by start).
+export function groupByDay<T extends { startsAt: string }>(
+  items: T[],
+): [string, T[]][] {
+  const groups: [string, T[]][] = [];
+  for (const item of items) {
+    const day = schoolInput(item.startsAt).slice(0, 10);
+    const last = groups[groups.length - 1];
+    if (last && last[0] === day) last[1].push(item);
+    else groups.push([day, [item]]);
+  }
+  return groups;
+}
 export function blankDefinition(): Definition {
   const day = schoolInput(
     new Date(Date.now() + 7 * 86400000).toISOString(),

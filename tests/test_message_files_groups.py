@@ -159,8 +159,8 @@ def test_group_concurrent_removal_and_reply_are_atomic(client):
         remove=pool.submit(teacher.post,url('threads/'+id+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove'))
         reply=pool.submit(parent.post,url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Concurrent reply',draftId=draft,fileIds=[file]))
         codes=[remove.result().status_code,reply.result().status_code]
-    assert codes in ([200,404],[409,200]),codes
-    value=detail(teacher,id);assert value['version']==2 and len(value['posts'])==2
+    assert codes in ([200,404],[200,200]),codes
+    value=detail(teacher,id);assert value['version']==2 and len(value['posts'])==2+(codes[1]==200)
     with api.connect() as db:
         linked=db.execute('SELECT post_id FROM message_files WHERE id=?',(file,)).fetchone()[0]
         assert (linked is not None)==(codes[1]==200)
