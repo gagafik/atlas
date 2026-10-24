@@ -16,6 +16,7 @@ class SchoolClass(Named):
     maxDaily: int = Field(default=8, ge=1, le=12)
     profileId: str = 'primary'
     studentCount: int | None = Field(default=None, ge=1, le=500)
+    classTeacherId: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class Teacher(Named):
@@ -482,6 +483,7 @@ class State(Model):
 
         for c in self.classes:
             require('profiles', [c.profileId])
+            require('teachers', [c.classTeacherId])
         for event in self.events:
             require('classes', event.classIds)
             if len(event.classIds) != len(set(event.classIds)):

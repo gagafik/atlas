@@ -39,6 +39,7 @@ interface Schedule {
   name: string;
   school: string;
   rows: Row[];
+  classTeacher?: string | null;
 }
 const days = [
   "Понедельник",
@@ -438,6 +439,11 @@ export default function Portal({
           {result && (
             <section>
               <h2>{result.name}</h2>
+              {result.classTeacher && (
+                <p className="muted">
+                  Классный руководитель: {result.classTeacher}
+                </p>
+              )}
               <p className="muted">
                 {result.school} · версия {result.revision}
               </p>

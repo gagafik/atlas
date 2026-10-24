@@ -49,4 +49,7 @@ def register_portal(app, Workspace, read, stamp):
             cycle=cycleId or state.cycles.patterns[0].id
             try: projected=snapshot.week_rows(cycle,kind,entityId)
             except ValueError as exc: raise HTTPException(422,str(exc))
-        return dict(revision=state.revision,name=entity.name,school=state.settings.name,rows=projected,day=day,source='working')
+        # The class teacher of a class view or of the pupil's class; the name is already public in the rows' teachers.
+        school_class=entity if kind=='class_' else snapshot.entities['class_'].get(entity.classId) if kind=='student' else None
+        leader=snapshot.entities['teacher'].get(school_class.classTeacherId) if school_class and school_class.classTeacherId else None
+        return dict(revision=state.revision,name=entity.name,school=state.settings.name,rows=projected,day=day,source='working',classTeacher=leader.name if leader else None)

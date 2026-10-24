@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uploadFile } from "./uploads";
 import { api } from "./api";
 
@@ -18,11 +18,27 @@ type Item = {
   canWithdraw?: boolean;
   periodLocks?: string[];
 };
+type ClassSetting = {
+  id: string;
+  name: string;
+  classTeacher: string | null;
+  enabled: boolean;
+  version: number;
+  updated: string | null;
+  actor: string | null;
+  canChange: boolean;
+};
 type Options = {
   parent: boolean;
   admin: boolean;
   canReview: boolean;
-  students: { id: string; name: string }[];
+  students: {
+    id: string;
+    name: string;
+    electronicNotes?: boolean;
+    classTeacher?: string | null;
+  }[];
+  classSettings?: ClassSetting[];
   yearStart: string;
   yearEnd: string;
   defaultDate: string;
@@ -101,6 +117,10 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     [bulkComment, setBulkComment] = useState(""),
     [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null),
     [bulkRequest, setBulkRequest] = useState(() => crypto.randomUUID());
+  // One request id per class, version and direction, so a repeated click or retry is the same switch.
+  const switchIds = useRef<Record<string, string>>({});
+  const child = options?.students.find((s) => s.id === student);
+  const notesOff = child?.electronicNotes === false;
   const clearBulkPreview = () => {
     setBulkPreview(null);
     setBulkRequest(crypto.randomUUID());
@@ -253,6 +273,31 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       "Решение сохранено и учитывается при следующем просмотре посещаемости.",
     );
   };
+  const switchNotes = async (c: ClassSetting) => {
+    const enabled = !c.enabled;
+    if (
+      !window.confirm(
+        enabled
+          ? `Включить электронные записки для класса ${c.name}? Родители снова смогут отправлять объяснительные.`
+          : `Выключить электронные записки для класса ${c.name}? Родители не смогут отправлять новые заявления и загружать файлы. Поданные заявления можно рассматривать и отзывать.`,
+      )
+    )
+      return;
+    const key = `${c.id}:${c.version}:${enabled}`;
+    const requestId = (switchIds.current[key] ||= crypto.randomUUID());
+    await api(
+      `journal/absences/classes/${encodeURIComponent(c.id)}/electronic`,
+      workspace,
+      "PUT",
+      { requestId, version: c.version, enabled },
+    );
+    await loadOptions();
+    setNotice(
+      enabled
+        ? `Электронные записки класса ${c.name} включены.`
+        : `Электронные записки класса ${c.name} выключены.`,
+    );
+  };
   const fileUrl = (id: string) =>
     `/api/journal/absence-files/${id}?workspace=${encodeURIComponent(workspace)}`;
   const bulkDone = async (count: number) => {
@@ -351,7 +396,14 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
               }}
             >
               <h3>Сообщить об отсутствии</h3>
-              <fieldset disabled={busy} className="access-fields">
+              {notesOff && (
+                <p role="status">
+                  Электронные записки для класса выключены. Свяжитесь с классным
+                  руководителем
+                  {child?.classTeacher ? `: ${child.classTeacher}` : ""}.
+                </p>
+              )}
+              <fieldset disabled={busy || notesOff} className="access-fields">
                 <label className="field">
                   <span>Ребёнок</span>
                   <select
@@ -598,6 +650,40 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
             </button>
           </div>
           {!busy && !items.length && <p>Заявлений не найдено.</p>}
+          {options?.classSettings?.length ? (
+            <section
+              className="absence-card"
+              aria-label="Электронные записки по классам"
+            >
+              <h3>Электронные записки по классам</h3>
+              <p>
+                Классный руководитель или администратор включает и выключает
+                приём новых заявлений от родителей. Уже поданные заявления и
+                файлы остаются доступными.
+              </p>
+              {options.classSettings.map((c) => (
+                <article className="absence-card" key={c.id}>
+                  <strong>{c.name}</strong>
+                  <p>
+                    Классный руководитель: {c.classTeacher || "не назначен"} ·
+                    записки {c.enabled ? "включены" : "выключены"}
+                    {c.updated
+                      ? ` · изменено ${new Date(c.updated).toLocaleString("ru-RU")}${c.actor ? `, ${c.actor}` : ""}`
+                      : ""}
+                  </p>
+                  {c.canChange && (
+                    <button
+                      disabled={busy}
+                      onClick={() => void run(() => switchNotes(c))}
+                    >
+                      {c.enabled ? "Выключить" : "Включить"} электронные записки{" "}
+                      {c.name}
+                    </button>
+                  )}
+                </article>
+              ))}
+            </section>
+          ) : null}
           {options?.canReview && (
             <section
               className="absence-card"

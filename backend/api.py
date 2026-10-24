@@ -87,8 +87,11 @@ def save(workspace, state, after_save=None):
         state = state.model_copy(update={'revision': state.revision + 1})
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (state.revision, state.model_dump_json(), workspace))
         db.execute('DELETE FROM history WHERE workspace=? AND id NOT IN (SELECT id FROM history WHERE workspace=? ORDER BY id DESC LIMIT 30)', (workspace, workspace))
+        before = State.model_validate_json(row[1])
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, before, state, 'saved')
         access.record(db,'state.saved',workspace,state.revision)
-        notifications.capture(db,workspace,State.model_validate_json(row[1]),state)
+        notifications.capture(db,workspace,before,state)
         if after_save is not None:
             after_save(db,state)
         return state
@@ -180,6 +183,8 @@ def undo(body: GenerateRequest, workspace: Workspace = 'school'):
         previous.revision = current[0] + 1
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM history WHERE id=?', (row[0],))
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, State.model_validate_json(current[1]), previous, 'undo')
         access.record(db,'state.undo',workspace,previous.revision)
         notifications.capture(db,workspace,State.model_validate_json(current[1]),previous,'undo')
         return previous
@@ -199,6 +204,8 @@ def redo(body: GenerateRequest, workspace: Workspace = 'school'):
         db.execute('INSERT INTO history (workspace,created,document) VALUES (?,?,?)', (workspace, datetime.now(timezone.utc).isoformat(), current[1]))
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM redo_history WHERE id=?', (row[0],))
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, State.model_validate_json(current[1]), previous, 'redo')
         access.record(db,'state.redo',workspace,previous.revision)
         notifications.capture(db,workspace,State.model_validate_json(current[1]),previous,'redo')
         return previous

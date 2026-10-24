@@ -6,6 +6,7 @@ export interface SchoolClass extends Named {
   maxDaily: number;
   profileId: string;
   studentCount?: number | null;
+  classTeacherId?: string | null;
 }
 export interface Room extends Named {
   capacity?: number | null;

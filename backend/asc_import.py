@@ -204,6 +204,7 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
     options = {key(d['id']): day_options(d) for d in get('daysdefs')}
     days = len(next(iter(options.values()))[0])
     class_names = {key(c['id']): named('classes', f'Класс aSc {key(c["id"])[:6]}', c.get('name'), c.get('short')) for c in get('classes')}
+    class_rows = {key(c['id']): c for c in get('classes')}
 
     # Observed periods: a period is dedicated (here the zero lesson) when a complete lesson
     # keeps at least two cards there and no lesson using it leaves it. Its complete lessons
@@ -284,7 +285,8 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
         extra[gid] = group
     groups += extra.values()
 
-    used = dict(subjects={key(l['subjectid']) for l in lessons}, teachers={key(t) for l in lessons for t in ids(l.get('teacherids'))},
+    # A class teacher who teaches no lesson is still kept: the class refers to the teacher.
+    used = dict(subjects={key(l['subjectid']) for l in lessons}, teachers={key(t) for l in lessons for t in ids(l.get('teacherids'))} | {key(t) for c in get('classes') for t in ids(c.get('teacherid'))[:1]},
                 classrooms={key(r) for l in lessons for r in ids(l.get('classroomids'))} | {key(r) for c in cards for r in ids(c.get('classroomids'))[:1]})
     keep = lambda section, row: not only_used or key(row['id']) in used[section]
     subjects = [dict(id=aid('s', s['id']), name=named('subjects', f'Предмет aSc {key(s["id"])[:6]}', s.get('name'), s.get('short')))
@@ -292,6 +294,11 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
     teachers = [dict(id=aid('t', t['id']), name=named('teachers', f'Учитель aSc {key(t["id"])[:6]}', t.get('name'),
                                                    ' '.join(filter(None, [t.get('firstname'), t.get('lastname')])), t.get('short')))
                 for t in get('teachers') if keep('teachers', t)]
+    teacher_refs = {t['id'] for t in teachers}
+    def leader(row):
+        # The first listed teacher leads the class; an id that matches no teacher is counted, not an error.
+        found = [aid('t', v) for v in ids(row.get('teacherid'))[:1]]
+        return found[0] if found and found[0] in teacher_refs else None
     buildings = [dict(id=aid('b', b['id']), name=named('buildings', f'Здание aSc {key(b["id"])[:6]}', b.get('name'), b.get('short'))) for b in get('buildings')]
     room_rows = [r for r in get('classrooms') if keep('classrooms', r)]
     # Synthetic group sizes are not real ones, so capacity checks would report invented overflows.
@@ -350,8 +357,10 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
              + (f'; классов с неразмещёнными карточками, уроки которых не ограничены: {len(open_classes)}.' if period_policy == 'observed' and open_classes else '.'),
              f'Неиспользуемых групп делений: {unused_divisions}. Без учителя: {stats["teacherless"]}; без кабинета: {stats["roomless"]}; вместимость неизвестна у {unknown_capacity} кабинетов.'
              + (f' Вместимость {ignored_capacity} кабинетов не перенесена: синтетические составы не дают настоящего размера групп.' if ignored_capacity else ''),
-             'Не перенесены: контакты, пол, цвет и краткие имена учителей, краткие названия, параллели, классные руководители и домашние кабинеты классов.']
-    document = dict(settings=dict(name='aSc import (temp)', days=DAY_NAMES[:days]), classes=[dict(id=aid('c', k), name=v, profileId='primary') for k, v in class_names.items()],
+             'Не перенесены: контакты, пол, цвет и краткие имена учителей, краткие названия, параллели и домашние кабинеты классов.']
+    lost_leaders = sum(bool(ids(c.get('teacherid'))) and leader(c) is None for c in get('classes'))
+    if lost_leaders: notes.append(f'Классный руководитель не найден среди учителей у {lost_leaders} классов.')
+    document = dict(settings=dict(name='aSc import (temp)', days=DAY_NAMES[:days]), classes=[dict(id=aid('c', k), name=v, profileId='primary', classTeacherId=leader(class_rows[k])) for k, v in class_names.items()],
                     teachers=teachers, rooms=room_records, campus=dict(buildings=buildings), subjects=subjects, students=students, groups=groups,
                     profiles=[dict(id='primary', name='Звонки aSc', periods=bells)], workloads=workloads, placements=placements, rules=rules,
                     importInfo=dict(filename=re.split(r'[\\/]', filename)[-1][:250], sourceCells=len(cards), importedLessons=len(lessons), notes=notes))
@@ -364,7 +373,7 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
     present = lambda section, attr, empty=('',): sum(r.get(attr, '') not in empty for r in get(section))
     report = dict(
         source={s: len(get(s)) for s in SECTIONS},
-        counts=dict(profiles=1, days=days, periods=n, classes=len(state.classes), teachers=len(state.teachers), rooms=len(state.rooms), subjects=len(state.subjects),
+        counts=dict(profiles=1, days=days, periods=n, classes=len(state.classes), classTeachers=sum(c.classTeacherId is not None for c in state.classes), teachers=len(state.teachers), rooms=len(state.rooms), subjects=len(state.subjects),
                     students=len(state.students), groups=len(state.groups), workloads=len(state.workloads), placements=len(state.placements),
                     rules=len(state.rules), hours=sum(w.hours for w in state.workloads)),
         groups=dict(whole=sum(map(entire, xml_groups)), singleDivision=kinds['singleDivision'], combined=kinds['combined'], combinedWhole=kinds['combinedWhole'],
@@ -380,7 +389,7 @@ def build_state(data: AscData, filename: str, *, rosters='synthetic', period_pol
         dropped=dict(teacherEmail=present('teachers', 'email'), teacherMobile=present('teachers', 'mobile'), teacherGender=present('teachers', 'gender'),
                      teacherColor=present('teachers', 'color'), teacherShort=present('teachers', 'short'), subjectShort=present('subjects', 'short'),
                      roomShort=present('classrooms', 'short'), roomBuilding=0 if buildings else present('classrooms', 'buildingid'),
-                     classGrade=present('classes', 'grade'), classHomeRoom=present('classes', 'classroomids'), classTeacher=present('classes', 'teacherid'),
+                     classGrade=present('classes', 'grade'), classHomeRoom=present('classes', 'classroomids'), classTeacher=lost_leaders,
                      lessonSeminarGroup=present('lessons', 'seminargroup'), lessonCapacity=present('lessons', 'capacity', ('', '*')),
                      partnerId=sum(present(s, 'partner_id') for s in SECTIONS), grades=len(get('grades')), breaks=len(get('breaks')),
                      classroomSupervisions=len(get('classroomsupervisions'))),

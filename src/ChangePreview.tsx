@@ -83,6 +83,7 @@ const FIELDS: Record<string, string> = {
   hours: "Часы",
   maxPerDay: "Максимум в день",
   teacherId: "Учитель",
+  classTeacherId: "Классный руководитель",
   additionalTeacherIds: "Совместные преподаватели",
   teacherRequired: "Требуется учитель",
   requiredRoomIds: "Все постоянные кабинеты",
