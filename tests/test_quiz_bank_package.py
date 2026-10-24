@@ -75,8 +75,9 @@ def end_record(entries,size,offset=0):
 
 
 def zip64_end(entries,size,offset=0):
+    # The locator points at the record, which follows the central directory.
     record=struct.pack('<4sQ2H2L4Q',b'PK\x06\x06',44,45,45,0,0,entries,entries,size,offset)
-    return record+struct.pack('<4sLQL',b'PK\x06\x07',0,0,1)+struct.pack('<4s4H2LH',b'PK\x05\x06',0xffff,0xffff,0xffff,0xffff,0xffffffff,0xffffffff,0)
+    return record+struct.pack('<4sLQL',b'PK\x06\x07',0,offset+size,1)+struct.pack('<4s4H2LH',b'PK\x05\x06',0xffff,0xffff,0xffff,0xffff,0xffffffff,0xffffffff,0)
 
 
 def central_entries(count):

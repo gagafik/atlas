@@ -4,9 +4,10 @@ import hashlib
 import json
 import os
 import stat
+import struct
 from typing import Literal
 import zlib
-from zipfile import ZipFile, BadZipFile, ZIP_STORED, ZIP_DEFLATED, _EndRecData, _ECD_ENTRIES_TOTAL, _ECD_SIZE
+from zipfile import ZipFile, BadZipFile, ZIP_STORED, ZIP_DEFLATED
 
 from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
@@ -95,13 +96,30 @@ def archive(path):
         raise HTTPException(422,'ZIP повреждён, зашифрован или использует неподдерживаемое сжатие.') from exc
 
 
+def directory_size(path):
+    """(entries, central directory bytes) from the end records, or None.
+
+    Read directly (APPNOTE 4.3.14-4.3.16) rather than through zipfile's private
+    parser, whose checks differ between 3.12 patch releases. As zipfile always
+    did, the ZIP64 record is the one right before its locator.
+    """
+    with open(path,'rb') as f:
+        f.seek(0,2);size=f.tell()
+        f.seek(max(0,size-(22+65535+20+56)));tail=f.read()
+    at=tail.rfind(b'PK\x05\x06')
+    if at<0 or len(tail)-at<22:return None
+    entries,directory=struct.unpack_from('<HL',tail,at+10)
+    if at>=20 and tail[at-20:at-16]==b'PK\x06\x07':
+        if at<76 or tail[at-76:at-72]!=b'PK\x06\x06':return None
+        entries,directory=struct.unpack_from('<QQ',tail,at-76+32)
+    return entries,directory
+
+
 def check_directory(path):
     # ZipFile parses size_cd bytes regardless of the declared count, so bound it first.
-    try:
-        with open(path,'rb') as f:endrec=_EndRecData(f)
-    except BadZipFile:endrec=None
-    if not endrec:raise HTTPException(422,'ZIP повреждён, зашифрован или использует неподдерживаемое сжатие.')
-    if endrec[_ECD_ENTRIES_TOTAL]>MAX_ENTRIES or endrec[_ECD_SIZE]>MAX_DIRECTORY:raise HTTPException(422,'Нужен manifest.json и до 200 уникальных файлов.')
+    bounds=directory_size(path)
+    if not bounds:raise HTTPException(422,'ZIP повреждён, зашифрован или использует неподдерживаемое сжатие.')
+    if bounds[0]>MAX_ENTRIES or bounds[1]>MAX_DIRECTORY:raise HTTPException(422,'Нужен manifest.json и до 200 уникальных файлов.')
 
 
 def inspect_package(path,filename):
