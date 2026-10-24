@@ -1,0 +1,267 @@
+.duty-schedule,
+.my-duties {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.duty-schedule section,
+.my-duties section {
+  min-width: 0;
+}
+.duty-templates,
+.duty-generate,
+.duty-roster,
+.duty-fairness,
+.duty-swaps {
+  display: grid;
+  gap: 16px;
+}
+.duty-mode {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.duty-mode legend {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.duty-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.duty-summary p,
+.duty-summary ul {
+  margin: 6px 0;
+}
+.duty-skipped {
+  padding-left: 18px;
+}
+.duty-skipped ul {
+  padding-left: 16px;
+  margin: 2px 0 6px;
+}
+.duty-controls {
+  align-items: end;
+}
+.duty-print {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.duty-print-title {
+  margin: 0;
+}
+.duty-grid-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid #dce3de;
+  border-radius: 10px;
+  background: #fff;
+}
+.duty-grid,
+.duty-fair,
+.duty-people table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.duty-grid th,
+.duty-grid td,
+.duty-fair th,
+.duty-fair td,
+.duty-people td {
+  border: 1px solid #dce3de;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.duty-grid thead th,
+.duty-fair thead th {
+  background: #f4f7f4;
+  white-space: nowrap;
+}
+.duty-grid tbody th {
+  position: sticky;
+  left: 0;
+  min-width: 120px;
+  background: #f8f9f6;
+  z-index: 1;
+}
+.duty-grid td {
+  min-width: 150px;
+}
+.duty-grid .closed {
+  background: #f1f1ef;
+  color: #64716a;
+}
+.duty-grid small {
+  display: block;
+  font-weight: 400;
+}
+.duty-slot {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+.duty-time {
+  font-weight: 700;
+}
+.duty-free {
+  color: #9a4b00;
+  font-weight: 700;
+}
+.duty-fair td {
+  text-align: right;
+}
+.duty-people {
+  display: grid;
+  gap: 14px;
+}
+.duty-people h4,
+.duty-day h4 {
+  margin: 0 0 6px;
+}
+.duty-people section {
+  break-inside: avoid;
+}
+.duty-day {
+  display: grid;
+  gap: 8px;
+}
+.duty-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #dce3de;
+  border-radius: 10px;
+}
+.duty-card p {
+  margin: 4px 0;
+}
+.duty-badge {
+  display: inline-block;
+  margin: 2px 6px 2px 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef2ee;
+  font-size: 12px;
+  font-weight: 700;
+}
+.duty-badge.pending {
+  background: #fdf1d6;
+}
+.duty-badge.approved {
+  background: #dcefe3;
+}
+.duty-badge.rejected,
+.duty-badge.cancelled {
+  background: #f4e2df;
+}
+.duty-badge.closed {
+  background: #e4e9f1;
+}
+/* The shared record list reserves a checkbox column; these lists have none. */
+.commitment-list.duty-template-list article,
+.commitment-list.duty-swap-list article {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+@media (max-width: 700px) {
+  .duty-card,
+  .commitment-list.duty-template-list article,
+  .commitment-list.duty-swap-list article {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .commitment-list.duty-template-list .dated-actions,
+  .commitment-list.duty-swap-list .dated-actions {
+    grid-column: auto;
+    grid-auto-flow: column;
+    justify-content: start;
+  }
+  .duty-controls > * {
+    min-width: 0;
+  }
+  .duty-controls .field {
+    flex: 1 1 100%;
+  }
+  .duty-grid td {
+    min-width: 130px;
+  }
+}
+@page duty-roster {
+  size: A4 landscape;
+  margin: 10mm;
+}
+@page duty-personal {
+  size: A4 portrait;
+  margin: 12mm;
+}
+.duty-print {
+  page: duty-roster;
+}
+.my-duties-list {
+  page: duty-personal;
+}
+@media print {
+  /* Only the printed block stays: every element that neither holds it nor sits inside it is removed from the layout. */
+  body:has(.duty-print)
+    *:not(.duty-print, .duty-print *, :has(.duty-print), script, style) {
+    display: none !important;
+  }
+  body:has(.duty-print) {
+    background: #fff;
+  }
+  body:has(.duty-print) :has(> .duty-print),
+  body:has(.duty-print) :has(.duty-print) {
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    position: static !important;
+    width: auto !important;
+  }
+  .duty-print {
+    gap: 6px;
+    font-size: 9pt;
+    color: #000;
+  }
+  .duty-print-title {
+    font-size: 13pt;
+  }
+  .duty-grid-scroll {
+    overflow: visible;
+    border: 0;
+  }
+  .duty-grid tbody th {
+    position: static;
+  }
+  .duty-grid th,
+  .duty-grid td {
+    padding: 3px 5px;
+  }
+  .duty-grid td {
+    min-width: 0;
+  }
+  .duty-grid tr,
+  .duty-card,
+  .duty-people section {
+    break-inside: avoid;
+  }
+  .duty-grid thead {
+    display: table-header-group;
+  }
+  .duty-card {
+    border: 1px solid #999;
+    padding: 6px 8px;
+  }
+  .duty-noprint {
+    display: none !important;
+  }
+}
