@@ -241,9 +241,15 @@ class Journal:
         deadline_tables(db)
         from .homework_queue_projection import tables as homework_queue_tables
         homework_queue_tables(db)
-        # Written last: ordinary reads treat a database without it as not yet migrated.
+        # Written last: ordinary reads treat a database without it as not yet migrated. A savepoint keeps the
+        # caller free to start its own BEGIN IMMEDIATE (a plain INSERT would leave an implicit transaction open).
         if db.execute("SELECT version FROM journal_projection_versions WHERE name='journal_schema'").fetchone()!=(SCHEMA,):
-            db.execute("INSERT OR REPLACE INTO journal_projection_versions VALUES ('journal_schema',?)",(SCHEMA,))
+            db.execute('SAVEPOINT journal_schema_marker')
+            try:
+                db.execute("INSERT OR REPLACE INTO journal_projection_versions VALUES ('journal_schema',?)",(SCHEMA,))
+                db.execute('RELEASE journal_schema_marker')
+            except Exception:
+                db.execute('ROLLBACK TO journal_schema_marker');db.execute('RELEASE journal_schema_marker');raise
 
     def rows(self, db, workspace, day, keys):
         """Day cards inside a snapshot: only the lesson part of the draft is parsed."""

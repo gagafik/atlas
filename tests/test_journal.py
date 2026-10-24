@@ -324,6 +324,18 @@ def test_report_paging_respects_teacher_scope_and_withdrawn_lessons(client):
     assert [r['lesson']['date'] for r in pages(teacher).json()['rows']]==['2026-08-24']
 
 
+def test_report_teacher_filter_keeps_later_pages_full(client):
+    enable(client);create(client,'teacher')
+    # Another teacher's Maths lesson lies between the two lessons of the assigned teacher.
+    for subject,day in [('Английский язык',DAY),('Математика','2026-08-24'),('Английский язык','2026-08-31')]:
+        assert write(client,graded(entry(client,lesson(client,subject,day)['lessonKey'],day=day)),publish=True).status_code==200
+    assert [r['lesson']['date'] for r in pages(client).json()['rows']]==[DAY,'2026-08-24','2026-08-31']
+    teacher=signed('teacher');first=pages(teacher,limit=1).json()
+    assert [r['lesson']['date'] for r in first['rows']]==[DAY] and first['nextAfter']
+    second=pages(teacher,limit=1,after=first['nextAfter']).json()
+    assert [r['lesson']['date'] for r in second['rows']]==['2026-08-31'] and second['nextAfter'] is None
+
+
 def test_options_panels_by_role(client):
     from backend import final_grades
     enable(client);teacher=create(client,'teacher');create(client,'student');create(client,'parent')

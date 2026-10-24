@@ -115,6 +115,37 @@ def test_entry_and_history_recheck_account_in_snapshot(client,monkeypatch):
     assert signed('teacher').get(f'/api/journal/entry?workspace=demo&lessonKey={key}&day={DAY}').status_code==200
 
 
+@pytest.mark.parametrize('login,reader',[('teacher','teacher'),('parent','parent'),('student','pupil')])
+def test_report_rechecks_account_in_snapshot(client,monkeypatch,login,reader):
+    record,pupil,parent,teacher=setup(client)
+    actor=dict(teacher=teacher,parent=parent,pupil=pupil)[reader];original=api.journal.reading
+    def revoke(operation):
+        # The account changes after the request was identified but before the read transaction starts.
+        with api.connect() as db:db.execute('UPDATE accounts SET version=version+1 WHERE login=?',(login,))
+        return original(operation)
+    monkeypatch.setattr(api.journal,'reading',revoke)
+    response=actor.get(REPORT);assert response.status_code==409,response.text
+    monkeypatch.setattr(api.journal,'reading',original)
+    assert signed(login).get(REPORT).status_code==200
+
+
+def test_schema_marker_write_leaves_no_open_transaction(client):
+    assert client.get('/api/journal/options?workspace=demo').status_code==200
+    def marker(db):return db.execute("SELECT version FROM journal_projection_versions WHERE name='journal_schema'").fetchone()
+    with api.connect() as db:
+        db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'");db.commit()
+        api.journal.tables(db)
+        # Quiz and homework writers call tables(db) and then start their own BEGIN IMMEDIATE.
+        assert not db.in_transaction and marker(db)==(journal_reads.SCHEMA,)
+        db.execute('BEGIN IMMEDIATE');db.execute('ROLLBACK')
+    # Inside a caller's transaction the marker belongs to that transaction.
+    with api.connect() as db:
+        db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'");db.commit()
+        db.execute('BEGIN IMMEDIATE');api.journal.tables(db)
+        assert db.in_transaction and marker(db)==(journal_reads.SCHEMA,)
+        db.execute('ROLLBACK');assert marker(db) is None
+
+
 def test_entry_and_day_recheck_schedule_revision_in_snapshot(client,monkeypatch):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']
     original=api.journal.snapshots.get

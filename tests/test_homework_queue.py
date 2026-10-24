@@ -291,6 +291,19 @@ def test_default_window_paging_crosses_phases(client,monkeypatch):
     assert queue(pupil,limit=1,cursor=cursor).status_code==409
 
 
+def test_default_window_shares_one_candidate_scan_budget_between_phases(client,monkeypatch):
+    pupil,parent,teacher=default_window_data(client,monkeypatch)
+    expected=[r['lessonKey'] for r in items(pupil)];assert len(expected)==3
+    # One candidate per request in total: the next phase must not start with a fresh budget.
+    monkeypatch.setattr(homework_queue,'SCAN',1)
+    paged=[];sizes=[];cursor=None
+    for _ in range(10):
+        page=queue(pupil,limit=50,**(dict(cursor=cursor) if cursor else {}));assert page.status_code==200,page.text
+        page=page.json();sizes.append(len(page['items']));paged.extend(r['lessonKey'] for r in page['items']);cursor=page['nextCursor']
+        if not cursor:break
+    assert sizes==[1,1,1] and paged==expected and cursor is None
+
+
 def test_default_window_edges_before_and_after_the_year(client,monkeypatch):
     pupil,parent,teacher=default_window_data(client,monkeypatch)
     monkeypatch.setattr(homework_queue,'now',lambda:datetime(2026,8,1,6,0,tzinfo=timezone.utc))
