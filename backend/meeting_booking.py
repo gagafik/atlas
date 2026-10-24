@@ -23,6 +23,7 @@ def check(service,db,event,slot,user,student,snap,workspace,ignore_wait=None):
 
 def insert(service,db,event,slot,user,student,host,snap,workspace,note):
     booking_id=str(uuid4());document=dict(parentName=user['name'],studentName=snap.entities['student'][student].name,hostName=host['name'],studentId=student,note=note,reason='',location=host['location'],roomName=snap.entities['room'][host['roomId']].name if host['roomId'] in snap.entities['room'] else '',updated=utc(meetings.now()))
+    # permissions is stored for compatibility and no longer compared: the parent-pupil link is checked instead (Meetings.booking_owner).
     db.execute('INSERT INTO meeting_bookings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',(booking_id,event['id'],slot['id'],workspace,user['id'],student,host['accountId'],permission_key(user),slot['starts_at'],slot['ends_at'],'scheduled',1,encoded(document)))
     db.execute('UPDATE meeting_slots SET version=version+1 WHERE id=?',(slot['id'],))
     if event['definition']['reminderMinutes']:

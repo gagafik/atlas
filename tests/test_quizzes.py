@@ -189,12 +189,88 @@ def test_current_teacher_membership_and_family_permissions(client):
     assert save(parent,begun,submit=True).status_code==403
     unrelated=signed('unrelated');assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
     state=api.read('demo');state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])];api.save('demo',state)
-    assert action(teacher,quiz,'close').status_code==403
-    assert detail(unrelated)['canManage']
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
     state=api.read('demo');group=next(g for g in state.groups if g.id==quiz['document']['lesson']['groupId']);group.kind='elective';group.studentIds=['s2'];api.save('demo',state)
     assert not detail(pupil)['canStart'] and save(pupil,begun,submit=True).status_code==403
     assert pupil.get('/api/journal/quizzes?workspace=demo').json()['items']==[]
     assert pupil.get('/api/journal/quizzes?workspace=demo&history=true').json()['items'][0]['readOnly']
+
+
+def test_cancelled_lesson_does_not_freeze_quiz(client):
+    quiz,pupil,parent,teacher,_=ready(client)
+    state=api.read('demo');state.datedLessons=[DatedLesson(id='cancel',name='Отмена',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)];api.save('demo',state)
+    current=teacher.get('/api/journal/quizzes/test-one?workspace=demo').json();assert current['canManage']
+    seen=detail(pupil);assert seen['canStart']
+    begun=start(pupil,current);assert begun.status_code==200,begun.text
+    assert save(pupil,begun.json(),submit=True).status_code==200
+    assert [s['enrolled'] for s in current['students']]==[True,True]
+    closed=action(teacher,current,'close');assert closed.status_code==200,closed.text
+    assert action(client,closed.json(),'withdraw').status_code==200
+
+
+def test_admin_manages_quiz_when_the_lesson_placement_is_gone(client):
+    quiz,pupil,parent,teacher,_=ready(client)
+    state=api.read('demo');state.placements=[p for p in state.placements if p.id!='eng'];api.save('demo',state)
+    admin=client.get('/api/journal/quizzes/test-one?workspace=demo').json();assert admin['canManage']
+    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    assert action(client,admin,'close').status_code==200
+
+
+def test_substitute_does_not_take_the_quiz_and_course_teacher_keeps_it(client):
+    quiz,pupil,parent,teacher,_=ready(client);unrelated=signed('unrelated')
+    state=api.read('demo');state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])];api.save('demo',state)
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    assert unrelated.get('/api/journal/quizzes?workspace=demo&history=true').json()['items']==[]
+    assert action(unrelated,quiz,'close').status_code==403
+    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    assert [i['id'] for i in teacher.get('/api/journal/quizzes?workspace=demo').json()['items']]==['test-one']
+    sent=save(pupil,start(pupil,quiz).json(),submit=True).json()
+    assert attempt(teacher,sent)['status']=='reviewed'
+    notices=lambda reader:[n for n in reader.get('/api/notifications/inbox').json()['items'] if n['action']=='quiz.submitted']
+    assert len(notices(teacher))==1 and notices(unrelated)==[]
+
+
+def test_course_teacher_and_owner_manage_after_reassignment(client):
+    quiz,pupil,parent,teacher,_=ready(client);unrelated=signed('unrelated')
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    state=api.read('demo');w=next(w for w in state.workloads if w.id=='w0');w.additionalTeacherIds=['t1'];api.save('demo',state)
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    closed=action(unrelated,quiz,'close');assert closed.status_code==200,closed.text
+    state=api.read('demo');w=next(w for w in state.workloads if w.id=='w0');w.teacherId='t1';w.additionalTeacherIds=[];api.save('demo',state)
+    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    create(client,'teacher',login='third',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
+    third=signed('third');assert third.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    assert action(third,closed.json(),'withdraw').status_code==403
+
+
+def test_snapshot_teacher_reads_but_does_not_manage(client):
+    record,pupil,parent,teacher=setup(client);q=question(client)
+    r=client.put('/api/journal/quizzes/admin-one?workspace=demo',json=body(record,[q]));assert r.status_code==200,r.text
+    assert teacher.get('/api/journal/quizzes/admin-one?workspace=demo').json()['canManage']
+    state=api.read('demo');w=next(w for w in state.workloads if w.id=='w0');w.teacherId='t1';api.save('demo',state)
+    seen=teacher.get('/api/journal/quizzes/admin-one?workspace=demo');assert seen.status_code==200,seen.text
+    assert seen.json()['canManage'] is False
+    assert action(teacher,seen.json(),'close').status_code==403
+    assert teacher.get('/api/journal/quizzes?workspace=demo').json()['items']==[]
+    item=teacher.get('/api/journal/quizzes?workspace=demo&history=true').json()['items'][0]
+    assert item['id']=='admin-one' and item['readOnly'] is True
+    assert signed('unrelated').get('/api/journal/quizzes/admin-one?workspace=demo').json()['canManage']
+
+
+def test_teacher_catalog_is_filtered_in_sql(client):
+    quiz,pupil,parent,teacher,_=ready(client)
+    with api.connect() as db:
+        row=db.execute("SELECT summary FROM quizzes WHERE id='test-one'").fetchone()
+        summary=json.loads(row[0]);summary['lesson'].update(groupId='g-d',subjectId='sub3',teacherIds=['t3'])
+        for i in range(120):
+            db.execute('INSERT INTO quizzes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',('demo',f'other-{i:03}',1,'someone','2026-01-01T00:00:00+00:00','published','2000-01-01T00:00:00+00:00',f'k{i}','{}',None,0,json.dumps(summary)))
+    for path in ['/api/journal/quizzes?workspace=demo&limit=50','/api/journal/quizzes?workspace=demo&limit=50&history=true']:
+        assert [i['id'] for i in teacher.get(path).json()['items']]==['test-one']
+    first=client.get('/api/journal/quizzes?workspace=demo&limit=50&history=true').json()['items']
+    assert len(first)==50 and all(i['id'].startswith('other-') for i in first)
 
 
 def test_save_conflict_and_close_do_not_overwrite_answers(client):

@@ -4,7 +4,7 @@ from datetime import timedelta
 import pytest
 from backend import api,meetings
 from test_access import client,create,signed
-from test_meetings import BASE,setup,publish,event,path,request,ok,slots,book,bookings,apply,transition,availability
+from test_meetings import BASE,setup,publish,event,path,request,ok,slots,book,bookings,apply,transition,availability,regrant
 
 
 def queue(c,eid,**params):return ok(c.get('/api/meetings/events/'+eid+'/waitlist',params=dict(workspace='demo',**params)))
@@ -199,3 +199,12 @@ def test_old_expired_offer_withdrawal_does_not_invalidate_new_family_hold(client
     ok(change(parent,eid,wid,'withdraw')[0])
     response=other.post(path('waitlist/'+other_id),json=request(version=row['version'],action='accept',eventVersion=ev,slotVersion=row['offer']['slotVersion']))
     ok(response)
+
+
+def test_second_child_keeps_queue_entry_offer_and_accept(client,monkeypatch):
+    eid,t,p,parent,wid=prepared(client,monkeypatch)
+    regrant(p['id'],['s1','s2'],'student')
+    assert queue(parent,eid)['items'][0]['current'] is True
+    offered(client,parent,eid,wid)
+    response,_=change(parent,eid,wid,'accept');assert response.status_code==200,response.text
+    assert len(bookings(parent,eid))==1

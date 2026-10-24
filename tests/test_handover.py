@@ -232,3 +232,30 @@ def test_backup_restores_approvals_pickups_history_and_workspaces(client,setup,t
     with api.connect() as db,sqlite3.connect(target/api.DB.name) as restored:
         names=[r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'handover_%' OR name='workspaces')")]
         for name in names:assert sorted([tuple(x) for x in db.execute('SELECT * FROM '+name)],key=repr)==sorted(restored.execute('SELECT * FROM '+name).fetchall(),key=repr)
+
+
+def regrant(account_id,ids):
+    # Rewrites the account's pupil grants and bumps its version, as any edit of the rights does.
+    with api.connect() as db:
+        raw=json.loads(db.execute('SELECT permissions FROM accounts WHERE id=?',(account_id,)).fetchone()[0]);raw['grants']=[dict(workspace='demo',view='student',entityIds=ids)]
+        db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(raw),account_id))
+
+
+def test_second_child_keeps_approved_adult_and_request(client,setup):
+    people,_=setup;p=signed('parent');a=adult(client);o=pickup(p,a)
+    regrant(people['parent']['id'],['s1','s2'])
+    assert get(p,'adults/'+a['id'])['unavailableReason']=='' and get(client,'pickups/'+o['id'])['unavailableReason']==''
+    assert complete(client,o['id']).status_code==200
+
+
+def test_unrelated_change_before_approval_does_not_block_it(client,setup):
+    people,_=setup;a=proposal(signed('parent'))
+    regrant(people['parent']['id'],['s1','s2'])
+    ok(approve(client,a['id']))
+
+
+def test_real_link_loss_still_blocks(client,setup):
+    people,_=setup;a=adult(client);o=pickup(signed('parent'),a)
+    regrant(people['parent']['id'],['s2'])
+    assert get(client,'adults/'+a['id'])['unavailableReason'] and get(client,'pickups/'+o['id'])['unavailableReason']
+    assert post(client,'pickups',adultId=a['id'],adultVersion=a['version'],day='2026-10-15',expectedTime='17:30',locationId='main').status_code==409

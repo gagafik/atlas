@@ -15,6 +15,8 @@ from .school_forms import grant_ids, enabled
 from .meeting_models import utc
 from .meeting_availability import Occupancy, ZONE
 
+HOST_ROLES={'admin','teacher','staff','editor'}
+
 
 def tables(db):
     db.executescript('''
@@ -102,10 +104,19 @@ class Meetings:
             user_row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(row['account_id'],)).fetchone()
             user=self.access.public(user_row) if user_row else None
             host=json.loads(row['document']);host.update(name=row['name'],permissions=row['permissions'])
-            host['current']=bool(user and enabled(user,snap,workspace) and permission_key(user)==row['permissions'] and (not host['teacherId'] or host['teacherId'] in grant_ids(user,workspace,'teacher') & snap.entities['teacher'].keys()) and (not host['roomId'] or host['roomId'] in snap.entities['room']) and set(host['classIds'])<=snap.entities['class_'].keys())
+            host['current']=bool(user) and not self.host_problem(user,host,snap,workspace)
             host['user']=user;result[host['accountId']]=host
         event['_hosts']=result
         return result
+
+    def host_problem(self,user,host,snap,workspace):
+        """Why this account cannot host now: it must be active, allowed, enabled in the workspace and bound to its teacher entity. Empty when it can."""
+        if not user or user['role'] not in HOST_ROLES or not enabled(user,snap,workspace):return 'Выберите действующий аккаунт ведущего.'
+        if user['role']=='teacher' and not host['teacherId']:return 'Для аккаунта учителя укажите преподавателя, чтобы проверить занятость.'
+        if host['teacherId'] and (user['role']!='teacher' or host['teacherId'] not in grant_ids(user,workspace,'teacher') & snap.entities['teacher'].keys()):return 'Преподаватель не связан с этим аккаунтом.'
+        if host['scope']=='teaching' and user['role']!='teacher':return 'Для сотрудника укажите доступные ему классы этого мероприятия.'
+        if set(host['classIds'])-snap.entities['class_'].keys() or host['roomId'] and host['roomId'] not in snap.entities['room']:return 'Выберите существующие классы и кабинет.'
+        return ''
 
     def eligible_pupils(self,host,directory):
         if not host['current']:return set()
@@ -133,11 +144,8 @@ class Meetings:
         for host in definition['hosts']:
             row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(host['accountId'],)).fetchone()
             user=self.access.public(row) if row else None
-            if not user or user['role'] not in ['admin','teacher','staff','editor'] or not enabled(user,snap,workspace):raise HTTPException(422,'Выберите действующий аккаунт ведущего.')
-            if user['role']=='teacher' and not host['teacherId']:raise HTTPException(422,'Для аккаунта учителя укажите преподавателя, чтобы проверить занятость.')
-            if host['teacherId'] and (user['role']!='teacher' or host['teacherId'] not in grant_ids(user,workspace,'teacher') & snap.entities['teacher'].keys()):raise HTTPException(422,'Преподаватель не связан с этим аккаунтом.')
-            if host['scope']=='teaching' and user['role']!='teacher':raise HTTPException(422,'Для сотрудника укажите доступные ему классы этого мероприятия.')
-            if set(host['classIds'])-snap.entities['class_'].keys() or host['roomId'] and host['roomId'] not in snap.entities['room']:raise HTTPException(422,'Выберите существующие классы и кабинет.')
+            if problem:=self.host_problem(user,host,snap,workspace):raise HTTPException(422,problem)
+            # permissions is kept for compatibility; a host stays current while host_problem() is empty, whatever else changes in their rights.
             db.execute('INSERT INTO meeting_hosts VALUES (?,?,?,?,?)',(event['id'],user['id'],permission_key(user),user['name'],encoded(host)))
 
     def replay(self,db,user,body,operation):
@@ -238,9 +246,10 @@ class Meetings:
         return dict(affectedSlots=len(slots),bookingsToCancel=len(bookings),offersToRevoke=len(offers),skippedPast=skipped,conflicts=conflicts[:30],conflictCount=len(conflicts),previewHash=key),slots,bookings
 
     def booking_owner(self,db,booking,snap,workspace):
+        """The parent who made it while still linked to this pupil; other changes of their rights do not matter."""
         row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(booking['parent_id'],)).fetchone()
         user=self.access.public(row) if row else None
-        return user if user and permission_key(user)==booking['permissions'] and booking['student_id'] in self.parent_pupils(user,snap,workspace) else None
+        return user if user and booking['student_id'] in self.parent_pupils(user,snap,workspace) else None
 
     def booking(self,db,workspace,id):
         row=db.execute('SELECT * FROM meeting_bookings WHERE id=? AND workspace=?',(id,workspace)).fetchone()
