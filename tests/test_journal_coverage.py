@@ -3,7 +3,7 @@ import csv,io,json
 from copy import deepcopy
 import pytest
 from backend import api,journal_coverage
-from backend.models import DatedLesson,Event,Student,Placement
+from backend.models import DatedLesson,Event,SchoolClass,Student,Placement
 from test_access import client,enable,create,signed
 from test_absences import setup
 from test_journal import DAY,lesson,entry,write,graded
@@ -151,6 +151,25 @@ def test_token_bound_to_account_and_scope(client):
     assert other.status_code==409 and 'items' not in other.json()
     assert export(signed('other-teacher'),token=first['token'],asOf=first['asOf']).status_code==409
     assert report(teacher,classId='c-demo-d',token=first['token'],asOf=first['asOf']).status_code==404
+
+
+def test_token_bound_to_account_even_with_the_same_scope(client):
+    enable(client);create(client,'admin',login='second-admin');known();first=report(client).json();twin=signed('second-admin')
+    key=english(first)['lessonKey']
+    for call in [report,export]:
+        other=call(twin,token=first['token'],asOf=first['asOf']);assert other.status_code==409 and 'items' not in other.json()
+    assert details(twin,key,token=first['token'],asOf=first['asOf']).status_code==409
+    own=report(twin).json();assert own['token'][:32]!=first['token'][:32] and report(twin,token=own['token'],asOf=own['asOf']).status_code==200
+
+
+def test_admin_token_ignores_roster_changes_and_new_classes(client,monkeypatch):
+    known();calls=counted(monkeypatch);first=report(client).json();key=english(first)['lessonKey']
+    state=api.read('demo');state.classes.append(SchoolClass(id='c-new',name='Новый класс'));state.students.append(Student(id='newcomer',name='Новый ученик',classId='c-new'));api.save('demo',state)
+    again=report(client,token=first['token'],asOf=first['asOf']);assert again.status_code==200 and again.json()['items']==first['items']
+    assert export(client,token=first['token'],asOf=first['asOf']).status_code==200 and len(calls)==1
+    assert details(client,key,token=first['token'],asOf=first['asOf']).status_code==200
+    # The enrolment is still a change of the school: without the snapshot a new check is required.
+    api.journal_coverage.cache.clear();assert report(client,token=first['token'],asOf=first['asOf']).status_code==409
 
 
 def test_cache_row_cap(client,monkeypatch):

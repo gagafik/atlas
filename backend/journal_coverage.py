@@ -60,8 +60,9 @@ class JournalCoverage:
         base=body.model_copy(update=dict(classId='',teacherId=''))
         try:classes,own=self.scope(db,user,snap,workspace,base)
         except HTTPException as error:return None,error
-        pupils=sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)
-        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),body.mode,sorted(classes),sorted(own),pupils]).encode()).hexdigest()[:32],None
+        # An administrator's scope is the whole school by definition: roster changes are covered by the data half.
+        scope=[] if user['role']=='admin' else [sorted(classes),sorted(own),sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)]
+        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),body.mode,*scope]).encode()).hexdigest()[:32],None
 
     def data_key(self,db,workspace,body,pupils,revision):
         """Data half: only journals and publications of the requested days (and pupils)."""

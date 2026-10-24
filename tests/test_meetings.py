@@ -230,6 +230,12 @@ def test_availability_and_reschedule_do_not_invalidate_parent_booking(client,mon
     assert late.status_code==409 and late.json()['detail'].startswith('Запись изменилась')
 
 
+def test_availability_preview_survives_timetable_save(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);body,preview=availability(client,id);assert preview['affectedSlots']==12
+    state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
+    ok(client.post(path('events/'+id+'/availability'),json=body));assert len(slots(client,id))==12
+
+
 def test_range_operations_skip_started_slots(client,monkeypatch):
     id,t,p=setup(client,monkeypatch,2);first=t['id'];second=next(h['accountId'] for h in event(client,id)['hosts'] if h['accountId']!=first)
     apply(client,id,hostIds=[first]);ok(transition(client,id,'publish'))

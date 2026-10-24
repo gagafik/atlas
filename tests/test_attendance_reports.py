@@ -7,7 +7,7 @@ from datetime import date,datetime,timedelta,timezone
 from uuid import uuid4
 import pytest
 from backend import api,attendance_projection
-from backend.models import Student,DatedLesson
+from backend.models import SchoolClass,Student,DatedLesson
 from test_access import client,create,signed
 from test_absences import setup,mark,send,decide,body,url,reviewers
 from test_journal import DAY,lesson,entry,write,graded
@@ -214,18 +214,60 @@ def test_moved_and_cancelled_timetable_does_not_silently_rewrite_published_repor
     assert details(teacher,start='2026-08-18',end='2026-08-18').json()['items']==[]
 
 
+def kept(account,token,**values):
+    # Every check starts without a snapshot, so the live token is compared with the sent one.
+    api.attendance_reports.cache.clear();return report(account,token=token,**values).status_code
+
+
 def test_unrelated_changes_keep_class_report_token(client):
     _,_,parent,teacher=setup(client);first=report(teacher).json();assert len(first['token'])==64
-    api.attendance_reports.cache.clear()
     state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
-    assert report(teacher,token=first['token']).status_code==200
+    assert kept(teacher,first['token'])==200
     other='2026-08-24'
     write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
-    assert report(teacher,token=first['token']).status_code==200
-    far=report(client,classId='c-demo-d').json();api.attendance_reports.cache.clear()
+    assert kept(teacher,first['token'])==200
+    far=report(client,classId='c-demo-d').json()
     mark(client)
-    assert report(client,classId='c-demo-d',token=far['token']).status_code==200
-    assert report(teacher,token=first['token']).status_code==409
+    assert kept(client,far['token'],classId='c-demo-d')==200
+    assert kept(teacher,first['token'])==409
+
+
+def test_admin_whole_school_token_limited_to_selected_days(client):
+    _,_,parent,teacher=setup(client);whole=report(client).json()
+    other='2026-08-24'
+    write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
+    assert kept(client,whole['token'])==200
+    mark(client)
+    assert kept(client,whole['token'])==409
+
+
+def test_pupil_rename_requires_new_summary_and_snapshot_keeps_its_time(client):
+    _,_,parent,teacher=setup(client);mark(client);first=report(teacher).json()
+    state=api.read('demo');next(s for s in state.students if s.id=='s1').name='Новое имя';api.save('demo',state)
+    snapshot=report(teacher,token=first['token']);assert snapshot.status_code==200 and snapshot.json()['generatedAt']==first['generatedAt']
+    assert pupil(snapshot.json())['name']!='Новое имя'
+    assert kept(teacher,first['token'])==409
+
+
+def test_admin_token_ignores_roster_changes_on_report_details_and_export(client):
+    _,_,parent,teacher=setup(client);mark(client);first=report(client).json()
+    state=api.read('demo');state.classes.append(SchoolClass(id='c-new',name='Новый класс'));state.students.append(Student(id='newcomer',name='Новый ученик',classId='c-new'));api.save('demo',state)
+    assert report(client,token=first['token']).status_code==200
+    assert details(client,token=first['token']).status_code==200
+    assert export(client,token=first['token']).status_code==200
+    assert export(client,token=first['token'],view='lessons',studentId='s1').status_code==200
+    assert kept(client,first['token'])==409
+
+
+def test_token_bound_to_account_even_with_the_same_scope(client):
+    _,person,parent,teacher=setup(client);mark(client)
+    with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
+    reviewers({'c-demo-a':[person['id'],other_id]});twin=signed('other-teacher');create(client,'admin',login='second-admin');second=signed('second-admin')
+    for owner,stranger in [(teacher,twin),(client,second)]:
+        first=report(owner).json()
+        for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
+            rejected=call(stranger,token=first['token'],**extra);assert rejected.status_code==409 and 'students' not in rejected.json() and 'items' not in rejected.json()
+        assert report(stranger).json()['token'][:32]!=first['token'][:32]
 
 
 def test_other_account_token_and_scope_on_details_and_export(client):

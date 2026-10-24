@@ -84,11 +84,14 @@ class AttendanceReports:
         return user,snap
 
     def access_key(self,db,user,snap,workspace):
-        """Account, permissions and the class/pupil scope; independent of the filters of one report."""
+        """Account, permissions and (except for administrators) the class/pupil scope; independent of the filters of one report."""
         self.journal.recheck_account(db,user)
-        allowed=self.absences.classes(db,user,snap,workspace,'attendance_read')
-        classes={c.id for c in snap.state.classes if user['role']=='admin' or c.id in allowed}
-        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),sorted(classes),sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)]).encode()).hexdigest()[:32]
+        scope=[]
+        if user['role']!='admin':
+            # An administrator's scope is the whole school by definition: roster changes are covered by the data half.
+            allowed=self.absences.classes(db,user,snap,workspace,'attendance_read');classes={c.id for c in snap.state.classes if c.id in allowed}
+            scope=[sorted(classes),sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)]
+        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),*scope]).encode()).hexdigest()[:32]
 
     def data_key(self,db,user,snap,workspace,body,classes,pupils):
         """Publications and approved notices of the selected pupils and days, plus the names shown."""
