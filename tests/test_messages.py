@@ -42,6 +42,7 @@ def test_direct_reply_read_search_and_idempotency(client):
     assert teacher.post(url('threads/'+id+'/reply'),json=reply).status_code==200
     assert teacher.post(url('threads/'+id+'/reply'),json=reply).status_code==200
     assert len(detail(parent,id)['posts'])==2
+    with api.connect() as db:assert {r[0] for r in db.execute('SELECT live_through FROM message_members WHERE thread_id=?',(id,))}=={detail(parent,id)['latestId']}
     assert len(parent.get(url(q='подготовьте')).json()['items'])==1
     assert parent.get('/api/notifications/inbox').json()['items'][0]['action']=='message.received'
 
@@ -62,18 +63,84 @@ def test_contacts_and_thread_boundaries(client):
     assert other.get(url(q='Вопрос')).json()['items']==[]
 
 
-def test_account_grants_and_changed_teacher_relationship_revoke_access(client):
+def test_changed_teacher_keeps_read_only_dialog(client):
     people=setup(client);parent=signed('parent');teacher=signed('teacher')
-    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    draft=str(uuid4());uploaded=parent.post(url('files',draftId=draft,filename='answer.txt'),content=b'Private attachment');assert uploaded.status_code==200,uploaded.text
+    file=uploaded.json()['id']
+    id=parent.post(url(),json=payload(people['teacher']['id'])|dict(draftId=draft,fileIds=[file])).json()['id']
     # Changing the current teaching assignment invalidates cached relation checks.
     state=api.read('demo')
     for workload in state.workloads:
         if workload.teacherId=='t2':workload.teacherId='t1'
         workload.additionalTeacherIds=[t for t in workload.additionalTeacherIds if t!='t2']
     api.save('demo',state)
-    assert parent.get(url('threads/'+id)).status_code==404
-    assert teacher.get(url('threads/'+id)).status_code==404
-    assert parent.get(url()).json()['items']==[]
+    # Both sides keep reading what was said while the link existed, but nobody can add to it.
+    for user in [parent,teacher]:
+        value=detail(user,id)
+        assert value['readOnly'] and not value['canReply'] and not value['canManage'] and value['participants']==[] and len(value['posts'])==1
+        assert user.get(url('files/'+file)).status_code==200
+        assert user.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='x')).status_code==404
+        assert user.get(url()).json()['items'][0]['readOnly'] is True
+    assert client.get(url('files/'+file)).status_code==404
+    # The new teacher was never a participant.
+    staff=signed('staff')
+    assert staff.get(url('threads/'+id)).status_code==404 and staff.get(url()).json()['items']==[]
+
+
+def test_message_notification_survives_rights_change_and_open_rechecks_access(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher')
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    assert [i['action'] for i in teacher.get('/api/notifications/inbox').json()['items']]==['message.received']
+    update={k:v for k,v in people['teacher'].items() if k!='id'};update['grants']=[dict(workspace='demo',view='teacher',entityIds=['t1'])]
+    assert client.put('/api/access/users/'+people['teacher']['id'],json=update).status_code==200
+    assert teacher.get('/api/notifications/inbox').status_code==401
+    teacher=signed('teacher');inbox=teacher.get('/api/notifications/inbox').json()
+    assert inbox['unread']==1 and inbox['items'][0]['action']=='message.received'
+    # Opening it re-checks current access: the old conversation is history, and t1 does not teach s1.
+    assert detail(teacher,id)['readOnly']
+    assert teacher.get(url('contacts',studentId='s1')).status_code==403
+    assert teacher.post('/api/notifications/read',json={'ids':[inbox['items'][0]['id']]}).status_code==200
+    assert teacher.get('/api/notifications/inbox').json()['unread']==0
+
+
+def test_legacy_rows_without_live_through_stay_hidden_after_link_loss(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher')
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL')
+    assert [t['id'] for t in parent.get(url()).json()['items']]==[id] and not detail(parent,id)['readOnly']
+    state=api.read('demo')
+    for workload in state.workloads:
+        if workload.teacherId=='t2':workload.teacherId='t1'
+        workload.additionalTeacherIds=[t for t in workload.additionalTeacherIds if t!='t2']
+    api.save('demo',state)
+    # No record of what they saw exists, so nothing is exposed.
+    for user in [parent,teacher]:
+        assert user.get(url('threads/'+id)).status_code==404 and user.get(url()).json()['items']==[]
+
+
+def test_child_added_and_removed_keep_only_own_history(client):
+    people=setup(client);teacher_id=people['teacher']['id']
+    multi=create(client,'parent',login='multi',grants=[dict(workspace='demo',view='student',entityIds=['s1','s3'])])
+    first=signed('multi')
+    about_s1=first.post(url(),json=payload(teacher_id)).json()['id']
+    about_s3=first.post(url(),json=payload(teacher_id)|dict(studentId='s3')).json()['id']
+    other_thread=signed('other').post(url(),json=payload(teacher_id)|dict(studentId='s2')).json()['id']
+    update={k:v for k,v in multi.items() if k!='id'};update['grants'][0]['entityIds']=['s3']
+    assert client.put('/api/access/users/'+multi['id'],json=update).status_code==200
+    current=signed('multi')
+    # The removed child's conversation is history now; the other child's stays live.
+    kept=detail(current,about_s1);assert kept['readOnly'] and not kept['canReply'] and len(kept['posts'])==1
+    assert current.post(url('threads/'+about_s1+'/reply'),json=dict(requestId=str(uuid4()),text='x')).status_code==404
+    live=detail(current,about_s3);assert not live['readOnly'] and live['canReply']
+    items={t['id']:t for t in current.get(url()).json()['items']}
+    assert items[about_s1]['readOnly'] and not items[about_s3]['readOnly']
+    assert current.post(url('threads/'+about_s3+'/reply'),json=dict(requestId=str(uuid4()),text='Ещё вопрос')).status_code==200
+    # A newly linked child brings no older conversations between other people.
+    parent=people['parent'];update={k:v for k,v in parent.items() if k!='id'};update['grants'][0]['entityIds']=['s1','s2']
+    assert client.put('/api/access/users/'+parent['id'],json=update).status_code==200
+    added=signed('parent')
+    assert added.get(url('threads/'+other_thread)).status_code==404
+    assert other_thread not in {t['id'] for t in added.get(url()).json()['items']}
 
 
 def test_announcement_private_audience_acknowledgement_and_withdrawal(client):
@@ -109,7 +176,9 @@ def test_announcement_scope_schoolwide_and_account_changes(client):
     # Use another existing pupil if this seed doesn't have s3.
     assert response.status_code==200,response.text
     assert parent.get(url('threads/'+id)).status_code==401
-    assert signed('parent').get(url('threads/'+id)).status_code==404
+    parent=signed('parent');value=detail(parent,id)
+    assert value['readOnly'] and value['posts'][0]['text']=='В пятницу.'
+    assert parent.post(url('threads/'+id+'/change'),json=dict(version=1,action='acknowledge')).status_code==404
 
 
 def test_reply_race_close_and_monotonic_read(client):
@@ -209,3 +278,14 @@ def test_full_backup_restores_conversation_and_private_access(client,tmp_path,mo
     assert detail(parent,id)==original
     assert signed('other').get(url('threads/'+id)).status_code==404
     assert detail(teacher,id)['posts']==original['posts']
+
+
+def test_live_through_column_is_added_to_existing_member_table(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp_path/'old.db')) as db:
+        db.execute('CREATE TABLE message_members (thread_id TEXT,user_id TEXT,role TEXT,scope_students TEXT,read_id INTEGER DEFAULT 0,ack_version INTEGER,PRIMARY KEY(thread_id,user_id))')
+        db.execute("INSERT INTO message_members VALUES ('t','u','parent','[\"s1\"]',7,2)")
+        api.messages.tables(db);api.messages.tables(db)
+        assert 'live_through' in {r[1] for r in db.execute('PRAGMA table_info(message_members)')}
+        assert db.execute('SELECT thread_id,user_id,role,scope_students,read_id,ack_version,live_through FROM message_members').fetchall()==[('t','u','parent','["s1"]',7,2,None)]

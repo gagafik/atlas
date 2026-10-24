@@ -73,7 +73,7 @@ def test_transfer_keeps_authorship_and_survives_departure_and_deactivation_of_cr
     assert teacher.post(url('threads/'+thread+'/change'),json=dict(version=3,action='close')).status_code==403
     assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove')).status_code==403
     assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['teacher']['id'],action='leave')).status_code==200
-    assert teacher.get(url('threads/'+thread)).status_code==404
+    assert detail(teacher,thread)['readOnly']
     body={k:v for k,v in people['teacher'].items() if k!='id'}|dict(active=False)
     assert client.put('/api/access/users/'+people['teacher']['id'],json=body).status_code==200
     assert detail(parent,thread)['managerId']==next_user['id'] and detail(successor,thread)['canManage']
@@ -113,7 +113,7 @@ def test_explicit_readmission_restores_history_and_retains_private_draft(client)
     id=str(uuid4());file=upload(parent,id,thread).json()['id']
     assert save(parent,id,dict(requestId=str(uuid4()),text='Личный черновик',fileIds=[file]),thread=thread).status_code==200
     assert parent.post(url('threads/'+thread+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='leave')).status_code==200
-    assert parent.get(url('threads/'+thread)).status_code==404 and get(parent,id).status_code==200
+    assert detail(parent,thread)['readOnly'] and get(parent,id).status_code==200
     assert add(teacher,thread,[people['parent']['id']],2).status_code==200
     assert detail(parent,thread)['version']==3
     assert get(teacher,id).status_code==404
@@ -168,7 +168,7 @@ def test_concurrent_add_reply_and_handoff_removal_are_versioned(client):
         results=[handoff.result(),remove.result()]
     assert sorted(r.status_code for r in results)==[200,409]
     assert detail(teacher,thread)['version']==version+1
-    assert signed('next').get(url('threads/'+thread)).status_code==(200 if results[0].status_code==200 else 404)
+    value=detail(signed('next'),thread);assert value['readOnly']==(results[1].status_code==200)
 
 
 def test_candidate_pages_filter_school_scope_before_deserializing_accounts(client,monkeypatch):
@@ -205,6 +205,6 @@ def test_new_manager_scope_checked_after_assignment_change_and_backup(client,tmp
         if workload.teacherId=='t2':workload.teacherId='t1'
         workload.additionalTeacherIds=[t for t in workload.additionalTeacherIds if t!='t2']
     api.save('demo',state)
-    assert parent.get(url('threads/'+thread)).status_code==404
+    assert detail(parent,thread)['readOnly']
     assert roster(successor,thread).status_code==404
     assert add(successor,thread,[people['staff']['id']],3).status_code==404

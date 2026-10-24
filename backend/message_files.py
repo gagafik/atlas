@@ -172,7 +172,8 @@ class MessageFiles:
                 if row[10] is None:
                     if row[2]!=user['id']:raise HTTPException(404,'Файл не найден.')
                 else:
-                    self.messages.find(db,row[4],user,directory,self.messages.thread_accounts(db,row[4],user))
+                    _,_,through=self.messages.readable(db,row[4],user,directory,self.messages.thread_accounts(db,row[4],user))
+                    if through is not None and row[10]>through:raise HTTPException(404,'Файл не найден.')
                     if self.messages.moderation.state(db,row[10])['hidden']:raise HTTPException(404,'Сообщение с этим файлом скрыто.')
                 path=storage.file_path(root_for(db),id)
                 try:stat=path.stat()

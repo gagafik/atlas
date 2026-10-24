@@ -54,12 +54,13 @@ class MessageGroups:
         return thread, accounts, self.scope(db, thread)
 
     def event(self, db, thread, user, text, action, signature, request_id, directory):
-        self.messages.post(db, thread, user, text)
+        post = self.messages.post(db, thread, user, text)
         db.execute('UPDATE message_threads SET version=version+1 WHERE id=?', (thread['id'],))
         db.execute('INSERT INTO message_requests VALUES (?,?,?,?)', (user['id'], request_id, signature, thread['id']))
         accounts = self.messages.thread_accounts(db, thread['id'], user)
-        targets = [u for uid, u in accounts.items() if uid != user['id'] and self.messages.member(db, thread, u, directory, accounts)]
-        self.messages.notifications.deliver(db, targets, directory.workspace, thread['version']+1, 'message.received')
+        live = [u for u in accounts.values() if self.messages.member(db, thread, u, directory, accounts)]
+        self.messages.advance(db, thread['id'], post, live)
+        self.messages.notifications.deliver(db, [u for u in live if u['id'] != user['id']], directory.workspace, thread['version']+1, 'message.received')
         self.access.record(db, action, directory.workspace, detail=thread['id'])
 
     def register(self, app, Workspace):

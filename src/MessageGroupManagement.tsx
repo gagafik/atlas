@@ -133,14 +133,16 @@ export default function MessageGroupManagement({
                   {person.id === roster.managerId
                     ? " · Управляет обсуждением"
                     : ""}
-                  {!person.accessible ? " · Доступ сейчас отсутствует" : ""}
+                  {!person.accessible
+                    ? " · Нет учебной связи: только чтение"
+                    : ""}
                 </span>
                 {person.id !== roster.managerId && (
                   <button
                     onClick={() => {
                       if (
                         !window.confirm(
-                          `Исключить ${person.name}? Доступ к истории и файлам обсуждения закроется.`,
+                          `Исключить ${person.name}? Новые сообщения станут недоступны; история до исключения останется у участника только для чтения.`,
                         )
                       )
                         return;
