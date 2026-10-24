@@ -60,7 +60,9 @@ def test_effective_dates_move_queue_windows_order_overdue_and_cursor(client):
     second=publish(client,'2026-08-24','2026-08-22')
     cursor=queue(pupil,limit=1).json()['nextCursor']
     assert change(teacher,key,get(teacher,key)).status_code==200
-    assert queue(pupil,limit=1,cursor=cursor).status_code==409
+    # The keyset cursor survives an extension; the row that moved may be repeated or skipped once.
+    resumed=queue(pupil,limit=1,cursor=cursor);assert resumed.status_code==200,resumed.text
+    assert resumed.json()['items'][0]['lessonKey']==second['lessonKey']
     assert items(pupil,start='2026-08-19',end='2026-08-19')==[]
     row=items(parent,start='2026-08-24',end='2026-08-24')[0]
     assert row['extended'] and row['baseDueDate']=='2026-08-19' and row['dueDate']=='2026-08-24'

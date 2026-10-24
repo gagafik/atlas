@@ -125,6 +125,20 @@ def test_start_is_idempotent_one_active_attempt_and_attempt_limit(client):
     assert len(detail(pupil)['attempts'])==2
 
 
+def test_quiz_writes_work_on_a_database_without_the_journal_schema_marker(client):
+    # A database upgraded from an earlier release has no marker until a journal read or the startup migration writes it.
+    quiz,pupil,_,teacher,_=ready(client)
+    with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'")
+    current=detail(pupil)
+    for _ in range(3):
+        attempt_=start(pupil,current);assert attempt_.status_code==200,attempt_.text
+        assert save(pupil,attempt_.json()).status_code==200
+    with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'")
+    question(teacher,'second')
+    with api.connect(read_only=True) as db:
+        assert db.execute("SELECT 1 FROM journal_projection_versions WHERE name='journal_schema'").fetchone()
+
+
 def test_autograding_types_manual_marks_and_hidden_results(client):
     record,pupil,parent,teacher=setup(client)
     base=dict(options=[],correctIds=[])

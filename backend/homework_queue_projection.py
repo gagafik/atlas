@@ -5,6 +5,7 @@ from .notifications import encoded
 
 
 def bump(db, workspace):
+    # Kept for tests and deadlines; the queue no longer binds its cursors to this counter.
     db.execute('INSERT INTO homework_queue_versions VALUES (?,1) ON CONFLICT(workspace) DO UPDATE SET version=version+1',(workspace,))
 
 

@@ -513,7 +513,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                     : item.action === "push.test"
                                       ? "Это проверочное уведомление для вашего устройства."
                                       : item.action.startsWith("absence.")
-                                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале."
+                                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале; ответственный учитель — в разделе «Работа с классами»."
                                         : item.action === "family.updated"
                                           ? "Откройте «Мои дети и доступ» в личном кабинете."
                                           : item.action.startsWith("message.")

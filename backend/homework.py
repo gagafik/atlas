@@ -70,7 +70,8 @@ class Homework:
     def __init__(self, journal, stamp):
         self.journal=journal
         self.access=journal.access
-        self.snapshots=PortalSnapshots(self.access.read,stamp)
+        # Journal and homework share one schedule cache, and so does every module built on homework.snapshots.
+        self.snapshots=journal.snapshots or PortalSnapshots(self.access.read,stamp)
 
     def tables(self,db):
         self.journal.tables(db);self.access.tables(db)
@@ -200,7 +201,8 @@ class Homework:
 
     def register(self,app,Workspace):
         from .homework_queue import HomeworkQueue
-        HomeworkQueue(self).register(app,Workspace)
+        self.queue=HomeworkQueue(self)
+        self.queue.register(app,Workspace)
         deadlines.HomeworkDeadlines(self).register(app,Workspace)
         materials.AssignmentFiles(self).register(app,Workspace)
         grading=HomeworkGrading(self)

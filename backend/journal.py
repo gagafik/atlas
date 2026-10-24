@@ -4,10 +4,11 @@ import hashlib
 import json
 from typing import Literal
 from zoneinfo import ZoneInfo
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Query, Request
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from .models import Model
 from .access import LOCAL, now
+from .journal_reads import SCHEMA, read as snapshot_read
 from .calendar_ops import resolve_day, DayContext
 from .notifications import encoded
 
@@ -201,8 +202,18 @@ def summary(rows):
 
 
 class Journal:
-    def __init__(self, access, notifications):
+    def __init__(self, access, notifications, stamp=None):
         self.access,self.notifications = access,notifications
+        # One schedule snapshot cache for the journal and every module built on homework.snapshots.
+        from .portal_cache import PortalSnapshots
+        self.snapshots = PortalSnapshots(access.read,stamp) if stamp else None
+
+    def prepare(self, db):
+        self.tables(db);self.access.tables(db)
+
+    def reading(self, operation):
+        """Run operation(db) in a read-only WAL snapshot; only schema setup takes the writer."""
+        return snapshot_read(self.access,self.prepare,operation)
 
     def tables(self, db):
         db.execute('CREATE TABLE IF NOT EXISTS journal_entries (workspace TEXT,lesson_key TEXT,version INTEGER,updated TEXT,actor_name TEXT,document TEXT,published_document TEXT,published_version INTEGER,published_at TEXT,PRIMARY KEY(workspace,lesson_key))')
@@ -230,20 +241,23 @@ class Journal:
         deadline_tables(db)
         from .homework_queue_projection import tables as homework_queue_tables
         homework_queue_tables(db)
+        # Written last: ordinary reads treat a database without it as not yet migrated. A savepoint keeps the
+        # caller free to start its own BEGIN IMMEDIATE (a plain INSERT would leave an implicit transaction open).
+        if db.execute("SELECT version FROM journal_projection_versions WHERE name='journal_schema'").fetchone()!=(SCHEMA,):
+            db.execute('SAVEPOINT journal_schema_marker')
+            try:
+                db.execute("INSERT OR REPLACE INTO journal_projection_versions VALUES ('journal_schema',?)",(SCHEMA,))
+                db.execute('RELEASE journal_schema_marker')
+            except Exception:
+                db.execute('ROLLBACK TO journal_schema_marker');db.execute('RELEASE journal_schema_marker');raise
 
-    def rows(self, workspace, day=None, keys=None, student_id=None, start=None, end=None):
-        with self.access.lock,self.access.connect() as db:
-            self.tables(db)
-            query,params = 'SELECT e.* FROM journal_entries e WHERE e.workspace=?',[workspace]
-            if day is not None:
-                query += " AND (json_extract(e.document,'$.lesson.date')=?"; params.append(day.isoformat())
-                if keys:
-                    query += ' OR e.lesson_key IN (SELECT value FROM json_each(?))'; params.append(encoded(keys))
-                query += ')'
-            if student_id is not None:
-                query += " AND e.lesson_key IN (SELECT lesson_key FROM journal_members WHERE workspace=? AND student_id=? AND kind='published') AND json_extract(e.published_document,'$.lesson.date') BETWEEN ? AND ?"
-                params += [workspace,student_id,start.isoformat(),end.isoformat()]
-            return [self.unpack(row) for row in db.execute(query,params)]
+    def rows(self, db, workspace, day, keys):
+        """Day cards inside a snapshot: only the lesson part of the draft is parsed."""
+        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson') FROM journal_entries e WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
+        params = [workspace,day.isoformat()]
+        if keys:
+            query += ' OR e.lesson_key IN (SELECT value FROM json_each(?))'; params.append(encoded(keys))
+        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4])) for r in db.execute(query+')',params)]
 
     def members(self, db, workspace, key, document, kind):
         from .coverage_projection import replace as coverage_replace
@@ -259,18 +273,28 @@ class Journal:
             from .attendance_projection import replace
             replace(db,workspace,key)
 
-    def historical_students(self, workspace, user):
-        with self.access.lock,self.access.connect() as db:
-            self.tables(db)
-            query = 'SELECT DISTINCT m.student_id,m.name FROM journal_members m JOIN journal_entries e ON e.workspace=m.workspace AND e.lesson_key=m.lesson_key WHERE m.workspace=?'
-            params = [workspace]
-            if user['role']=='teacher':
-                query += " AND m.kind='draft' AND EXISTS(SELECT 1 FROM json_each(e.document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
-                params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
-            elif user['role'] in ['student','parent']:
-                query += " AND m.kind='published' AND m.student_id IN (SELECT value FROM json_each(?))"
-                params.append(encoded(sorted(user_ids(user,workspace,'student'))))
-            return [dict(id=r[0],name=r[1]) for r in db.execute(query,params)]
+    def historical_students(self, db, workspace, user):
+        query = 'SELECT DISTINCT m.student_id,m.name FROM journal_members m JOIN journal_entries e ON e.workspace=m.workspace AND e.lesson_key=m.lesson_key WHERE m.workspace=?'
+        params = [workspace]
+        if user['role']=='teacher':
+            query += " AND m.kind='draft' AND EXISTS(SELECT 1 FROM json_each(e.document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
+            params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
+        elif user['role'] in ['student','parent']:
+            query += " AND m.kind='published' AND m.student_id IN (SELECT value FROM json_each(?))"
+            params.append(encoded(sorted(user_ids(user,workspace,'student'))))
+        return [dict(id=r[0],name=r[1]) for r in db.execute(query,params)]
+
+    def panels(self, db, workspace, user):
+        """Which management panels have anything for this account. Flags only decide what the page mounts: every endpoint still enforces rights."""
+        role = user['role']
+        result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'])
+        if role in ['teacher','student','parent']:
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('grading_rows','final_results')")}
+            if role=='teacher' and 'grading_rows' in tables:
+                result['finalGrades'] = db.execute('SELECT 1 FROM grading_rows WHERE workspace=? AND assigned=? LIMIT 1',(workspace,user['id'])).fetchone() is not None
+            elif role!='teacher' and 'final_results' in tables:
+                result['finalGrades'] = db.execute('SELECT 1 FROM final_results WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) LIMIT 1',(workspace,encoded(sorted(user_ids(user,workspace,'student'))))).fetchone() is not None
+        return result
 
     def unpack(self,row):
         return dict(workspace=row[0],lessonKey=row[1],version=row[2],updated=row[3],actor=row[4],document=json.loads(row[5]),
@@ -283,20 +307,22 @@ class Journal:
         if not allowed: raise HTTPException(403,'Нет доступа к учебному журналу этого пространства.')
         return user
 
-    def find(self, workspace, key):
-        with self.access.lock,self.access.connect() as db:
-            self.tables(db)
-            row = db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()
+    def find(self, workspace, key, db=None):
+        if db is None: return self.reading(lambda db:self.find(workspace,key,db))
+        row = db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()
         return self.unpack(row) if row else None
 
-    def entry(self, state, workspace, user, key, day, sync=False):
-        existing = self.find(workspace,key)
-        if existing:
-            current = current_lesson(state,existing['document']['lesson'])
-        else:
-            rows,_ = resolve_day(state,day)
-            current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
-        return self.resolved_entry(state,workspace,user,key,existing,current,sync=sync)
+    def entry(self, state, workspace, user, key, day, sync=False, db=None, rows_for_day=None):
+        """Saved journal, lesson and restrictions from one snapshot; rows_for_day is an optional cached schedule."""
+        def read(db):
+            existing = self.find(workspace,key,db)
+            if existing:
+                current = current_lesson(state,existing['document']['lesson'],rows_for_day)
+            else:
+                rows = rows_for_day(day) if rows_for_day else resolve_day(state,day)[0]
+                current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
+            return self.resolved_entry(state,workspace,user,key,existing,current,sync=sync,db=db)
+        return self.reading(read) if db is None else read(db)
 
     def resolved_entry(self, state, workspace, user, key, existing, current, sync=False, *, db=None):
         """Describe a journal against an already resolved, immutable school snapshot.
@@ -330,11 +356,7 @@ class Journal:
             excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
             closed=locks(db,workspace,lesson,result['document']['lesson'],existing['published']['lesson'] if existing and existing['published'] else None)
             return excuses,closed
-        if db is None:
-            with self.access.lock,self.access.connect() as connection:
-                excuses,closed=restrictions(connection)
-        else:
-            excuses,closed=restrictions(db)
+        excuses,closed=self.reading(restrictions) if db is None else restrictions(db)
         return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
                              futureLesson=bool(lesson and lesson['date']>today().isoformat()),
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
@@ -345,6 +367,12 @@ class Journal:
         else:
             row = db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(user['id'],)).fetchone()
             if not row or self.access.public(row)!=user: raise HTTPException(409,'Учётная запись изменилась. Войдите снова.')
+
+    def recheck_read(self, db, user, snap, workspace):
+        """A snapshot read answers only for the account and schedule revision it was authorized with."""
+        self.recheck_account(db,user)
+        if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(snap.state.revision,):
+            raise HTTPException(409,'Расписание изменилось. Обновите журнал.')
 
     def notify(self, db, workspace, version, before, after, key=None):
         if key:
@@ -389,7 +417,7 @@ class Journal:
         @app.get('/api/journal/options')
         def options(request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace)
-            state = self.access.read(workspace)
+            snap = self.snapshots.get(workspace);state = snap.state
             allowed_students = user_ids(user,workspace,'student')
             if user['role']=='admin': allowed_students = {s.id for s in state.students}
             elif user['role']=='teacher':
@@ -398,34 +426,46 @@ class Journal:
                 groups = {w.groupId for w in state.workloads if teachers & set(teacher_ids(w))}
                 allowed_students = {s.id for s in state.students if any(g.id in groups and (s.classId in g.classIds if g.kind=='whole' else s.id in g.studentIds) for g in state.groups)}
             students = {s.id:dict(id=s.id,name=s.name) for s in state.students if s.id in allowed_students}
-            for student in self.historical_students(workspace,user): students.setdefault(student['id'],student)
-            return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=user['role'] in ['admin','teacher','parent'],yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))
+            def read(db):
+                self.recheck_read(db,user,snap,workspace)
+                return self.historical_students(db,workspace,user),self.panels(db,workspace,user)
+            historical,panels = self.reading(read)
+            for student in historical: students.setdefault(student['id'],student)
+            return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))
 
         @app.get('/api/journal/day')
         def day_view(request: Request,day: date,workspace: Workspace='school'):
             user = self.scope(request,workspace,staff=True)
-            state = self.access.read(workspace)
-            rows,_ = resolve_day(state,day)
-            saved = {r['lessonKey']:r for r in self.rows(workspace,day=day,keys=[key_for(r) for r in rows if r['activity']=='lesson'])}
+            snap = self.snapshots.get(workspace);state = snap.state
+            rows = snap.lesson_rows(day)
+            keys = [key_for(r) for r in rows if r['activity']=='lesson']
+            def read(db):
+                self.recheck_read(db,user,snap,workspace)
+                return {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
+            saved = self.reading(read)
             result = []
             for row in rows:
                 if row['activity']!='lesson': continue
                 key = key_for(row)
                 record = saved.get(key)
-                if not (staff_read(user,workspace,row) or record and staff_read(user,workspace,record['document']['lesson'])): continue
-                result.append(dict(lessonKey=key,lesson={k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(row['studentIds']),version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['published']),archived=False))
+                if not (staff_read(user,workspace,row) or record and staff_read(user,workspace,record['lesson'])): continue
+                result.append(dict(lessonKey=key,lesson={k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(row['studentIds']),version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False))
             present = {r['lessonKey'] for r in result}
             for key,record in saved.items():
-                lesson = record['document']['lesson']
+                lesson = record['lesson']
                 if key not in present and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
-                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['published'] is not None,archived=True))
+                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True))
             result.sort(key=lambda r:(r['lesson']['start'],r['lesson']['group'],r['lesson']['subject']))
             return dict(revision=state.revision,lessons=result)
 
         @app.get('/api/journal/entry')
         def get_entry(request: Request,lessonKey: str,day: date,syncRoster: bool=False,workspace: Workspace='school'):
             user = self.scope(request,workspace,staff=True)
-            return self.entry(self.access.read(workspace),workspace,user,lessonKey,day,syncRoster)
+            snap = self.snapshots.get(workspace)
+            def read(db):
+                self.recheck_read(db,user,snap,workspace)
+                return self.entry(snap.state,workspace,user,lessonKey,day,syncRoster,db=db,rows_for_day=snap.lesson_rows)
+            return self.reading(read)
 
         @app.put('/api/journal/entry')
         def save_entry(body: SaveEntry,request: Request,workspace: Workspace='school'):
@@ -493,40 +533,63 @@ class Journal:
         @app.get('/api/journal/history')
         def history(request: Request,lessonKey: str,workspace: Workspace='school',version: int | None=None,beforeVersion: int | None=None):
             user = self.scope(request,workspace,staff=True)
-            record = self.find(workspace,lessonKey)
-            if not record: raise HTTPException(404,'Запись не найдена.')
-            current = current_lesson(self.access.read(workspace),record['document']['lesson'])
-            if not (staff_read(user,workspace,record['document']['lesson']) or current and staff_read(user,workspace,current)):
-                raise HTTPException(403,'Нет доступа к этой записи.')
-            with self.access.lock,self.access.connect() as db:
+            snap = self.snapshots.get(workspace)
+            def read(db):
+                self.recheck_read(db,user,snap,workspace)
+                record = self.find(workspace,lessonKey,db)
+                if not record: raise HTTPException(404,'Запись не найдена.')
+                current = current_lesson(snap.state,record['document']['lesson'],snap.lesson_rows)
+                if not (staff_read(user,workspace,record['document']['lesson']) or current and staff_read(user,workspace,current)):
+                    raise HTTPException(403,'Нет доступа к этой записи.')
                 query = 'SELECT version,updated,actor_name,action,document FROM journal_history WHERE workspace=? AND lesson_key=?'
                 params = [workspace,lessonKey]
                 if version is not None: query += ' AND version=?'; params.append(version)
                 if beforeVersion is not None: query += ' AND version<?'; params.append(beforeVersion)
-                rows = db.execute(query+' ORDER BY version DESC LIMIT 50',params).fetchall()
+                return db.execute(query+' ORDER BY version DESC LIMIT 50',params).fetchall()
+            rows = self.reading(read)
             return [dict(version=r[0],updated=r[1],actor=r[2],action=r[3],**(dict(document=json.loads(r[4])) if version is not None else {})) for r in rows]
 
         @app.get('/api/journal/report')
-        def report(request: Request,studentId: str,start: date,end: date,workspace: Workspace='school'):
+        def report(request: Request,studentId: str,start: date,end: date,workspace: Workspace='school',
+                   after: str | None=Query(default=None,pattern=r'^\d{4}-\d{2}-\d{2}\|\d{2}:\d{2}\|[a-f0-9]{64}$'),limit: int=Query(default=100,ge=1,le=200)):
+            """Published rows by (date, start, lessonKey). The first page also carries the summary of the whole period."""
             user = self.scope(request,workspace)
             if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
             if user['role'] in ['student','parent'] and studentId not in user_ids(user,workspace,'student'):
                 raise HTTPException(403,'Этот ученик не назначен вашей учётной записи.')
-            rows = []
-            for entry in self.rows(workspace,student_id=studentId,start=start,end=end):
-                document = entry['published']
-                if not document or not start.isoformat()<=document['lesson']['date']<=end.isoformat(): continue
-                if user['role'] in ['admin','teacher'] and not staff_read(user,workspace,document['lesson']): continue
-                projected = pupil_projection(document,studentId)
-                if projected: rows.append(projected | dict(lessonKey=entry['lessonKey'],version=entry['publishedVersion'],publishedAt=entry['publishedAt']))
             from .absences import approvals
-            lessons=[r['lesson']|dict(students=[dict(id=studentId)]) for r in rows]
-            with self.access.lock,self.access.connect() as db:
-                accepted=approvals(db,workspace,lessons)
-            for i,row in enumerate(rows):
-                excuse=accepted.get(i,{}).get(studentId)
-                if excuse and row['record']['attendance']=='absent':
-                    row['record']=row['record']|dict(attendance='excused')
-                    row['absenceApproval']=excuse
-            rows.sort(key=lambda r:(r['lesson']['date'],r['lesson']['start'],r['lesson']['subject']))
-            return dict(rows=rows,summary=summary(rows),source='published')
+            def read(db):
+                self.recheck_account(db,user)
+                # The attendance projection holds one row per published record, so it drives the range scan.
+                query = 'SELECT e.lesson_key,e.published_document,e.published_version,e.published_at,a.day,a.start FROM journal_attendance a JOIN journal_entries e ON e.workspace=a.workspace AND e.lesson_key=a.lesson_key WHERE a.workspace=? AND a.student_id=? AND a.day BETWEEN ? AND ? AND e.published_document IS NOT NULL'
+                params = [workspace,studentId,start.isoformat(),end.isoformat()]
+                if user['role']=='teacher':
+                    query += " AND EXISTS(SELECT 1 FROM json_each(e.published_document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
+                    params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
+                if after:
+                    query += ' AND (a.day,a.start,a.lesson_key)>(?,?,?)'; params += after.split('|')
+                query += ' ORDER BY a.day,a.start,a.lesson_key'
+                if after: query += ' LIMIT ?'; params.append(limit+1)
+                fetched = db.execute(query,params).fetchall()
+                more = bool(after) and len(fetched)>limit
+                if more: fetched = fetched[:limit]
+                rows,marks = [],[]
+                for key,raw,published_version,published_at,day,begin in fetched:
+                    document = json.loads(raw)
+                    if not start.isoformat()<=document['lesson']['date']<=end.isoformat(): continue
+                    if user['role'] in ['admin','teacher'] and not staff_read(user,workspace,document['lesson']): continue
+                    projected = pupil_projection(document,studentId)
+                    if projected:
+                        rows.append(projected | dict(lessonKey=key,version=published_version,publishedAt=published_at));marks.append(f'{day}|{begin}|{key}')
+                def approve(chosen):
+                    accepted = approvals(db,workspace,[r['lesson']|dict(students=[dict(id=studentId)]) for r in chosen])
+                    for i,row in enumerate(chosen):
+                        excuse = accepted.get(i,{}).get(studentId)
+                        if excuse and row['record']['attendance']=='absent':
+                            row['record'] = row['record']|dict(attendance='excused')
+                            row['absenceApproval'] = excuse
+                approve(rows)
+                # A later page continues after the last row it scanned, even if some were filtered out.
+                if after: return dict(rows=rows,summary=None,nextAfter=f'{fetched[-1][4]}|{fetched[-1][5]}|{fetched[-1][0]}' if more else None,source='published')
+                return dict(rows=rows[:limit],summary=summary(rows),nextAfter=marks[limit-1] if len(rows)>limit else None,source='published')
+            return self.reading(read)
