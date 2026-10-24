@@ -264,7 +264,8 @@ def plan_generation(state, templates, start, end, generated, body):
                 made = generated.get(key)
                 if (body.updateUntouched and made and current.kind == 'duty' and not current.locked and made['fingerprint'] != digest
                         and fingerprint(commitment_fields(current)) == made['fingerprint']):
-                    replacement = Commitment(id=cid, kind='duty', teacherIds=[x for x in current.teacherIds if not eligible or x in eligible], **fields)
+                    try: replacement = Commitment(id=cid, kind='duty', teacherIds=[x for x in current.teacherIds if not eligible or x in eligible], **fields)
+                    except ValueError as exc: skipped.append(row | dict(reason=reason_of(exc))); continue
                     updated.append(replacement); replaced[cid] = replacement; keys.append((t.id, day.isoformat(), cid, digest))
                 else: existing += 1
                 continue
@@ -366,7 +367,8 @@ def notify_changes(notifications, db, workspace, before, after):
         for teacher in had - has: changes[teacher]['removed'].append(a)
         if a and b and shape(a) != shape(b):
             for teacher in had & has: changes[teacher]['moved'].append(b)
-    if not changes: return
+    # Without accounts (the local user) there is nobody to tell and nothing to remind.
+    if not changes or not db.execute('SELECT 1 FROM accounts LIMIT 1').fetchone(): return
     labels = dict(old=labeller(before), new=labeller(after))
     if config['enabled']:
         # The notice below already states these duties, so the worker must not repeat them.

@@ -116,11 +116,18 @@ def test_roles(client):
     assert client.get('/api/duties/options?workspace=demo').json()['settings']['remindAt'] == '18:00'
 
 
-def test_local_user_is_a_manager_but_never_a_teacher(client):
+def test_local_user_is_a_manager_but_never_a_teacher(client, monkeypatch):
     assert client.get('/api/duties/options?workspace=demo').json()['role'] == 'manager'
     body = dict(requestId=rid(), commitmentId='d1', fromTeacherId='t2')
     assert client.post('/api/duties/swaps?workspace=demo', json=body).status_code == 403
     assert client.get('/api/duties/mine?workspace=demo').status_code == 422
+    # Without accounts nobody is told: no duty notices, no marks, no grant lookup tables.
+    clock(monkeypatch, MON.replace(day=1))
+    put_commitments(duty('d1', MON, teacherIds=['t2']))
+    with api.connect() as db:
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='account_grant_candidates'").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM notifications WHERE action LIKE 'duty.%'").fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM duty_reminders').fetchone()[0] == 0
     enable(client)
     # Once accounts exist, the unauthenticated local user is gone.
     from fastapi.testclient import TestClient
@@ -300,6 +307,26 @@ def test_generation_apply_is_atomic(client, monkeypatch):
         assert db.execute('SELECT count(*) FROM duty_generated').fetchone()[0] == 0
         assert db.execute('SELECT count(*) FROM duty_requests').fetchone()[0] == 1
     assert apply(client, shown)['counts']['created'] == 4
+
+
+def test_generation_that_adds_violations_cannot_be_applied(client):
+    put_commitments()
+    # Room r0 is taken by the Monday lesson at 08:20-09:00, so a duty there collides.
+    tid = save_template(client, afterPeriod=None, startTime='08:30', endTime='08:50', roomIds=['r0'], location='')['id']
+    shown = preview(client, [tid], end='2026-09-13')
+    assert shown['counts']['created'] == 1 and not shown['canApply'] and shown['newIssues']
+    response = client.post('/api/duties/generate/apply?workspace=demo', json=dict(requestId=rid(), revision=shown['revision'], token=shown['token']))
+    assert response.status_code == 422 and 'нарушения' in response.json()['detail']
+    assert api.read('demo').commitments == []
+
+
+def test_reminder_worker_starts_and_stops_with_the_application(client):
+    import threading
+    from fastapi.testclient import TestClient
+    alive = lambda: any(t.name == 'atlas-duty-reminders' and t.is_alive() for t in threading.enumerate())
+    with TestClient(api.app, headers=HEADERS) as running:
+        assert running.get('/api/health').status_code == 200 and alive()
+    assert not alive()
 
 
 def test_template_edit_after_preview_blocks_apply(client):
