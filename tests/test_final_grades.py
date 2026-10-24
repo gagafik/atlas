@@ -58,7 +58,7 @@ def test_workflow_assignment_privacy_and_personal_publication(client):
     r=propose(t,r,s);assert r.status_code==200,r.text
     r=publish(client,r.json())
     personal=report(parent,p).json()['items'];assert len(personal)==1 and personal[0]['label']=='Выше'
-    assert 'explanation' not in personal[0] and 'author' not in personal[0] and personal[0]['current']
+    assert 'explanation' not in personal[0] and 'author' not in personal[0] and 'calculation' not in personal[0] and personal[0]['current']
     assert report(parent,p,'s2').status_code==403
     assert parent.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').status_code==403
     assert parent.get(BASE+'/rows/'+r['id']+'/history?workspace=demo').status_code==403
@@ -188,3 +188,81 @@ def test_evidence_pagination_and_atomic_publication_rollback(client):
     with pytest.raises(sqlite3.IntegrityError):batch(client,[r],'publish')
     assert report(signed('parent'),p).json()['items']==[]
     with api.connect() as db:assert db.execute('SELECT version,status FROM grading_rows WHERE id=?',(r['id'],)).fetchone()==(r['version'],'approved')
+
+
+def test_labels_scale_needs_no_explanation_for_manual_grade(client):
+    p,b,s,r,_=seeded(client);lab=scale(client,kind='labels')
+    done=propose(client,r,lab,label='Ниже');assert done.status_code==200,done.text
+    assert done.json()['proposal']['explanation']==''
+    empty=next(v for v in sheet(client,b).json()['items'] if not v['source']['published'])
+    assert propose(client,empty,lab,label='',outcome='exempt').status_code==422
+    assert propose(client,empty,lab,label='',outcome='exempt',explanation='Освобождён приказом').status_code==200
+    # Threshold scales keep requiring a reason for a label that differs from the recommendation.
+    other=next(v for v in sheet(client,b).json()['items'] if v['studentId']=='s3')
+    assert propose(client,other,s).status_code==422
+
+
+def test_sheet_and_report_are_ordered_by_names(client):
+    state=api.read('demo')
+    for c in state.classes:
+        if c.id=='c-demo-d':c.name='7D'
+    api.save('demo',state)
+    p,b,s,r,_=seeded(client)
+    data=sheet(client,b).json()
+    assert [c['name'] for c in data['classes']]==['7D','10A'] and [c['name'] for c in data['subjects']]==['Английский язык','Математика']
+    order=[(i['source']['student']['className'],i['source']['student']['name'],i['source']['subject']) for i in data['items']]
+    assert order==[('7D','Ученик 3 (пример)','Математика'),('10A','Ученик 1 (пример)','Английский язык'),('10A','Ученик 1 (пример)','Математика'),('10A','Ученик 2 (пример)','Английский язык')]
+    assert [i['studentId'] for i in sheet(client,b,classId='c-demo-a').json()['items']]==['s1','s1','s2']
+    second=next(v for v in data['items'] if v['studentId']=='s1' and v['subjectId']!=r['subjectId'])
+    second=propose(client,second,s,label='',outcome='not_assessed',explanation='Недостаточно работ').json()
+    publish(client,second);publish(client,propose(client,r,s).json())
+    assert [i['subject'] for i in report(signed('parent'),p).json()['items']]==['Английский язык','Математика']
+
+
+def test_families_never_receive_calculation_details(client):
+    p,b,s,r,_=seeded(client);publish(client,propose(client,r,s).json());parent=signed('parent')
+    assert 'calculation' not in report(parent,p).json()['items'][0]
+    with api.connect() as db:
+        db.execute("UPDATE final_results SET document=json_set(document,'$.calculation',json('{\"recommended\":\"Выше\"}'))")
+        assert 'calculation' in json.loads(db.execute('SELECT document FROM final_results').fetchone()[0])
+    assert 'calculation' not in report(parent,p).json()['items'][0]
+
+
+def test_reason_is_stored_only_for_return_reopen_and_withdraw(client):
+    p,b,s,r,_=seeded(client);r=propose(client,r,s).json()
+    last=lambda:client.get(BASE+'/rows/'+r['id']+'/history?workspace=demo').json()['items'][0]
+    r=batch(client,[r],'approve',reason='старая причина').json()['items'][0]
+    assert last()['action']=='approve' and last()['reason']==''
+    r=batch(client,[r],'return',reason='Нужна проверка').json()['items'][0]
+    assert last()['reason']=='Нужна проверка'
+    r=batch(client,[propose(client,r,s).json()],'approve').json()['items'][0]
+    r=batch(client,[r],'publish',reason='остаток').json()['items'][0]
+    assert last()['action']=='publish' and last()['reason']==''
+    # Reopening and withdrawing a published grade keep the audit reason.
+    r=batch(client,[r],'reopen',reason='Проверка итога').json()['items'][0]
+    assert last()['action']=='reopen' and last()['reason']=='Проверка итога'
+    r=publish(client,propose(client,r,s).json())
+    withdrawn=batch(client,[r],'withdraw',reason='Ошибочная публикация');assert withdrawn.status_code==200,withdrawn.text
+    assert last()['action']=='withdraw' and last()['reason']=='Ошибочная публикация'
+
+
+def test_reclose_preserves_assignment_and_proposal(client):
+    p,b,s,r,record=seeded(client);t=signed('teacher')
+    submitted=propose(t,r,s);assert submitted.status_code==200,submitted.text
+    publish(client,submitted.json())
+    reopened=action(client,p,'reopen').json()
+    changed=entry(client,record['lessonKey']);changed['document']['content']['records'][0]['grades'][0]['score']=5
+    write(client,changed,publish=True).raise_for_status();p=close(client,reopened);b2=prepare(client,p)
+    assert b['id']!=b2['id']
+    old={(v['studentId'],v['subjectId']):v for v in sheet(client,b).json()['items']};new={(v['studentId'],v['subjectId']):v for v in sheet(client,b2).json()['items']}
+    carried=new[(r['studentId'],r['subjectId'])]
+    assert carried['assigned']==r['assigned'] and carried['status']=='draft' and carried['version']==1
+    assert carried['proposal']['label']=='Выше' and 'approval' not in carried['proposal'] and carried['proposal']['carriedFrom']['bookId']==b['id']
+    assert len(sheet(t,b2).json()['items'])==1
+    for key,value in new.items():
+        if key!=(r['studentId'],r['subjectId']) and key in old: assert value['proposal'] is None and value['assigned']=='' and old[key]['proposal'] is None
+    # The proposal is only a starting point: saving recalculates it from the new evidence.
+    again=propose(t,carried,s,label='Ниже',explanation='Новые работы');assert again.status_code==200,again.text
+    assert again.json()['proposal']['calculation']['recommended']=='Ниже' and 'carriedFrom' not in again.json()['proposal']
+    # The old book and the existing publication are untouched until the new row is republished.
+    assert not sheet(client,b).json()['book']['current'] and report(signed('parent'),p).json()['items'][0]['label']=='Выше'

@@ -33,6 +33,17 @@ def public(job):
     return {k:v for k,v in job.items() if k not in ['principal','start','end','abandoned','needsCleanup']}
 
 
+def carried(db,workspace,book_id,chunk):
+    """Assignment and proposal of the previous closure for the pairs in this chunk, as drafts for re-checking."""
+    wanted={(r[1],r[2]) for r in chunk};result={}
+    for student,subject,assigned,proposal in db.execute('SELECT student_id,subject_id,assigned,proposal FROM grading_rows WHERE workspace=? AND book_id=? AND student_id IN (SELECT value FROM json_each(?))',(workspace,book_id,encoded(sorted({r[1] for r in chunk})))):
+        if (student,subject) not in wanted:continue
+        if proposal:
+            value=json.loads(proposal);value.pop('approval',None);value['carriedFrom']=dict(bookId=book_id);proposal=encoded(value)
+        result[(student,subject)]=(assigned,proposal)
+    return result
+
+
 class Queue:
     def __init__(self,path,*,clock=time.time,lease=15):
         self.path=Path(path).resolve();self.clock=clock;self.lease=lease
@@ -188,7 +199,7 @@ class Queue:
         # Keep connections open, but commit each batch separately. Reopening a
         # writer for every 250 rows repeatedly rebuilds SQLite's page cache.
         with closing(sqlite3.connect(Path(stage).resolve().as_uri()+'?mode=ro',uri=True)) as source,closing(sqlite3.connect(self.path,timeout=5)) as db:
-            total=sum(source.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ['facts','projected','rows']);done=0
+            total=sum(source.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ['facts','projected','rows']);done=0;previous=False
             for table in ['facts','projected','rows']:
                 cursor=source.execute('SELECT * FROM '+table)
                 while chunk:=cursor.fetchmany(CHUNK):
@@ -198,7 +209,13 @@ class Queue:
                         if not self.owns(db,job['id'],token) or self.load(db,job['id'])['status']=='cancelling' or self.valid(db,job):raise Cancelled()
                         if table=='facts':db.executemany('INSERT OR IGNORE INTO grading_facts(workspace,lesson_key,version,student_id,subject_id,day,start,summary,works) VALUES (?,?,?,?,?,?,?,?,?)',[(job['workspace'],*r) for r in chunk])
                         elif table=='projected':db.executemany('INSERT OR IGNORE INTO grading_projected VALUES (?,?,?)',[(job['workspace'],*r) for r in chunk])
-                        else:db.executemany('INSERT INTO grading_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',[(job['workspace'],r[0],job['bookId'],r[1],r[2],r[3],'',1,'draft',r[4],None) for r in chunk])
+                        else:
+                            # Re-closing keeps who is responsible and the proposed grade; evidence may differ, so rows restart as drafts.
+                            # The carry writes no grading_history entry; the earlier book stays frozen.
+                            if previous is False:previous=db.execute('SELECT id FROM grading_books WHERE workspace=? AND period_id=? AND closure_version<? ORDER BY closure_version DESC LIMIT 1',(job['workspace'],job['periodId'],job['closureVersion'])).fetchone()
+                            old=carried(db,job['workspace'],previous[0],chunk) if previous else {}
+                            picked=[old.get((r[1],r[2]),('',None)) for r in chunk]
+                            db.executemany('INSERT INTO grading_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',[(job['workspace'],r[0],job['bookId'],r[1],r[2],r[3],c[0],1,'draft',r[4],c[1]) for r,c in zip(chunk,picked)])
                     done+=len(chunk);progress(dict(phase='saving',completed=done,total=total))
                     # Give waiting journal writers a chance before reacquiring
                     # SQLite's single writer slot for the next batch.

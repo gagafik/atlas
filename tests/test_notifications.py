@@ -3,7 +3,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from backend import api
-from backend.access import now
+from backend.access import LOCAL, now
 from backend.models import DatedLesson, Commitment, TeacherAbsence, Event
 from test_access import client, enable, create, signed, HEADERS
 
@@ -139,3 +139,35 @@ def test_retention_and_paged_unread_history(client):
     assert len(second['items']) == 50 and not {x['id'] for x in first['items']} & {x['id'] for x in second['items']}
     with api.connect() as db: db.execute('UPDATE notifications SET created=?',((now()-timedelta(days=91)).isoformat(),))
     assert inbox(client)['unread'] == 0
+
+
+def test_topic_keeps_one_unread_entry(client):
+    def deliver(revision,topic=None):
+        with api.access.lock, api.connect() as db: api.notifications.deliver(db,[LOCAL],'demo',revision,'forms.submitted',topic=topic)
+    def rows(topic):
+        with api.connect() as db:
+            clause = 'topic IS NULL AND action=?' if topic is None else 'topic=?'
+            return db.execute(f'SELECT id,revision,read_at FROM notifications WHERE user_id=? AND {clause} ORDER BY id',(LOCAL['id'],'forms.submitted' if topic is None else topic)).fetchall()
+    deliver(1,'t1'); deliver(2,'t1')
+    (first,) = rows('t1')
+    assert first[1] == 2 and first[2] is None
+    assert client.post('/api/notifications/read',json={'ids':[first[0]]}).status_code == 200
+    deliver(3,'t1')
+    kept = rows('t1')
+    assert [r[1] for r in kept] == [2,3] and kept[0][2] and kept[1][2] is None
+    deliver(4,'t2')
+    assert len(rows('t1')) == 2 and len(rows('t2')) == 1
+    deliver(5); deliver(6)
+    assert len(rows(None)) == 2
+    assert all('topic' not in item for item in inbox(client)['items'])
+
+
+def test_topic_column_is_added_to_an_existing_notifications_table(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from backend.notifications import Notifications
+    with closing(sqlite3.connect(tmp_path / 'old.db')) as db:
+        db.execute('CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT)')
+        db.execute("INSERT INTO notifications(user_id,permissions,workspace,revision,created,action) VALUES ('u','p','demo',1,'2026-01-01T00:00:00','saved')")
+        Notifications(None).tables(db); Notifications(None).tables(db)
+        assert db.execute('SELECT action,topic FROM notifications').fetchall() == [('saved', None)]

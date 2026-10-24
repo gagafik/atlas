@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 import QuizFiles from "./QuizFiles";
 import {
@@ -39,6 +40,7 @@ export default function QuizBankPanel({
     [archived, setArchived] = useState(false),
     [epoch, setEpoch] = useState(0);
   const [busy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false),
     [error, setError] = useState(""),
     [editing, setEditing] = useState<BankItem | null>(null),
     [dirty, setDirty] = useState(false);
@@ -253,25 +255,15 @@ export default function QuizBankPanel({
     try {
       for (const file of batch) {
         const params = new URLSearchParams({ workspace, filename: file.name });
-        const response = await fetch(`/api/journal/quiz-files?${params}`, {
-          method: "POST",
-          headers: {
-            "X-Atlas-Request": "1",
-            "Content-Type": "application/octet-stream",
+        const result = await uploadFile(
+          `/api/journal/quiz-files?${params}`,
+          file,
+          {
+            signal: controller.signal,
+            onBusy: (b) => alive.current && setServerBusy(b),
+            fallback: "Не удалось загрузить файл.",
           },
-          body: file,
-          signal: controller.signal,
-        });
-        const result = await response.json();
-        if (!response.ok) {
-          if (response.status === 401)
-            window.dispatchEvent(new Event("atlas-auth-required"));
-          throw new Error(
-            typeof result.detail === "string"
-              ? result.detail
-              : "Не удалось загрузить файл.",
-          );
-        }
+        );
         if (alive.current) {
           setEditing((old) =>
             old
@@ -289,6 +281,8 @@ export default function QuizBankPanel({
         }
       }
     } catch (e: any) {
+      if (e.status === 401)
+        window.dispatchEvent(new Event("atlas-auth-required"));
       if (alive.current && e.name !== "AbortError") setError(e.message);
     } finally {
       uploadLock.current = false;
@@ -650,6 +644,9 @@ export default function QuizBankPanel({
                 До 6 файлов по 10 МБ: изображения, PDF, документы Office, текст,
                 аудио и видео. Ученик увидит их после начала попытки.
               </small>
+              {serverBusy && (
+                <small role="status">Сервер занят, повторяем…</small>
+              )}
             </fieldset>
             {(q.kind === "single" || q.kind === "multiple") && (
               <fieldset className="quiz-options">

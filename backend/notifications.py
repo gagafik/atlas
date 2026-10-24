@@ -110,6 +110,9 @@ class Notifications:
         db.execute('CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_owner ON notifications(user_id,permissions,id)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_age ON notifications(created)')
+        if 'topic' not in {r[1] for r in db.execute('PRAGMA table_info(notifications)')}:
+            db.execute('ALTER TABLE notifications ADD COLUMN topic TEXT')
+        db.execute('CREATE INDEX IF NOT EXISTS notification_topic ON notifications(user_id,topic)')
         db.execute('CREATE TABLE IF NOT EXISTS notification_preferences (user_id TEXT PRIMARY KEY,enabled INTEGER)')
         from .web_push import tables
         tables(db)
@@ -155,14 +158,16 @@ class Notifications:
                 result.append(user)
         return result
 
-    def deliver(self, db, users, workspace, revision, action):
+    def deliver(self, db, users, workspace, revision, action, topic=None):
+        """topic: at most one unread entry per user and topic; a newer event replaces it."""
         self.tables(db)
         muted = {r[0] for r in db.execute('SELECT user_id FROM notification_preferences WHERE enabled=0')}
         created = now().isoformat()
         for user in users:
             if user['id'] in muted: continue
-            notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action) VALUES (?,?,?,?,?,?)',
-                       (user['id'], permission_key(user), workspace, revision, created, action)).lastrowid
+            if topic: db.execute('DELETE FROM notifications WHERE user_id=? AND topic=? AND read_at IS NULL', (user['id'], topic))
+            notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,topic) VALUES (?,?,?,?,?,?,?)',
+                       (user['id'], permission_key(user), workspace, revision, created, action, topic)).lastrowid
             from .web_push import enqueue
             enqueue(db,user,notice)
             db.execute('DELETE FROM notifications WHERE user_id=? AND id NOT IN (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500)', (user['id'], user['id']))

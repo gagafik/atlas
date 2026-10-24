@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "./api";
+import { uploadFile } from "./uploads";
 
 export type MessageFile = {
   id: string;
@@ -28,7 +29,8 @@ export default function MessageAttachments({
   busy: boolean;
   run: (fn: () => Promise<void>) => Promise<void>;
 }) {
-  const [available, setAvailable] = useState<MessageFile[]>(items);
+  const [available, setAvailable] = useState<MessageFile[]>(items),
+    [serverBusy, setServerBusy] = useState(false);
   const alive = useRef(true),
     controller = useRef<AbortController | null>(null);
   useEffect(() => {
@@ -65,29 +67,16 @@ export default function MessageAttachments({
                   filename: file.name,
                 });
                 if (threadId) params.set("threadId", threadId);
-                const response = await fetch(`/api/messages/files?${params}`, {
-                  method: "POST",
-                  headers: {
-                    "X-Atlas-Request": "1",
-                    "Content-Type": "application/octet-stream",
+                const result = await uploadFile(
+                  `/api/messages/files?${params}`,
+                  file,
+                  {
+                    signal: controller.current.signal,
+                    onBusy: (b) => alive.current && setServerBusy(b),
+                    unreadable:
+                      "Ответ загрузки не получен. Нажмите «Найти мои загрузки» перед повтором.",
                   },
-                  body: file,
-                  signal: controller.current.signal,
-                });
-                let result: any;
-                try {
-                  result = await response.json();
-                } catch {
-                  throw Error(
-                    "Ответ загрузки не получен. Нажмите «Найти мои загрузки» перед повтором.",
-                  );
-                }
-                if (!response.ok)
-                  throw Error(
-                    typeof result.detail === "string"
-                      ? result.detail
-                      : "Файл не принят.",
-                  );
+                );
                 if (!alive.current) return;
                 setAvailable((old) => [...old, result]);
                 setItems((old) => [...old, result]);
@@ -96,6 +85,7 @@ export default function MessageAttachments({
           }}
         />
         <small>До 5 файлов по 10 МБ. До отправки их видите только вы.</small>
+        {serverBusy && <small role="status">Сервер занят, повторяем…</small>}
       </label>
       {!!available.length && (
         <div className="message-file-choices">

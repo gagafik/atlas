@@ -1,6 +1,5 @@
 """Private uploads retained by immutable library versions, including copied versions."""
 import asyncio
-from datetime import timedelta
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -50,24 +49,28 @@ def bind_files(db, ids, workspace, material, version, user, *, trusted=False):
         db.execute('INSERT INTO teaching_material_file_links VALUES (?,?,?)',(id,material,version))
 
 
-def collect_unused(db):
-    rows=db.execute('''SELECT f.id FROM teaching_material_files f WHERE
+def unused_rows(db, limit=20, days=1):
+    stale,old=files.cutoffs(days)
+    return [(r[0],r[1]) for r in db.execute('''SELECT f.id,f.size FROM teaching_material_files f WHERE
         ((f.status='uploading' AND f.created<?) OR (f.status='ready' AND f.created<?))
         AND NOT EXISTS(SELECT 1 FROM teaching_material_file_links l WHERE l.file_id=f.id)
-        ORDER BY f.created LIMIT 20''',((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
-    for (id,) in rows:
-        try: files.file_path(root_for(db),id).unlink(missing_ok=True)
+        ORDER BY f.created LIMIT ?''',(stale,old,limit))]
+
+
+def collect_unused(db):
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try: files.release_row(db,'teaching_material_files',root,id)
         except OSError: continue
-        db.execute('DELETE FROM teaching_material_files WHERE id=?',(id,))
 
 
 def reserve(db, workspace, user, filename):
     name=media.name_for(filename)
     size=db.execute('SELECT coalesce(sum(size),0) FROM teaching_material_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
     pending=db.execute("SELECT count(*) FROM teaching_material_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
-    if files.total_stored(db)+files.MAX_FILE>files.total_limit() or size+files.MAX_FILE>250*1024*1024:
-        raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
-    if pending>=2: raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+    if size+files.MAX_FILE>250*1024*1024: raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
+    files.require_capacity(db,'materials')
+    if pending>=2: raise files.busy('Дождитесь окончания текущих загрузок.')
     id=uuid4().hex
     db.execute('INSERT INTO teaching_material_files VALUES (?,?,?,?,?,?,?,NULL)',(id,workspace,user['id'],name,files.MAX_FILE,now().isoformat(),'uploading'))
     return id,name,root_for(db)
@@ -82,7 +85,7 @@ class MaterialFiles:
 
         @app.post('/api/journal/material-files')
         async def upload(request:Request,filename:str,workspace:Workspace='school'):
-            if not files.UPLOAD_SLOTS.acquire(blocking=False): raise HTTPException(429,'Слишком много загрузок. Попробуйте чуть позже.')
+            slots=await files.acquire_slot()
             id=None;path=None;stream=None;finished=False
             try:
                 user=self.library.scope(request,workspace)
@@ -127,7 +130,7 @@ class MaterialFiles:
                                     if path: path.unlink(missing_ok=True)
                                     db.execute('DELETE FROM teaching_material_files WHERE id=?',(id,))
                         await run_in_threadpool(cleanup)
-                finally: files.UPLOAD_SLOTS.release()
+                finally: slots.release()
 
         @app.get('/api/journal/material-files/{id}')
         def download(id:str,request:Request,workspace:Workspace='school',materialId:str|None=None,version:int|None=None,lessonKey:str|None=None,download:bool=False):

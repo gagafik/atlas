@@ -1,6 +1,5 @@
 """Immutable private question files; downloads use the quiz's existing projections."""
 import asyncio
-from datetime import timedelta
 import os
 from pathlib import Path
 from typing import Literal
@@ -53,24 +52,28 @@ def bind_question(db,workspace,question,version,user,document):
             db.execute('INSERT INTO quiz_file_links VALUES (?,?,?,?)',(id,workspace,question,version))
 
 
-def collect_unused(db):
-    rows=db.execute('''SELECT f.id FROM quiz_files f WHERE
+def unused_rows(db,limit=20,days=1):
+    stale,old=files.cutoffs(days)
+    return [(r[0],r[1]) for r in db.execute('''SELECT f.id,f.size FROM quiz_files f WHERE
         ((f.status='uploading' AND f.created<?) OR (f.status='ready' AND f.created<?))
         AND NOT EXISTS(SELECT 1 FROM quiz_file_links l WHERE l.file_id=f.id)
-        ORDER BY f.created LIMIT 20''',((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
-    for (id,) in rows:
-        try:files.file_path(root_for(db),id).unlink(missing_ok=True)
+        ORDER BY f.created LIMIT ?''',(stale,old,limit))]
+
+
+def collect_unused(db):
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try:files.release_row(db,'quiz_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
 
 
 def reserve(db,workspace,user,filename):
     name=media.name_for(filename)
     size=db.execute('SELECT coalesce(sum(size),0) FROM quiz_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
     pending=db.execute("SELECT count(*) FROM quiz_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
-    if files.total_stored(db)+files.MAX_FILE>files.total_limit() or size+files.MAX_FILE>250*1024*1024:
-        raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
-    if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+    if size+files.MAX_FILE>250*1024*1024:raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
+    files.require_capacity(db,'quizzes')
+    if pending>=2:raise files.busy('Дождитесь окончания текущих загрузок.')
     id=uuid4().hex
     db.execute('INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)',(id,workspace,user['id'],name,files.MAX_FILE,now().isoformat(),'uploading'))
     return id,name,root_for(db)
@@ -81,10 +84,9 @@ def collect_own_stale(db,user):
     """A crash can strand up to 200 reservations, but collect_unused frees only 20 school-wide per call
     and a later 429 would roll even that back: the caller's own abandoned rows are freed at once."""
     root=root_for(db)
-    for (id,) in db.execute("SELECT id FROM quiz_files WHERE owner_id=? AND status='uploading' AND created<?",(user['id'],(now()-timedelta(minutes=30)).isoformat())).fetchall():
-        try:files.file_path(root,id).unlink(missing_ok=True)
+    for (id,) in db.execute("SELECT id FROM quiz_files WHERE owner_id=? AND status='uploading' AND created<?",(user['id'],files.cutoffs()[0])).fetchall():
+        try:files.release_row(db,'quiz_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
 
 
 def package_quota(db,user,total):
@@ -123,7 +125,7 @@ class QuizFiles:
     def register(self,app,Workspace):
         @app.post('/api/journal/quiz-files')
         async def upload(request:Request,filename:str,workspace:Workspace='school'):
-            if not files.UPLOAD_SLOTS.acquire(blocking=False): raise HTTPException(429,'Слишком много загрузок. Попробуйте чуть позже.')
+            slots=await files.acquire_slot()
             id=None;path=None;stream=None;finished=False
             try:
                 user=self.quizzes.journal.scope(request,workspace,staff=True)
@@ -168,7 +170,7 @@ class QuizFiles:
                                     if path: path.unlink(missing_ok=True)
                                     db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
                         await run_in_threadpool(cleanup)
-                finally: files.UPLOAD_SLOTS.release()
+                finally: slots.release()
 
         @app.get('/api/journal/quiz-files/{id}')
         def download(id:str,request:Request,workspace:Workspace='school',quizId:str|None=None,

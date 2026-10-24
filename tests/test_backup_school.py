@@ -97,3 +97,33 @@ def test_backup_older_database_and_refuses_overwrite_or_nonexistent_source(tmp_p
     with pytest.raises(FileNotFoundError):
         backup_school.create_backup(tmp_path/'missing.db', tmp_path/'other')
     assert not (tmp_path/'missing.db').exists()
+
+
+def shared_blob_database(tmp_path, second_hash=None):
+    # Two lesson rows share one deduplicated file whose own first row no longer exists.
+    source, _, _ = fixture_database(tmp_path, attachment=False)
+    blob, data = 'd' * 32, b'Shared lesson worksheet'
+    path = source.with_suffix('.files') / 'assignments' / (blob + '.bin')
+    path.parent.mkdir(parents=True)
+    path.write_bytes(data)
+    sha = hashlib.sha256(data).hexdigest()
+    with closing(sqlite3.connect(source)) as db:
+        db.execute('CREATE TABLE assignment_files(id TEXT,size INTEGER,sha256 TEXT,status TEXT,blob_id TEXT)')
+        db.execute('INSERT INTO assignment_files VALUES (?,?,?,?,?)', ('e' * 32, len(data), sha, 'ready', blob))
+        db.execute('INSERT INTO assignment_files VALUES (?,?,?,?,?)', ('f' * 32, len(data), second_hash or sha, 'ready', blob))
+        db.commit()
+    return source, path, data
+
+
+def test_shared_blob_is_copied_once(tmp_path):
+    source, path, data = shared_blob_database(tmp_path)
+    manifest = backup_school.create_backup(source, tmp_path / 'snapshot')
+    assert [f['path'] for f in manifest['files']] == ['school.files/assignments/' + path.name]
+    assert (tmp_path / 'snapshot' / manifest['files'][0]['path']).read_bytes() == data
+
+
+def test_inconsistent_shared_blob_never_marks_backup_complete(tmp_path):
+    source, _, _ = shared_blob_database(tmp_path, second_hash='0' * 64)
+    with pytest.raises(RuntimeError, match='Invalid attachment metadata'):
+        backup_school.create_backup(source, tmp_path / 'snapshot')
+    assert not (tmp_path / 'snapshot' / 'manifest.json').exists()

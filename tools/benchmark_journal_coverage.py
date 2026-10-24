@@ -78,7 +78,7 @@ def main():
     with synthetic_server() as (url,identities,accounts,cookie):
         with httpx.Client(base_url=url,trust_env=False,timeout=30,headers={'Cookie':cookie,'X-Atlas-Request':'1'}) as c:
             state=c.get('/api/state').json();c.get('/api/journal/coverage/options').raise_for_status()
-            c.put('/api/journal/absences/reviewers',json=dict(version=0,assignments={f'c{i}':[f'teacher{i}'] for i in range(55)})).raise_for_status()
+            current=c.get('/api/access/class-staff').json();c.put('/api/access/class-staff',json=dict(version=current['version'],revision=current['revision'],reason='Синтетическая нагрузка',assignments={f'c{i}':[dict(accountId=f'teacher{i}',capabilities=['absence_review','attendance_read','journal_coverage'])] for i in range(55)})).raise_for_status()
             period,seeded=seed(Path(os.environ['TIMETABLE_DB']),state,args.days)
             print(json.dumps(dict(phase='seeded',**seeded)),flush=True)
             run=asyncio.run(probe(url,identities,cookie,period,seeded))

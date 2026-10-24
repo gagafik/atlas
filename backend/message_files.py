@@ -14,6 +14,7 @@ from .access import now
 from . import homework_files as storage
 
 MAX_OWNER=250*1024*1024
+QUOTA_DAYS=30  # Sent files count towards the per-user quota only this long; unsent ones always count.
 
 
 def tables(db):
@@ -32,21 +33,23 @@ def root_for(db):
 def meta(row):return dict(id=row[0],filename=row[5],size=row[6],created=row[7])
 
 
-def collect_unused(db):
+def unused_rows(db,limit=20,days=1):
     from .message_drafts import tables as draft_tables
-    draft_tables(db)
-    rows=db.execute('''SELECT id FROM message_files WHERE post_id IS NULL AND
+    draft_tables(db);stale,old=storage.cutoffs(days)
+    return [(r[0],r[1]) for r in db.execute('''SELECT id,size FROM message_files WHERE post_id IS NULL AND
         ((status='uploading' AND created<?) OR (status='ready' AND created<?))
         AND NOT EXISTS (SELECT 1 FROM message_drafts d
             WHERE d.workspace=message_files.workspace AND d.owner_id=message_files.owner_id
             AND d.id=message_files.draft_id AND d.status='active'
             AND EXISTS(SELECT 1 FROM json_each(d.content,'$.fileIds') WHERE value=message_files.id))
-        ORDER BY created LIMIT 20''',((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
+        ORDER BY created LIMIT ?''',(stale,old,limit))]
+
+
+def collect_unused(db):
     root=root_for(db)
-    for (id,) in rows:
-        try:storage.file_path(root,id).unlink(missing_ok=True)
+    for id,_ in unused_rows(db):
+        try:storage.release_row(db,'message_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM message_files WHERE id=?',(id,))
 
 
 class MessageFiles:
@@ -77,17 +80,19 @@ class MessageFiles:
     def register(self,app,Workspace):
         @app.post('/api/messages/files')
         async def upload(request:Request,filename:str,draftId:str=Query(pattern=r'^[a-f0-9-]{36}$'),threadId:str|None=None,workspace:Workspace='school'):
-            if not storage.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Сервер принимает другие файлы. Повторите немного позже.')
+            slots=await storage.acquire_slot()
             reservation=None;handle=None;complete=False
             def prepare():
                 user,directory=self.messages.context(request,workspace)
                 with self.access.lock,self.access.connect() as db:
                     self.messages.tables(db);tables(db);db.execute('BEGIN IMMEDIATE');self.can_upload(db,user,directory,threadId)
                     collect_unused(db);name=storage.name_for(filename)
-                    used,count,pending=db.execute("SELECT coalesce(sum(size),0),count(CASE WHEN post_id IS NULL THEN 1 END),count(CASE WHEN status='uploading' THEN 1 END) FROM message_files WHERE workspace=? AND owner_id=?",(workspace,user['id'])).fetchone()
-                    if used+storage.MAX_FILE>MAX_OWNER or storage.total_stored(db)+storage.MAX_FILE>storage.total_limit():raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к администратору.')
+                    # Rolling window: unsent files (including reservations) always count, sent ones for QUOTA_DAYS.
+                    used,count,pending=db.execute("SELECT coalesce(sum(CASE WHEN post_id IS NULL OR created>=? THEN size ELSE 0 END),0),count(CASE WHEN post_id IS NULL THEN 1 END),count(CASE WHEN status='uploading' THEN 1 END) FROM message_files WHERE workspace=? AND owner_id=?",((now()-timedelta(days=QUOTA_DAYS)).isoformat(),workspace,user['id'])).fetchone()
+                    if used+storage.MAX_FILE>MAX_OWNER:raise HTTPException(413,'За последние 30 дней загружено 250 МиБ вложений. Удалите неотправленные файлы или повторите позже.')
+                    storage.require_capacity(db,'messages')
                     if count>=50:raise HTTPException(413,'Слишком много неотправленных вложений. Удалите ненужные файлы.')
-                    if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+                    if pending>=2:raise storage.busy('Дождитесь окончания текущих загрузок.')
                     id=uuid4().hex;root=root_for(db)
                     db.execute('INSERT INTO message_files VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL)',(id,workspace,user['id'],draftId,threadId,name,storage.MAX_FILE,now().isoformat(),'uploading'))
                 return user,directory,id,name,root
@@ -133,7 +138,7 @@ class MessageFiles:
                                 except OSError:return
                                 db.execute('DELETE FROM message_files WHERE id=?',(id,))
                         await run_in_threadpool(discard)
-                finally:storage.UPLOAD_SLOTS.release()
+                finally:slots.release()
 
         @app.get('/api/messages/files')
         def drafts(request:Request,draftId:str=Query(pattern=r'^[a-f0-9-]{36}$'),workspace:Workspace='school'):

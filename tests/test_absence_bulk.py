@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from backend import api,absence_bulk
 from test_access import client,create,signed
-from test_absences import setup,body,send,decide,url,mark,upload
+from test_absences import setup,body,send,decide,url,mark,upload,reviewers
 from test_journal import entry,report
 
 
@@ -92,7 +92,7 @@ def test_preview_and_receipt_bound_to_actor_and_workspace(client):
     assert client.post('/api/journal/absences/bulk/'+preview['id']+'/apply?workspace=school').status_code==404
     assert apply(teacher,dict(id='missing')).status_code==404
     assert apply(teacher,preview).status_code==200
-    assert client.put(url('/reviewers'),json=dict(version=1,assignments={})).status_code==200
+    reviewers({})
     assert apply(teacher,preview).status_code==404
 
 
@@ -113,7 +113,7 @@ def test_preview_invalidated_by_context_changes(client,monkeypatch,change):
     if change=='expiry':
         clock=absence_bulk.now();monkeypatch.setattr(absence_bulk,'now',lambda:clock+timedelta(minutes=15))
     elif change=='reviewers':
-        assert client.put(url('/reviewers'),json=dict(version=1,assignments={'c-demo-a':[person['id']]})).status_code==200
+        reviewers({'c-demo-a':[person['id']]})
     else:
         state=api.read('demo')
         if change=='school':state.settings.name='School revision changed'
@@ -185,3 +185,43 @@ def test_fifty_notice_bound_and_current_account_recheck(client,monkeypatch):
     monkeypatch.setattr(api.absences,'recheck',original)
     result=apply(teacher,preview);assert result.status_code==200,result.text
     assert result.json()['count']==50
+
+
+def test_bulk_refuses_notices_in_closed_period_without_partial_writes(client,monkeypatch):
+    # Imported here: test_journal_periods imports test_journal_coverage, which imports test_absences.
+    from test_journal_periods import period,close
+    from datetime import datetime,timezone
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);notices=two(parent);prepared=prepare(teacher,notices)
+    close(client,period(client))
+    before=counts();response=teacher.post(url('/bulk/preview'),json=batch(notices))
+    assert response.status_code==403,response.text
+    detail=response.json()['detail'];assert '2026-08-17 00:00' in detail and 'Первая четверть' in detail and '2026-08-18' not in detail
+    assert counts()==before
+    def untouched():
+        for n in notices:
+            item=client.get(url('/'+n['id'])).json();assert item['status']=='pending' and item['version']==1
+    untouched();before=counts()
+    # A preview prepared before the period closed is refused when applied.
+    assert apply(teacher,prepared).status_code==403 and counts()==before
+    # Rejection changes no figures, so the same notices can still be rejected in bulk.
+    rejected=apply(teacher,prepare(teacher,notices,action='reject'));assert rejected.status_code==200,rejected.text
+    assert [n['status'] for n in rejected.json()['items']]==['rejected','rejected']
+
+
+def test_bulk_revoke_names_every_notice_in_closed_periods(client,monkeypatch):
+    from test_journal_periods import period,close
+    from datetime import datetime,timezone
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);approved=apply(teacher,prepare(teacher,two(parent))).json()['items']
+    close(client,period(client));close(client,period(client,name='Вторая четверть',start='2026-08-18',end='2026-08-18'))
+    before=counts();response=teacher.post(url('/bulk/preview'),json=batch(approved,action='revoke'))
+    assert response.status_code==403,response.text
+    detail=response.json()['detail']
+    assert 'Общее решение не применено' in detail
+    for fragment in ['2026-08-17 00:00','2026-08-18 00:00','Первая четверть','Вторая четверть']:assert fragment in detail,detail
+    assert counts()==before
+    for n in approved:
+        item=client.get(url('/'+n['id'])).json();assert item['status']=='approved' and item['version']==n['version']

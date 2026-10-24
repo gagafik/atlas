@@ -7,7 +7,7 @@ import re
 import shutil
 import sqlite3
 
-from .backup_school import STORES, digest, reject_link
+from .backup_school import STORES, blob_expr, digest, reject_link
 
 MAX_MANIFEST_BYTES=64*1024*1024
 MAX_FILES=200000
@@ -102,9 +102,11 @@ def verify_backup(directory:Path):
             if table not in tables:continue
             if db.execute(f"SELECT 1 FROM {table} WHERE status='uploading' LIMIT 1").fetchone():
                 raise ValueError('Backup contains an incomplete upload.')
-            for id,size,sha in db.execute(f"SELECT id,size,sha256 FROM {table} WHERE status='ready'"):
+            for id,size,sha in db.execute(f"SELECT {blob_expr(db,table)},size,sha256 FROM {table} WHERE status='ready'"):
                 if not isinstance(id,str) or not re.fullmatch('[a-f0-9]{32}',id):raise ValueError('Invalid attachment metadata.')
-                expected[f'{prefix}/{folder}/{id}.bin']=(size,sha)
+                path=f'{prefix}/{folder}/{id}.bin'
+                # Rows sharing one deduplicated file must agree about its bytes.
+                if expected.setdefault(path,(size,sha))!=(size,sha):raise ValueError('Invalid attachment metadata.')
         if expected!=listed:raise ValueError('Manifest and database attachment references do not match.')
         # Parse stored workspace documents without migrating or changing their schema.
         count=0

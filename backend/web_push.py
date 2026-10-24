@@ -330,16 +330,20 @@ class PushService:
             with self.transaction() as db:
                 row=self.authenticated(db,request)
                 if self.config(db)[0]!=body.publicKey:raise HTTPException(409,'Ключ сервера изменился. Обновите раздел и включите уведомления заново.')
-                old=db.execute('SELECT id,user_id,version,created FROM push_devices WHERE endpoint_hash=?',(fingerprint,)).fetchone()
+                old=db.execute('SELECT id,user_id,version,created,active,account_version,expires FROM push_devices WHERE endpoint_hash=?',(fingerprint,)).fetchone()
                 if old and old[1]!=row[0]:raise HTTPException(409,'Подписка связана с другим аккаунтом. Отключите подписку браузера и включите её снова.')
                 if (old[2] if old else 0)!=body.version:raise HTTPException(409,'Устройство изменилось. Обновите список.')
-                count=db.execute('SELECT count(*) FROM push_devices WHERE user_id=?',(row[0],)).fetchone()[0]
-                if not old and count>=MAX_DEVICES:raise HTTPException(409,'Уже сохранено 10 устройств. Удалите ненужное из списка.')
+                # Only working devices count; old inactive entries are bounded.
+                count=db.execute('SELECT count(*) FROM push_devices WHERE user_id=? AND active=1 AND account_version=? AND expires>?',(row[0],row[5],stamp)).fetchone()[0]
+                reviving=not old or not (old[4] and old[5]==row[5] and old[6]>stamp)
+                if reviving and count>=MAX_DEVICES:raise HTTPException(409,'Уже подключено 10 устройств. Отключите или удалите ненужное.')
                 id=old[0] if old else uuid4().hex
                 version=(old[2] if old else 0)+1
                 db.execute('''INSERT OR REPLACE INTO push_devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,NULL,'enabled',NULL)''',
                     (id,fingerprint,endpoint,body.keys.p256dh.get_secret_value(),body.keys.auth.get_secret_value(),row[0],digest(request.cookies.get(COOKIE,'')),row[5],version,body.name,old[3] if old else stamp,stamp,expires))
                 db.execute('DELETE FROM push_outbox WHERE device_id=?',(id,))
+                stale=[(r[0],) for r in db.execute('SELECT id FROM push_devices WHERE user_id=? AND id!=? AND NOT(active=1 AND account_version=? AND expires>?) ORDER BY updated DESC LIMIT -1 OFFSET ?',(row[0],id,row[5],stamp,MAX_DEVICES))]
+                db.executemany('DELETE FROM push_devices WHERE id=?',stale);db.executemany('DELETE FROM push_outbox WHERE device_id=?',stale)
                 self.access.record(db,'push.enabled',detail=id,principal=self.access.public(row))
                 return next(d for d in self.devices(db,row) if d['id']==id)
 

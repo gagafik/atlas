@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadFile } from "./uploads";
 import { api } from "./api";
 import { MaterialView } from "./LessonMaterials";
 import TeachingMediaPlayer from "./TeachingMediaPlayer";
@@ -44,7 +45,8 @@ export default function TeachingMaterialsPanel({
     [archived, setArchived] = useState(false);
   const [epoch, setEpoch] = useState(0),
     [loading, setLoading] = useState(true),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [serverBusy, setServerBusy] = useState(false);
   const [selected, setSelected] = useState<MaterialDetail | null>(null),
     [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<MaterialContent>(blank),
@@ -301,22 +303,15 @@ export default function TeachingMaterialsPanel({
     try {
       for (const file of batch) {
         const params = new URLSearchParams({ workspace, filename: file.name });
-        const response = await fetch(`/api/journal/material-files?${params}`, {
-          method: "POST",
-          headers: {
-            "X-Atlas-Request": "1",
-            "Content-Type": "application/octet-stream",
+        const result = await uploadFile(
+          `/api/journal/material-files?${params}`,
+          file,
+          {
+            signal: controller.signal,
+            onBusy: (b) => alive.current && setServerBusy(b),
+            fallback: "Не удалось загрузить файл.",
           },
-          body: file,
-          signal: controller.signal,
-        });
-        const result = await response.json();
-        if (!response.ok)
-          throw new Error(
-            typeof result.detail === "string"
-              ? result.detail
-              : "Не удалось загрузить файл.",
-          );
+        );
         if (alive.current) {
           setUploads((previous) => [...previous, result]);
           setDraft((previous) => ({
@@ -598,6 +593,9 @@ export default function TeachingMaterialsPanel({
                           e.target.value = "";
                         }}
                       />
+                      {serverBusy && (
+                        <small role="status">Сервер занят, повторяем…</small>
+                      )}
                     </label>
                     <ul className="teaching-library-files">
                       {uploads

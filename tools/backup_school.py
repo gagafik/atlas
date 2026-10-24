@@ -21,6 +21,11 @@ def reject_link(path):
         raise ValueError('Symbolic links and junctions are not allowed in backup storage.')
 
 
+def blob_expr(db, table):
+    # Deduplicated rows (blob_id) share one physical file named by the first upload's id.
+    return 'coalesce(blob_id,id)' if 'blob_id' in {r[1] for r in db.execute(f'PRAGMA table_info({table})')} else 'id'
+
+
 def digest(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -51,7 +56,10 @@ def create_backup(source: Path, destination: Path):
                     raise RuntimeError('Database integrity check failed; backup is incomplete.')
                 for table,folder in STORES:
                     if not copy.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():continue
-                    rows = copy.execute(f"SELECT id,size,sha256 FROM {table} WHERE status='ready' ORDER BY id").fetchall()
+                    # Every distinct physical file is copied and verified once, however many rows share it.
+                    rows = copy.execute(f"SELECT DISTINCT {blob_expr(copy, table)},size,sha256 FROM {table} WHERE status='ready' ORDER BY 1").fetchall()
+                    if len({row[0] for row in rows}) != len(rows):
+                        raise RuntimeError('Invalid attachment metadata; backup is incomplete.')
                     file_root = source.with_suffix('.files') / folder
                     reject_link(source.with_suffix('.files'))
                     reject_link(file_root)

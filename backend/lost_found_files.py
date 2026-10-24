@@ -1,6 +1,5 @@
 """Bounded photo uploads. Store only decoded, resized pixels without metadata."""
 import asyncio,hashlib,io,os,warnings
-from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 from fastapi import HTTPException,Query,Request
@@ -14,12 +13,14 @@ from .lost_found import version
 
 def root_for(db):return Path(db.execute('PRAGMA database_list').fetchone()[2]).resolve().with_suffix('.files')/'lost-found'
 def meta(r):return dict(id=r['id'],filename=r['filename'],size=r['size'],created=r['created'],linked=bool(r['linked']))
+def unused_rows(db,limit=20,days=1):
+    stale,old=storage.cutoffs(days)
+    return [(r[0],r[1]) for r in db.execute("SELECT id,size FROM lost_found_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?)) ORDER BY created LIMIT ?",(stale,old,limit))]
 def collect_unused(db):
-    rows=db.execute("SELECT id FROM lost_found_files WHERE linked=0 AND ((status='uploading' AND created<?) OR (status='ready' AND created<?)) ORDER BY created LIMIT 20",((now()-timedelta(minutes=30)).isoformat(),(now()-timedelta(days=1)).isoformat())).fetchall()
-    for r in rows:
-        try:storage.file_path(root_for(db),r['id']).unlink(missing_ok=True)
+    root=root_for(db)
+    for id,_ in unused_rows(db):
+        try:storage.release_row(db,'lost_found_files',root,id)
         except OSError:continue
-        db.execute('DELETE FROM lost_found_files WHERE id=?',(r['id'],))
 
 def sanitize(path):
     try:
@@ -46,14 +47,15 @@ def register(s,app,Workspace):
 
     @app.post('/api/lost-found/items/{id}/photos')
     async def upload(id:str,request:Request,itemVersion:int=Query(ge=1),workspace:Workspace='school'):
-        if not storage.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Сервер принимает другие файлы. Повторите позже.')
+        slots=await storage.acquire_slot()
         reservation=None;handle=None;complete=False
         def prepare():
             with s.context(request,workspace,True) as (db,u,snap):
                 writable(db,u,workspace,id,itemVersion);collect_unused(db)
                 used,pending=db.execute("SELECT coalesce(sum(size),0),count(CASE WHEN status='uploading' THEN 1 END) FROM lost_found_files WHERE owner_id=?",(u['id'],)).fetchone()
-                if used+storage.MAX_FILE>250*1024*1024 or storage.total_stored(db)+storage.MAX_FILE>storage.total_limit():raise HTTPException(413,'Лимит хранилища достигнут.')
-                if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+                if used+storage.MAX_FILE>250*1024*1024:raise HTTPException(413,'Лимит хранилища достигнут.')
+                storage.require_capacity(db,'lost-found')
+                if pending>=2:raise storage.busy('Дождитесь окончания текущих загрузок.')
                 if db.execute('SELECT count(*) FROM lost_found_files WHERE item_id=?',(id,)).fetchone()[0]>=20:raise HTTPException(413,'Достигнут предел 20 фото с учётом истории. Удалите неиспользованные загрузки.')
                 file_id=uuid4().hex;root=root_for(db)
                 db.execute('INSERT INTO lost_found_files VALUES (?,?,?,?,?,?,?,?,NULL,0)',(file_id,workspace,id,u['id'],'finding-photo.jpg',storage.MAX_FILE,now().isoformat(),'uploading'))
@@ -95,7 +97,7 @@ def register(s,app,Workspace):
                             except OSError:return
                             db.execute('DELETE FROM lost_found_files WHERE id=?',(file_id,))
                     await run_in_threadpool(discard)
-            finally:storage.UPLOAD_SLOTS.release()
+            finally:slots.release()
 
     @app.get('/api/lost-found/items/{id}/photos')
     def drafts(id:str,request:Request,workspace:Workspace='school'):

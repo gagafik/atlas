@@ -231,3 +231,71 @@ def test_failed_upload_cleanup_does_not_exhaust_shared_slots(client,monkeypatch)
         upload(teacher,record)
     assert slots.acquire(blocking=False)
     slots.release()
+
+
+def test_identical_materials_are_stored_once_and_released_by_reference(client,tmp_path,monkeypatch):
+    from tools.backup_school import create_backup
+    from tools.restore_school import verify_backup
+    record,pupil,parent,teacher=setup(client);body=b'Same worksheet'
+    other=entry(client,lesson(client,'Математика')['lessonKey'])
+    a=upload(teacher,record,body).json();b=upload(teacher,record,body).json()
+    c=upload(client,other,body).json()  # another author and lesson
+    assert len({a['id'],b['id'],c['id']})==3 and download(teacher,b['id']).content==body
+    with api.connect() as db:
+        assert {r[0] for r in db.execute('SELECT coalesce(blob_id,id) FROM assignment_files')}=={a['id']}
+        assert [p.name for p in assignment_files.root_for(db).glob('*.bin')]==[a['id']+'.bin']
+        assert homework_files.module_stored(db,'assignments')==len(body)==homework_files.total_stored(db)
+    monkeypatch.setattr(assignment_files,'MAX_OWNER',len(body)+homework_files.MAX_FILE)
+    d=upload(teacher,record,body);assert d.status_code==200,d.text  # the owner's quota counts the content once
+    save_materials(teacher,record,[b['id']])
+    assert download(parent,c['id'],'s1').status_code in [403,404]  # another lesson's row keeps its own access rules
+    with api.connect() as db:
+        db.execute('UPDATE assignment_files SET created=?',((homework.now()-timedelta(days=2)).isoformat(),))
+        assignment_files.collect_unused(db)
+        assert {r[0] for r in db.execute('SELECT id FROM assignment_files')}=={b['id']}
+        assert (assignment_files.root_for(db)/(a['id']+'.bin')).is_file()  # still referenced by b
+    assert download(parent,b['id'],'s1').content==body
+    destination=tmp_path/'restore';source=api.DB
+    manifest=create_backup(source,destination);assert len(manifest['files'])==1
+    assert verify_backup(destination)['files']==1
+    monkeypatch.setattr(api,'DB',destination/source.name)
+    assert download(parent,b['id'],'s1').content==body
+    monkeypatch.setattr(api,'DB',source)
+    save_materials(teacher,entry(teacher,record['lessonKey']),[])
+    with api.connect() as db:
+        assert (assignment_files.root_for(db)/(a['id']+'.bin')).is_file()  # saved history keeps the row and the bytes
+
+
+def test_blob_column_migration_is_idempotent_and_keeps_legacy_rows(client,tmp_path):
+    from contextlib import closing
+    import sqlite3
+    with closing(sqlite3.connect(tmp_path/'legacy.db')) as db:
+        db.execute('''CREATE TABLE assignment_files (id TEXT PRIMARY KEY,workspace TEXT,lesson_key TEXT,owner_id TEXT,
+            filename TEXT,size INTEGER,created TEXT,status TEXT,sha256 TEXT,day TEXT)''')
+        db.execute("INSERT INTO assignment_files VALUES (?,?,?,?,?,?,?,?,?,?)",('a'*32,'demo','k','o','x.txt',3,'2026-01-01','ready','b'*64,'2026-08-17'))
+        assignment_files.tables(db);assignment_files.tables(db)
+        columns=[r[1] for r in db.execute('PRAGMA table_info(assignment_files)')]
+        assert columns.count('blob_id')==1 and columns[-1]=='blob_id'
+        assert db.execute('SELECT blob_id FROM assignment_files').fetchone()[0] is None
+        assert homework_files.stored(db,'assignment_files')==3
+    record,_,parent,teacher=setup(client)
+    first=upload(teacher,record,b'Legacy bytes').json()['id']
+    with api.connect() as db:db.execute('UPDATE assignment_files SET blob_id=NULL')  # as if uploaded before the column existed
+    assert download(teacher,first).content==b'Legacy bytes'
+    second=upload(teacher,record,b'Legacy bytes').json()['id']
+    with api.connect() as db:
+        assert db.execute('SELECT blob_id FROM assignment_files WHERE id=?',(second,)).fetchone()[0]==first
+        assert [p.name for p in assignment_files.root_for(db).glob('*.bin')]==[first+'.bin']
+        assert not homework_files.referenced(db,'assignment_files',second)
+        assert homework_files.referenced(db,'assignment_files',first,exclude=first)
+
+
+def test_dedupe_skips_a_target_whose_file_is_missing(client):
+    record,_,_,teacher=setup(client)
+    first=upload(teacher,record,b'Same bytes').json()['id']
+    with api.connect() as db:(assignment_files.root_for(db)/(first+'.bin')).unlink()
+    second=upload(teacher,record,b'Same bytes').json()['id']
+    with api.connect() as db:
+        assert db.execute('SELECT blob_id FROM assignment_files WHERE id=?',(second,)).fetchone()[0]==second
+        assert (assignment_files.root_for(db)/(second+'.bin')).is_file()
+    assert download(teacher,second).content==b'Same bytes'
