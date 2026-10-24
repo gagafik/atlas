@@ -1,4 +1,6 @@
 // Question bank packages: limits, selection and transfer helpers (kept free of React so they can be tested).
+import { uploadWithRetry, type UploadOptions } from "./uploads";
+
 export const MAX_SELECTION = 100;
 export const MAX_PACKAGE = 55 * 1024 * 1024;
 export const MAX_JSON = 2 * 1024 * 1024;
@@ -137,27 +139,26 @@ async function failure(response: Response) {
   );
 }
 
+/** Both transfers wait out a busy server (429 with Retry-After) like every other upload. */
+type TransferOptions = Pick<UploadOptions, "signal" | "onBusy">;
+
 export async function sendPackage(
   path: "import/preview" | "import",
   workspace: string,
   file: File,
   extra: Record<string, string>,
-  signal?: AbortSignal,
+  options: TransferOptions = {},
 ) {
   const params = new URLSearchParams({
     workspace,
     filename: file.name,
     ...extra,
   });
-  const response = await fetch(`/api/journal/quiz-bank/${path}?${params}`, {
-    method: "POST",
-    headers: {
-      "X-Atlas-Request": "1",
-      "Content-Type": "application/octet-stream",
-    },
-    body: file,
-    signal,
-  });
+  const response = await uploadWithRetry(
+    `/api/journal/quiz-bank/${path}?${params}`,
+    file,
+    options,
+  );
   if (!response.ok) throw await failure(response);
   try {
     return await response.json();
@@ -169,18 +170,19 @@ export async function sendPackage(
 export async function exportPackage(
   workspace: string,
   selected: ReadonlyMap<string, number>,
-  signal?: AbortSignal,
+  options: TransferOptions = {},
 ) {
-  const response = await fetch(
+  const response = await uploadWithRetry(
     `/api/journal/quiz-bank/export?${new URLSearchParams({ workspace })}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Atlas-Request": "1" },
-      body: JSON.stringify({
-        items: Array.from(selected, ([id, version]) => ({ id, version })),
-      }),
-      signal,
-    },
+    new Blob(
+      [
+        JSON.stringify({
+          items: Array.from(selected, ([id, version]) => ({ id, version })),
+        }),
+      ],
+      { type: "application/json" },
+    ),
+    { ...options, contentType: "application/json" },
   );
   if (!response.ok) throw await failure(response);
   const json = (response.headers.get("Content-Type") || "").includes("json");

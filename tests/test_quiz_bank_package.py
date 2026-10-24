@@ -617,13 +617,41 @@ def test_quota_blocks_preview_and_apply_but_not_json(client,monkeypatch):
     assert ok(preview(signed('teacher'),package))['files']==2 and temp_children()==[]
 
 
+def test_package_files_obey_the_quiz_section_budget(client,monkeypatch):
+    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;other=signed('unrelated');template=pkg.template_bytes()
+    monkeypatch.setenv('ATLAS_UPLOAD_QUIZZES_MB','10');big=uuid4().hex
+    with api.connect() as db:
+        db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(big,'demo',account('teacher'),'big.txt',10*1024*1024,quiz_files.now().isoformat(),'ready'))
+    before=(counts(),stored_files())
+    for call in (preview,apply):
+        response=call(other,package);assert response.status_code==413 and '«Тесты»' in response.json()['detail'],response.text
+    assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
+    assert ok(preview(other,template,'t.json'))['questions']==4 and ok(apply(other,template,'t.json'))['imported']==4
+    with api.connect() as db:db.execute('DELETE FROM quiz_files WHERE id=?',(big,))
+    assert ok(preview(other,package))['files']==2 and ok(apply(other,package))['files']==2
+
+
+def test_package_files_obey_the_disk_reserve(client,monkeypatch):
+    from collections import namedtuple
+    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;other=signed('unrelated');template=pkg.template_bytes()
+    usage=namedtuple('usage','total used free')
+    monkeypatch.setattr(homework_files.shutil,'disk_usage',lambda path:usage(10**12,0,1000))
+    monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB','1');before=(counts(),stored_files())
+    for call in (preview,apply):
+        response=call(other,package);assert response.status_code==507 and 'заканчивается место' in response.json()['detail'],response.text
+    assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
+    assert ok(apply(other,template,'t.json'))['imported']==4  # no attachments, nothing to store
+    monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB','0')  # 0 disables the disk check
+    assert ok(preview(other,package))['files']==2 and ok(apply(other,package))['files']==2
+
+
 def test_pending_uploads_block_a_second_package(client,tmp_path):
     record,pupil,parent,teacher=setup(client);other=signed('unrelated');package=two_file_package(tmp_path)
     with api.connect() as db:
         api.quizzes.tables(db)
         for _ in range(2):db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(uuid4().hex,'demo',account('unrelated'),'x.txt',10,quiz_files.now().isoformat(),'uploading'))
     before=counts();response=apply(other,package)
-    assert response.status_code==429 and counts()==before and temp_children()==[]
+    assert response.status_code==429 and response.headers['retry-after']=='5' and counts()==before and temp_children()==[]
 
 
 def test_package_cannot_forge_ids_or_owners(client):
@@ -749,7 +777,8 @@ def test_stranded_reservations_do_not_lock_their_owner_out(client,tmp_path):
 def test_fresh_reservations_are_not_collected_and_other_owners_are_untouched(client,tmp_path):
     record,pupil,parent,teacher=setup(client);other=signed('unrelated')
     strand('unrelated',2,minutes=5);before=counts()
-    assert apply(other,two_file_package(tmp_path)).status_code==429 and counts()==before and uploading()==2
+    refused=apply(other,two_file_package(tmp_path))
+    assert refused.status_code==429 and refused.headers['retry-after']=='5' and counts()==before and uploading()==2
     # A neighbour's abandoned rows go through the school-wide cleanup of every import.
     strand('teacher',3);ok(apply(client,two_file_package(tmp_path)))
     with api.connect() as db:left=db.execute("SELECT owner_id FROM quiz_files WHERE status='uploading'").fetchall()
@@ -765,6 +794,28 @@ def test_release_removes_orphaned_bytes_but_never_a_committed_file(client):
         remaining={r[0] for r in db.execute('SELECT id FROM quiz_files')}
     assert remaining=={ready} and homework_files.file_path(root,ready).exists()
     assert not homework_files.file_path(root,gone).exists() and not homework_files.file_path(root,pending).exists()
+
+
+def test_stale_reservations_of_one_owner_are_released_with_their_bytes(client):
+    record,pupil,parent,teacher=setup(client)
+    old=strand('unrelated',3);fresh=strand('unrelated',1,minutes=5);neighbour=strand('teacher',1)
+    with api.connect() as db:
+        root=quiz_files.root_for(db);quiz_files.collect_own_stale(db,dict(id=account('unrelated')))
+        left={r[0] for r in db.execute('SELECT id FROM quiz_files')}
+    assert left==set(fresh+neighbour) and not any(homework_files.file_path(root,id).exists() for id in old)
+    assert all(homework_files.file_path(root,id).exists() for id in fresh+neighbour)
+
+
+def test_one_stuck_file_does_not_strand_the_other_reservations(client,monkeypatch):
+    record,pupil,parent,teacher=setup(client);stuck,free=strand('unrelated',2,minutes=5);original=homework_files.release_row
+    def locked(db,table,root,id):
+        if id==stuck:raise PermissionError('file is in use')
+        return original(db,table,root,id)
+    monkeypatch.setattr(homework_files,'release_row',locked)
+    with api.connect() as db:
+        root=quiz_files.root_for(db);quiz_files.release_reserved(db,[stuck,free])
+        left={r[0] for r in db.execute('SELECT id FROM quiz_files')}
+    assert left=={stuck} and homework_files.file_path(root,stuck).exists() and not homework_files.file_path(root,free).exists()
 
 
 def test_reservations_deleted_during_extraction_abort_the_import_cleanly(client,monkeypatch,tmp_path):
@@ -801,19 +852,34 @@ def test_export_of_a_damaged_bank_document_is_409(client):
     assert response.status_code==409 and 'повреждён' in response.json()['detail'] and temp_children()==[]
 
 
-def test_no_free_transfer_slot_is_a_429_and_slots_are_not_over_released(client,monkeypatch,tmp_path):
+def test_busy_server_queues_then_answers_429_with_retry_after_and_slots_are_not_over_released(client,monkeypatch,tmp_path):
     pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;plain=put_question(teacher,'plain')
     slots=threading.BoundedSemaphore(1);slots.acquire();monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
+    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0.3)
     other=signed('unrelated');before=(counts(),stored_files())
     for response in (export(teacher,source),preview(other,package),apply(other,package)):
-        assert response.status_code==429 and 'Слишком много загрузок' in response.json()['detail']
-    assert export(teacher,plain).status_code==200
+        assert response.status_code==429 and response.headers['retry-after']=='5' and 'принимает другие файлы' in response.json()['detail']
+    started=time.perf_counter();assert export(teacher,source).status_code==429 and time.perf_counter()-started>=0.25  # it queued first
+    assert export(teacher,plain).status_code==200  # a JSON export needs no slot
     assert (counts(),stored_files())==before and temp_children()==[]
+    # A slot freed while the request waits is taken by it; a full queue answers at once.
+    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',5);threading.Timer(0.2,slots.release).start()
+    assert preview(other,package).status_code==200
+    assert slots.acquire(blocking=False);monkeypatch.setattr(homework_files,'UPLOAD_WAITERS',threading.Semaphore(0))
+    started=time.perf_counter();assert apply(other,package).status_code==429 and time.perf_counter()-started<2
     # A refused request must not release a slot it never took: a bounded semaphore would raise here.
     slots.release()
     with pytest.raises(ValueError):slots.release()
     assert export(teacher,source).status_code==200 and preview(other,package).status_code==200
     with pytest.raises(ValueError):slots.release()
+
+
+def test_a_pupil_does_not_queue_for_a_slot(client,monkeypatch):
+    record,pupil,parent,teacher=setup(client)
+    slots=threading.BoundedSemaphore(1);slots.acquire();monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
+    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',5);started=time.perf_counter()
+    assert preview(pupil,pkg.template_bytes(),'t.json').status_code==403 and apply(pupil,pkg.template_bytes(),'t.json').status_code==403
+    assert time.perf_counter()-started<2
 
 
 @pytest.mark.parametrize('error,status,text',[(TimeoutError,408,'по времени'),(ClientDisconnect,400,'прервана')])

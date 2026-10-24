@@ -84,7 +84,7 @@ def register(app,quizzes,Workspace):
                         headers=HEADERS|{'Content-Disposition':'attachment; filename="atlas-quiz-bank-template.json"'})
 
     @app.post('/api/journal/quiz-bank/export')
-    def export(body:pkg.Selection,request:Request,workspace:Workspace='school'):
+    async def export(body:pkg.Selection,request:Request,workspace:Workspace='school'):
         user=quizzes.journal.scope(request,workspace,staff=True)
         def read(db):
             quizzes.journal.recheck_account(db,user)
@@ -102,7 +102,7 @@ def register(app,quizzes,Workspace):
             if len(stored)!=len(ids) or any(r[3] is None for r in stored.values()):
                 raise HTTPException(409,'Вложение отсутствует в хранилище. Обратитесь к администратору.')
             return rows,[stored[id] for id in ids],quiz_files.root_for(db)
-        rows,stored,root=quizzes.read_only(read)
+        rows,stored,root=await run_in_threadpool(quizzes.read_only,read)
         if len(stored)>pkg.MAX_FILES:raise HTTPException(413,f'Выбранные вопросы содержат больше {pkg.MAX_FILES} файлов. Уменьшите выборку.')
         if sum(r[2] for r in stored)>pkg.MAX_TOTAL:raise HTTPException(413,'Вложения выбранных вопросов занимают больше 50 МБ. Уменьшите выборку.')
         # Internal storage ids never leave the system: every file gets a fresh package id.
@@ -120,23 +120,23 @@ def register(app,quizzes,Workspace):
         if not stored:
             return Response(pkg.manifest_bytes(package,pretty=True),media_type='application/json',
                             headers=HEADERS|{'Content-Disposition':f'attachment; filename="{name}.json"'})
-        if not files.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Слишком много загрузок. Попробуйте чуть позже.')
+        slots=await files.acquire_slot()
         try:
-            folder=temp_folder(root)
-            try:pkg.write_package(folder/'package.zip',package,{alias[r[0]]:files.file_path(root,r[0]) for r in stored})
+            folder=await run_in_threadpool(temp_folder,root)
+            try:await run_in_threadpool(pkg.write_package,folder/'package.zip',package,{alias[r[0]]:files.file_path(root,r[0]) for r in stored})
             except BaseException:
                 shutil.rmtree(folder,ignore_errors=True);raise
-        finally:files.UPLOAD_SLOTS.release()
+        finally:slots.release()
         return FileResponse(folder/'package.zip',media_type='application/zip',filename=name+'.zip',headers=HEADERS,
                             background=BackgroundTask(shutil.rmtree,folder,True))
 
     @app.post('/api/journal/quiz-bank/import/preview')
     async def preview(request:Request,filename:str=Query(min_length=1,max_length=180),workspace:Workspace='school'):
         kind=kind_for(filename)
-        if not files.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Слишком много загрузок. Попробуйте чуть позже.')
+        user=quizzes.journal.scope(request,workspace,staff=True)
+        slots=await files.acquire_slot()
         folder=None
         try:
-            user=quizzes.journal.scope(request,workspace,staff=True)
             root=await run_in_threadpool(quizzes.read_only,quiz_files.root_for)
             folder=await run_in_threadpool(temp_folder,root);path=folder/'package'
             digest,size=await receive(request,path,*limit_for(kind))
@@ -156,16 +156,16 @@ def register(app,quizzes,Workspace):
         finally:
             try:
                 if folder:await run_in_threadpool(shutil.rmtree,folder,True)
-            finally:files.UPLOAD_SLOTS.release()
+            finally:slots.release()
 
     @app.post('/api/journal/quiz-bank/import')
     async def apply(request:Request,filename:str=Query(min_length=1,max_length=180),requestId:str=Query(pattern=r'^[a-f0-9-]{32,36}$'),
                     packageHash:str=Query(pattern=r'^[a-f0-9]{64}$'),workspace:Workspace='school'):
         kind=kind_for(filename)
-        if not files.UPLOAD_SLOTS.acquire(blocking=False):raise HTTPException(429,'Слишком много загрузок. Попробуйте чуть позже.')
+        user=quizzes.journal.scope(request,workspace,staff=True)
+        slots=await files.acquire_slot()
         folder=None;reserved={};committed=False
         try:
-            user=quizzes.journal.scope(request,workspace,staff=True)
             root=await run_in_threadpool(quizzes.read_only,quiz_files.root_for)
             folder=await run_in_threadpool(temp_folder,root);path=folder/'package'
             digest,_=await receive(request,path,*limit_for(kind))
@@ -225,4 +225,4 @@ def register(app,quizzes,Workspace):
             finally:
                 try:
                     if folder:await run_in_threadpool(shutil.rmtree,folder,True)
-                finally:files.UPLOAD_SLOTS.release()
+                finally:slots.release()

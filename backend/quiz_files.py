@@ -91,16 +91,18 @@ def collect_own_stale(db,user):
 
 def package_quota(db,user,total):
     own=db.execute('SELECT coalesce(sum(size),0) FROM quiz_files WHERE owner_id=?',(user['id'],)).fetchone()[0]
-    if files.total_stored(db)+total>files.total_limit() or own+total>250*1024*1024:
+    if own+total>250*1024*1024:
         mb=f'{total/1048576:.1f}'.replace('.',',')
         raise HTTPException(413,f'Лимит хранилища достигнут: вложения пакета занимают {mb} МБ. Обратитесь к администратору.')
+    # The section budget, the school-wide cap and the free-disk reserve apply to a package as to any upload.
+    files.require_capacity(db,'quizzes',total)
 
 
 def reserve_package(db,workspace,user,package_files):
     collect_own_stale(db,user)
     package_quota(db,user,sum(f.size for f in package_files))
     pending=db.execute("SELECT count(*) FROM quiz_files WHERE owner_id=? AND status='uploading'",(user['id'],)).fetchone()[0]
-    if pending>=2:raise HTTPException(429,'Дождитесь окончания текущих загрузок.')
+    if pending>=2:raise files.busy('Дождитесь окончания текущих загрузок.')
     reserved={}
     for file in package_files:
         reserved[file.id]=id=uuid4().hex
@@ -114,8 +116,8 @@ def release_reserved(db,ids):
         row=db.execute('SELECT status FROM quiz_files WHERE id=?',(id,)).fetchone()
         # The ids are ours alone: a vanished row still leaves its bytes to remove, a ready one is committed.
         if row and row[0]!='uploading':continue
-        files.file_path(root,id).unlink(missing_ok=True)
-        db.execute('DELETE FROM quiz_files WHERE id=?',(id,))
+        try:files.release_row(db,'quiz_files',root,id)
+        except OSError:continue  # The row and its quota stay until collect_unused succeeds later.
 
 
 class QuizFiles:

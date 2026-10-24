@@ -15,6 +15,8 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const MB = 1024 * 1024;
@@ -138,7 +140,8 @@ it("exports the selected question versions and saves the named file", async () =
   expect(url).toBe("/api/journal/quiz-bank/export?workspace=demo");
   expect(init.method).toBe("POST");
   expect(init.headers["X-Atlas-Request"]).toBe("1");
-  expect(JSON.parse(init.body)).toEqual({
+  expect(init.headers["Content-Type"]).toBe("application/json");
+  expect(JSON.parse(await init.body.text())).toEqual({
     items: [
       { id: "q1", version: 3 },
       { id: "q2", version: 1 },
@@ -267,4 +270,74 @@ it("marks a refused export as stale only for conflicts", async () => {
   );
   expect(denied.status).toBe(403);
   expect(exportFailure(denied)).toBe("Вопрос отсутствует в доступном банке.");
+});
+
+const busy = () =>
+  new Response(
+    JSON.stringify({
+      detail: "Сервер принимает другие файлы. Повторите немного позже.",
+    }),
+    { status: 429, headers: { "Retry-After": "2" } },
+  );
+
+it("waits out a busy server and sends the same import again", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(busy())
+    .mockResolvedValueOnce(new Response(JSON.stringify({ imported: 2 })));
+  vi.stubGlobal("fetch", fetchMock);
+  const onBusy = vi.fn();
+  const file = new File(["{}"], "bank.json");
+  const extra = { requestId: "a".repeat(32), packageHash: "b".repeat(64) };
+  const sent = sendPackage("import", "demo", file, extra, { onBusy });
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(onBusy).toHaveBeenCalledWith(true);
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(sent).resolves.toEqual({ imported: 2 });
+  expect(onBusy.mock.calls).toEqual([[true], [false]]);
+  // The retry carries the same request identity, so the server cannot import twice.
+  expect(fetchMock.mock.calls[1][0]).toBe(fetchMock.mock.calls[0][0]);
+  expect(fetchMock.mock.calls[1][0]).toContain("requestId=" + extra.requestId);
+  expect(fetchMock.mock.calls[1][1].body).toBe(file);
+});
+
+it("waits out a busy server before an export too", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(busy())
+    .mockResolvedValueOnce(
+      new Response(new Blob(["zip"]), {
+        headers: { "Content-Type": "application/zip" },
+      }),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+  const onBusy = vi.fn();
+  const exported = exportPackage("demo", new Map([["q", 1]]), { onBusy });
+  await vi.advanceTimersByTimeAsync(2000);
+  expect((await exported).filename).toBe("atlas-quiz-bank.zip");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(onBusy.mock.calls).toEqual([[true], [false]]);
+});
+
+it("does not retry a refusal that is not a busy answer", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ detail: "Лимит хранилища достигнут." }), {
+      status: 413,
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const error = await sendPackage(
+    "import/preview",
+    "demo",
+    new File(["x"], "a.zip"),
+    {},
+  ).catch((e) => e);
+  expect(error.message).toBe("Лимит хранилища достигнут.");
+  expect(error.status).toBe(413);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });

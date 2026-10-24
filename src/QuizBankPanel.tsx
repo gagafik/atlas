@@ -147,7 +147,12 @@ export default function QuizBankPanel({
       if (alive.current) setBusy(false);
     }
   }
-  async function transfer(work: (signal: AbortSignal) => Promise<void>) {
+  async function transfer(
+    work: (options: {
+      signal: AbortSignal;
+      onBusy: (busy: boolean) => void;
+    }) => Promise<void>,
+  ) {
     if (busy || uploadLock.current) return;
     uploadLock.current = true;
     setBusy(true);
@@ -156,7 +161,10 @@ export default function QuizBankPanel({
     const controller = new AbortController();
     uploadAbort.current = controller;
     try {
-      await work(controller.signal);
+      await work({
+        signal: controller.signal,
+        onBusy: (b) => alive.current && setServerBusy(b),
+      });
     } catch (e: any) {
       if (alive.current && e.name !== "AbortError") setError(e.message);
     } finally {
@@ -171,12 +179,12 @@ export default function QuizBankPanel({
     setError(result.error);
   }
   function exportSelected() {
-    void transfer(async (signal) => {
+    void transfer(async (options) => {
       try {
         const { blob, filename } = await exportPackage(
           workspace,
           selected,
-          signal,
+          options,
         );
         saveBlob(blob, filename);
         if (alive.current) setNotice("Пакет сохранён.");
@@ -196,13 +204,13 @@ export default function QuizBankPanel({
     }
     setPreview(null);
     setImportFile(null);
-    void transfer(async (signal) => {
+    void transfer(async (options) => {
       const result = await sendPackage(
         "import/preview",
         workspace,
         file,
         {},
-        signal,
+        options,
       );
       if (alive.current) {
         setPreview(result);
@@ -213,13 +221,13 @@ export default function QuizBankPanel({
   }
   function confirmImport() {
     if (!preview || !importFile) return;
-    void transfer(async (signal) => {
+    void transfer(async (options) => {
       const result: ImportResult = await sendPackage(
         "import",
         workspace,
         importFile,
         { requestId: importRequest, packageHash: preview.packageHash },
-        signal,
+        options,
       );
       if (alive.current) {
         setNotice(
@@ -302,6 +310,7 @@ export default function QuizBankPanel({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
+      {!editing && serverBusy && <p role="status">Сервер занят, повторяем…</p>}
       {!editing && (
         <>
           <form
