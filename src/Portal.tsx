@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { roleNames, type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
+import { CHANGE_TYPES } from "./substitutions";
+import type { ChangeType } from "./types";
 import JournalPanel from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
@@ -33,6 +35,8 @@ interface Row {
   rooms: string;
   status: string;
   activity: string;
+  // Sent for a teacher's own timetable only; pupils and parents never get it.
+  changeType?: string | null;
 }
 interface Schedule {
   revision: number;
@@ -40,6 +44,20 @@ interface Schedule {
   school: string;
   rows: Row[];
 }
+const statusLabel = (r: Row) =>
+  r.status === "cancelled"
+    ? "Отменено"
+    : r.activity === "duty"
+      ? "Дежурство"
+      : r.activity === "booking"
+        ? "Бронирование"
+        : r.changeType
+          ? CHANGE_TYPES[r.changeType as ChangeType] || r.changeType
+          : r.status === "changed"
+            ? "Изменено"
+            : r.status === "added"
+              ? "Разовый урок"
+              : "По расписанию";
 const days = [
   "Понедельник",
   "Вторник",
@@ -153,7 +171,7 @@ export default function Portal({
         r.group,
         r.teachers,
         r.rooms,
-        r.status,
+        statusLabel(r),
       ]),
     ];
     download(
@@ -461,19 +479,7 @@ export default function Portal({
                           <strong>
                             {r.start}–{r.end}
                           </strong>
-                          <span>
-                            {r.status === "cancelled"
-                              ? "Отменено"
-                              : r.activity === "duty"
-                                ? "Дежурство"
-                                : r.activity === "booking"
-                                  ? "Бронирование"
-                                  : r.status === "changed"
-                                    ? "Изменено"
-                                    : r.status === "added"
-                                      ? "Разовый урок"
-                                      : "По расписанию"}
-                          </span>
+                          <span>{statusLabel(r)}</span>
                           <h4>
                             {r.subject} · {r.group}
                           </h4>

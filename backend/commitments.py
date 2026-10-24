@@ -38,7 +38,7 @@ def commitment_rows(state, day, context):
             reasons=([item.note] if item.note else []) + ([f'Дежурных: {len(item.teacherIds)} из {item.requiredTeachers}'] if item.kind == 'duty' else []),
             teacherRequired=item.kind == 'duty', requiredTeachers=item.requiredTeachers,
             roomRequired=item.kind == 'booking', audienceSize=size, rosterComplete=complete,
-            audienceLowerBound=lower,
+            audienceLowerBound=lower, changeType=None, mergeWith=None, movedTo=None,
             profileId=item.profileId, buildingId=item.buildingId))
     return rows
 
@@ -46,14 +46,15 @@ def commitment_rows(state, day, context):
 def occupied_lunch_rules(state, day, rows):
     """Bookings and supervision occupy breaks without becoming taught lessons."""
     from .rules import RuleContext, minutes, lunch_available
-    from .cycles import active_in, pattern_on
+    from .cycles import active_in
+    from .calendar_ops import cycle_on, weekday_on
     if not any(r['activity'] != 'lesson' for r in rows): return [], []
     context = RuleContext(state)
     issues, warnings = [], []
     for rule in state.rules:
         if not (rule.enabled and rule.kind == 'day_shape' and rule.lunchMinutes and
-                rule.scope not in ['subject', 'workload'] and active_in(rule, pattern_on(state, day)) and
-                (not rule.days or day.weekday() in rule.days)): continue
+                rule.scope not in ['subject', 'workload'] and active_in(rule, cycle_on(state, day)) and
+                (not rule.days or weekday_on(state, day) in rule.days)): continue
         targets = context.targets(rule)
         buckets = defaultdict(list)
         for row in rows:
@@ -116,8 +117,8 @@ class DutyRequest(Model):
 
 def allocate_duties(state, body):
     from ortools.sat.python import cp_model
-    from .calendar_ops import DayContext, day_report, check_dates
-    from .cycles import active_in, pattern_on
+    from .calendar_ops import DayContext, day_report, check_dates, cycle_on, weekday_on
+    from .cycles import active_in
     from .editing import new_issues
     from .rules import minutes
     began = monotonic()
@@ -148,13 +149,14 @@ def allocate_duties(state, body):
                 reasons.append('урок, бронирование или другое дежурство')
             if any(a.teacherId == teacher and a.start <= c.onDate <= a.end and c.startTime < a.endTime and a.startTime < c.endTime for a in state.absences):
                 reasons.append('отсутствие')
-            bells = ctx.maps['profiles'][c.profileId].for_day(c.onDate.weekday())
-            if any(f'{c.onDate.weekday()}:{i}' in teachers[teacher].unavailable and c.startTime < p.end and p.start < c.endTime for i,p in enumerate(bells)):
+            wd = weekday_on(state, c.onDate)
+            bells = ctx.maps['profiles'][c.profileId].for_day(wd)
+            if any(f'{wd}:{i}' in teachers[teacher].unavailable and c.startTime < p.end and p.start < c.endTime for i,p in enumerate(bells)):
                 reasons.append('запрет по номеру урока')
             if any(rule.enabled and rule.kind == 'availability' and rule.mode == 'hard' and rule.scope == 'teacher'
-                   and (not rule.targetIds or teacher in rule.targetIds) and (not rule.days or c.onDate.weekday() in rule.days)
-                   and active_in(rule, pattern_on(state, c.onDate))
-                   and any(w.day == c.onDate.weekday() and c.startTime < w.end and w.start < c.endTime for w in rule.unavailable) for rule in state.rules):
+                   and (not rule.targetIds or teacher in rule.targetIds) and (not rule.days or wd in rule.days)
+                   and active_in(rule, cycle_on(state, c.onDate))
+                   and any(w.day == wd and c.startTime < w.end and w.start < c.endTime for w in rule.unavailable) for rule in state.rules):
                 reasons.append('обязательная недоступность')
             if reasons:
                 unavailable[c.id, teacher] = ', '.join(reasons)
@@ -178,7 +180,7 @@ def allocate_duties(state, body):
             for rule in state.rules:
                 if not (rule.enabled and rule.mode == 'hard' and rule.kind == 'day_shape' and rule.scope == 'teacher'
                         and rule.lunchMinutes and (not rule.targetIds or teacher in rule.targetIds)
-                        and (not rule.days or d.weekday() in rule.days) and active_in(rule, pattern_on(state, d))): continue
+                        and (not rule.days or weekday_on(state, d) in rule.days) and active_in(rule, cycle_on(state, d))): continue
                 start, end = minutes(rule.lunchStart), minutes(rule.lunchEnd)
                 starts = {start} | {minutes(r['end']) for r,_,_ in nodes if start <= minutes(r['end']) <= end-rule.lunchMinutes}
                 viable = [t for t in starts if not any(not selected and minutes(r['start']) < t+rule.lunchMinutes and t < minutes(r['end']) for r,_,selected in nodes)]

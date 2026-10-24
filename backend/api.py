@@ -156,7 +156,7 @@ def generate(body: GenerateRequest, workspace: Workspace = 'school'):
             if body.preview:
                 result['preview'] = create_preview(workspace, state, candidate)
             else:
-                if state.datedLessons or state.absences or state.commitments or any(e.effect == 'cancel' for e in state.events):
+                if state.datedLessons or state.absences or state.commitments or state.scheduleDays or any(e.effect == 'cancel' for e in state.events):
                     check = inspect_edit(state, candidate)
                     if not check['canApply']:
                         raise HTTPException(422, 'Генерация затрагивает изменения по датам. Запустите её с предпросмотром.')
@@ -346,6 +346,8 @@ from .courses import register_courses
 register_courses(app, Workspace, require_revision, create_preview, solve_lock)
 from .calendar_ops import register_calendar
 register_calendar(app, Workspace, read, require_revision, create_preview)
+from .substitutions import register as register_substitutions
+register_substitutions(app, Workspace, read, require_revision, create_preview, save)
 from .commitments import register_commitments
 register_commitments(app, Workspace, require_revision, create_preview, solve_lock)
 from .exporting import register_exports

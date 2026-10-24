@@ -29,7 +29,8 @@ class ExportRequest(Model):
 TABLES = {'classes': 'Классы', 'teachers': 'Учителя', 'rooms': 'Кабинеты', 'subjects': 'Предметы',
           'students': 'Ученики', 'groups': 'Группы', 'profiles': 'Звонки', 'workloads': 'Нагрузка',
           'placements': 'Занятия', 'events': 'Календарь', 'rules': 'Ограничения', 'courses': 'Курсы', 'courseRequests': 'Заявки',
-          'datedLessons': 'Изменения по датам', 'absences': 'Отсутствия учителей', 'commitments': 'Бронирования и дежурства'}
+          'datedLessons': 'Изменения по датам', 'absences': 'Отсутствия учителей', 'commitments': 'Бронирования и дежурства',
+          'scheduleDays': 'Дни в расписании'}
 VIEWS = dict(class_='classes', teacher='teachers', room='rooms', group='groups', student='students')
 
 

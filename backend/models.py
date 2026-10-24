@@ -140,6 +140,8 @@ class DatedLesson(Named):
     endTime: str | None = Field(default=None, pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
     teacherIds: list[str] | None = None
     roomIds: list[str] | None = None
+    changeType: Literal['substitution', 'merge', 'move', 'self_study', 'cancel', 'extra'] | None = None
+    mergeWith: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode='after')
     def valid_change(self):
@@ -156,6 +158,15 @@ class DatedLesson(Named):
         for values in [self.teacherIds, self.roomIds]:
             if values is not None and len(values) != len(set(values)):
                 raise ValueError('Учителя и кабинеты не должны повторяться.')
+        allowed = dict(cancel=(None, 'cancel'), add=(None, 'extra'), change=(None, 'substitution', 'merge', 'move', 'self_study'))[self.kind]
+        if self.changeType not in allowed:
+            raise ValueError('Тип замены не подходит к виду изменения.')
+        if (self.changeType == 'merge') != bool(self.mergeWith):
+            raise ValueError('Для объединения выберите урок, к которому присоединяется группа.')
+        if self.changeType == 'self_study' and not self.teacherIds:
+            raise ValueError('Для самостоятельной работы укажите ответственного сотрудника.')
+        if self.changeType == 'move' and self.onDate == self.sourceDate and not self.startTime:
+            raise ValueError('Перенос должен менять дату или время урока.')
         return self
 
 
@@ -170,6 +181,22 @@ class TeacherAbsence(Named):
     def valid_interval(self):
         if self.end < self.start or (self.end-self.start).days > 366 or self.endTime <= self.startTime:
             raise ValueError('Проверьте даты отсутствия (до 367 дней) и время каждого дня.')
+        return self
+
+
+class ScheduleDay(Named):
+    """A date that runs another weekday's timetable (and optionally another week), for all or selected classes."""
+    onDate: date
+    day: int = Field(ge=0, le=6)
+    cycleId: str | None = None
+    classIds: list[str] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode='after')
+    def valid_day(self):
+        if len(self.classIds) != len(set(self.classIds)):
+            raise ValueError('Классы не должны повторяться.')
+        if self.day == self.onDate.weekday() and self.cycleId is None:
+            raise ValueError('Дата и так работает по этому дню недели. Выберите другой день или неделю.')
         return self
 
 
@@ -209,12 +236,22 @@ class Commitment(Named):
         return self
 
 
+class SubstitutionWeights(Model):
+    """Points a substitute earns per criterion; see SUBSTITUTIONS.md."""
+    subject: int = Field(default=40, ge=0, le=100)
+    group: int = Field(default=30, ge=0, le=100)
+    presence: int = Field(default=20, ge=0, le=100)
+    fairness: int = Field(default=20, ge=0, le=100)
+    building: int = Field(default=10, ge=0, le=100)
+
+
 class Settings(Model):
     name: str = 'Наша школа'
     yearStart: date = date(2026, 8, 17)
     yearEnd: date = date(2027, 6, 11)
     days: list[str] = Field(default_factory=lambda: ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница'], min_length=1, max_length=7)
     shifts: Literal[1] = 1
+    substitutionWeights: SubstitutionWeights = Field(default_factory=SubstitutionWeights)
 
     @model_validator(mode='after')
     def chronological(self):
@@ -449,6 +486,7 @@ class State(Model):
     datedLessons: list[DatedLesson] = Field(default_factory=list)
     absences: list[TeacherAbsence] = Field(default_factory=list)
     commitments: list[Commitment] = Field(default_factory=list, max_length=20000)
+    scheduleDays: list[ScheduleDay] = Field(default_factory=list, max_length=400)
     importInfo: ImportInfo = Field(default_factory=ImportInfo)
 
     @model_validator(mode='after')
@@ -469,7 +507,7 @@ class State(Model):
             if not set(rule.cycleIds) <= cycle_ids or len(set(rule.cycleIds)) != len(rule.cycleIds):
                 raise ValueError('Проверьте недели дополнительного правила.')
         maps = {}
-        for key in ['classes', 'teachers', 'rooms', 'subjects', 'students', 'groups', 'profiles', 'workloads', 'placements', 'events', 'rules', 'courses', 'courseRequests', 'datedLessons', 'absences', 'commitments']:
+        for key in ['classes', 'teachers', 'rooms', 'subjects', 'students', 'groups', 'profiles', 'workloads', 'placements', 'events', 'rules', 'courses', 'courseRequests', 'datedLessons', 'absences', 'commitments', 'scheduleDays']:
             items = getattr(self, key)
             maps[key] = {i.id: i for i in items}
             if len(maps[key]) != len(items):
@@ -505,6 +543,19 @@ class State(Model):
             require('teachers', [absence.teacherId])
             if absence.start < self.settings.yearStart or absence.end > self.settings.yearEnd:
                 raise ValueError('Отсутствие учителя выходит за учебный год.')
+        from .cycles import pattern_on
+        for item in self.scheduleDays:
+            require('classes', item.classIds)
+            if not self.settings.yearStart <= item.onDate <= self.settings.yearEnd:
+                raise ValueError('«День в расписании» выходит за учебный год.')
+            if item.day >= len(self.settings.days):
+                raise ValueError('«День в расписании» ссылается на день вне учебной недели.')
+            if item.cycleId is not None and item.cycleId not in cycle_ids:
+                raise ValueError('«День в расписании» ссылается на отсутствующую неделю расписания.')
+            if item.cycleId is None and pattern_on(self, item.onDate) is None:
+                raise ValueError('Дата вне учебных периодов: выберите неделю расписания.')
+        if len({item.onDate for item in self.scheduleDays}) != len(self.scheduleDays):
+            raise ValueError('Для одной даты допускается один «день в расписании».')
         buildings = {b.id for b in self.campus.buildings}
         for item in self.commitments:
             require('rooms', item.roomIds)

@@ -131,7 +131,8 @@ class Notifications:
         old = personal_index(before, views) if views else {}
         new = personal_index(after, views) if views else {}
         calendar_changed = (before.cycles != after.cycles or
-                            (before.settings.yearStart, before.settings.yearEnd) != (after.settings.yearStart, after.settings.yearEnd))
+                            (before.settings.yearStart, before.settings.yearEnd) != (after.settings.yearStart, after.settings.yearEnd) or
+                            before.scheduleDays != after.scheduleDays)
         recipients = []
         for user in relevant:
             changed = user['role'] in ['admin', 'editor'] or calendar_changed or any(

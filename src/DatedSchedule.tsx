@@ -3,13 +3,27 @@ import { api } from "./api";
 import { uid, named, csvCell, download } from "./utils";
 import type {
   State,
-  Named,
   DatedLesson,
   TeacherAbsence,
+  ScheduleDay,
+  ChangeType,
   CalendarEvent,
   ScheduleIssue,
 } from "./types";
 import ChangePreview, { type Preview } from "./ChangePreview";
+import { DateField, Multi } from "./DatedFields";
+import SubstitutionPlan from "./SubstitutionPlan";
+import SubstitutionReport from "./SubstitutionReport";
+import ScheduleDays from "./ScheduleDays";
+import {
+  CHANGE_TYPES,
+  effectiveType,
+  factorLine,
+  type MergeOption,
+  type RankedTeacher,
+} from "./substitutions";
+
+export { Multi };
 
 interface DatedRow {
   activity?: "lesson" | "booking" | "duty";
@@ -38,6 +52,9 @@ interface DatedRow {
   end: string;
   status: "scheduled" | "cancelled" | "added" | "changed";
   reasons: string[];
+  changeType?: ChangeType | null;
+  mergeWith?: string | null;
+  movedTo?: string | null;
 }
 interface DayReport {
   unfilledDuties?: number;
@@ -47,6 +64,7 @@ interface DayReport {
   revision: number;
   date: string;
   cycleId: string | null;
+  scheduleDay?: ScheduleDay | null;
   rows: DatedRow[];
   events: CalendarEvent[];
   issues: ScheduleIssue[];
@@ -57,99 +75,12 @@ interface DayReport {
   missingTeachers: number;
   missingRooms: number;
 }
-interface Candidate {
-  id: string;
-  name: string;
-  available: boolean;
-  reasons: string[];
-  lessons: number;
-}
 const STATUS = {
   scheduled: "По расписанию",
   changed: "Изменение",
   added: "Разовый урок",
   cancelled: "Отменён",
 };
-function DateField({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  min: string;
-  max: string;
-}) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <input
-        type="date"
-        required
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
-  );
-}
-export function Multi({
-  label,
-  items,
-  values,
-  onChange,
-}: {
-  label: string;
-  items: Named[];
-  values: string[];
-  onChange: (v: string[]) => void;
-}) {
-  const [search, setSearch] = useState("");
-  return (
-    <fieldset className="dated-multi">
-      <legend>{label}</legend>
-      <input
-        aria-label={`Поиск: ${label}`}
-        placeholder="Поиск"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <div>
-        {items
-          .filter(
-            (x) =>
-              !search ||
-              x.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-          )
-          .map((x) => (
-            <label className="check-line" key={x.id}>
-              <input
-                type="checkbox"
-                checked={values.includes(x.id)}
-                onChange={(e) =>
-                  onChange(
-                    e.target.checked
-                      ? [...values, x.id]
-                      : values.filter((v) => v !== x.id),
-                  )
-                }
-              />
-              {x.name}
-            </label>
-          ))}
-      </div>
-      <small>
-        Выбрано: {values.length}.{" "}
-        {values.map((id) => named(items, id)).join(", ")}
-      </small>
-    </fieldset>
-  );
-}
-
 export default function DatedSchedule({
   state: s,
   workspace,
@@ -170,7 +101,10 @@ export default function DatedSchedule({
         ? s.settings.yearStart
         : today),
   );
-  const [tab, setTab] = useState<"day" | "absences" | "changes">("day");
+  const [tab, setTab] = useState<
+    "day" | "absences" | "changes" | "plan" | "days" | "report"
+  >("day");
+  const [planTeacher, setPlanTeacher] = useState("");
   const [mode, setMode] = useState<
     "class" | "teacher" | "room" | "student" | "all"
   >(initialDate ? "all" : "class");
@@ -182,7 +116,8 @@ export default function DatedSchedule({
     [absence, setAbsence] = useState<TeacherAbsence | null>(null);
   const [selectedRow, setSelectedRow] = useState<DatedRow | null>(null),
     [replaceTeacher, setReplaceTeacher] = useState("");
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null),
+  const [candidates, setCandidates] = useState<RankedTeacher[] | null>(null),
+    [mergeOptions, setMergeOptions] = useState<MergeOption[]>([]),
     [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -223,6 +158,7 @@ export default function DatedSchedule({
     setLesson(null);
     setAbsence(null);
     setCandidates(null);
+    setMergeOptions([]);
     setSelectedRow(null);
   }, [workspace, s.revision]);
   const fresh = report?.revision === s.revision;
@@ -267,13 +203,16 @@ export default function DatedSchedule({
       ? "Бронирование"
       : r.activity === "duty"
         ? "Дежурство"
-        : STATUS[excluded(r) ? "cancelled" : r.status];
+        : r.changeType && !excluded(r) && r.status !== "scheduled"
+          ? CHANGE_TYPES[r.changeType]
+          : STATUS[excluded(r) ? "cancelled" : r.status];
   }
   function reset() {
     setLesson(null);
     setAbsence(null);
     setPreview(null);
     setCandidates(null);
+    setMergeOptions([]);
     setSelectedRow(null);
     setError("");
   }
@@ -299,6 +238,8 @@ export default function DatedSchedule({
             endTime: null,
             teacherIds: null,
             roomIds: null,
+            changeType: "cancel",
+            mergeWith: null,
           }
         : {
             id: existing?.id || uid(),
@@ -314,6 +255,12 @@ export default function DatedSchedule({
             endTime: r.end,
             teacherIds: r.teacherIds,
             roomIds: r.roomIds,
+            changeType:
+              existing?.kind === "add"
+                ? "extra"
+                : (existing?.changeType ??
+                  (r.date !== r.sourceDate ? "move" : "substitution")),
+            mergeWith: existing?.mergeWith ?? null,
           },
     );
     setSelectedRow(r);
@@ -335,6 +282,8 @@ export default function DatedSchedule({
       endTime: "09:40",
       teacherIds: [],
       roomIds: [],
+      changeType: "extra",
+      mergeWith: null,
     });
   }
   function newAbsence() {
@@ -350,8 +299,8 @@ export default function DatedSchedule({
     });
   }
   async function check(
-    table: "datedLessons" | "absences",
-    value?: DatedLesson | TeacherAbsence,
+    table: "datedLessons" | "absences" | "scheduleDays",
+    value?: DatedLesson | TeacherAbsence | ScheduleDay,
     removeId?: string,
   ) {
     if (busy) return;
@@ -416,6 +365,7 @@ export default function DatedSchedule({
         teacherId: replaceTeacher || null,
       });
       setCandidates(r.candidates);
+      setMergeOptions(r.mergeOptions || []);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -446,7 +396,40 @@ export default function DatedSchedule({
       setBusy(false);
     }
   }
+  function lessonProblem(l: DatedLesson, row: DatedRow | null) {
+    if (l.kind !== "change") return "";
+    if (l.changeType === "merge" && !l.mergeWith)
+      return "Выберите урок, к которому присоединяется группа.";
+    if (l.changeType === "self_study" && !l.teacherIds?.length)
+      return "Для самостоятельной работы укажите ответственного сотрудника.";
+    if (
+      l.changeType === "move" &&
+      l.onDate === l.sourceDate &&
+      row &&
+      l.startTime === row.start &&
+      l.endTime === row.end
+    )
+      return "Перенос должен менять дату или время урока.";
+    return "";
+  }
+  function pickType(l: DatedLesson, type: ChangeType) {
+    setLesson({
+      ...l,
+      changeType: type,
+      mergeWith: type === "merge" ? (l.mergeWith ?? null) : null,
+    });
+  }
+  function pickMerge(l: DatedLesson, rowId: string) {
+    const option = mergeOptions.find((o) => o.rowId === rowId);
+    setLesson({
+      ...l,
+      mergeWith: rowId || null,
+      teacherIds: option ? option.teacherIds : l.teacherIds,
+      roomIds: option ? option.roomIds : l.roomIds,
+    });
+  }
   const dateBounds = { min: s.settings.yearStart, max: s.settings.yearEnd };
+  const mergeChoice = mergeOptions.find((o) => o.rowId === lesson?.mergeWith);
   return (
     <div className="dated-panel">
       <p className="info-line">
@@ -462,8 +445,11 @@ export default function DatedSchedule({
         {(
           [
             ["day", "Занятия на дату"],
+            ["plan", "Замена на день"],
             ["absences", "Отсутствия учителей"],
             ["changes", "Все изменения"],
+            ["days", "Дни в расписании"],
+            ["report", "Итоги замен"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -529,7 +515,9 @@ export default function DatedSchedule({
               className="dated-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                void check("datedLessons", lesson);
+                const problem = lessonProblem(lesson, selectedRow);
+                if (problem) setError(problem);
+                else void check("datedLessons", lesson);
               }}
             >
               <h3>
@@ -537,7 +525,7 @@ export default function DatedSchedule({
                   ? "Отмена урока"
                   : lesson.kind === "add"
                     ? "Разовое занятие"
-                    : "Замена или перенос"}
+                    : CHANGE_TYPES[effectiveType(lesson)]}
               </h3>
               {selectedRow && (
                 <p>
@@ -557,13 +545,81 @@ export default function DatedSchedule({
                   }
                 />
               </label>
+              {lesson.kind === "change" && (
+                <label className="field">
+                  <span>Тип изменения</span>
+                  <select
+                    value={effectiveType(lesson)}
+                    onChange={(e) =>
+                      pickType(lesson, e.target.value as ChangeType)
+                    }
+                  >
+                    {(
+                      ["substitution", "move", "merge", "self_study"] as const
+                    ).map((t) => (
+                      <option key={t} value={t}>
+                        {CHANGE_TYPES[t]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {lesson.kind === "change" && lesson.changeType === "merge" && (
+                <label className="field">
+                  <span>Присоединить к уроку</span>
+                  <select
+                    required
+                    value={lesson.mergeWith || ""}
+                    onChange={(e) => pickMerge(lesson, e.target.value)}
+                  >
+                    <option value="">
+                      {mergeOptions.length
+                        ? "Выберите урок"
+                        : "Нажмите «Подобрать заменяющего», чтобы увидеть уроки"}
+                    </option>
+                    {lesson.mergeWith && !mergeChoice && (
+                      <option value={lesson.mergeWith}>
+                        Текущий урок объединения
+                      </option>
+                    )}
+                    {mergeOptions.map((o) => (
+                      <option key={o.rowId} value={o.rowId}>
+                        {o.start}–{o.end} · {o.group} · {o.subject} ·{" "}
+                        {o.teachers || "без учителя"}
+                        {o.fits === false ? " · не вмещает" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {mergeChoice && (
+                    <small>
+                      Вместимость: {mergeChoice.capacity ?? "не задана"},
+                      участников {mergeChoice.attendance ?? "неизвестно"}
+                      {mergeChoice.fits === false ? " — не вмещает" : ""}.
+                      Учителя и кабинеты берутся у выбранного урока.
+                    </small>
+                  )}
+                </label>
+              )}
               {lesson.kind !== "cancel" && (
                 <>
                   <div className="dated-fields">
                     <DateField
                       label="Дата занятия"
                       value={lesson.onDate}
-                      onChange={(v) => setLesson({ ...lesson, onDate: v })}
+                      onChange={(v) =>
+                        setLesson({
+                          ...lesson,
+                          onDate: v,
+                          changeType:
+                            lesson.kind === "change" &&
+                            (lesson.changeType === "substitution" ||
+                              lesson.changeType === "move")
+                              ? v !== lesson.sourceDate
+                                ? "move"
+                                : "substitution"
+                              : lesson.changeType,
+                        })
+                      }
                       {...dateBounds}
                     />
                     <label className="field">
@@ -651,9 +707,10 @@ export default function DatedSchedule({
                     <details className="dated-substitutes">
                       <summary>Подобрать заменяющего учителя</summary>
                       <p>
-                        Подбор по сохранённому времени урока, занятости и
-                        отсутствиям. Квалификация не задана; выбор предмета и
-                        преподавателя подтверждает сотрудник. После ручной
+                        Список упорядочен по баллам: свободен в это время
+                        (обязательно), ведёт предмет, знает учеников, уже в
+                        школе, равномерность замен за месяц, здание. Веса
+                        настраиваются на вкладке «Итоги замен». После ручной
                         правки времени или состава выполните общую проверку
                         формы.
                       </p>
@@ -679,20 +736,21 @@ export default function DatedSchedule({
                         disabled={busy}
                         onClick={findSubstitutes}
                       >
-                        Найти свободных учителей
+                        Подобрать заменяющего
                       </button>
                       {candidates && (
                         <div className="dated-candidates">
                           {candidates.map((c) => (
                             <div key={c.id}>
                               <span>
-                                <strong>{c.name}</strong> · уроков в этот день:{" "}
-                                {c.lessons}
+                                <strong>{c.name}</strong> · {c.score} балл. ·
+                                уроков в этот день: {c.lessons}
                                 <small>
-                                  {c.available
-                                    ? "Нет обнаруженных препятствий"
-                                    : c.reasons.join("; ")}
+                                  {c.factors.map(factorLine).join(" · ")}
                                 </small>
+                                {!c.available && (
+                                  <small>{c.reasons.join("; ")}</small>
+                                )}
                               </span>
                               <button
                                 type="button"
@@ -700,14 +758,19 @@ export default function DatedSchedule({
                                 onClick={() =>
                                   setLesson({
                                     ...lesson,
-                                    teacherIds: Array.from(
-                                      new Set([
-                                        ...(lesson.teacherIds || []).filter(
-                                          (t) => t !== replaceTeacher,
-                                        ),
-                                        c.id,
-                                      ]),
-                                    ),
+                                    teacherIds:
+                                      lesson.changeType === "self_study"
+                                        ? [c.id]
+                                        : Array.from(
+                                            new Set([
+                                              ...(
+                                                lesson.teacherIds || []
+                                              ).filter(
+                                                (t) => t !== replaceTeacher,
+                                              ),
+                                              c.id,
+                                            ]),
+                                          ),
                                   })
                                 }
                               >
@@ -721,7 +784,11 @@ export default function DatedSchedule({
                   )}
                   <div className="dated-fields">
                     <Multi
-                      label="Учителя занятия"
+                      label={
+                        lesson.changeType === "self_study"
+                          ? "Ответственный сотрудник"
+                          : "Учителя занятия"
+                      }
                       items={s.teachers}
                       values={lesson.teacherIds || []}
                       onChange={(v) => setLesson({ ...lesson, teacherIds: v })}
@@ -907,6 +974,11 @@ export default function DatedSchedule({
                         report.cycleId,
                       )
                     : "Вне учебных периодов"}
+                  {report.scheduleDay &&
+                    ` · работает как «${s.settings.days[report.scheduleDay.day] ?? report.scheduleDay.day}»` +
+                      (report.scheduleDay.classIds.length
+                        ? ` для классов: ${report.scheduleDay.classIds.map((id) => named(s.classes, id)).join(", ")}`
+                        : "")}
                 </strong>
                 <span>Показано занятий: {shown.length}</span>
                 <button
@@ -925,6 +997,7 @@ export default function DatedSchedule({
                             "Учителя",
                             "Кабинеты",
                             "Статус",
+                            "Тип изменения",
                             "Примечание",
                           ],
                           ...shown.map((r) => [
@@ -936,6 +1009,7 @@ export default function DatedSchedule({
                             r.teachers,
                             r.rooms,
                             statusLabel(r),
+                            r.changeType ? CHANGE_TYPES[r.changeType] : "",
                             r.reasons.join("; "),
                           ]),
                         ]
@@ -1112,6 +1186,17 @@ export default function DatedSchedule({
                   disabled={busy}
                   onClick={() => {
                     reset();
+                    setDay(a.start);
+                    setPlanTeacher(a.teacherId);
+                    setTab("plan");
+                  }}
+                >
+                  Замены на день
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    reset();
                     setAbsence(a);
                   }}
                 >
@@ -1152,12 +1237,7 @@ export default function DatedSchedule({
                 <div>
                   <strong>{c.name}</strong>
                   <p>
-                    {c.onDate} ·{" "}
-                    {c.kind === "cancel"
-                      ? "Отмена"
-                      : c.kind === "add"
-                        ? "Разовый урок"
-                        : "Замена / перенос"}
+                    {c.onDate} · {CHANGE_TYPES[effectiveType(c)]}
                     {c.sourceDate &&
                       c.sourceDate !== c.onDate &&
                       ` · исходная дата ${c.sourceDate}`}
@@ -1194,6 +1274,34 @@ export default function DatedSchedule({
               </article>
             ))}
         </div>
+      )}
+      {tab === "plan" && (
+        <SubstitutionPlan
+          state={s}
+          workspace={workspace}
+          onState={onState}
+          day={day}
+          initialTeacher={planTeacher}
+        />
+      )}
+      {tab === "days" && (
+        <ScheduleDays
+          state={s}
+          busy={busy}
+          onCheck={(value, removeId) => {
+            reset();
+            void check("scheduleDays", value, removeId);
+          }}
+          onOpenDate={(d) => {
+            reset();
+            setDay(d);
+            setTab("day");
+            setMode("all");
+          }}
+        />
+      )}
+      {tab === "report" && (
+        <SubstitutionReport state={s} workspace={workspace} onState={onState} />
       )}
     </div>
   );

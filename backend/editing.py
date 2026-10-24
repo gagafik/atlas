@@ -217,6 +217,9 @@ def placement_label(state, p):
 
 
 def display_value(state, field, value):
+    if field == 'changeType':
+        from .calendar_ops import TYPES
+        return TYPES.get(value, 'По виду изменения')
     if field == 'effect': return {'note': 'Информационная отметка', 'cancel': 'Отмена занятий'}.get(value, value)
     if field == 'sections' and isinstance(value, list):
         names = {g.id: g.name for g in state.groups}
@@ -242,7 +245,7 @@ def display_value(state, field, value):
 def compare(before: State, after: State):
     changes = []
     totals = Counter()
-    for table in ['classes', 'teachers', 'rooms', 'subjects', 'students', 'groups', 'profiles', 'workloads', 'placements', 'events', 'rules', 'courses', 'courseRequests', 'datedLessons', 'absences', 'commitments']:
+    for table in ['classes', 'teachers', 'rooms', 'subjects', 'students', 'groups', 'profiles', 'workloads', 'placements', 'events', 'rules', 'courses', 'courseRequests', 'datedLessons', 'absences', 'commitments', 'scheduleDays']:
         old, new = ({x.id: x for x in getattr(s, table)} for s in [before, after])
         for id in sorted(old.keys() | new.keys()):
             a, b = old.get(id), new.get(id)
@@ -278,9 +281,16 @@ def compare(before: State, after: State):
                         subject = next((s.name for s in source.subjects if s.id == (obj.subjectId or (w.subjectId if w else None))), '')
                         slot = next(pr for pr in source.profiles if pr.id == w.profileId).for_day(p.day)[p.period] if w else None
                         start, end = obj.startTime or (slot.start if slot else ''), obj.endTime or (slot.end if slot else '')
-                        action = {'change': 'Изменение', 'cancel': 'Отмена', 'add': 'Разовый урок'}[obj.kind]
+                        from .calendar_ops import TYPES, change_type
+                        action = TYPES[change_type(obj)]
                         return f'{action} · {obj.onDate} · {group} · {subject} · {start}–{end} · {obj.name}'
                     old_label, new_label = dated_label(before, a), dated_label(after, b)
+                if table == 'scheduleDays':
+                    def day_label(source, obj):
+                        if obj is None: return None
+                        days = source.settings.days
+                        return f'{obj.onDate} · как «{days[obj.day] if obj.day < len(days) else obj.day}» · {obj.name}'
+                    old_label, new_label = day_label(before, a), day_label(after, b)
                 if table == 'commitments':
                     def commitment_label(source, obj):
                         if obj is None: return None
@@ -288,6 +298,11 @@ def compare(before: State, after: State):
                         return f'{obj.name} · {obj.onDate} · {obj.startTime}–{obj.endTime} · {obj.location or rooms}'
                     old_label, new_label = commitment_label(before, a), commitment_label(after, b)
             def display(source, obj, field, value):
+                if table == 'scheduleDays':
+                    days = source.settings.days
+                    if field == 'day': return days[value] if isinstance(value, int) and 0 <= value < len(days) else str(value)
+                    if field == 'cycleId' and value is None: return 'По календарю'
+                    if field == 'classIds' and not value: return 'Вся школа'
                 if table == 'rules' and obj and field == 'targetIds':
                     from .rules import RuleContext
                     context = RuleContext(source)

@@ -3486,7 +3486,62 @@ main {
 .dated-candidates small {
   display: block;
 }
+.substitution-plan {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.substitution-plan article {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #dce3de;
+  border-radius: 10px;
+  background: white;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.substitution-plan article > div {
+  min-width: 0;
+}
+.substitution-plan article > div:last-child {
+  display: grid;
+  gap: 10px;
+}
+.substitution-plan article h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.substitution-plan select,
+.substitution-plan input {
+  width: 100%;
+  min-width: 0;
+}
+.substitution-plan small,
+.substitution-report small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.report-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+  margin: 8px 0 0;
+}
+.report-figures dt {
+  font-size: 12px;
+  color: #64716a;
+}
+.report-figures dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: 18px;
+}
 @media (max-width: 700px) {
+  .substitution-plan article {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .dated-fields,
   .dated-lesson {
     grid-template-columns: minmax(0, 1fr);

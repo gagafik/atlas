@@ -125,6 +125,8 @@ export interface CalendarEvent extends Named {
   effect?: "note" | "cancel";
   classIds?: string[];
 }
+export type ChangeType =
+  "substitution" | "merge" | "move" | "self_study" | "cancel" | "extra";
 export interface DatedLesson extends Named {
   kind: "change" | "cancel" | "add";
   onDate: string;
@@ -137,6 +139,21 @@ export interface DatedLesson extends Named {
   endTime: string | null;
   teacherIds: string[] | null;
   roomIds: string[] | null;
+  changeType?: ChangeType | null;
+  mergeWith?: string | null;
+}
+export interface ScheduleDay extends Named {
+  onDate: string;
+  day: number;
+  cycleId: string | null;
+  classIds: string[];
+}
+export interface SubstitutionWeights {
+  subject: number;
+  group: number;
+  presence: number;
+  fairness: number;
+  building: number;
 }
 export interface TeacherAbsence extends Named {
   teacherId: string;
@@ -182,6 +199,7 @@ export interface State {
     yearEnd: string;
     days: string[];
     shifts: 1;
+    substitutionWeights?: SubstitutionWeights;
   };
   classes: SchoolClass[];
   teachers: Teacher[];
@@ -200,6 +218,7 @@ export interface State {
   datedLessons?: DatedLesson[];
   absences?: TeacherAbsence[];
   commitments?: Commitment[];
+  scheduleDays?: ScheduleDay[];
   importInfo: {
     filename: string;
     sourceCells: number;

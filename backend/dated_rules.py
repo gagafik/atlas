@@ -1,7 +1,7 @@
 """Use the same rule evaluator for actual dated rows and weekly templates."""
 from .rules import RuleContext, evaluate_rules, minutes
 from .models import Workload
-from .cycles import pattern_on, active_in
+from .cycles import active_in
 from .resources import teacher_ids, room_ids
 
 
@@ -12,8 +12,9 @@ class DatedRuleContext(RuleContext):
         self.dated, self.rows = {}, []
         self.closed = {id for e in original.events if e.effect == 'cancel' and e.start <= day <= e.end
                        for id in (e.classIds or list(self.idx['classes']))}
-        cycle = pattern_on(original, day)
-        self.template = [p for p in original.placements if p.day == day.weekday() and p.cycleId == cycle]
+        from .calendar_ops import template_on, weekday_on
+        self.template = template_on(original, day, self.idx)
+        wd = weekday_on(original, day)
         prefix = 'actual-row:'
         while any(w.id.startswith(prefix) for w in original.workloads): prefix = '_' + prefix
         for row in dated:
@@ -22,7 +23,7 @@ class DatedRuleContext(RuleContext):
                          additionalTeacherIds=row['teacherIds'][1:], requiredRoomIds=row['roomIds'],
                          teacherRequired=bool(row['teacherIds']), roomRequired=bool(row['roomIds']))
             self.dated[id(w)] = row
-            self.rows.append(dict(w=w, day=day.weekday(), period=f'{row["start"]}–{row["end"]}', roomId=None, var=1,
+            self.rows.append(dict(w=w, day=wd, period=f'{row["start"]}–{row["end"]}', roomId=None, var=1,
                                   start=minutes(row['start']), end=minutes(row['end']), id=row['id'], classIds=row['classIds']))
 
     def members(self, w, class_ids=()):
@@ -89,12 +90,13 @@ class DatedRuleContext(RuleContext):
 
 
 def evaluate_date_rules(state, day, rows):
-    cycle = pattern_on(state, day)
+    from .calendar_ops import cycle_on, weekday_on
+    cycle, wd = cycle_on(state, day), weekday_on(state, day)
     rules = []
     for r in state.rules:
-        if not r.enabled or r.kind == 'distribution' or not active_in(r, cycle) or r.days and day.weekday() not in r.days: continue
-        rules.append(r.model_copy(update=dict(days=[day.weekday()], maxWeeklyIdlePeriods=None,
-            includeEmptyDays=r.includeEmptyDays and day.weekday() < len(state.settings.days) and cycle is not None)))
+        if not r.enabled or r.kind == 'distribution' or not active_in(r, cycle) or r.days and wd not in r.days: continue
+        rules.append(r.model_copy(update=dict(days=[wd], maxWeeklyIdlePeriods=None,
+            includeEmptyDays=r.includeEmptyDays and wd < len(state.settings.days) and cycle is not None)))
     if not rules: return [], [], 0
     settings = state.settings.model_copy(update={'days': ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']})
     dated_state = state.model_copy(update={'rules': rules, 'settings': settings})
