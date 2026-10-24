@@ -17,6 +17,9 @@
   gap: 12px;
   flex-wrap: wrap;
 }
+.ac-controls {
+  margin: 8px 0;
+}
 .assessments header {
   justify-content: space-between;
   align-items: flex-start;
@@ -144,15 +147,15 @@
   flex-direction: column;
   gap: 4px;
 }
-.ac-day.other {
+.ac-day.ac-other {
   background: #f4f7f9;
   opacity: 0.75;
 }
-.ac-day.today {
+.ac-day.ac-today {
   border-color: #1f5f8b;
   box-shadow: inset 0 0 0 1px #1f5f8b;
 }
-.ac-day.lesson {
+.ac-day.ac-lesson {
   background: #f1f8f3;
 }
 .ac-daylabel {
@@ -317,7 +320,8 @@
     min-height: 0;
     margin-bottom: 6px;
   }
-  .ac-day.empty {
+  .ac-day.ac-blank,
+  .ac-week.ac-blank {
     display: none;
   }
   .ac-dow {

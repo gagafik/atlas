@@ -764,7 +764,7 @@ export default function AssessmentPanel({
                 {form.pair && (
                   <p className="ac-meta">
                     {visibleDays.length
-                      ? `Уроки: ${visibleDays.slice(0, 14).map(shortDay).join(", ")}${visibleDays.length > 14 ? "…" : ""}`
+                      ? `Уроки: ${visibleDays.slice(0, 14).map(shortDay).join(", ")}${visibleDays.length > 14 ? "…" : ""}.`
                       : "В показанном месяце уроков по этому предмету нет."}{" "}
                     Выберите день в календаре или укажите дату.
                   </p>
@@ -941,7 +941,7 @@ export default function AssessmentPanel({
                 items={shown}
                 events={events}
                 today={options.today}
-                lessonDays={lessonDays}
+                lessonDays={lessonDays.filter((d) => d >= options.today)}
                 canPick={options.canBook && formOpen}
                 selected={selectedId}
                 onSelect={setSelectedId}

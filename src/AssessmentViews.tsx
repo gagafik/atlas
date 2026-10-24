@@ -53,6 +53,11 @@ export function CalendarGrid({
   onPick: (day: string) => void;
 }) {
   const byDay = groupByDay(items);
+  // Phones show only the days that have something to read or to pick.
+  const used = (day: string) =>
+    byDay.has(day) ||
+    eventsOn(events, day).length > 0 ||
+    lessonDays.includes(day);
   return (
     <div className="ac-month">
       {weekdayNames.map((name) => (
@@ -61,7 +66,10 @@ export function CalendarGrid({
         </div>
       ))}
       {weeks.map((week) => (
-        <div className="ac-week" key={week[0]}>
+        <div
+          className={`ac-week${week.some(used) ? "" : " ac-blank"}`}
+          key={week[0]}
+        >
           <h4 className="ac-week-title">Неделя с {shortDay(week[0])}</h4>
           {week.map((day) => {
             const list = byDay.get(day) || [],
@@ -72,16 +80,16 @@ export function CalendarGrid({
                 key={day}
                 className={[
                   "ac-day",
-                  month && day.slice(0, 7) !== month ? "other" : "",
-                  day === today ? "today" : "",
-                  lesson ? "lesson" : "",
-                  list.length || marks.length ? "" : "empty",
+                  month && day.slice(0, 7) !== month ? "ac-other" : "",
+                  day === today ? "ac-today" : "",
+                  lesson ? "ac-lesson" : "",
+                  used(day) ? "" : "ac-blank",
                 ]
                   .join(" ")
                   .trim()}
               >
                 <div className="ac-daylabel">
-                  {canPick ? (
+                  {canPick && day >= today ? (
                     <button
                       className="ac-pick"
                       onClick={() => onPick(day)}
