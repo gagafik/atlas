@@ -135,9 +135,10 @@ def test_reply_drafts_closed_group_revocation_and_send(client):
     assert parent.post(url('threads/'+thread+'/reply'),json=reply|dict(version=3)).status_code==200
     assert get(parent,id).status_code==404
     second=str(uuid4());save(parent,second,body,thread=thread)
-    teacher.post(url('threads/'+thread+'/participants'),json=dict(version=4,userId=people['parent']['id'],action='remove'))
+    # A reply does not change the conversation version: the reopened thread is still at version 3.
+    teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove'))
     assert save(parent,second,body,1,thread).status_code==404
-    assert parent.post(url('threads/'+thread+'/reply'),json=reply|dict(requestId=str(uuid4()),version=5,draftId=second,draftVersion=1)).status_code==404
+    assert parent.post(url('threads/'+thread+'/reply'),json=reply|dict(requestId=str(uuid4()),version=4,draftId=second,draftVersion=1)).status_code==404
     # Private unsent words remain the author's; no thread content is returned.
     assert get(parent,second).json()['content']['text']=='Ответ'
     assert parent.delete(url('drafts/'+second,version=1)).status_code==200

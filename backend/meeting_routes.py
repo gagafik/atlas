@@ -100,7 +100,7 @@ def register(service,app,Workspace):
             preview,slots,bookings=service.availability(db,event,body,snap,workspace)
             if preview['conflictCount']:raise HTTPException(409,'Есть пересечения. Уточните время, ведущего или кабинет.')
             if preview['previewHash']!=body.previewHash:raise HTTPException(409,'Интервалы или записи изменились. Повторите проверку перед применением.')
-            if not slots:raise HTTPException(422,'Нет интервалов для этого действия.')
+            if not slots:raise HTTPException(422,'Все интервалы выбранного времени уже начались или прошли.' if preview['skippedPast'] else 'Нет интервалов для этого действия.')
             if body.action=='generate':
                 for slot in slots:
                     slot['id']=str(uuid4());slot['version']=1
@@ -109,8 +109,8 @@ def register(service,app,Workspace):
                 if body.action=='block':meeting_waitlist.cancel_for_event(service,db,event,user,snap,workspace,body.reason,[s['id'] for s in slots])
                 for booked in bookings:service.cancel_booking(db,service.booking(db,workspace,booked['id']),event,user,snap,workspace,body.reason)
                 for slot in slots:db.execute('UPDATE meeting_slots SET status=?,version=version+1,reason=? WHERE id=?',('blocked' if body.action=='block' else 'open',body.reason if body.action=='block' else '',slot['id']))
-            result=service.save_event(db,event,user,body.action,dict(affectedSlots=len(slots),cancelledBookings=len(bookings),reason=body.reason))
-            return service.remember(db,user,body,fingerprint,result|dict(affectedSlots=len(slots),cancelledBookings=len(bookings)))
+            result=service.note_event(db,event,user,body.action,dict(affectedSlots=len(slots),cancelledBookings=len(bookings),skippedPast=preview['skippedPast'],reason=body.reason))
+            return service.remember(db,user,body,fingerprint,result|dict(affectedSlots=len(slots),cancelledBookings=len(bookings),skippedPast=preview['skippedPast']))
 
     @app.post('/api/meetings/events/{id}/transition')
     def transition(id:str,body:Transition,request:Request,workspace:Workspace='school'):
@@ -192,13 +192,14 @@ def register(service,app,Workspace):
             return service.remember(db,user,body,fingerprint,result)
 
     @app.get('/api/meetings/bookings')
-    def bookings(request:Request,workspace:Workspace='school',eventId:str='',onDate:date|None=None,after:str=Query(default='',max_length=150),limit:int=Query(default=30,ge=1,le=100)):
+    def bookings(request:Request,workspace:Workspace='school',eventId:str='',onDate:date|None=None,fromDate:date|None=None,after:str=Query(default='',max_length=150),limit:int=Query(default=30,ge=1,le=100)):
         with service.context(request,workspace) as (db,user,snap):
             clause='';params=[workspace]
             if user['role']!='admin':clause+=' AND '+('parent_id' if user['role']=='parent' else 'host_id')+'=?';params.append(user['id'])
             if eventId:clause+=' AND event_id=?';params.append(eventId)
             if onDate:
                 start=datetime.combine(onDate,datetime.min.time(),ZONE);clause+=' AND starts_at>=? AND starts_at<?';params.extend([utc(start),utc(start+timedelta(days=1))])
+            if fromDate:clause+=' AND starts_at>=?';params.append(utc(datetime.combine(fromDate,datetime.min.time(),ZONE)))
             if after:
                 pair=cursor(after)
                 clause+=' AND (starts_at,id)>(?,?)';params+=pair

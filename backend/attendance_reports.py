@@ -8,6 +8,7 @@ import io
 from threading import RLock
 import time
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Request, Response
 from pydantic import Field, model_validator
@@ -18,6 +19,9 @@ from .notifications import encoded, permission_key
 STATES=['unmarked','present','absent','late','excused']
 LABELS=dict(unmarked='Не отмечено',present='Присутствует',absent='Отсутствует',late='Опоздание',excused='Уважительная причина')
 PAGE=50
+CACHE_SECONDS=600
+CACHE_ENTRIES=16
+STALE='Данные отчёта изменились. Обновите сводку.'
 
 
 class Period(Model):
@@ -79,12 +83,37 @@ class AttendanceReports:
         with self.access.lock,self.access.connect() as db:self.journal.tables(db);tables(db)
         return user,snap
 
-    def token(self,db,user,snap,workspace):
-        self.absences.recheck(db,user,snap,workspace)
-        config=self.absences.config(db,workspace)
-        epoch=db.execute('SELECT version FROM journal_attendance_epoch WHERE workspace=?',(workspace,)).fetchone()
-        decisions=db.execute('SELECT count(*),coalesce(sum(version),0) FROM absence_notices WHERE workspace=?',(workspace,)).fetchone()
-        return hashlib.sha256(encoded([workspace,snap.state.revision,user['id'],permission_key(user),config['version'],epoch,decisions]).encode()).hexdigest()
+    def access_key(self,db,user,snap,workspace):
+        """Account, permissions and (except for administrators) the class/pupil scope; independent of the filters of one report."""
+        self.journal.recheck_account(db,user)
+        scope=[]
+        if user['role']!='admin':
+            # An administrator's scope is the whole school by definition: roster changes are covered by the data half.
+            allowed=self.absences.classes(db,user,snap,workspace,'attendance_read');classes={c.id for c in snap.state.classes if c.id in allowed}
+            scope=[sorted(classes),sorted((s.id,s.classId) for s in snap.state.students if s.classId in classes)]
+        return hashlib.sha256(encoded([workspace,user['id'],permission_key(user),*scope]).encode()).hexdigest()[:32]
+
+    def data_key(self,db,user,snap,workspace,body,classes,pupils):
+        """Publications and approved notices of the selected pupils and days, plus the names shown."""
+        ids=[body.studentId] if body.studentId else sorted(pupils) if (user['role']!='admin' or body.classId) and not body.historicalOnly else None
+        start,end=body.start.isoformat(),body.end.isoformat()
+        if ids is None:
+            lessons=db.execute("SELECT count(*),coalesce(sum(version),0),coalesce(max(published_at),'') FROM journal_attendance_lessons WHERE workspace=? AND day BETWEEN ? AND ?",(workspace,start,end)).fetchone()
+            notices=db.execute("SELECT count(*),coalesce(sum(version),0),coalesce(max(updated),'') FROM absence_notices WHERE workspace=? AND status='approved' AND substr(start_at,1,10)<=? AND substr(end_at,1,10)>=?",(workspace,end,start)).fetchone()
+        else:
+            lessons=db.execute("""SELECT count(*),coalesce(sum(l.version),0),coalesce(max(l.published_at),'') FROM journal_attendance a INDEXED BY attendance_student
+                JOIN journal_attendance_lessons l ON l.workspace=a.workspace AND l.lesson_key=a.lesson_key
+                WHERE a.workspace=? AND a.student_id IN (SELECT value FROM json_each(?)) AND a.day BETWEEN ? AND ?""",(workspace,encoded(ids),start,end)).fetchone()
+            notices=db.execute("SELECT count(*),coalesce(sum(version),0),coalesce(max(updated),'') FROM absence_notices WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) AND status='approved' AND substr(start_at,1,10)<=? AND substr(end_at,1,10)>=?",(workspace,encoded(ids),end,start)).fetchone()
+        names=[sorted((id,s.name,s.classId,s.active) for id,s in pupils.items()),sorted(classes.items()),sorted((s.id,s.name) for s in snap.state.subjects)]
+        return hashlib.sha256(encoded([tuple(lessons),tuple(notices),names]).encode()).hexdigest()[:32]
+
+    def token(self,db,user,snap,workspace,body):
+        """64 characters: access half + data half. A sent token must keep the same access half."""
+        key=self.access_key(db,user,snap,workspace)
+        if body.token and body.token[:32]!=key:raise HTTPException(409,STALE)
+        classes,pupils=self.scope(db,user,snap,workspace,body)
+        return key+self.data_key(db,user,snap,workspace,body,classes,pupils)
 
     def scope(self,db,user,snap,workspace,body):
         allowed=self.absences.classes(db,user,snap,workspace,'attendance_read')
@@ -117,22 +146,25 @@ class AttendanceReports:
         return 'WITH visible AS (SELECT a.*,a.attendance AS raw'+extra+' FROM journal_attendance a '+index+' WHERE '+' AND '.join(where)+') ',args
 
     def summary(self,db,user,snap,workspace,body):
-        # Cache only a fully scoped result. Every hit still rechecks the live
-        # account, publication/decision versions and class assignments.
+        # Cache only a fully scoped result. A sent token is served from its snapshot while it
+        # exists (token() verified the live access half); otherwise the live token must be equal.
+        live=self.token(db,user,snap,workspace,body)
         path=next(r[2] for r in db.execute('PRAGMA database_list') if r[1]=='main')
-        key=(path,self.token(db,user,snap,workspace),encoded(body.model_dump(mode='json',include={'start','end','classId','studentId','subjectId','historicalOnly'})))
+        filters=encoded(body.model_dump(mode='json',include={'start','end','classId','studentId','subjectId','historicalOnly'}))
         stamp=time.monotonic()
         with self.cache_lock:
-            for expired in [k for k,(created,_) in self.cache.items() if stamp-created>=60]:self.cache.pop(expired)
-            if key in self.cache:
-                self.cache.move_to_end(key)
-                return deepcopy(self.cache[key][1])
-        value=self.calculate(db,user,snap,workspace,body)
+            for expired in [k for k,(created,_) in self.cache.items() if stamp-created>=CACHE_SECONDS]:self.cache.pop(expired)
+            for candidate in dict.fromkeys([body.token,live]):
+                if candidate and (path,candidate,filters) in self.cache:
+                    self.cache.move_to_end((path,candidate,filters))
+                    return deepcopy(self.cache[(path,candidate,filters)][1])|dict(token=candidate)
+        if body.token and body.token!=live:raise HTTPException(409,STALE)
+        value=self.calculate(db,user,snap,workspace,body)|dict(generatedAt=now().isoformat())
         if value['studentCount']<=5000:
             with self.cache_lock:
-                self.cache[key]=(time.monotonic(),deepcopy(value));self.cache.move_to_end(key)
-                while len(self.cache)>16:self.cache.popitem(last=False)
-        return value
+                self.cache[(path,live,filters)]=(time.monotonic(),deepcopy(value));self.cache.move_to_end((path,live,filters))
+                while len(self.cache)>CACHE_ENTRIES:self.cache.popitem(last=False)
+        return value|dict(token=live)
 
     def calculate(self,db,user,snap,workspace,body):
         classes,pupils=self.scope(db,user,snap,workspace,body)
@@ -206,11 +238,11 @@ class AttendanceReports:
         return dict(student=dict(id=body.studentId,name=name if isinstance(name,str) else name[0] if name else 'Ученик вне текущего состава'),items=items,nextOffset=offset+PAGE if not export and len(rows)>PAGE else None)
 
     def finish(self,user,snap,workspace,token,body,action):
-        # A report reads one WAL snapshot. Revalidate once more before releasing
-        # the response, so a concurrent grant/publication change requires refresh.
+        # A report reads one WAL snapshot. Only access is revalidated before releasing the response:
+        # a concurrent grant or class change requires a refresh, a publication elsewhere does not.
         with self.access.lock,self.access.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            if self.token(db,user,snap,workspace)!=token:raise HTTPException(409,'Данные отчёта изменились. Обновите сводку.')
+            if self.access_key(db,user,snap,workspace)!=token[:32]:raise HTTPException(409,STALE)
             self.scope(db,user,snap,workspace,body)
             self.access.record(db,action,workspace,detail=encoded(body.model_dump(mode='json',exclude={'token','offset'})))
 
@@ -223,21 +255,27 @@ class AttendanceReports:
                 allowed=self.absences.classes(db,user,snap,workspace,'attendance_read')
                 classes=[dict(id=c.id,name=c.name) for c in snap.state.classes if user['role']=='admin' or c.id in allowed]
                 ids={c['id'] for c in classes}
+                today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date().isoformat()
+                period=db.execute("SELECT name,start_day,end_day FROM journal_periods WHERE workspace=? AND start_day<=? AND end_day>=? ORDER BY julianday(end_day)-julianday(start_day),start_day DESC,id LIMIT 1",(workspace,today,today)).fetchone()
                 return dict(available=user['role']=='admin' or bool(allowed),admin=user['role']=='admin',classes=classes,
                     students=[dict(id=s.id,name=s.name,classId=s.classId,active=s.active) for s in snap.state.students if s.classId in ids],
-                    subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects],yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd)
+                    subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects],yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd,
+                    today=today,period=dict(name=period[0],start=period[1],end=period[2]) if period else None)
 
         def read(request,workspace,body,detail=False):
             user,snap=self.context(request,workspace)
             with self.access.read_connect() as db:
-                db.execute('BEGIN');token=self.token(db,user,snap,workspace)
-                if body.token and body.token!=token:raise HTTPException(409,'Данные отчёта изменились. Обновите сводку.')
-                value=self.details(db,user,snap,workspace,body) if detail else self.summary(db,user,snap,workspace,body)
-            self.finish(user,snap,workspace,token,body,'attendance.details_read' if detail else 'attendance.summary_read')
+                db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
+                if detail:
+                    # Drill-downs are live and scope-checked; only the access half of a sent token matters.
+                    token=self.token(db,user,snap,workspace,body)
+                    value=self.details(db,user,snap,workspace,body)|dict(token=body.token or token,generatedAt=now().isoformat())
+                else:value=self.summary(db,user,snap,workspace,body)
+            self.finish(user,snap,workspace,value['token'],body,'attendance.details_read' if detail else 'attendance.summary_read')
             if not detail:
                 all_students=value['students'];value['students']=all_students[body.offset:body.offset+PAGE]
                 value['nextOffset']=body.offset+PAGE if len(all_students)>body.offset+PAGE else None
-            return value|dict(token=token,source='published',membership='current',missingJournals='not_measured',generatedAt=now().isoformat())
+            return value|dict(source='published',membership='current',missingJournals='not_measured')
 
         @app.post('/api/journal/attendance/report')
         def report(body:Period,request:Request,workspace:Workspace='school'):return read(request,workspace,body)
@@ -249,19 +287,19 @@ class AttendanceReports:
         def export(body:Export,request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace)
             with self.access.read_connect() as db:
-                db.execute('BEGIN');token=self.token(db,user,snap,workspace)
-                if body.token and body.token!=token:raise HTTPException(409,'Данные отчёта изменились. Обновите сводку перед выгрузкой.')
+                db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
                 header=['Источник','Начало периода','Конец периода','Состав классов']
                 prefix=['Опубликованные журналы',body.start.isoformat(),body.end.isoformat(),'Текущий состав; пропущенные журналы не подсчитаны']
                 if body.view=='lessons':
+                    token=self.token(db,user,snap,workspace,body);used=body.token or token
                     value=self.details(db,user,snap,workspace,body,export=True)
                     rows=[header+['Ученик','ID ученика','Дата','Начало','Конец','Предмет','Группа','Учителя','Посещаемость','Исходная отметка','Минут опоздания','Принятая объяснительная','Редакция','Опубликовано']]
                     rows += [prefix+[value['student']['name'],body.studentId,r['date'],r['start'],r['end'],r['subject'],r['group'],r['teachers'],LABELS[r['attendance']],LABELS[r['rawAttendance']],r['lateMinutes'],'Да' if r['excusedByNotice'] else '',r['version'],r['publishedAt']] for r in value['items']]
                 else:
-                    value=self.summary(db,user,snap,workspace,body)
+                    value=self.summary(db,user,snap,workspace,body);used=value['token']
                     rows=[header+(['Класс','Ученики','Без опубликованных записей'] if body.view=='classes' else ['Предмет','ID предмета'] if body.view=='subjects' else ['Ученик','ID ученика','Класс','Статус ученика'])+['Записей']+[LABELS[s] for s in STATES]+['Минут опоздания']]
                     for r in value[body.view]:
                         identity=[r['name'],r['students'],r['withoutRecords']] if body.view=='classes' else [r['name'],r['id']] if body.view=='subjects' else [r['name'],r['id'],r['className'],'Активен' if r['active'] else 'Неактивен' if r['active'] is False else 'Вне текущего состава']
                         rows.append(prefix+identity+[r['records']]+[r['attendance'][s] for s in STATES]+[r['lateMinutes']])
-            response=csv_response(rows);self.finish(user,snap,workspace,token,body,'attendance.exported')
+            response=csv_response(rows);self.finish(user,snap,workspace,used,body,'attendance.exported')
             return response

@@ -107,7 +107,7 @@ def test_mixed_class_selection_does_not_leak_details(client):
     assert client.get(url('/'+notice['id'])).json()['version']==1
 
 
-@pytest.mark.parametrize('change',['school','reviewers','expiry','transfer'])
+@pytest.mark.parametrize('change',['reviewers','expiry','transfer'])
 def test_preview_invalidated_by_context_changes(client,monkeypatch,change):
     _,person,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
     if change=='expiry':
@@ -116,12 +116,18 @@ def test_preview_invalidated_by_context_changes(client,monkeypatch,change):
         reviewers({'c-demo-a':[person['id']]})
     else:
         state=api.read('demo')
-        if change=='school':state.settings.name='School revision changed'
-        else:
-            next(s for s in state.students if s.id=='s1').classId=next(c.id for c in state.classes if c.id!='c-demo-a')
+        next(s for s in state.students if s.id=='s1').classId=next(c.id for c in state.classes if c.id!='c-demo-a')
         api.save('demo',state)
     before=counts();assert apply(teacher,preview).status_code==(404 if change=='transfer' else 409)
     assert counts()==before and client.get(url('/'+notices[0]['id'])).json()['version']==1
+
+
+def test_timetable_save_does_not_invalidate_bulk_preview(client):
+    _,_,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
+    state=api.read('demo');state.settings.name='School revision changed';api.save('demo',state)
+    before=counts();response=apply(teacher,preview);assert response.status_code==200,response.text
+    assert all(n['status']=='approved' and n['version']==2 for n in response.json()['items'])
+    assert counts()['absence_history']==before['absence_history']+2
 
 
 def test_notification_failure_rolls_back_whole_batch_and_can_retry(client,monkeypatch):

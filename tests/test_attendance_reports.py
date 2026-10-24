@@ -3,10 +3,11 @@ import io
 import json
 import hashlib
 from copy import deepcopy
-from datetime import date,timedelta
+from datetime import date,datetime,timedelta,timezone
+from uuid import uuid4
 import pytest
 from backend import api,attendance_projection
-from backend.models import Student,DatedLesson
+from backend.models import SchoolClass,Student,DatedLesson
 from test_access import client,create,signed
 from test_absences import setup,mark,send,decide,body,url,reviewers
 from test_journal import DAY,lesson,entry,write,graded
@@ -60,7 +61,8 @@ def test_notice_approval_reversal_only_effective_absence_and_no_private_fields(c
     _,_,parent,teacher=setup(client);mark(client);notice=send(parent)
     before=report(teacher).json();assert pupil(before)['attendance']['absent']==1
     accepted=decide(teacher,notice).json()
-    assert report(teacher,token=before['token']).status_code==409
+    assert report(teacher,token=before['token']).status_code==200
+    api.attendance_reports.cache.clear();assert report(teacher,token=before['token']).status_code==409
     after=report(teacher).json();assert pupil(after)['attendance']['excused']==1
     lesson_row=details(teacher).json()['items'][0]
     assert lesson_row['rawAttendance']=='absent' and lesson_row['attendance']=='excused' and lesson_row['excusedByNotice']
@@ -88,7 +90,8 @@ def test_draft_edits_publication_withdrawal_and_replication_are_atomic(client,mo
     assert pupil(report(teacher).json())['attendance']['absent']==1
     monkeypatch.setattr(api.journal,'notify',original)
     published=write(client,draft,publish=True).json()
-    assert report(teacher,token=first['token']).status_code==409
+    assert pupil(report(teacher,token=first['token']).json())['attendance']['absent']==1
+    api.attendance_reports.cache.clear();assert report(teacher,token=first['token']).status_code==409
     assert pupil(report(teacher).json())['attendance']['present']==1
     assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=published['lessonKey'],version=published['version'])).status_code==200
     assert report(teacher).json()['totals']['records']==0
@@ -137,7 +140,8 @@ def test_student_pagination_token_catches_changed_publication_and_reviewer_scope
     assert not {s['id'] for s in first['students']} & {s['id'] for s in second['students']}
     assert len(list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';')))==68
     record=entry(client,lesson(client)['lessonKey']);assert write(client,record,publish=True).status_code==200
-    assert report(teacher,offset=50,token=first['token']).status_code==409
+    again=report(teacher,offset=50,token=first['token']);assert again.status_code==200 and again.json()['students']==second['students']
+    api.attendance_reports.cache.clear();assert report(teacher,offset=50,token=first['token']).status_code==409
     current=report(teacher).json()
     reviewers({})
     assert report(teacher,token=current['token']).status_code==409
@@ -208,3 +212,87 @@ def test_moved_and_cancelled_timetable_does_not_silently_rewrite_published_repor
     assert details(teacher,start='2026-08-18',end='2026-08-18').json()['items']
     assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=saved['lessonKey'],version=published.json()['version'])).status_code==200
     assert details(teacher,start='2026-08-18',end='2026-08-18').json()['items']==[]
+
+
+def kept(account,token,**values):
+    # Every check starts without a snapshot, so the live token is compared with the sent one.
+    api.attendance_reports.cache.clear();return report(account,token=token,**values).status_code
+
+
+def test_unrelated_changes_keep_class_report_token(client):
+    _,_,parent,teacher=setup(client);first=report(teacher).json();assert len(first['token'])==64
+    state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
+    assert kept(teacher,first['token'])==200
+    other='2026-08-24'
+    write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
+    assert kept(teacher,first['token'])==200
+    far=report(client,classId='c-demo-d').json()
+    mark(client)
+    assert kept(client,far['token'],classId='c-demo-d')==200
+    assert kept(teacher,first['token'])==409
+
+
+def test_admin_whole_school_token_limited_to_selected_days(client):
+    _,_,parent,teacher=setup(client);whole=report(client).json()
+    other='2026-08-24'
+    write(client,graded(entry(client,lesson(client,day=other)['lessonKey'],day=other)),publish=True).raise_for_status()
+    assert kept(client,whole['token'])==200
+    mark(client)
+    assert kept(client,whole['token'])==409
+
+
+def test_pupil_rename_requires_new_summary_and_snapshot_keeps_its_time(client):
+    _,_,parent,teacher=setup(client);mark(client);first=report(teacher).json()
+    state=api.read('demo');next(s for s in state.students if s.id=='s1').name='Новое имя';api.save('demo',state)
+    snapshot=report(teacher,token=first['token']);assert snapshot.status_code==200 and snapshot.json()['generatedAt']==first['generatedAt']
+    assert pupil(snapshot.json())['name']!='Новое имя'
+    assert kept(teacher,first['token'])==409
+
+
+def test_admin_token_ignores_roster_changes_on_report_details_and_export(client):
+    _,_,parent,teacher=setup(client);mark(client);first=report(client).json()
+    state=api.read('demo');state.classes.append(SchoolClass(id='c-new',name='Новый класс'));state.students.append(Student(id='newcomer',name='Новый ученик',classId='c-new'));api.save('demo',state)
+    assert report(client,token=first['token']).status_code==200
+    assert details(client,token=first['token']).status_code==200
+    assert export(client,token=first['token']).status_code==200
+    assert export(client,token=first['token'],view='lessons',studentId='s1').status_code==200
+    assert kept(client,first['token'])==409
+
+
+def test_token_bound_to_account_even_with_the_same_scope(client):
+    _,person,parent,teacher=setup(client);mark(client)
+    with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
+    reviewers({'c-demo-a':[person['id'],other_id]});twin=signed('other-teacher');create(client,'admin',login='second-admin');second=signed('second-admin')
+    for owner,stranger in [(teacher,twin),(client,second)]:
+        first=report(owner).json()
+        for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
+            rejected=call(stranger,token=first['token'],**extra);assert rejected.status_code==409 and 'students' not in rejected.json() and 'items' not in rejected.json()
+        assert report(stranger).json()['token'][:32]!=first['token'][:32]
+
+
+def test_other_account_token_and_scope_on_details_and_export(client):
+    _,person,parent,teacher=setup(client);mark(client)
+    with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
+    reviewers({'c-demo-a':[person['id']],'c-demo-d':[other_id]});other=signed('other-teacher')
+    first=report(teacher).json();own=report(other).json();assert first['token'][:32]!=own['token'][:32]
+    for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
+        assert call(other,token=first['token'],**extra).status_code==409
+    assert details(other,token=own['token'],studentId='s1').status_code==404
+    assert details(other,token=own['token'],studentId='s3').status_code==200
+    assert details(teacher,token=first['token'],studentId='s3').status_code==404
+    assert export(teacher,token=first['token'],view='lessons',studentId='s3').status_code==404
+    assert details(teacher,token=first['token'],studentId='s1').status_code==200
+
+
+def test_options_report_today_and_current_period(client,monkeypatch):
+    _,_,parent,teacher=setup(client)
+    stamp=datetime(2026,10,14,20,30,tzinfo=timezone.utc);monkeypatch.setattr('backend.attendance_reports.now',lambda:stamp)
+    def options(account):return account.get('/api/journal/attendance/options?workspace=demo').json()
+    def create_period(name,start,end):
+        response=client.put(f'/api/journal/periods/{uuid4().hex}?workspace=demo',json=dict(name=name,start=start,end=end,kind='custom',version=0,reason='Создание периода'));assert response.status_code==200,response.text
+    value=options(client);assert value['today']=='2026-10-15' and value['period'] is None
+    create_period('Первая четверть','2026-09-01','2026-10-31');create_period('Прошлая неделя','2026-10-05','2026-10-11')
+    assert options(teacher)['period']==dict(name='Первая четверть',start='2026-09-01',end='2026-10-31')
+    create_period('Текущая неделя','2026-10-12','2026-10-18')
+    assert options(client)['period']==dict(name='Текущая неделя',start='2026-10-12',end='2026-10-18')
+

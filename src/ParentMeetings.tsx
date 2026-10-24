@@ -8,6 +8,7 @@ import {
   blankDefinition,
   clockTime,
   displayTime,
+  groupByDay,
   labels,
   schoolInput,
   schoolISO,
@@ -22,6 +23,14 @@ import type {
   Slot,
 } from "./meetings";
 import "./ParentMeetings.css";
+
+const dayHeading = (day: string) =>
+  new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Asia/Qyzylorda",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(new Date(day + "T12:00:00+05:00"));
 
 export default function ParentMeetings({
   user,
@@ -68,7 +77,10 @@ export default function ParentMeetings({
     [nextBooking, setNextBooking] = useState<string | null>(null);
   const [hostId, setHostId] = useState(""),
     [day, setDay] = useState(""),
-    [student, setStudent] = useState("");
+    [student, setStudent] = useState(""),
+    [pastToo, setPastToo] = useState(false);
+  // Parents and hosts see all upcoming meetings of the event; administrators browse by day.
+  const mine = !options.canManage;
   const [picked, setPicked] = useState<Slot | null>(null),
     [note, setNote] = useState("");
   const [action, setAction] = useState("generate"),
@@ -163,10 +175,18 @@ export default function ParentMeetings({
     event: MeetingEvent,
     date: string,
     after?: string,
+    past = pastToo,
   ) {
+    const range: Record<string, string> = mine
+      ? past
+        ? {}
+        : { fromDate: schoolInput(new Date().toISOString()).slice(0, 10) }
+      : date
+        ? { onDate: date }
+        : {};
     const query = new URLSearchParams({
       eventId: event.id,
-      ...(date ? { onDate: date } : {}),
+      ...range,
       ...(after ? { after } : {}),
     });
     const r = await api(`meetings/bookings?${query}`, workspace);
@@ -548,27 +568,50 @@ export default function ParentMeetings({
                 ))}
               </nav>
               <div className="meeting-toolbar">
-                <label>
-                  День
-                  <input
-                    type="date"
-                    disabled={busy}
-                    value={day}
-                    onChange={(e) => {
-                      if (!mayLeave()) return;
-                      const value = e.target.value;
-                      setDay(value);
-                      setPicked(null);
-                      setNote("");
-                      void run(async () => {
-                        await Promise.all([
-                          loadSlots(selected, hostId, value),
-                          loadBookings(selected, value),
-                        ]);
-                      });
-                    }}
-                  />
-                </label>
+                {!(tab === "agenda" && mine) && (
+                  <label>
+                    День
+                    <input
+                      type="date"
+                      disabled={busy}
+                      value={day}
+                      onChange={(e) => {
+                        if (!mayLeave()) return;
+                        const value = e.target.value;
+                        setDay(value);
+                        setPicked(null);
+                        setNote("");
+                        void run(async () => {
+                          await Promise.all([
+                            loadSlots(selected, hostId, value),
+                            loadBookings(selected, value),
+                          ]);
+                        });
+                      }}
+                    />
+                  </label>
+                )}
+                {tab === "agenda" && mine && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      disabled={busy}
+                      checked={pastToo}
+                      onChange={(e) => {
+                        setPastToo(e.target.checked);
+                        void run(() =>
+                          loadBookings(
+                            selected,
+                            day,
+                            undefined,
+                            e.target.checked,
+                          ),
+                        );
+                      }}
+                    />{" "}
+                    Показать прошедшие встречи
+                  </label>
+                )}
                 {tab === "slots" && (
                   <label>
                     Учитель / сотрудник
@@ -794,6 +837,8 @@ export default function ParentMeetings({
                             <strong>{preview.bookingsToCancel}</strong>.
                             Предложений времени будет отозвано:{" "}
                             <strong>{preview.offersToRevoke || 0}</strong>.
+                            Пропущено начавшихся и прошедших интервалов:{" "}
+                            <strong>{preview.skippedPast || 0}</strong>.
                             Пересечений:{" "}
                             <strong>{preview.conflictCount}</strong>.
                           </p>
@@ -972,104 +1017,127 @@ export default function ParentMeetings({
                     </button>
                   )}
                   <div className="meeting-agenda">
-                    {bookings.map((b) => (
-                      <article key={b.id}>
-                        <h4>
-                          {displayTime(b.startsAt)}–{clockTime(b.endsAt)} ·{" "}
-                          {b.hostName}
-                        </h4>
-                        <p>
-                          {b.studentName} · {b.parentName} ·{" "}
-                          {b.roomName || b.location}
-                        </p>
-                        <p>{labels[b.status]}</p>
-                        {b.note && <p>Комментарий: {b.note}</p>}
-                        {b.reason && <p>Причина отмены: {b.reason}</p>}
-                        {b.rescheduleReason && (
-                          <p>
-                            Причина последнего переноса: {b.rescheduleReason}
-                          </p>
-                        )}
-                        {b.parentAccessCurrent === false && (
-                          <p className="meeting-error">
-                            Текущий доступ родителя к ребёнку изменился.
-                            Проверьте запись.
-                          </p>
-                        )}
-                        <div className="meeting-toolbar">
-                          {options.canManage && b.canReschedule && (
-                            <button
-                              disabled={busy || b.parentAccessCurrent === false}
-                              onClick={() => setTransfer(b)}
-                            >
-                              Перенести встречу
-                            </button>
-                          )}
-                          {b.canCancel && (
-                            <button
-                              disabled={busy}
-                              onClick={() =>
-                                void run(() => changeBooking(b, "cancel"))
-                              }
-                            >
-                              Отменить запись
-                            </button>
-                          )}
-                          {b.canMark &&
-                            ["attended", "no_show", "scheduled"].map((a) => (
+                    {(mine
+                      ? groupByDay(bookings)
+                      : [["", bookings] as [string, Booking[]]]
+                    ).map(([d, rows]) => (
+                      <section key={d}>
+                        {d && <h3>{dayHeading(d)}</h3>}
+                        {rows.map((b) => (
+                          <article key={b.id}>
+                            <h4>
+                              {displayTime(b.startsAt)}–{clockTime(b.endsAt)} ·{" "}
+                              {b.hostName}
+                            </h4>
+                            <p>
+                              {b.studentName} · {b.parentName} ·{" "}
+                              {b.roomName || b.location}
+                            </p>
+                            <p>{labels[b.status]}</p>
+                            {b.note && <p>Комментарий: {b.note}</p>}
+                            {b.reason && <p>Причина отмены: {b.reason}</p>}
+                            {b.rescheduleReason && (
+                              <p>
+                                Причина последнего переноса:{" "}
+                                {b.rescheduleReason}
+                              </p>
+                            )}
+                            {b.parentAccessCurrent === false && (
+                              <p className="meeting-error">
+                                Текущий доступ родителя к ребёнку изменился.
+                                Проверьте запись.
+                              </p>
+                            )}
+                            <div className="meeting-toolbar">
+                              {options.canManage && b.canReschedule && (
+                                <button
+                                  disabled={
+                                    busy || b.parentAccessCurrent === false
+                                  }
+                                  onClick={() => setTransfer(b)}
+                                >
+                                  Перенести встречу
+                                </button>
+                              )}
+                              {b.canCancel && (
+                                <button
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void run(() => changeBooking(b, "cancel"))
+                                  }
+                                >
+                                  Отменить запись
+                                </button>
+                              )}
+                              {b.canMark &&
+                                ["attended", "no_show", "scheduled"].map(
+                                  (a) => (
+                                    <button
+                                      disabled={busy || a === b.status}
+                                      key={a}
+                                      onClick={() =>
+                                        void run(() => changeBooking(b, a))
+                                      }
+                                    >
+                                      {a === "scheduled"
+                                        ? "Убрать отметку"
+                                        : labels[a]}
+                                    </button>
+                                  ),
+                                )}
                               <button
-                                disabled={busy || a === b.status}
-                                key={a}
+                                disabled={busy}
                                 onClick={() =>
-                                  void run(() => changeBooking(b, a))
+                                  void run(async () => {
+                                    const h = await api(
+                                      `meetings/bookings/${b.id}/history`,
+                                      workspace,
+                                    );
+                                    setHistory((old) => ({
+                                      ...old,
+                                      [b.id]: h,
+                                    }));
+                                  })
                                 }
                               >
-                                {a === "scheduled"
-                                  ? "Убрать отметку"
-                                  : labels[a]}
+                                История
                               </button>
-                            ))}
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void run(async () => {
-                                const h = await api(
-                                  `meetings/bookings/${b.id}/history`,
-                                  workspace,
-                                );
-                                setHistory((old) => ({ ...old, [b.id]: h }));
-                              })
-                            }
-                          >
-                            История
-                          </button>
-                        </div>
-                        {history[b.id] && (
-                          <ol>
-                            {history[b.id].map((h, i) => (
-                              <li key={i}>
-                                {displayTime(h.created)} ·{" "}
-                                {labels[h.action] || h.action}
-                                {h.reason ? ` · ${h.reason}` : ""}
-                                {h.source && h.target && (
-                                  <>
-                                    {" "}
-                                    · {displayTime(h.source.startsAt)} →{" "}
-                                    {displayTime(h.target.startsAt)}
-                                    {h.sourceBlocked
-                                      ? " · прежний интервал закрыт"
-                                      : " · прежний интервал освобождён"}
-                                  </>
-                                )}
-                              </li>
-                            ))}
-                          </ol>
-                        )}
-                      </article>
+                            </div>
+                            {history[b.id] && (
+                              <ol>
+                                {history[b.id].map((h, i) => (
+                                  <li key={i}>
+                                    {displayTime(h.created)} ·{" "}
+                                    {labels[h.action] || h.action}
+                                    {h.reason ? ` · ${h.reason}` : ""}
+                                    {h.source && h.target && (
+                                      <>
+                                        {" "}
+                                        · {displayTime(
+                                          h.source.startsAt,
+                                        )} → {displayTime(h.target.startsAt)}
+                                        {h.sourceBlocked
+                                          ? " · прежний интервал закрыт"
+                                          : " · прежний интервал освобождён"}
+                                      </>
+                                    )}
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </article>
+                        ))}
+                      </section>
                     ))}
                   </div>
                   {!bookings.length && !busy && (
-                    <p>Записей на выбранный день нет.</p>
+                    <p>
+                      {mine
+                        ? pastToo
+                          ? "Встреч нет."
+                          : "Предстоящих встреч нет."
+                        : "Записей на выбранный день нет."}
+                    </p>
                   )}
                   {nextBooking && (
                     <button

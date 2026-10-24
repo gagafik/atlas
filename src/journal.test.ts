@@ -12,6 +12,7 @@ import {
   mergeReportPage,
   loadRemainingReport,
   journalPanels,
+  defaultAttendancePeriod,
   type JournalDocument,
   type JournalReport,
   type JournalReportPage,
@@ -122,7 +123,10 @@ describe("number fields", () => {
     // Valid values survive both ways, and points keep whatever the user typed.
     const kept = withKind({ ...points, maxScore: 5, weight: 0 }, "label");
     expect(kept).toMatchObject({ maxScore: 5, weight: 0 });
-    expect(withKind(label, "points")).toMatchObject({ kind: "points", maxScore: 10 });
+    expect(withKind(label, "points")).toMatchObject({
+      kind: "points",
+      maxScore: 10,
+    });
     expect(withKind(points, "points").maxScore).toBeNaN();
     for (const a of [label, kept]) {
       const c = structuredClone(document.content);
@@ -289,5 +293,45 @@ describe("management panels", () => {
     expect(journalPanels({ panels: { absences: true } })).toEqual(["absences"]);
     expect(journalPanels({ panels: { absences: false } })).toEqual([]);
     expect(journalPanels({})).toEqual([]);
+  });
+});
+describe("attendance opening period", () => {
+  const year = ["2026-08-17", "2027-06-11"] as const;
+  it("uses the current journal period, clamped to the school year", () => {
+    expect(
+      defaultAttendancePeriod("2026-10-15", ...year, {
+        start: "2026-09-01",
+        end: "2026-10-31",
+      }),
+    ).toEqual({ start: "2026-09-01", end: "2026-10-31" });
+    expect(
+      defaultAttendancePeriod("2026-08-20", ...year, {
+        start: "2026-08-01",
+        end: "2026-12-31",
+      }),
+    ).toEqual({ start: "2026-08-17", end: "2026-12-31" });
+  });
+  it("falls back to the whole month of today", () => {
+    expect(defaultAttendancePeriod("2026-10-15", ...year)).toEqual({
+      start: "2026-10-01",
+      end: "2026-10-31",
+    });
+    expect(defaultAttendancePeriod("2026-11-15", ...year, null)).toEqual({
+      start: "2026-11-01",
+      end: "2026-11-30",
+    });
+  });
+  it("clamps a day outside the year and handles a leap February", () => {
+    expect(defaultAttendancePeriod("2026-07-01", ...year)).toEqual({
+      start: "2026-08-17",
+      end: "2026-08-31",
+    });
+    expect(defaultAttendancePeriod("2028-03-01", ...year)).toEqual({
+      start: "2027-06-01",
+      end: "2027-06-11",
+    });
+    expect(
+      defaultAttendancePeriod("2028-02-10", "2027-08-17", "2028-06-11"),
+    ).toEqual({ start: "2028-02-01", end: "2028-02-29" });
   });
 });

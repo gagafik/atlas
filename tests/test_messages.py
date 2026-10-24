@@ -118,7 +118,9 @@ def test_reply_race_close_and_monotonic_read(client):
     with ThreadPoolExecutor(max_workers=2) as pool:
         a=pool.submit(teacher.post,url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Ответ'))
         b=pool.submit(parent.post,url('threads/'+id+'/change'),json=dict(version=1,action='close'))
-        assert sorted([a.result().status_code,b.result().status_code])==[200,409]
+        # Replies never lock the conversation: both win, or the close came first and the reply is refused.
+        codes=sorted([a.result().status_code,b.result().status_code]);assert codes in ([200,200],[200,409]),codes
+    assert any(p['text']=='Ответ' for p in detail(parent,id)['posts'])==(a.result().status_code==200)
     current=detail(parent,id)
     assert parent.post(url('threads/'+id+'/change'),json=dict(version=current['version'],action='close')).status_code==200
     current=detail(parent,id)
@@ -129,6 +131,23 @@ def test_reply_race_close_and_monotonic_read(client):
     teacher.put(url('threads/'+id+'/read'),json=dict(throughId=current['latestId']))
     teacher.put(url('threads/'+id+'/read'),json=dict(throughId=first['latestId']))
     assert not teacher.get(url(unreadOnly=True)).json()['items']
+
+
+def test_simultaneous_group_replies_are_all_stored_in_order(client):
+    setup(client);teacher=signed('teacher');parent=signed('parent');student=signed('student')
+    id=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='Обсуждение класса',text='Общий вопрос.',groupIds=['g-a'],roles=['parent','student'])).json()['id']
+    before=detail(teacher,id)
+    def send(pair):
+        who,text=pair;return who.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=before['version'],text=text))
+    with ThreadPoolExecutor(max_workers=2) as pool:responses=list(pool.map(send,[(parent,'Ответ родителя'),(student,'Ответ ученика')]))
+    assert [r.status_code for r in responses]==[200,200],[r.text for r in responses]
+    value=detail(teacher,id);posts=value['posts']
+    assert [p['text'] for p in posts][0]=='Общий вопрос.' and {p['text'] for p in posts}=={'Общий вопрос.','Ответ родителя','Ответ ученика'}
+    ids=[p['id'] for p in posts];assert ids==sorted(ids) and len(set(ids))==3
+    assert value['version']==before['version']
+    # The old version is still valid for management, and a reply needs no version at all.
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Без версии')).status_code==200
+    assert teacher.post(url('threads/'+id+'/change'),json=dict(version=before['version'],action='close')).status_code==200
 
 
 def test_local_mode_requires_accounts_and_plain_text_does_not_modify_school(client):
