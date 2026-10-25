@@ -205,13 +205,16 @@ def register(service,app,Workspace):
             items=outcome(db,workspace,snap,body,pupils,subject)
             # A pupil with a problem blocks the whole set: nothing is stored and the rate limit is not used.
             if any(item['problem'] for item in items):return shown(body,subject,items,status='blocked')
-            if previous:
-                if previous[6]<=now().isoformat():raise HTTPException(409,'Предпросмотр истёк. Подготовьте записки заново.')
-                return shown(body,subject,items,id=previous[0],expires=previous[6])
-            count=db.execute('SELECT count(*) FROM absence_note_batches WHERE actor_id=? AND created>?',(user['id'],(now()-timedelta(hours=1)).isoformat())).fetchone()[0]
+            stamp=now()
+            if previous and previous[6]>stamp.isoformat():return shown(body,subject,items,id=previous[0],expires=previous[6])
+            # A new preview, or an expired one prepared again in place under its request id, uses the hourly allowance (the expired row is replaced, not counted).
+            count=db.execute('SELECT count(*) FROM absence_note_batches WHERE actor_id=? AND created>? AND id!=?',(user['id'],(stamp-timedelta(hours=1)).isoformat(),previous[0] if previous else '')).fetchone()[0]
             if count>=30:raise HTTPException(429,'До 30 новых предпросмотров записок в час. Повторите позже.')
-            id=uuid4().hex;stamp=now();expires=(stamp+timedelta(minutes=15)).isoformat()
-            db.execute('INSERT INTO absence_note_batches VALUES (?,?,?,?,?,?,?,?,?,?)',(id,workspace,user['id'],body.requestId,fingerprint,stamp.isoformat(),expires,payload,'preview',None))
+            expires=(stamp+timedelta(minutes=15)).isoformat()
+            if previous:id=previous[0];db.execute('UPDATE absence_note_batches SET created=?,expires=? WHERE id=?',(stamp.isoformat(),expires,id))
+            else:
+                id=uuid4().hex
+                db.execute('INSERT INTO absence_note_batches VALUES (?,?,?,?,?,?,?,?,?,?)',(id,workspace,user['id'],body.requestId,fingerprint,stamp.isoformat(),expires,payload,'preview',None))
             service.access.record(db,'absence.notes_preview',workspace,detail=id)
             return shown(body,subject,items,id=id,expires=expires)
 

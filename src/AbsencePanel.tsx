@@ -14,6 +14,7 @@ import {
   lessonEdge,
   noticeQuery,
   notesOff as closed,
+  sharedDecision,
 } from "./absenceForm";
 
 type FileItem = { id: string; filename: string; size: number };
@@ -1161,7 +1162,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   <p>
                     {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·{" "}
                     {labels[h.action] || h.action} · редакция {h.version}
-                    {h.batchId && " · общее решение"}
+                    {sharedDecision(h) && " · общее решение"}
                   </p>
                   {h.comment && <p className="journal-text">{h.comment}</p>}
                 </div>

@@ -8,6 +8,8 @@ import {
   lessonEdge,
   noticeQuery,
   schoolSubmitLabel,
+  sharedDecision,
+  staleSchoolPreview,
 } from "./absenceForm";
 
 const closed = { id: "s1", electronicNotes: false };
@@ -93,6 +95,26 @@ it("refuses a type list the server would refuse", () => {
 it("labels the school note button by the number of pupils", () => {
   expect(schoolSubmitLabel(1)).toBe("Внести записку");
   expect(schoolSubmitLabel(3)).toBe("Внести записки (3)");
+});
+
+it("drops a school preview only when the server reports it as stale", () => {
+  const conflict = Object.assign(new Error("Предпросмотр истёк."), {
+    status: 409,
+  });
+  expect(staleSchoolPreview(conflict)).toBe(true);
+  expect(
+    staleSchoolPreview(Object.assign(new Error("x"), { status: 403 })),
+  ).toBe(false);
+  expect(staleSchoolPreview(new Error("Сервер недоступен."))).toBe(false);
+  expect(staleSchoolPreview(null)).toBe(false);
+});
+
+it("calls only joint approvals and rejections a shared decision", () => {
+  expect(sharedDecision({ action: "approve", batchId: "b1" })).toBe(true);
+  expect(sharedDecision({ action: "revoke", batchId: "b1" })).toBe(true);
+  expect(sharedDecision({ action: "recorded", batchId: "b1" })).toBe(false);
+  expect(sharedDecision({ action: "approve", batchId: null })).toBe(false);
+  expect(sharedDecision({ action: "submitted" })).toBe(false);
 });
 
 it("lists the excused lessons per type and skips zeros", () => {

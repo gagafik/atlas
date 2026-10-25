@@ -70,8 +70,9 @@ def register(service,app,Workspace):
     def listing(request:Request,workspace:Workspace='school'):
         user,_=service.context(request,workspace)
         with service.access.lock,service.access.connect() as db:
-            tables(db);service.journal.recheck_account(db,user)
-            return current(db,workspace)
+            tables(db);service.journal.recheck_account(db,user);value=current(db,workspace)
+            # Who saved the list and when belong to the administrator's history; everybody else needs only the labels.
+            return value if user['role']=='admin' else dict(version=value['version'],items=value['items'])
 
     @app.get('/api/journal/absences/codes/history')
     def history(request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):

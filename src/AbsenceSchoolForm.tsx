@@ -7,6 +7,7 @@ import {
   type Subject,
   lessonEdge,
   schoolSubmitLabel,
+  staleSchoolPreview,
 } from "./absenceForm";
 
 type Entry = {
@@ -89,6 +90,11 @@ export default function AbsenceSchoolForm({
       await fn();
     } catch (e) {
       setError((e as Error).message);
+      // The preview can no longer be applied and its request id is spent: preparing it again must start from a new one.
+      if (staleSchoolPreview(e)) {
+        setPreview(null);
+        setRequestId(crypto.randomUUID());
+      }
     } finally {
       setBusy(false);
     }

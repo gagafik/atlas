@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import pytest
 from backend import api, absence_bulk
+import test_absence_bulk as bulk
 from backend.absences import tables as absence_tables, approvals
 from backend.access import now
 from test_access import client, enable, create, signed
@@ -41,6 +42,8 @@ def counts():
         absence_tables(db);absence_bulk.tables(db)
         return {t:db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['absence_notices','absence_history','notifications','audit','absence_note_batches']}
 def inbox(account):return [n['action'] for n in account.get('/api/notifications/inbox').json()['items']]
+def audit(action):
+    with api.connect() as db:return [r[0] for r in db.execute('SELECT detail FROM audit WHERE action=? ORDER BY id',(action,))]
 def admin_id():
     with api.connect() as db:return db.execute("SELECT id FROM accounts WHERE role='admin'").fetchone()[0]
 def put_codes(client,items,**values):
@@ -108,6 +111,10 @@ def test_codes_admin_versioned_history_and_validation(client):
     assert put_codes(client,renamed,reason='no').status_code==422
     assert put_codes(client,[dict(id='Bad Id',name='x')]+renamed[1:]).status_code==422
     assert client.get(url('/options')).json()['codesVersion']==1
+    # Who saved the list and when stays with the administrator; every other role gets the labels only.
+    assert {'updated','actor'}<=set(client.get(url('/codes')).json())
+    for login in ['teacher','parent','staff','student']:assert set(signed(login).get(url('/codes')).json())=={'version','items'},login
+    assert audit('absence.codes_saved')==['1']
 
 
 def test_parent_chooses_only_active_codes_for_parents(client):
@@ -163,6 +170,7 @@ def test_subject_preview_and_lesson_range_note(client):
 
 def test_class_teacher_enters_note_author_recorded_family_notified(client):
     _,_,parent,teacher,student=staff_setup(client);mark(client)
+    updates=lambda:(inbox(parent).count('journal.updated'),inbox(student).count('journal.updated'));earlier=updates()
     prepared_note=prepared(teacher,codeId='illness')
     assert prepared_note['items'][0]['lessonCount']>=1 and prepared_note['items'][0]['problem'] is None
     result=apply(teacher,prepared_note['id']).json();item=result['items'][0];assert item['status']=='approved' and result['count']==1
@@ -172,7 +180,9 @@ def test_class_teacher_enters_note_author_recorded_family_notified(client):
     assert [(h['action'],h['actor'],h['batchId']) for h in history]==[('recorded','Сотрудник',prepared_note['id'])]
     assert report(teacher).json()['totals']['attendance']['excused']==1
     assert journal_report(parent).json()['summary']['attendance']['excused']==1
-    assert 'absence.recorded' in inbox(parent) and 'journal.updated' in inbox(parent) and 'absence.recorded' in inbox(student)
+    # The published lesson already told the family about the journal; the note adds exactly one more event of each kind.
+    assert inbox(parent).count('absence.recorded')==1 and inbox(student).count('absence.recorded')==1
+    assert updates()==(earlier[0]+1,earlier[1]+1)
     assert 'absence.recorded' not in inbox(teacher) and inbox(client).count('absence.recorded')==1
     # The family can read the summary; the parent cannot withdraw a note of the school.
     shown=parent.get(url('/'+item['id']));assert shown.status_code==200 and shown.json()['summary'] is True and 'reason' not in shown.json()
@@ -252,6 +262,8 @@ def test_bulk_notes_replay_and_receipt(client):
     assert result['count']==2 and all(i['status']=='approved' for i in result['items'])
     for i in result['items']:
         h=client.get(url('/'+i['id']+'/history')).json()['items'];assert len(h)==1 and h[0]['batchId']==ready['id'] and h[0]['action']=='recorded'
+    assert audit('absence.notes_preview')==[ready['id']] and audit('absence.notes_applied')==[ready['id']] and len(audit('absence.recorded'))==2
+    assert 'Олимпиада' not in json.dumps(audit('absence.notes_preview')+audit('absence.notes_applied'),ensure_ascii=False)
     done=counts()
     assert apply(client,ready['id']).json()==result
     assert client.post(url('/school/preview'),json=request).json()==result
@@ -407,3 +419,99 @@ def test_overlapping_notes_count_a_lesson_once(client):
         db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(row))+')',row)
     value=report(teacher).json();assert pupil(value)['attendance']['excused']==1 and pupil(value)['attendance']['absent']==0
     assert sum(pupil(value)['excusedCodes'].values())==1
+
+
+def test_expired_preview_is_prepared_again_under_the_same_request(client,monkeypatch):
+    setup(client);request=school(studentIds=['s1','s3']);first=client.post(url('/school/preview'),json=request).json()
+    clock=absence_bulk.now;monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(minutes=16))
+    expired=apply(client,first['id']);assert expired.status_code==409 and 'истёк' in expired.json()['detail']
+    # Preparing it again with the same request id must not repeat the refusal.
+    again=client.post(url('/school/preview'),json=request);assert again.status_code==200,again.text
+    assert again.json()['status']=='preview' and again.json()['id']==first['id'] and again.json()['expires']>first['expires']
+    assert counts()['absence_note_batches']==1 and audit('absence.notes_preview')==[first['id']]*2
+    done=counts();assert client.post(url('/school/preview'),json=request).json()==again.json() and counts()==done
+    result=apply(client,first['id']);assert result.status_code==200 and result.json()['count']==2
+    assert client.post(url('/school/preview'),json=request).json()==result.json()
+    # Preparing an expired preview again is a new preview for the hourly allowance; the expired row itself is not counted.
+    other=school(studentIds=['s2']);stale=client.post(url('/school/preview'),json=other).json()
+    monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(minutes=40))
+    with api.connect() as db:
+        for _ in range(29):
+            db.execute("INSERT INTO absence_note_batches VALUES (?,?,?,?,?,?,?,?,?,?)",(uuid4().hex,'demo',admin_id(),str(uuid4()),'x',now().isoformat(),now().isoformat(),'{}','preview',None))
+    assert client.post(url('/school/preview'),json=other).status_code==429 and apply(client,stale['id']).status_code==409
+    with api.connect() as db:db.execute("DELETE FROM absence_note_batches WHERE id=(SELECT id FROM absence_note_batches WHERE payload='{}' LIMIT 1)")
+    renewed=client.post(url('/school/preview'),json=other).json();assert renewed['id']==stale['id'] and renewed['expires']>stale['expires']
+    assert apply(client,stale['id']).json()['count']==1
+
+
+def test_apply_reauthorizes_the_actor_for_every_pupil(client):
+    from test_class_staff import assign, item as duty
+    parent,teacher,parent_client,teacher_client,student=staff_setup(client);mark(client)
+    # The class teacher's duty is revoked between the preview and the apply: no pupil detail, no note.
+    ready=prepared(teacher_client)
+    assign(client,{A:[dict(accountId=teacher['id'],capabilities=[],revoked=['absence_review'])]});before=counts()
+    assert apply(teacher_client,ready['id']).status_code==404 and counts()==before
+    assign(client,{})
+    # The pupil moved to another class between the preview and the apply.
+    ready=prepared(teacher_client)
+    state=api.read('demo');state.students=[s.model_copy(update=dict(classId=D)) if s.id=='s1' else s for s in state.students];api.save('demo',state);before=counts()
+    assert apply(teacher_client,ready['id']).status_code==404 and counts()==before
+    with api.connect() as db:assert db.execute("SELECT status FROM absence_note_batches WHERE id=?",(ready['id'],)).fetchone()[0]=='preview'
+
+
+def test_school_note_rechecks_the_current_account_and_school_data(client,monkeypatch):
+    parent,teacher,parent_client,teacher_client,student=staff_setup(client);mark(client)
+    original=api.absences.recheck
+    def changed(db,user,snap,workspace):
+        db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(teacher['id'],))
+        original(db,user,snap,workspace)
+    before=counts()
+    monkeypatch.setattr(api.absences,'recheck',changed)
+    assert preview(teacher_client).status_code==409 and counts()==before
+    monkeypatch.setattr(api.absences,'recheck',original)
+    ready=prepared(teacher_client);before=counts()
+    monkeypatch.setattr(api.absences,'recheck',changed)
+    assert apply(teacher_client,ready['id']).status_code==409 and counts()==before
+    monkeypatch.setattr(api.absences,'recheck',original)
+    # Once the account is unchanged the same checked preview applies.
+    done=apply(teacher_client,ready['id']);assert done.status_code==200 and done.json()['count']==1
+
+
+def test_school_note_notifies_the_class_teacher_and_a_deputy_once(client):
+    from test_class_staff import assign, item as duty
+    parent,teacher,parent_client,teacher_client,student=staff_setup(client);deputy=create(client,'staff',login='deputy');mark(client)
+    assign(client,{A:[duty(teacher,'absence_review'),duty(deputy,'absence_review')]})
+    # Two pupils of one class in one operation: each reviewer still receives one event; the administrator who entered the note receives none.
+    assert note(client,studentIds=['s1','s2'])['count']==2
+    assert inbox(teacher_client).count('absence.recorded')==1 and inbox(signed('deputy')).count('absence.recorded')==1
+    assert 'absence.recorded' not in inbox(client)
+    # A reviewer of another class is not told about a pupil of this one.
+    assert 'absence.recorded' not in inbox(signed('other-teacher'))
+
+
+def test_unverified_legal_relationship_sees_nothing_until_the_school_verifies(client):
+    _,_,parent,teacher=setup(client);second=create(client,'parent',login='second-parent');other=signed('second-parent')
+    payload=body();file=upload(parent,payload).json();notice=send(parent,payload|dict(fileIds=[file['id']]));path=url('/'+notice['id'])
+    # The relationship is recorded as father, but the school has not verified it.
+    family(client,second,relationship='father',verified=False)
+    def hidden():
+        assert other.get(path).status_code==404 and other.get(url()).json()['items']==[]
+        assert other.get(url('/'+notice['id']+'/history')).status_code==404 and other.get(file_url(file['id'])).status_code==404
+    hidden()
+    assert decide(teacher,notice).status_code==200 and 'absence.updated' not in inbox(other) and 'absence.submitted' not in inbox(other)
+    hidden()
+    family(client,second,verified=True,evidence='Свидетельство о рождении')
+    assert other.get(path).status_code==200 and [i['id'] for i in other.get(url()).json()['items']]==[notice['id']]
+    family(client,second,verified=False,evidence='');hidden()
+
+
+def test_bulk_decision_notifies_only_verified_legal_guardians(client):
+    _,_,parent,teacher=setup(client)
+    verified=create(client,'parent',login='verified-parent');plain=create(client,'parent',login='plain-parent')
+    family(client,verified,relationship='father',verified=True,evidence='Свидетельство о рождении')
+    family(client,plain,relationship='father',verified=False)
+    notice=send(parent);result=bulk.apply(teacher,bulk.prepare(teacher,[notice]));assert result.status_code==200,result.text
+    assert inbox(signed('verified-parent')).count('absence.updated')==1 and inbox(parent).count('absence.updated')==1
+    assert 'absence.updated' not in inbox(signed('plain-parent')) and 'absence.updated' not in inbox(signed('student'))
+    # Everybody with access still learns that the attendance changed.
+    for login in ['verified-parent','plain-parent','student']:assert inbox(signed(login)).count('journal.updated')==1,login

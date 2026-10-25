@@ -61,6 +61,16 @@ export const codeSetError = (items: { name: string; active: boolean }[]) => {
 export const schoolSubmitLabel = (count: number) =>
   count === 1 ? "Внести записку" : `Внести записки (${count})`;
 
+// A 409 means the checked preview is stale (expired, changed by someone else, request id reused): drop it and use a new request id.
+export const staleSchoolPreview = (error: unknown) =>
+  (error as { status?: number } | null)?.status === 409;
+
+// Only decisions made together are "общее решение"; a note entered by the school is also stored under a batch id but decides nothing jointly.
+export const sharedDecision = (entry: {
+  action: string;
+  batchId?: string | null;
+}) => Boolean(entry.batchId) && entry.action !== "recorded";
+
 // "Болезнь 2, Представляет школу 1": the list order first, then notes without a type; zeros are skipped.
 export const codeBreakdown = (
   counts: Record<string, number> | undefined,
