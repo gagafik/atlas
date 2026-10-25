@@ -11,6 +11,7 @@ type Space = {
   id: string;
   name: string;
   classes: { id: string; name: string; capabilities: ClassCapability[] }[];
+  classTeacherOf?: string[];
 };
 export default function ClassStaffWorkspace({
   controls,
@@ -96,7 +97,10 @@ export default function ClassStaffWorkspace({
             <summary>Мои полномочия по классам</summary>
             {current.classes.map((c) => (
               <p key={c.id}>
-                <strong>{c.name}</strong>:{" "}
+                <strong>{c.name}</strong>
+                {current.classTeacherOf?.includes(c.id) &&
+                  " · классный руководитель"}
+                :{" "}
                 {c.capabilities.map((cap) => classCapabilities[cap]).join(", ")}
               </p>
             ))}
