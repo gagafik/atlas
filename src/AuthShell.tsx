@@ -36,6 +36,7 @@ const LiveProjector = lazy(() => import("./LiveProjector"));
 const HallScreens = lazy(() => import("./HallScreens"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
+const Registers = lazy(() => import("./Registers"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
 );
@@ -156,6 +157,17 @@ export default function AuthShell() {
     window.addEventListener("atlas-open-hall", open);
     return () => window.removeEventListener("atlas-open-hall", open);
   }, []);
+  const [registersWorkspace, setRegistersWorkspace] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    const open = (event: Event) =>
+      setRegistersWorkspace(
+        (event as CustomEvent).detail?.workspace || "school",
+      );
+    window.addEventListener("atlas-open-registers", open);
+    return () => window.removeEventListener("atlas-open-registers", open);
+  }, []);
   const [meetingsWorkspace, setMeetingsWorkspace] = useState<string | null>(
     null,
   );
@@ -186,6 +198,7 @@ export default function AuthShell() {
     setMeetingsWorkspace(null);
     setHallWorkspace(null);
     setStaffTimeWorkspace(null);
+    setRegistersWorkspace(null);
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
     setCanteenWorkspace(null);
@@ -482,6 +495,15 @@ export default function AuthShell() {
           {["admin", "editor", "teacher", "staff", "parent"].includes(
             session.user.role,
           ) && (
+            <button onClick={() => setRegistersWorkspace("school")}>
+              {session.user.role === "parent"
+                ? "Сообщения о происшествиях"
+                : "Журналы регистрации"}
+            </button>
+          )}
+          {["admin", "editor", "teacher", "staff", "parent"].includes(
+            session.user.role,
+          ) && (
             <button onClick={() => setMeetingsWorkspace("school")}>
               Родительские встречи
             </button>
@@ -721,6 +743,20 @@ export default function AuthShell() {
               user={session.user}
               initialWorkspace={staffTimeWorkspace}
               onClose={() => setStaffTimeWorkspace(null)}
+            />
+          </Suspense>
+        )}
+      {registersWorkspace &&
+        session.user &&
+        ["admin", "editor", "teacher", "staff", "parent"].includes(
+          session.user.role,
+        ) && (
+          <Suspense fallback={<p role="status">Открываю журналы…</p>}>
+            <Registers
+              key={session.user.id + ":" + session.user.version}
+              user={session.user}
+              initialWorkspace={registersWorkspace}
+              onClose={() => setRegistersWorkspace(null)}
             />
           </Suspense>
         )}

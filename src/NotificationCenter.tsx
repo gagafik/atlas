@@ -57,6 +57,10 @@ const titles: Record<string, string> = {
   "library.reminder": "Напоминание о библиотечной книге",
   "lost-found.claimed": "Есть изменение в заявках на найденные вещи",
   "lost-found.changed": "Изменилось решение по вашей находке",
+  "registers.visitor": "К вам пришёл посетитель",
+  "registers.incident": "Зарегистрировано происшествие",
+  "registers.inventory": "Вы назначены ответственным за предмет инвентаря",
+  "registers.summary": "Школа опубликовала сведения о происшествии с ребёнком",
   "behaviour.published": "Новая похвала или замечание",
   "behaviour.changed": "Изменена запись о поведении",
   "behaviour.withdrawn": "Запись о поведении отозвана",
@@ -427,6 +431,20 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                       Открыть потерянные вещи
                     </button>
                   )}
+                  {item.action.startsWith("registers.") && (
+                    <button
+                      onClick={() => {
+                        window.dispatchEvent(
+                          new CustomEvent("atlas-open-registers", {
+                            detail: { workspace: item.workspace },
+                          }),
+                        );
+                        setOpen(false);
+                      }}
+                    >
+                      Открыть журналы
+                    </button>
+                  )}
                   {item.action.startsWith("documents.") && (
                     <button
                       onClick={() =>
@@ -499,6 +517,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                     item.action.startsWith("library.") ||
                     item.action.startsWith("clubs.") ||
                     item.action.startsWith("lost-found.") ||
+                    item.action.startsWith("registers.") ||
                     item.action.startsWith("staff-time.") ||
                     item.action.startsWith("forms.") ||
                     item.action.startsWith("journal.") ||
@@ -544,7 +563,11 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                                       "journal.",
                                                     )
                                                   ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
-                                                  : "Проверьте доступное вам расписание, включая занятия по датам."}
+                                                  : item.action.startsWith(
+                                                        "registers.",
+                                                      )
+                                                    ? "Откройте журналы регистрации, чтобы посмотреть запись."
+                                                    : "Проверьте доступное вам расписание, включая занятия по датам."}
                   </p>
                   <time dateTime={item.created}>
                     {new Date(item.created).toLocaleString("ru-RU")}
