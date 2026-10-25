@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { uploadFile } from "./uploads";
 import { api } from "./api";
+import { defaultChild, formLocks, notesOff as closed } from "./absenceForm";
 
 type FileItem = { id: string; filename: string; size: number };
 type Item = {
@@ -120,7 +121,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   // One request id per class, version and direction, so a repeated click or retry is the same switch.
   const switchIds = useRef<Record<string, string>>({});
   const child = options?.students.find((s) => s.id === student);
-  const notesOff = child?.electronicNotes === false;
+  const notesOff = closed(child);
+  const locks = formLocks(busy, child);
   const clearBulkPreview = () => {
     setBulkPreview(null);
     setBulkRequest(crypto.randomUUID());
@@ -146,7 +148,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   const loadOptions = async () => {
     const r: Options = await api("journal/absences/options", workspace);
     setOptions(r);
-    setStudent((old) => old || r.students[0]?.id || "");
+    setStudent((old) => defaultChild(r.students, old));
     setStart((old) => old || r.defaultDate);
     setEnd((old) => old || r.defaultDate);
   };
@@ -189,7 +191,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       .then(([o, r]) => {
         if (!live) return;
         setOptions(o);
-        setStudent((old) => old || o.students[0]?.id || "");
+        setStudent((old) => defaultChild(o.students, old));
         setStart((old) => old || o.defaultDate);
         setEnd((old) => old || o.defaultDate);
         setItems(r.items);
@@ -403,7 +405,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   {child?.classTeacher ? `: ${child.classTeacher}` : ""}.
                 </p>
               )}
-              <fieldset disabled={busy || notesOff} className="access-fields">
+              <fieldset disabled={locks.pick} className="access-fields">
                 <label className="field">
                   <span>Ребёнок</span>
                   <select
@@ -427,91 +429,94 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     ))}
                   </select>
                 </label>
-                <div className="dated-fields">
+                {/* Notes off for this class: only what writes a new notice is locked. */}
+                <fieldset disabled={locks.write} className="access-fields">
+                  <div className="dated-fields">
+                    <label className="field">
+                      <span>Первый день отсутствия</span>
+                      <input
+                        type="date"
+                        required
+                        min={options.yearStart}
+                        max={options.yearEnd}
+                        value={start}
+                        onChange={(e) => {
+                          setStart(e.target.value);
+                          setPreview(null);
+                        }}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>С какого времени</span>
+                      <input
+                        type="time"
+                        required
+                        value={from}
+                        onChange={(e) => {
+                          setFrom(e.target.value);
+                          setPreview(null);
+                        }}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Последний день отсутствия</span>
+                      <input
+                        type="date"
+                        required
+                        min={start}
+                        max={options.yearEnd}
+                        value={end}
+                        onChange={(e) => {
+                          setEnd(e.target.value);
+                          setPreview(null);
+                        }}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>До какого времени</span>
+                      <input
+                        type="time"
+                        required
+                        value={to}
+                        onChange={(e) => {
+                          setTo(e.target.value);
+                          setPreview(null);
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <p>
+                    Время школы — Asia/Qyzylorda. Для полных дней оставьте
+                    00:00–23:59. Период непрерывный, до 31 дня; учитываются
+                    только полностью включённые в него уроки. Перенос урока за
+                    пределы периода отменяет применение объяснительной к нему.
+                  </p>
                   <label className="field">
-                    <span>Первый день отсутствия</span>
-                    <input
-                      type="date"
+                    <span>Причина отсутствия</span>
+                    <textarea
                       required
-                      min={options.yearStart}
-                      max={options.yearEnd}
-                      value={start}
-                      onChange={(e) => {
-                        setStart(e.target.value);
-                        setPreview(null);
-                      }}
+                      maxLength={4000}
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
                     />
                   </label>
                   <label className="field">
-                    <span>С какого времени</span>
+                    <span>Приложить файл (необязательно, до 5 по 10 МиБ)</span>
                     <input
-                      type="time"
-                      required
-                      value={from}
+                      type="file"
+                      accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+                      disabled={!student || files.length >= 5}
                       onChange={(e) => {
-                        setFrom(e.target.value);
-                        setPreview(null);
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (f) void run(() => upload(f));
                       }}
                     />
+                    {serverBusy && (
+                      <small role="status">Сервер занят, повторяем…</small>
+                    )}
                   </label>
-                  <label className="field">
-                    <span>Последний день отсутствия</span>
-                    <input
-                      type="date"
-                      required
-                      min={start}
-                      max={options.yearEnd}
-                      value={end}
-                      onChange={(e) => {
-                        setEnd(e.target.value);
-                        setPreview(null);
-                      }}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>До какого времени</span>
-                    <input
-                      type="time"
-                      required
-                      value={to}
-                      onChange={(e) => {
-                        setTo(e.target.value);
-                        setPreview(null);
-                      }}
-                    />
-                  </label>
-                </div>
-                <p>
-                  Время школы — Asia/Qyzylorda. Для полных дней оставьте
-                  00:00–23:59. Период непрерывный, до 31 дня; учитываются только
-                  полностью включённые в него уроки. Перенос урока за пределы
-                  периода отменяет применение объяснительной к нему.
-                </p>
-                <label className="field">
-                  <span>Причина отсутствия</span>
-                  <textarea
-                    required
-                    maxLength={4000}
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>Приложить файл (необязательно, до 5 по 10 МиБ)</span>
-                  <input
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
-                    disabled={!student || files.length >= 5}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = "";
-                      if (f) void run(() => upload(f));
-                    }}
-                  />
-                  {serverBusy && (
-                    <small role="status">Сервер занят, повторяем…</small>
-                  )}
-                </label>
+                </fieldset>
                 {files.map((f) => (
                   <div className="absence-file" key={f.id}>
                     <a href={fileUrl(f.id)}>{f.filename}</a>
@@ -532,35 +537,37 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     </button>
                   </div>
                 ))}
-                <button
-                  type="button"
-                  disabled={!student}
-                  onClick={() =>
-                    void run(async () => {
-                      const r = await api(
-                        `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
-                        workspace,
-                      );
-                      setAvailable(r.items);
-                    })
-                  }
-                >
-                  Найти загрузки этой формы
-                </button>
-                {available
-                  .filter((f) => !files.some((x) => x.id === f.id))
-                  .map((f) => (
-                    <div className="absence-file" key={f.id}>
-                      <span>{f.filename}</span>
-                      <button
-                        type="button"
-                        disabled={files.length >= 5}
-                        onClick={() => setFiles((old) => [...old, f])}
-                      >
-                        Приложить найденный файл
-                      </button>
-                    </div>
-                  ))}
+                <fieldset disabled={locks.write} className="access-fields">
+                  <button
+                    type="button"
+                    disabled={!student}
+                    onClick={() =>
+                      void run(async () => {
+                        const r = await api(
+                          `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
+                          workspace,
+                        );
+                        setAvailable(r.items);
+                      })
+                    }
+                  >
+                    Найти загрузки этой формы
+                  </button>
+                  {available
+                    .filter((f) => !files.some((x) => x.id === f.id))
+                    .map((f) => (
+                      <div className="absence-file" key={f.id}>
+                        <span>{f.filename}</span>
+                        <button
+                          type="button"
+                          disabled={files.length >= 5}
+                          onClick={() => setFiles((old) => [...old, f])}
+                        >
+                          Приложить найденный файл
+                        </button>
+                      </div>
+                    ))}
+                </fieldset>
                 <p>
                   Неотправленный текст не сохраняется после закрытия формы.
                   Неиспользованные файлы очищаются через сутки при следующих
@@ -569,7 +576,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                 <div className="dated-toolbar">
                   <button
                     type="button"
-                    disabled={!student || !reason.trim()}
+                    disabled={!student || !reason.trim() || locks.write}
                     onClick={() =>
                       void run(async () => {
                         const r = await api(
@@ -587,7 +594,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   <button
                     className="primary"
                     type="submit"
-                    disabled={!student || !reason.trim()}
+                    disabled={!student || !reason.trim() || locks.write}
                   >
                     Отправить объяснительную
                   </button>

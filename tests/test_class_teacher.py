@@ -1,4 +1,5 @@
 """The class teacher is a property of the class: default duties, admin-only changes, notes switch, personal reports."""
+import base64
 from uuid import uuid4
 import pytest
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from test_attendance_reports import report
 from test_class_staff import BASE, CAPS, A, D, item, settings, assign, payload, coverage, own
 from test_final_grades import seeded, publish, report as final_report, opts, propose, stop_gradebook_jobs  # noqa: F401
 from test_behaviour import url as behaviour_url, note as behaviour_note
+from test_tabular_import import mapped, csv
 
 HISTORY = '/api/access/class-staff/teachers/history?workspace=demo'
 STAFF = 'Классный руководитель'
@@ -60,6 +62,45 @@ def test_class_teacher_is_a_reference_column_of_the_table_import():
     classes = next(t for t in metadata() if t['key'] == 'classes')
     field = next(f for f in classes['fields'] if f['key'] == 'classTeacherId')
     assert field['label'] == STAFF and 'classTeacherId' not in classes['common']
+
+
+def table_import(c, cell):
+    """Upload an `id;Учитель` row for 10A, preview the import into `classes`, return (result, revision)."""
+    raw = f'id;Учитель\n{A};{cell}\n'.encode()
+    info = c.post('/api/exchange/inspect?workspace=demo', json=dict(filename='classes.csv', content=base64.b64encode(raw).decode(), delimiter=';'))
+    assert info.status_code == 200, info.text
+    revision = api.read('demo').revision
+    r = c.post('/api/exchange/import-preview?workspace=demo', json=dict(token=info.json()['token'], revision=revision, table='classes', mapping=dict(id=0, classTeacherId=1), mode='update'))
+    assert r.status_code == 200, r.text
+    return r.json(), revision
+
+
+def test_table_import_resolves_the_class_teacher_by_id_and_by_name():
+    school = initial_state('demo')
+    for cell in ['t2', 'Учитель английского']:
+        result = mapped(school, csv(f'id;Учитель\n{A};{cell}\n'), 'classes', dict(id=0, classTeacherId=1), mode='update')
+        assert result['status'] == 'success', result
+        assert {c.id: c.classTeacherId for c in result['candidate'].classes} == {A: 't2', D: None}
+    # A name nobody carries is a row error, not a silent clear or a dangling reference.
+    result = mapped(school, csv(f'id;Учитель\n{A};Никто\n'), 'classes', dict(id=0, classTeacherId=1), mode='update')
+    assert result['status'] != 'success' and 'candidate' not in result and result['errors']
+
+
+def test_table_import_of_the_class_teacher_is_admin_only_and_shows_the_name(client):
+    enable(client)
+    create(client)  # editor
+    editor = signed('editor')
+    result, revision = table_import(editor, 'Учитель английского')
+    assert result['status'] == 'success'
+    change = next(c for c in result['preview']['diff']['changes'] if 'classTeacherId' in c['fields'])
+    assert change['fields']['classTeacherId']['displayAfter'] == 'Учитель английского'
+    refused = editor.post('/api/editor/apply?workspace=demo', json=dict(revision=revision, token=result['preview']['token']))
+    assert refused.status_code == 403 and 'администратор' in refused.json()['detail']
+    assert api.read('demo').revision == revision and all(c.classTeacherId is None for c in api.read('demo').classes)
+    result, revision = table_import(client, 'Учитель английского')
+    assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=revision, token=result['preview']['token'])).status_code == 200
+    assert {c.id: c.classTeacherId for c in api.read('demo').classes}[A] == 't2'
+    assert client.get(HISTORY).json()['items'][0]['after']['name'] == 'Учитель английского'
 
 
 def test_unknown_or_deleted_class_teacher_is_refused_and_leaves_the_school_unchanged(client):
@@ -406,6 +447,22 @@ def test_switch_list_for_reviewers_shows_only_changeable_classes_to_class_teache
     everything = client.get('/api/journal/absences/options?workspace=demo').json()['classSettings']
     assert {r['id'] for r in everything} == {A, D} and all(r['canChange'] for r in everything)
     assert 'classSettings' not in parent.get('/api/journal/absences/options?workspace=demo').json()
+
+
+def test_switch_list_offers_no_button_to_registry_deputies_or_a_revoked_class_teacher(client):
+    teacher, parent, t = staffed(client)
+    lead('t2')
+    staff = create(client, 'staff')
+    assign(client, {A: [item(staff, 'absence_review')]})
+    deputy = signed('staff')
+    rows = deputy.get('/api/journal/absences/options?workspace=demo').json()['classSettings']
+    assert [(r['id'], r['canChange']) for r in rows] == [(A, False)]
+    assert switch(deputy, A, False, 0).status_code == 403
+    # The class teacher of 10A with the review duty revoked there but a registry row for 10D: only 10D is listed and it is not theirs to switch.
+    assign(client, {A: [dict(accountId=teacher['id'], capabilities=[], revoked=['absence_review'])], D: [item(teacher, 'absence_review')]})
+    rows = t.get('/api/journal/absences/options?workspace=demo').json()['classSettings']
+    assert [(r['id'], r['canChange']) for r in rows] == [(D, False)]
+    assert switch(t, A, False, 0).status_code == 403 and switch(t, D, False, 0).status_code == 403
 
 
 def test_concurrent_switches_have_one_winner(client):
