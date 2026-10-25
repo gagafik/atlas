@@ -120,6 +120,11 @@ def has_marks(content):
     return any(r['attendance']!='unmarked' or r['lateMinutes'] or any(g['score'] is not None or g['label'] for g in r['grades']) for r in content['records'])
 
 
+def frozen(published, current, day):
+    """A publication of an earlier day keeps its roster, time and teachers; a dated move to another date still asks for review."""
+    return bool(published and published['date']<day.isoformat() and (current is None or current['date']==published['date']))
+
+
 def key_for(row):
     # Changing the subject/group creates another journal, never reassigns old marks.
     return hashlib.sha256(encoded([row['id'],row['subjectId'],row['groupId']]).encode()).hexdigest()
@@ -127,8 +132,10 @@ def key_for(row):
 
 def snapshot(state, row):
     classes = {c.id:c.name for c in state.classes}
+    # Rows of an earlier day carry the class each pupil had then.
+    dated = row.get('studentClasses',{})
     return {key:row[key] for key in ['date','start','end','subjectId','subject','groupId','group','teacherIds','teachers','rooms','status','rosterComplete']} | dict(
-        sourceKey=row['id'],students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes[s.classId],enrolled=True)
+        sourceKey=row['id'],students=[dict(id=s.id,name=s.name,classId=dated[s.id][0] if s.id in dated else s.classId,className=dated[s.id][1] if s.id in dated else classes[s.classId],enrolled=True)
                                     for s in state.students if s.id in row['studentIds']])
 
 
@@ -140,7 +147,7 @@ def staff_read(user, workspace, lesson):
     return user['role']=='admin' or user['role']=='teacher' and bool(user_ids(user,workspace,'teacher') & set(lesson['teacherIds']))
 
 
-def current_lesson(state, lesson, rows_for_day=None):
+def current_lesson(state, lesson, rows_for_day):
     source = lesson['sourceKey']
     if source.startswith('extra:'):
         item = next((x for x in state.datedLessons if x.id==source[6:]),None)
@@ -151,7 +158,7 @@ def current_lesson(state, lesson, rows_for_day=None):
         day = date.fromisoformat(raw)
         change = next((x for x in state.datedLessons if x.placementId==placement_id and x.sourceDate==day),None)
         if change: day = change.onDate
-    rows = rows_for_day(day) if rows_for_day else resolve_day(state,day)[0]
+    rows = rows_for_day(day)
     return next((r for r in rows if r['activity']=='lesson' and r['id']==source and
                  r['subjectId']==lesson['subjectId'] and r['groupId']==lesson['groupId']),None)
 
@@ -253,11 +260,12 @@ class Journal:
 
     def rows(self, db, workspace, day, keys):
         """Day cards inside a snapshot: only the lesson part of the draft is parsed."""
-        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson') FROM journal_entries e WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
+        # The compact coverage projection carries the published lesson without parsing grade documents.
+        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson'),c.lesson FROM journal_entries e LEFT JOIN journal_coverage_documents c ON c.workspace=e.workspace AND c.lesson_key=e.lesson_key WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
         params = [workspace,day.isoformat()]
         if keys:
             query += ' OR e.lesson_key IN (SELECT value FROM json_each(?))'; params.append(encoded(keys))
-        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4])) for r in db.execute(query+')',params)]
+        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4]),published=json.loads(r[5]) if r[5] else None) for r in db.execute(query+')',params)]
 
     def members(self, db, workspace, key, document, kind):
         from .coverage_projection import replace as coverage_replace
@@ -312,14 +320,22 @@ class Journal:
         row = db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()
         return self.unpack(row) if row else None
 
+    def lesson_rows(self, state, workspace):
+        """Schedule rows of this revision for any day, resolved against the timetable and rosters valid then."""
+        if self.snapshots is None: return lambda day: resolve_day(state,day)[0]
+        snap = self.snapshots.get(workspace)
+        if snap.state.revision!=state.revision: raise HTTPException(409,'Расписание изменилось. Обновите журнал.')
+        return snap.lesson_rows
+
     def entry(self, state, workspace, user, key, day, sync=False, db=None, rows_for_day=None):
         """Saved journal, lesson and restrictions from one snapshot; rows_for_day is an optional cached schedule."""
+        rows_for_day = rows_for_day or self.lesson_rows(state,workspace)
         def read(db):
             existing = self.find(workspace,key,db)
             if existing:
                 current = current_lesson(state,existing['document']['lesson'],rows_for_day)
             else:
-                rows = rows_for_day(day) if rows_for_day else resolve_day(state,day)[0]
+                rows = rows_for_day(day)
                 current = next((r for r in rows if r['activity']=='lesson' and key_for(r)==key),None)
             return self.resolved_entry(state,workspace,user,key,existing,current,sync=sync,db=db)
         return self.reading(read) if db is None else read(db)
@@ -337,14 +353,17 @@ class Journal:
             raise HTTPException(403,'Этот урок не назначен вашей учётной записи.')
         lesson = snapshot(state,current) if current else None
         writable = bool(current and current['status']!='cancelled' and staff_read(user,workspace,current))
+        fixed = frozen(existing['published']['lesson'] if existing and existing['published'] else None,current,today())
         if existing:
             document = existing['document']
-            merged = merged_snapshot(lesson,document['lesson']) if lesson else document['lesson']
-            needs_sync = not lesson or signature(document['lesson']) != signature(merged)
-            if sync and writable:
-                document = dict(document,lesson=merged)
-                records = {r['studentId']:r for r in document['content']['records']}
-                document['content'] = dict(document['content'],records=[records.get(s['id'],PupilRecord(studentId=s['id']).model_dump(mode='json')) for s in merged['students']])
+            needs_sync = False
+            if not fixed:
+                merged = merged_snapshot(lesson,document['lesson']) if lesson else document['lesson']
+                needs_sync = not lesson or signature(document['lesson']) != signature(merged)
+                if sync and writable:
+                    document = dict(document,lesson=merged)
+                    records = {r['studentId']:r for r in document['content']['records']}
+                    document['content'] = dict(document['content'],records=[records.get(s['id'],PupilRecord(studentId=s['id']).model_dump(mode='json')) for s in merged['students']])
             result = {k:v for k,v in existing.items() if k!='published'} | dict(document=document,hasPublished=existing['published'] is not None)
         else:
             needs_sync = False
@@ -358,7 +377,7 @@ class Journal:
             return excuses,closed
         excuses,closed=self.reading(restrictions) if db is None else restrictions(db)
         return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
-                             futureLesson=bool(lesson and lesson['date']>today().isoformat()),
+                             rosterFrozen=fixed,futureLesson=bool(lesson and lesson['date']>today().isoformat()),
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
 
     def recheck_account(self, db, user):
@@ -449,12 +468,17 @@ class Journal:
                 key = key_for(row)
                 record = saved.get(key)
                 if not (staff_read(user,workspace,row) or record and staff_read(user,workspace,record['lesson'])): continue
-                result.append(dict(lessonKey=key,lesson={k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(row['studentIds']),version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False))
+                lesson,count,fixed = {k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},len(row['studentIds']),False
+                if record and frozen(record['published'],row,today()) and record['published']['date']==day.isoformat():
+                    # An earlier day keeps the time, teachers and roster it was published with.
+                    published = record['published']
+                    lesson,count,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),sum(bool(s.get('enrolled',True)) for s in published['students']),True
+                result.append(dict(lessonKey=key,lesson=lesson,studentCount=count,version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed))
             present = {r['lessonKey'] for r in result}
             for key,record in saved.items():
                 lesson = record['lesson']
                 if key not in present and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
-                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True))
+                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False))
             result.sort(key=lambda r:(r['lesson']['start'],r['lesson']['group'],r['lesson']['subject']))
             return dict(revision=state.revision,lessons=result)
 
@@ -470,10 +494,10 @@ class Journal:
         @app.put('/api/journal/entry')
         def save_entry(body: SaveEntry,request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace,staff=True)
-            state = self.access.read(workspace)
+            snap = self.snapshots.get(workspace);state = snap.state
             if state.revision!=body.revision: raise HTTPException(409,'Расписание изменилось. Загрузите урок заново.')
             if not state.settings.yearStart <= body.day <= state.settings.yearEnd: raise HTTPException(422,'Дата вне учебного года.')
-            record = self.entry(state,workspace,user,body.lessonKey,body.day,body.syncRoster)
+            record = self.entry(state,workspace,user,body.lessonKey,body.day,body.syncRoster,rows_for_day=snap.lesson_rows)
             if record['version']!=body.version: raise HTTPException(409,'Журнал уже изменён в другом окне. Загрузите запись заново.')
             if not record['writable']: raise HTTPException(403,'Период закрыт или урок доступен только для просмотра. Обновите журнал для подробностей.')
             if record['currentDate']!=body.day.isoformat(): raise HTTPException(409,'Урок перенесён на другую дату. Загрузите его заново.')
@@ -498,12 +522,12 @@ class Journal:
                 from .assignment_files import bind
                 bind(db,body.content.homeworkFiles,workspace,body.lessonKey,user['id'])
                 self.store_revision(db,workspace,body.lessonKey,user,state.revision,version,document,previous,publish=body.publish,created=created)
-            return self.entry(state,workspace,user,body.lessonKey,body.day)
+            return self.entry(state,workspace,user,body.lessonKey,body.day,rows_for_day=snap.lesson_rows)
 
         @app.post('/api/journal/withdraw')
         def withdraw(body: Withdraw,request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace,staff=True)
-            state = self.access.read(workspace)
+            snap = self.snapshots.get(workspace);state = snap.state
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);self.access.tables(db)
                 if not db.in_transaction: db.execute('BEGIN IMMEDIATE')
@@ -511,8 +535,8 @@ class Journal:
                 row = db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,body.lessonKey)).fetchone()
                 if not row: raise HTTPException(404,'Запись не найдена.')
                 record = self.unpack(row)
-                # The current timetable decides who teaches the lesson; the saved draft only when the lesson is gone.
-                current = current_lesson(state,record['document']['lesson'])
+                # The timetable of that day decides who teaches the lesson; the saved draft only when the lesson is gone.
+                current = snap.current_lesson(record['document']['lesson'])
                 if not staff_read(user,workspace,current or record['document']['lesson']): raise HTTPException(403,'Нет доступа к этой записи.')
                 if record['version']!=body.version: raise HTTPException(409,'Запись изменилась. Обновите журнал.')
                 if not record['published']: raise HTTPException(409,'Запись уже скрыта.')

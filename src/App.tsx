@@ -26,6 +26,7 @@ import { roleNames, type AuthStatus } from "./auth";
 import { patterns, weekState, activeIn, cycleHours, patternOn } from "./cycles";
 import ChangePreview from "./ChangePreview";
 import { api } from "./api";
+import { withEffectiveFrom } from "./timetableVersions";
 import { startPolling } from "./polling";
 import {
   CalendarDays,
@@ -233,6 +234,7 @@ export default function App({
     [selected, setSelected] = useState("");
   const [studentQuery, setStudentQuery] = useState("");
   const [studentClassFilter, setStudentClassFilter] = useState("");
+  const [effectiveFrom, setEffectiveFrom] = useState("");
   const [showArchivedStudents, setShowArchivedStudents] = useState(false);
   const [grade, setGrade] = useState<number | null>(null),
     [tab, setTab] = useState("classes");
@@ -475,7 +477,12 @@ export default function App({
     setBusy(true);
     setError("");
     try {
-      const saved = await api("state", workspace, "PUT", next);
+      const saved = await api(
+        withEffectiveFrom("state", effectiveFrom),
+        workspace,
+        "PUT",
+        next,
+      );
       setState(saved);
       const id = patterns(saved).some((p) => p.id === activeCycle)
         ? activeCycle
@@ -551,10 +558,15 @@ export default function App({
     setError("");
     try {
       await receiveState(
-        await api("editor/apply", workspace, "POST", {
-          revision: state!.revision,
-          token: preview.token,
-        }),
+        await api(
+          withEffectiveFrom("editor/apply", effectiveFrom),
+          workspace,
+          "POST",
+          {
+            revision: state!.revision,
+            token: preview.token,
+          },
+        ),
       );
       setModal(null);
       setToast("Изменения применены. Доступна отмена.");
@@ -1804,6 +1816,19 @@ export default function App({
                       ))}
                     </div>
                     <div className="toolbar-buttons">
+                      <label
+                        className="effective-from"
+                        title="Пусто — изменение относится ко всему текущему периоду расписания. Дата — прошлые дни до неё сохраняют прежнее расписание и составы."
+                      >
+                        <span>Действует с</span>
+                        <input
+                          type="date"
+                          value={effectiveFrom}
+                          max={new Date().toLocaleDateString("sv-SE")}
+                          disabled={busy}
+                          onChange={(e) => setEffectiveFrom(e.target.value)}
+                        />
+                      </label>
                       <button
                         className="icon-button"
                         title="Отменить последнее изменение"

@@ -8,13 +8,18 @@ from collections import OrderedDict, defaultdict
 from copy import deepcopy
 from threading import RLock
 
+from fastapi import HTTPException
+
 from .calendar_ops import resolve_day
 from .exporting import ExportRequest, schedule_rows, VIEWS
+from .timetable_history import History, Stale, annotate, load
 
 
 class Snapshot:
-    def __init__(self, state):
+    def __init__(self, state, history=None):
         self.state = state
+        # Past days resolve against the timetable and rosters valid then; the last segment is the plain state.
+        self.history = history or History(state)
         self.entities = {view: {x.id: x for x in getattr(state, table)} for view, table in VIEWS.items()}
         self.days, self.weeks = OrderedDict(), OrderedDict()
         self.lesson_days = OrderedDict()
@@ -29,7 +34,9 @@ class Snapshot:
     def lesson_rows(self, day):
         with self.lock:
             if day not in self.lesson_days:
-                self.lesson_days[day] = resolve_day(self.state,day)[0]
+                view,ctx = self.history.context(day);rows = resolve_day(view,day,ctx)[0]
+                if view is not self.state: annotate(rows,view)
+                self.lesson_days[day] = rows
                 if len(self.lesson_days)>8: self.lesson_days.popitem(last=False)
             self.lesson_days.move_to_end(day)
             return self.lesson_days[day]
@@ -43,7 +50,8 @@ class Snapshot:
     def day_rows(self, day, view, entity_id):
         with self.lock:
             if day not in self.days:
-                rows, _ = resolve_day(self.state, day)
+                state, ctx = self.history.context(day)
+                rows, _ = resolve_day(state, day, ctx)
                 index = defaultdict(list)
                 for row in rows:
                     projected = {k: row[k] for k in ['start','end','subject','group','teachers','rooms','status','activity']}
@@ -80,8 +88,16 @@ class PortalSnapshots:
             key = database, workspace
             snapshot = self.cache.get(key)
             if snapshot is None or snapshot.state.revision != revision:
-                snapshot = Snapshot(self.read(workspace))
+                snapshot = self.build(workspace, database)
                 self.cache[key] = snapshot
             self.cache.move_to_end(key)
             if len(self.cache)>2: self.cache.popitem(last=False)
             return snapshot
+
+    def build(self, workspace, database):
+        # A save between reading the State and its history makes them disagree: read again.
+        for _ in range(3):
+            state = self.read(workspace)
+            try: return Snapshot(state, load(database, workspace, state))
+            except Stale: continue
+        raise HTTPException(409, 'Расписание изменилось. Обновите страницу.')

@@ -614,6 +614,8 @@ export default function AccessPanel({
                   {(
                     {
                       "state.saved": "Сохранено расписание",
+                      "timetable.versioned":
+                        "Сохранена прежняя версия расписания",
                       "absence.submitted": "Подана объяснительная",
                       "absence.approved": "Принята объяснительная",
                       "absence.rejected": "Отклонена объяснительная",

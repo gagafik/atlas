@@ -9,8 +9,8 @@ from fastapi import HTTPException,Request
 from pydantic import Field,model_validator
 from .models import Model
 from .access import now
-from .calendar_ops import DayContext,dates,resolve_day
-from .journal import key_for,staff_read,user_ids
+from .calendar_ops import dates,resolve_day
+from .journal import frozen,key_for,staff_read,user_ids
 from .notifications import encoded,permission_key
 from .resources import teacher_ids
 from .attendance_reports import csv_response
@@ -81,7 +81,8 @@ class JournalCoverage:
         if body.token and (key is None or body.token[:32]!=key):raise HTTPException(409,STALE)
         if error:raise error
         classes,_=self.scope(db,user,snap,workspace,body)
-        pupils=None if user['role']=='admin' and not body.classId else sorted(s.id for s in snap.state.students if s.classId in classes)
+        # Pupils who were in these classes on any day count too: a transferred pupil's earlier lessons still belong to the class.
+        pupils=None if user['role']=='admin' and not body.classId else sorted({s.id for s in snap.state.students if s.classId in classes}|{sid for sid,kind,target,*_ in snap.history.stints if kind=='class' and target in classes})
         current=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
         return key+self.data_key(db,workspace,body,pupils,current[0] if current else 0)
 
@@ -93,11 +94,15 @@ class JournalCoverage:
             if not classes:raise HTTPException(403,'Нужно назначение ответственным за класс.')
         else:
             if not own:raise HTTPException(403,'Нет назначения преподавателем.')
-            groups={w.groupId for w in state.workloads if own&set(teacher_ids(w))}
-            groups|={d.groupId for d in state.datedLessons if d.groupId and own&set(d.teacherIds or [])}
-            placements={p.id:p for p in state.placements};loads={w.id:w for w in state.workloads}
-            groups|={loads[placements[d.placementId].workloadId].groupId for d in state.datedLessons if d.placementId in placements and own&set(d.teacherIds or [])}
-            classes={c for g in state.groups if g.id in groups for c in g.classIds}
+            classes=set()
+            # Every timetable version valid in the period contributes the classes its teacher taught.
+            for base in snap.history.bases(body.start,body.end):
+                groups={w.groupId for w in base.workloads if own&set(teacher_ids(w))}
+                groups|={d.groupId for d in base.datedLessons if d.groupId and own&set(d.teacherIds or [])}
+                placements={p.id:p for p in base.placements};loads={w.id:w for w in base.workloads}
+                groups|={loads[placements[d.placementId].workloadId].groupId for d in base.datedLessons if d.placementId in placements and own&set(d.teacherIds or [])}
+                classes|={c for g in base.groups if g.id in groups for c in g.classIds}
+            classes&={c.id for c in state.classes}
         if body.classId and body.classId not in classes:raise HTTPException(404,'Класс не найден или недоступен.')
         if body.teacherId and (body.teacherId not in snap.entities['teacher'] or user['role']!='admin' and body.mode=='teaching' and body.teacherId not in own):raise HTTPException(404,'Учитель не найден или недоступен.')
         return classes & {body.classId} if body.classId else classes,own
@@ -133,20 +138,28 @@ class JournalCoverage:
     def calculate(self,db,user,snap,workspace,body,*,detail=None):
         classes,own=self.scope(db,user,snap,workspace,body);state=snap.state
         if body.start<state.settings.yearStart or body.end>state.settings.yearEnd:raise HTTPException(422,'Контроль использует расписание текущего учебного года. Выберите даты внутри него.')
-        cutoff=body.asOf.astimezone(ZoneInfo('Asia/Qyzylorda'));ctx=DayContext(state)
+        cutoff=body.asOf.astimezone(ZoneInfo('Asia/Qyzylorda'))
         people={s.id:s for s in state.students};class_names={c.id:c.name for c in state.classes}
-        # Resolve only potentially visible lessons. Full entity maps and all
-        # relevant overrides remain available, including substitute teachers.
-        groups={g.id for g in state.groups if classes&set(g.classIds) or any(people[id].classId in classes for id in g.studentIds)}
         teacher_filter=({body.teacherId} if body.teacherId else own) if user['role']!='admin' and body.mode=='teaching' or body.teacherId else None
-        replacement_ids={d.placementId for d in state.datedLessons if teacher_filter and teacher_filter&set(d.teacherIds or [])}
-        placements=[p for p in state.placements if ctx.maps['workloads'][p.workloadId].groupId in groups and (not teacher_filter or teacher_filter&set(teacher_ids(ctx.maps['workloads'][p.workloadId])) or p.id in replacement_ids)]
-        placement_ids={p.id for p in placements}
-        changes=[d for d in state.datedLessons if d.placementId in placement_ids or not d.placementId and d.groupId in groups and (not teacher_filter or teacher_filter&set(d.teacherIds or []))]
-        calendar=state.model_copy(update=dict(placements=placements,datedLessons=changes,commitments=[]))
+        history,segments=snap.history,{}
+        def segment(day):
+            # One filtered calendar per history segment: versions and enrollment periods change only at their boundaries.
+            index=history.segment(day)
+            if index not in segments:
+                view,ctx=history.context(day);pupils={s.id:s for s in view.students}
+                # Resolve only potentially visible lessons. Full entity maps and all
+                # relevant overrides remain available, including substitute teachers.
+                groups={g.id for g in view.groups if classes&set(g.classIds) or any(pupils[id].classId in classes for id in g.studentIds)}
+                replacement_ids={d.placementId for d in view.datedLessons if teacher_filter and teacher_filter&set(d.teacherIds or [])}
+                placements=[p for p in view.placements if ctx.maps['workloads'][p.workloadId].groupId in groups and (not teacher_filter or teacher_filter&set(teacher_ids(ctx.maps['workloads'][p.workloadId])) or p.id in replacement_ids)]
+                placement_ids={p.id for p in placements}
+                changes=[d for d in view.datedLessons if d.placementId in placement_ids or not d.placementId and d.groupId in groups and (not teacher_filter or teacher_filter&set(d.teacherIds or []))]
+                segments[index]=(view.model_copy(update=dict(placements=placements,datedLessons=changes,commitments=[])),ctx,pupils)
+            return segments[index]
         rows=[];orphans={};expected=set();cancelled=0;detail_value=None
         period=[detail.day] if detail else dates(body.start,body.end)
         for day in period:
+            calendar,ctx,pupils=segment(day)
             resolved,_=resolve_day(calendar,day,ctx)
             chosen=[]
             for row in resolved:
@@ -155,29 +168,36 @@ class JournalCoverage:
                     if self.selected(row|dict(classIds=row['originalClassIds']),user,body,classes,own):cancelled+=1
                     continue
                 if self.selected(row,user,body,classes,own):chosen.append(row)
-            entries,marks=self.publications(db,user,workspace,day.isoformat(),[key_for(r) for r in chosen],body,classes,own,people)
+            entries,marks=self.publications(db,user,workspace,day.isoformat(),[key_for(r) for r in chosen],body,classes,own,pupils)
             for row in chosen:
                 key=key_for(row);expected.add(key);saved=entries.get(key);published=saved['lesson'] if saved else None
-                ids={id for id in row['studentIds'] if people[id].classId in classes}
+                # A publication of an earlier day keeps the roster, time and teachers it was published with.
+                fixed=frozen(published,row,cutoff.date())
                 roster_unknown=not row['rosterComplete']
                 group=ctx.maps['groups'][row['groupId']]
                 if group.kind=='whole':
-                    roster_unknown |= any(ctx.maps['classes'][c].studentCount is None or sum(people[id].classId==c for id in row['studentIds'])<(ctx.maps['classes'][c].studentCount or 0) for c in classes&set(row['classIds']))
+                    roster_unknown |= any(ctx.maps['classes'][c].studentCount is None or sum(pupils[id].classId==c for id in row['studentIds'])<(ctx.maps['classes'][c].studentCount or 0) for c in classes&set(row['classIds']))
                 if row['audienceSize'] is not None and row['audienceSize']>len(row['studentIds']):roster_unknown=True
                 actual=marks.get(key,{}) if published else {}
+                if fixed:
+                    held={s['id']:s['classId'] for s in published['students'] if s.get('enrolled',True)}
+                    ids={id for id,class_id in held.items() if class_id in classes};stale=False;identity=published
+                else:
+                    held={id:pupils[id].classId for id in row['studentIds']}
+                    ids={id for id in row['studentIds'] if pupils[id].classId in classes}
+                    old_ids={s['id'] for s in published['students'] if s.get('enrolled',True) and (pupils[s['id']].classId if s['id'] in pupils else s['classId']) in classes} if published else set()
+                    stale=bool(published and (any(published[k]!=row[k] for k in ['date','start','end','subjectId','groupId','teachers','rooms']) or set(published['teacherIds'])!=set(row['teacherIds']) or old_ids!=ids));identity=row
                 missing=ids-set(actual);unmarked={id for id in ids if actual.get(id)=='unmarked'}
-                old_ids={s['id'] for s in published['students'] if s.get('enrolled',True) and (people[s['id']].classId if s['id'] in people else s['classId']) in classes} if published else set()
-                stale=bool(published and (any(published[k]!=row[k] for k in ['date','start','end','subjectId','groupId','teachers','rooms']) or set(published['teacherIds'])!=set(row['teacherIds']) or old_ids!=ids))
                 due=day<cutoff.date() or day==cutoff.date() and row['end']<=cutoff.strftime('%H:%M')
                 topic=bool(saved and saved['topic'])
                 status='upcoming' if not due else 'missing' if not saved else 'draft' if not published else 'stale' if stale else 'incomplete' if missing or unmarked or not topic or roster_unknown else 'complete'
-                value=dict(lessonKey=key,date=row['date'],start=row['start'],end=row['end'],subject=row['subject'],group=row['group'],teachers=row['teachers'],classNames=[class_names[c] for c in sorted(classes&set(row['classIds']))],status=status,due=due,
+                value=dict(lessonKey=key,date=identity['date'],start=identity['start'],end=identity['end'],subject=identity['subject'],group=identity['group'],teachers=identity['teachers'],classNames=[class_names[c] for c in sorted(classes&set(row['classIds']))],status=status,due=due,
                     pupils=len(ids),missingPupils=len(missing),unmarkedPupils=len(unmarked),rosterUnknown=roster_unknown,topicFilled=topic,needsSync=stale,
                     version=saved['version'] if saved else 0,publishedVersion=saved['publishedVersion'] if saved else None,hasDraftChanges=bool(published and saved['version']!=saved['publishedVersion']),canOpen=staff_read(user,workspace,row))
                 rows.append(value)
                 if detail and key==detail.lessonKey:
-                    pupils=sorted([dict(id=id,name=people[id].name,className=class_names[people[id].classId],issue='missing' if id in missing else 'unmarked') for id in missing|unmarked],key=lambda s:(s['name'].casefold(),s['id']))
-                    detail_value=dict(lesson=value,pupils=pupils[detail.pupilOffset:detail.pupilOffset+PAGE],nextOffset=detail.pupilOffset+PAGE if len(pupils)>detail.pupilOffset+PAGE else None,total=len(pupils))
+                    names=sorted([dict(id=id,name=people[id].name if id in people else 'Ученик вне текущего состава',className=class_names.get(held[id],'Вне текущего состава'),issue='missing' if id in missing else 'unmarked') for id in missing|unmarked],key=lambda s:(s['name'].casefold(),s['id']))
+                    detail_value=dict(lesson=value,pupils=names[detail.pupilOffset:detail.pupilOffset+PAGE],nextOffset=detail.pupilOffset+PAGE if len(names)>detail.pupilOffset+PAGE else None,total=len(names))
             if detail:continue
             for key,saved in entries.items():
                 lesson=saved['lesson']
@@ -234,7 +254,8 @@ class JournalCoverage:
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
                 modes=['classes'] if user['role']=='admin' else (['teaching'] if user['role']=='teacher' else [])+(['classes'] if self.absences.classes(db,user,snap,workspace,'journal_coverage') else [])
-                scopes={mode:self.scope(db,user,snap,workspace,CoverageQuery(start=snap.state.settings.yearStart,end=snap.state.settings.yearStart,mode=mode))[0] for mode in modes}
+                year=CoverageQuery(start=snap.state.settings.yearStart,end=min(snap.state.settings.yearEnd,snap.state.settings.yearStart+timedelta(days=365)))
+                scopes={mode:self.scope(db,user,snap,workspace,year.model_copy(update=dict(mode=mode)))[0] for mode in modes}
                 own=user_ids(user,workspace,'teacher')
                 return dict(modes=modes,classes={mode:[dict(id=c.id,name=c.name) for c in snap.state.classes if c.id in ids] for mode,ids in scopes.items()},teachers={mode:[dict(id=t.id,name=t.name) for t in snap.state.teachers if user['role']=='admin' or mode=='classes' or t.id in own] for mode in modes},yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd,today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date(),subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects])
 
@@ -257,7 +278,7 @@ class JournalCoverage:
                         value=csv_response([['Дата','Начало','Конец','Предмет','Группа','Классы','Учителя','Состояние','Ученики в области проверки','Нет записи','Не отмечено','Состав требует проверки','Тема заполнена','Редакция публикации','Проверено на момент']]+[[r['date'],r['start'],r['end'],r['subject'],r['group'],', '.join(r['classNames']),r['teachers'],LABELS[r['status']],r['pupils'],r['missingPupils'],r['unmarkedPupils'],'Да' if r['rosterUnknown'] else 'Нет','Да' if r['topicFilled'] else 'Нет',r['publishedVersion'],body.asOf.isoformat()] for r in rows])
                     else:value=dict(counts=cached['counts'],total=len(rows),items=[dict(zip(KEYS,r)) for r in rows[body.offset:body.offset+PAGE]],nextOffset=body.offset+PAGE if len(rows)>body.offset+PAGE else None)
             self.finish(user,snap,workspace,used,body,'journal.coverage_exported' if export else 'journal.coverage_read')
-            return value if export else value|dict(token=used,asOf=body.asOf.isoformat(),membership='current',source='current_schedule_and_published_journals')
+            return value if export else value|dict(token=used,asOf=body.asOf.isoformat(),membership='dated',source='dated_schedule_and_published_journals')
 
         @app.post('/api/journal/coverage/report')
         def report(body:CoverageQuery,request:Request,workspace:Workspace='school'):return read(body,request,workspace)
