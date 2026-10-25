@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import HomeworkParallelPanel from "./HomeworkParallelPanel";
-import { nextLessonText, type NextLesson } from "./homeworkBulk";
+import { nextLessonText, whileCurrent, type NextLesson } from "./homeworkBulk";
 import LessonMaterials from "./LessonMaterials";
 import LessonTopic, { SavedPlanTopic } from "./LessonTopic";
 import AssignmentFilesPanel, {
@@ -331,6 +331,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   }
   function clearEditor() {
     ++sequence.current;
+    setDueBusy(false);
     setEntry(null);
     setDirty(false);
     setSyncRoster(false);
@@ -341,6 +342,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   }
   async function openEntry(key: string, sync = false, entryDay = day) {
     const current = ++sequence.current;
+    setDueBusy(false);
     setBusy(true);
     setError("");
     setMessage("");
@@ -459,23 +461,28 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   // Only the date is taken from the timetable and saved; a later timetable change does not move it.
   async function dueNextLesson() {
     if (!entry || dueBusy) return;
+    // The reply may come after another lesson or day was opened: it is then dropped, like a late entry.
+    const made = sequence.current,
+      current = () => sequence.current === made;
     setDueBusy(true);
     setError("");
     setDueNote("");
-    try {
-      const r: NextLesson = await api(
-        `journal/homework-next-lesson?${new URLSearchParams({ lessonKey: entry.lessonKey, day: entry.document.lesson.date })}`,
-        workspace,
-      );
-      if (r.date) {
-        content((c) => ({ ...c, dueDate: r.date }));
-        setDueNote(nextLessonText(r));
-      } else setError(nextLessonText(r));
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setDueBusy(false);
-    }
+    await whileCurrent<NextLesson>(
+      () =>
+        api(
+          `journal/homework-next-lesson?${new URLSearchParams({ lessonKey: entry.lessonKey, day: entry.document.lesson.date })}`,
+          workspace,
+        ),
+      current,
+      (r) => {
+        if (r.date) {
+          content((c) => ({ ...c, dueDate: r.date }));
+          setDueNote(nextLessonText(r));
+        } else setError(nextLessonText(r));
+      },
+      (e) => setError(e.message),
+    );
+    if (current()) setDueBusy(false);
   }
   function adminPanel(name: JournalPanelName) {
     switch (name) {

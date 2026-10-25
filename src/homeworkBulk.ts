@@ -41,6 +41,23 @@ export function bulkSummary(result: BulkResult) {
   return `${done} Не приняты: ${result.skipped.map((s) => `${s.name} — ${s.reason.replace(/\.$/, "")}`).join("; ")}.`;
 }
 
+/** A reply belongs to the lesson that was open when the request went out: it is applied, or its error shown, only while that still holds. */
+export async function whileCurrent<T>(
+  request: () => Promise<T>,
+  current: () => boolean,
+  apply: (reply: T) => void,
+  fail: (error: Error) => void,
+) {
+  let reply: T;
+  try {
+    reply = await request();
+  } catch (e) {
+    if (current()) fail(e as Error);
+    return;
+  }
+  if (current()) apply(reply);
+}
+
 export interface NextLesson {
   date: string | null;
   start?: string | null;

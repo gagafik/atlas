@@ -1,7 +1,9 @@
 """The next real lesson of a class, and one published assignment given to the same subject in other classes."""
-from datetime import date
+from datetime import date, timedelta
 
+import pytest
 from backend import api, assignment_files
+from backend.access import now
 from backend.models import DatedLesson, Event, Placement, ScheduleDay
 from backend.portal_cache import Snapshot
 from backend.homework_parallel import next_lesson
@@ -25,12 +27,14 @@ def timetable(extra=()):
     api.save('demo',state)
 
 
-def prepare(client, **fields):
-    """10A English of DAY is published with a task and one material; returns the saved record and the signed-in teacher."""
+def prepare(client, twin=False, **fields):
+    """10A English of DAY is published with a task and one material; returns the saved record and the signed-in teacher.
+    With twin the material is a second upload of the same bytes: its row points to the first upload's stored file."""
     enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
     create(client,'student',login='pupil-d',grants=[dict(workspace='demo',view='student',entityIds=['s3'])])
     timetable();teacher=signed('teacher')
     record=entry(teacher,lesson(teacher)['lessonKey'])
+    if twin: upload(teacher,record).raise_for_status()
     material=upload(teacher,record).json()
     saved=save_materials(teacher,record,[material['id']],homework='Упражнение 5',dueDate='2026-08-19',homeworkSubmission='online',**fields)
     return saved,material,teacher,signed('pupil-d')
@@ -106,6 +110,42 @@ def test_publish_reuses_files_and_creates_separate_homework(client):
         assert db.execute("SELECT count(*) FROM audit WHERE action='homework.parallel_published'").fetchone()[0]==1
 
 
+@pytest.mark.parametrize('twin',[False,True])
+def test_copied_files_stay_bound_after_collection_and_share_the_stored_file(client, twin):
+    source,material,teacher,pupil=prepare(client,twin=twin)
+    item=candidates(teacher,source)['targets'][0]
+    assert publish(teacher,source,candidates(teacher,source),[choose(item,'2026-08-20')]).status_code==200
+    copied=get(pupil,item['lessonKey'],'s3')['assignmentFiles'][0]['id']
+    with api.connect() as db:
+        blob=db.execute('SELECT coalesce(blob_id,id) FROM assignment_files WHERE id=?',(material['id'],)).fetchone()[0]
+        assert (blob!=material['id'])==twin
+        assert db.execute('SELECT coalesce(blob_id,id) FROM assignment_files WHERE id=?',(copied,)).fetchone()[0]==blob
+        assert [p.name for p in assignment_files.root_for(db).glob('*.bin')]==[blob+'.bin']
+        # A day later only unsaved uploads are collected: the copy is bound to its lesson like a saved file, and so is the source.
+        db.execute('UPDATE assignment_files SET created=?',((now()-timedelta(days=2)).isoformat(),))
+        assignment_files.collect_unused(db)
+        assert {material['id'],copied}<={r[0] for r in db.execute('SELECT id FROM assignment_files')}
+        assert (assignment_files.root_for(db)/(blob+'.bin')).is_file()
+    assert download(pupil,copied,'s3').content==b'Teacher materials'
+    assert download(teacher,material['id']).content==b'Teacher materials'
+
+
+def test_publish_refuses_when_the_stored_file_is_gone_or_the_lesson_is_full(client, monkeypatch):
+    source,material,teacher,pupil=prepare(client)
+    listing=candidates(teacher,source);item=listing['targets'][0];before=counts()
+    with api.connect() as db: path=assignment_files.root_for(db)/(material['id']+'.bin')
+    stored=path.read_bytes();path.unlink()
+    gone=publish(teacher,source,listing,[choose(item,'2026-08-20')]);assert gone.status_code==409 and 'недоступен' in gone.text
+    assert counts()==before
+    path.write_bytes(stored)
+    with monkeypatch.context() as limited:
+        limited.setattr(assignment_files,'MAX_TASK',0)
+        full=publish(teacher,source,listing,[choose(item,'2026-08-20')],request=SECOND);assert full.status_code==413 and 'лимит' in full.text
+    assert counts()==before
+    assert publish(teacher,source,listing,[choose(item,'2026-08-20')],request=SECOND).status_code==200
+    assert download(pupil,get(pupil,item['lessonKey'],'s3')['assignmentFiles'][0]['id'],'s3').content==stored
+
+
 def test_publish_keeps_target_draft_marks_private(client):
     source,_,teacher,pupil=prepare(client)
     item=candidates(teacher,source)['targets'][0]
@@ -178,6 +218,47 @@ def test_publish_refuses_other_teachers_courses_and_substitutes(client):
     listing=candidates(teacher,source);assert listing['targets']==[]
     assert publish(teacher,source,listing,[choose(item,'2026-08-20')]).status_code==403
     assert counts()==before
+
+
+def test_a_substitute_at_the_source_lesson_is_not_a_course_teacher(client):
+    source,_,teacher,pupil=prepare(client)
+    item=candidates(teacher,source)['targets'][0];before=counts()
+    state=api.read('demo')
+    state.datedLessons=[DatedLesson(id='sub',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
+    api.save('demo',state)
+    substitute=signed('unrelated');revision=api.read('demo').revision
+    # The substitute may open the lesson, but giving the course's homework to other classes is the course teacher's.
+    assert entry(substitute,source['lessonKey'])['document']['lesson']['groupId']=='g-a'
+    for denied in [substitute.get(PARALLEL,params=dict(workspace='demo',lessonKey=source['lessonKey'],day=DAY)),
+                   publish(substitute,source,dict(revision=revision),[choose(item,'2026-08-20')])]:
+        assert denied.status_code==403 and 'учитель курса' in denied.text
+    assert counts()==before
+    # The same teacher is offered the classes once the courses are theirs.
+    state=api.read('demo');state.datedLessons=[]
+    for w in state.workloads:
+        if w.id in ('w0','w1'): w.teacherId='t1'
+    api.save('demo',state)
+    listing=candidates(substitute,source);assert [t['group'] for t in listing['targets']]==['10D'] and listing['targets'][0]['available']
+    assert publish(substitute,source,listing,[choose(listing['targets'][0],'2026-08-20')]).status_code==200
+    assert teacher.get(PARALLEL,params=dict(workspace='demo',lessonKey=source['lessonKey'],day=DAY)).status_code==403
+
+
+def test_the_course_lesson_is_never_taken_from_another_subject_of_the_class(client):
+    source,_,teacher,pupil=prepare(client)
+    # History comes first on Monday in 10D and before the English on Wednesday in 10A.
+    state=api.read('demo')
+    next(p for p in state.placements if p.id=='eng-wed').period=2
+    state.placements+=[Placement(id='hist-d',workloadId='w3',day=0,period=1,roomId='r1'),Placement(id='hist-wed',workloadId='w2',day=2,period=1,roomId='r1')]
+    api.save('demo',state)
+    item=candidates(teacher,source)['targets'][0]
+    assert (item['day'],item['available'])==('2026-08-17',True)
+    held=entry(teacher,item['lessonKey'])['document']['lesson'];assert (held['groupId'],held['subjectId'])==('g-d','sub2')
+    assert publish(teacher,source,candidates(teacher,source),[choose(item,'2026-08-20')]).status_code==200
+    english=lesson(teacher,day='2026-08-19')['lesson']
+    response=following(teacher,source).json()
+    assert (response['date'],response['start'])==('2026-08-19',english['start'])
+    found=next_lesson(Snapshot(api.read('demo')),'g-a','sub2',date(2026,8,17))
+    assert (found['subjectId'],found['start'])==('sub2',english['start'])
 
 
 def test_publish_to_a_closed_period_is_refused(client):

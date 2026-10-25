@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   acceptable,
   inClasses,
@@ -9,6 +9,7 @@ import {
   parallelBody,
   rosterCounts,
   targetDue,
+  whileCurrent,
   type ParallelTarget,
   type RosterStudent,
 } from "./homeworkBulk";
@@ -119,15 +120,26 @@ describe("next lesson", () => {
 });
 
 describe("parallel classes", () => {
-  it("puts parallel classes first and sorts in Russian order", () => {
+  it("puts parallel classes first, even when their names sort later", () => {
     const ordered = orderTargets([
+      target("10А"),
+      target("10Я", { parallel: true }),
+      target("10Б"),
+    ]);
+    expect(ordered.map((t) => t.group)).toEqual(["10Я", "10А", "10Б"]);
+  });
+  it("sorts by name in Russian collation order", () => {
+    // Code points would put Ё before Е; Russian order puts it after.
+    const ordered = orderTargets([target("Ж"), target("Ё"), target("Е")]);
+    expect(ordered.map((t) => t.group)).toEqual(["Е", "Ё", "Ж"]);
+    const classes = orderTargets([
       target("Б"),
       target("10Г"),
       target("А"),
       target("10Б", { parallel: true }),
       target("10А", { parallel: true }),
     ]);
-    expect(ordered.map((t) => t.group)).toEqual([
+    expect(classes.map((t) => t.group)).toEqual([
       "10А",
       "10Б",
       "10Г",
@@ -178,5 +190,68 @@ describe("parallel classes", () => {
         { lessonKey: "k2", day: "2026-08-18", version: 2, dueDate: null },
       ],
     });
+  });
+});
+
+describe("late replies", () => {
+  const pending = <T>() => {
+    let resolve!: (value: T) => void, reject!: (error: Error) => void;
+    const promise = new Promise<T>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  };
+  it("applies a reply while the same lesson is still open", async () => {
+    const apply = vi.fn(),
+      fail = vi.fn();
+    await whileCurrent(
+      async () => "2026-08-19",
+      () => true,
+      apply,
+      fail,
+    );
+    expect(apply).toHaveBeenCalledWith("2026-08-19");
+    expect(fail).not.toHaveBeenCalled();
+  });
+  it("drops a reply that arrives after another lesson was opened", async () => {
+    let open = 1;
+    const made = open,
+      apply = vi.fn(),
+      fail = vi.fn(),
+      request = pending<string>();
+    const done = whileCurrent(
+      () => request.promise,
+      () => open === made,
+      apply,
+      fail,
+    );
+    open = 2;
+    request.resolve("2026-08-19");
+    await done;
+    expect(apply).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
+  });
+  it("shows an error only for the lesson it was made for", async () => {
+    let open = 1;
+    const made = open,
+      apply = vi.fn(),
+      fail = vi.fn();
+    await whileCurrent(
+      () => Promise.reject(new Error("нет связи")),
+      () => open === made,
+      apply,
+      fail,
+    );
+    expect(fail).toHaveBeenCalledWith(new Error("нет связи"));
+    open = 2;
+    await whileCurrent(
+      () => Promise.reject(new Error("поздно")),
+      () => open === made,
+      apply,
+      fail,
+    );
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(apply).not.toHaveBeenCalled();
   });
 });
