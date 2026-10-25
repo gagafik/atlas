@@ -1,11 +1,13 @@
 from datetime import date,datetime,timezone
 import json
 import pytest
-from backend import api,journal,journal_coverage,timetable_history
+from backend import api,journal,journal_coverage,portal_cache,quiz_attempts,quiz_bank,quiz_catalog,quizzes,timetable_history
 from backend.models import DatedLesson,Placement,Student
 from backend.seed import initial_state
 from test_access import client,enable,create,signed
+from test_homework import get as homework,answer
 from test_journal import DAY,lesson,entry,write,graded,report
+from test_quizzes import NOW,detail,ready,start
 
 TODAY=date(2026,9,1)
 NEXT='2026-08-24'
@@ -334,3 +336,101 @@ def test_group_roster_change_is_dated(client,clock):
     math=lambda day:card(client,day,'Математика','Математика · группа A')['lessonKey']
     assert roster(opened(client,math(DAY)))=={'s1','s3'}
     assert roster(opened(client,math(NEXT),NEXT))=={'s2','s3'}
+
+
+def test_undo_and_redo_restore_enrollment_periods(client,clock):
+    resave(lambda s:setattr(pupil(s,'s1'),'classId','c-demo-d'),date(2026,8,24))
+    assert stints('s1')==[('c-demo-a',DAY,'2026-08-23'),('c-demo-d',NEXT,None)]
+    undone=client.post('/api/undo?workspace=demo',json=dict(revision=api.read('demo').revision));assert undone.status_code==200,undone.text
+    assert pupil(api.read('demo'),'s1').classId=='c-demo-a' and stints('s1')==[('c-demo-a',DAY,None)]
+    redone=client.post('/api/redo?workspace=demo',json=dict(revision=undone.json()['revision']));assert redone.status_code==200,redone.text
+    # Redo is retroactive within the current version, like a dateless save: it does not remember the date.
+    assert pupil(api.read('demo'),'s1').classId=='c-demo-d' and stints('s1')==[('c-demo-d',DAY,None)]
+    assert current_from()==(DAY,) and versions()==[]
+
+
+def test_first_dated_save_on_an_upgraded_database_backfills_from_the_state_before(client,clock):
+    with api.connect() as db:
+        for table in ['timetable_versions','timetable_current','pupil_enrollments']:db.execute(f'DROP TABLE {table}')
+    api.journal.snapshots.cache.clear()
+    resave(lambda s:setattr(pupil(s,'s1'),'classId','c-demo-d'),date(2026,8,24))
+    assert stints('s1')==[('c-demo-a',DAY,'2026-08-23'),('c-demo-d',NEXT,None)] and current_from()==(DAY,)
+    assert stints('s3')==[('c-demo-d',DAY,None)] and stints('s1','group')==[('g-math',DAY,None)]
+    assert roster(opened(client,card(client)['lessonKey']))=={'s1','s2'}
+
+
+def test_effective_from_checks_earlier_days_against_the_replaced_template(client,clock):
+    resave(lambda s:setattr(s,'datedLessons',[DatedLesson(id='move',name='Перенос',kind='change',placementId='eng',sourceDate=date(2026,8,17),onDate=date(2026,8,18),startTime='14:00',endTime='14:40')]))
+    state=client.get('/api/state?workspace=demo').json()
+    state['placements']=[dict(state['placements'][0],id='eng2',period=3)]+state['placements'][1:]
+    # Dateless, the past move would point at a placement that no longer exists; dated, the archived template still has it.
+    rejected=client.put('/api/state?workspace=demo',json=state);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail']
+    assert versions()==[]
+    saved=client.put(f'/api/state?workspace=demo&effectiveFrom={NEXT}',json=state);assert saved.status_code==200,saved.text
+    assert [(v[0],v[1]) for v in versions()]==[(DAY,NEXT)]
+
+
+def test_effective_from_still_rejects_new_conflicts_on_earlier_days(client,clock):
+    state=api.read('demo');eng=next(p for p in state.placements if p.id=='eng');w0=next(w for w in state.workloads if w.id==eng.workloadId)
+    state.datedLessons=[DatedLesson(id='double',name='Двойной урок',kind='add',onDate=date(2026,8,17),groupId='g-d',profileId='primary',subjectId=w0.subjectId,
+                                    startTime='08:20',endTime='09:05',teacherIds=[w0.teacherId],roomIds=[eng.roomId])]
+    body=state.model_dump(mode='json')
+    revision=api.read('demo').revision
+    def put(value=None,**edit):
+        return client.put('/api/state?workspace=demo'+(f'&effectiveFrom={value}' if value else ''),json=body|edit)
+    # No template change is stored, so the earlier day is checked against the candidate itself.
+    for value in [None,'2026-09-01',NEXT]:
+        rejected=put(value);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail'],(value,rejected.text)
+    # With a template change the earlier day is checked against the replaced template.
+    swapped=[dict(body['placements'][0],id='eng2',period=3)]+body['placements'][1:]
+    rejected=put(NEXT,placements=swapped);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail'],rejected.text
+    assert api.read('demo').revision==revision and versions()==[] and not api.read('demo').datedLessons
+
+
+def test_dated_deactivation_stops_pupil_writes_but_a_transfer_does_not(client,clock,monkeypatch):
+    for module in [quizzes,quiz_bank,quiz_attempts,quiz_catalog]:monkeypatch.setattr(module,'now',lambda:NOW)
+    quiz,student,parent,teacher,_=ready(client);key=lesson(client)['lessonKey']
+    assert homework(student,key)['canSubmit'] and detail(student)['canStart'] and len(student.get('/api/journal/quizzes?workspace=demo').json()['items'])==1
+    # A transferred pupil attended the old lesson and still acts on it.
+    resave(lambda s:setattr(pupil(s,'s1'),'classId','c-demo-d'),date(2026,8,24))
+    assert homework(student,key)['canSubmit'] and detail(student)['canStart']
+    resave(lambda s:setattr(pupil(s,'s1'),'active',False),date(2026,8,24))
+    # Journal rosters keep the pupil for the days before the departure ...
+    assert roster(opened(client,key))=={'s1','s2'}
+    # ... but a pupil who has left the school no longer writes to it.
+    current=homework(student,key);assert not current['canSubmit']
+    refused=answer(student,key,current);assert refused.status_code==403,refused.text
+    assert not detail(student)['canStart']
+    refused=start(student,quiz);assert refused.status_code==403,refused.text
+    assert student.get('/api/journal/quizzes?workspace=demo').json()['items']==[]
+    assert student.get('/api/journal/quizzes?workspace=demo&history=true').json()['items'][0]['readOnly']
+    assert homework(parent,key)['canSubmit'] is False
+
+
+def test_teaching_scope_keeps_an_index_for_every_version(client,clock,monkeypatch):
+    enable(client);create(client,'teacher')
+    for i in range(10):
+        resave(lambda s,i=i:setattr(next(p for p in s.placements if p.id=='eng'),'period',2+i%2),date(2026,8,18+i))
+    def retire(state):
+        for w in state.workloads:
+            if w.teacherId=='t2':w.teacherId='t3'
+    resave(retire,date(2026,8,28))
+    assert len(versions())==11
+    overlays,reads,real=[],[],timetable_history.load
+    def counting(*args):
+        history=real(*args);document=history.document
+        if document:history.document=lambda valid_from:(reads.append(valid_from),document(valid_from))[1]
+        return history
+    monkeypatch.setattr(portal_cache,'load',counting)
+    monkeypatch.setattr(timetable_history,'overlay',lambda *args:(overlays.append(1),None)[1])
+    teacher=signed('teacher')
+    options=lambda:teacher.get('/api/journal/coverage/options?workspace=demo')
+    value=options();assert value.status_code==200,value.text
+    # The teacher taught English in both classes in the early versions only, and every version is read once, without rebuilding a template.
+    assert [c['id'] for c in value.json()['classes']['teaching']]==['c-demo-a','c-demo-d']
+    assert overlays==[] and len(reads)==11
+    for _ in range(3):assert options().status_code==200
+    assert len(reads)==11
+    history=api.journal.snapshots.get('demo').history
+    assert history.taught({'t2'},date(2026,8,28),date(2026,8,31))==set() and history.taught({'t2'},date(2026,8,17),date(2026,8,31))=={'c-demo-a','c-demo-d'}
+    assert len(reads)==11 and overlays==[]

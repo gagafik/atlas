@@ -20,6 +20,8 @@ class Snapshot:
         self.state = state
         # Past days resolve against the timetable and rosters valid then; the last segment is the plain state.
         self.history = history or History(state)
+        # Dated rosters keep pupils who have left for history; only these may act on a lesson now.
+        self.active = frozenset(s.id for s in state.students if s.active)
         self.entities = {view: {x.id: x for x in getattr(state, table)} for view, table in VIEWS.items()}
         self.days, self.weeks = OrderedDict(), OrderedDict()
         self.lesson_days = OrderedDict()

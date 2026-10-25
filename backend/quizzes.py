@@ -64,8 +64,9 @@ class Quizzes:
             raise HTTPException(403,'Нет доступа к этому назначению теста.')
         if student is not None and student not in document['studentIds']:raise HTTPException(404,'Ученику не назначен этот тест.')
         active=bool(current and current['status']!='cancelled')
-        enrolled=bool(active and student in current['studentIds'])
-        return dict(user=user,staff=staff,workspace=workspace,quiz=quiz,student=student,current=current,state=snap.state,revision=snap.state.revision,
+        members=set(current['studentIds'])&snap.active if active else set()
+        enrolled=student in members
+        return dict(user=user,staff=staff,workspace=workspace,quiz=quiz,student=student,current=current,members=members,state=snap.state,revision=snap.state.revision,
                     canReview=bool(staff and active and staff_read(user,workspace,current) and (student is None or enrolled)),
                     canAnswer=bool(user['role']=='student' and enrolled),key=quiz['lessonKey'])
 
@@ -177,7 +178,7 @@ class Quizzes:
             for r in rows:grouped[r[0]].append(dict(id=r[1],number=r[2],status=r[3],startedAt=r[4],deadline=r[5],submittedAt=r[6],score=r[7],maxScore=r[8]))
             names={s['id']:s['name'] for s in document['lesson']['students']}
             result['students']=[dict(id=id,name=names[id],variant=document['variantsByStudent'][id],attempts=grouped[id],
-                                     enrolled=bool(ctx['current'] and ctx['current']['status']!='cancelled' and id in ctx['current']['studentIds'])) for id in document['studentIds']]
+                                     enrolled=id in ctx['members']) for id in document['studentIds']]
         return result
 
     def questions(self,db,workspace,user,definition,old=None):

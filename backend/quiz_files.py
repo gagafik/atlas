@@ -147,8 +147,7 @@ class QuizFiles:
                 if ctx:
                     quizzes.recheck(db,ctx)
                     if not ctx['staff']:
-                        current=ctx['current']
-                        if not current or current['status']=='cancelled' or ctx['student'] not in current['studentIds']:
+                        if ctx['student'] not in ctx['members']:
                             raise HTTPException(403,'Нет действующего доступа к материалам этого урока.')
                     if attemptId:
                         from .quiz_attempts import load

@@ -94,15 +94,8 @@ class JournalCoverage:
             if not classes:raise HTTPException(403,'Нужно назначение ответственным за класс.')
         else:
             if not own:raise HTTPException(403,'Нет назначения преподавателем.')
-            classes=set()
-            # Every timetable version valid in the period contributes the classes its teacher taught.
-            for base in snap.history.bases(body.start,body.end):
-                groups={w.groupId for w in base.workloads if own&set(teacher_ids(w))}
-                groups|={d.groupId for d in base.datedLessons if d.groupId and own&set(d.teacherIds or [])}
-                placements={p.id:p for p in base.placements};loads={w.id:w for w in base.workloads}
-                groups|={loads[placements[d.placementId].workloadId].groupId for d in base.datedLessons if d.placementId in placements and own&set(d.teacherIds or [])}
-                classes|={c for g in base.groups if g.id in groups for c in g.classIds}
-            classes&={c.id for c in state.classes}
+            # Every timetable version valid in the period contributes the classes its teacher taught; the index is kept per History, never rebuilt per request.
+            classes=snap.history.taught(own,body.start,body.end)&{c.id for c in state.classes}
         if body.classId and body.classId not in classes:raise HTTPException(404,'Класс не найден или недоступен.')
         if body.teacherId and (body.teacherId not in snap.entities['teacher'] or user['role']!='admin' and body.mode=='teaching' and body.teacherId not in own):raise HTTPException(404,'Учитель не найден или недоступен.')
         return classes & {body.classId} if body.classId else classes,own

@@ -14,7 +14,7 @@ from .scheduling import validate_schedule
 from .solver_process import solve_isolated as solve
 from .optimization import Optimization
 from .editing import EditRequest, edit, inspect_edit
-from .timetable_history import capture, current_from
+from .timetable_history import archived, capture, current_from
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -114,13 +114,13 @@ def put_state(state: State, workspace: Workspace = 'school', effectiveFrom: date
     from .editing import new_issues
     current = require_revision(workspace, state.revision)
     days = operational_dates(current) | operational_dates(state)
-    if effectiveFrom:
-        # Earlier days are resolved by the archived version, not by the candidate.
-        days = {d for d in days if d >= effectiveFrom}
-    if days:
-        added = new_issues({'issues': check_dates(current, days)}, {'issues': check_dates(state, days)})
-        if added:
-            raise HTTPException(422, 'Изменение создаёт проблемы в расписании по датам: ' + '; '.join(i['message'] for i in added[:3]))
+    checks = [(state, days)]
+    if effectiveFrom and (early := {d for d in days if d < effectiveFrom}):
+        # Earlier days keep the replaced template and pupils; only the candidate's own dated changes can be new problems there.
+        checks = [(state, days - early), (archived(current, state), early)]
+    added = [i for candidate, ds in checks if ds for i in new_issues({'issues': check_dates(current, ds)}, {'issues': check_dates(candidate, ds)})]
+    if added:
+        raise HTTPException(422, 'Изменение создаёт проблемы в расписании по датам: ' + '; '.join(i['message'] for i in added[:3]))
     return save(workspace, state, effective=effectiveFrom)
 
 

@@ -27,6 +27,7 @@ VERSION_WINS = dict(groups=Group, profiles=Profile)
 CURRENT_WINS = dict(subjects=Subject, teachers=Teacher, rooms=Room, classes=SchoolClass)
 CONTEXTS = 16
 BASES = 8
+TAUGHT = 64
 
 
 def today(): return now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()
@@ -55,6 +56,11 @@ def changed(before, after):
     """Renames and group rosters are not versions: membership has its own periods."""
     return (any(getattr(before, key) != getattr(after, key) for key in ['placements', 'workloads', 'profiles', 'cycles']) or
             [(g.id, g.kind, g.classIds) for g in before.groups] != [(g.id, g.kind, g.classIds) for g in after.groups])
+
+
+def versioned(current, day, before, after):
+    """Whether a save effective from day stores the replaced template."""
+    return day > current and changed(before, after)
 
 
 def backfill(db, workspace, state):
@@ -88,7 +94,7 @@ def capture(db, workspace, before, after, effective=None):
         if effective > max(today(), current):
             raise HTTPException(422, 'Дата начала действия не может быть позже сегодняшнего дня.')
     day, stored = effective or current, None
-    if day > current and changed(before, after):
+    if versioned(current, day, before, after):
         db.execute('INSERT INTO timetable_versions (workspace,valid_from,valid_to,revision,created,document) VALUES (?,?,?,?,?,?)',
                    (workspace, current.isoformat(), day.isoformat(), after.revision, now().isoformat(), encoded(template(before))))
         db.execute('UPDATE timetable_current SET valid_from=? WHERE workspace=?', (day.isoformat(), workspace))
@@ -124,6 +130,11 @@ def overlay(state, doc):
     return state.model_copy(update=update | dict(cycles=Cycles.model_validate(doc['cycles'])))
 
 
+def archived(before, after):
+    """The candidate as days before its effective date see it: the replaced template and the old pupils, with the candidate's dated changes."""
+    return overlay(after, template(before)).model_copy(update=dict(students=before.students))
+
+
 class History:
     """stints are (student, kind, target, start, end) with an inclusive end; document maps a version start to its stored template."""
     def __init__(self, state, current_from=None, versions=(), stints=(), document=None):
@@ -133,6 +144,7 @@ class History:
         self.bounds = sorted({to for _, to in self.versions} | {s[3] for s in self.stints if s[3] > self.first} |
                              {s[4] + timedelta(days=1) for s in self.stints if s[4]})
         self.lock, self.contexts, self.bases_cache = RLock(), OrderedDict(), OrderedDict()
+        self.teachings, self.taught_cache = {}, OrderedDict()
 
     def segment(self, day): return bisect_right(self.bounds, day)
 
@@ -173,14 +185,46 @@ class History:
             self.contexts.move_to_end(index)
             return self.contexts[index]
 
-    def bases(self, start, end):
-        """Templates in force at some time within start..end."""
-        found = False
-        for valid_from, to in self.versions:
-            if valid_from <= end and start < to:
-                found = True
-                yield self.base(valid_from)
-        if self.current_from is None or end >= self.current_from or not found: yield self.state
+    def starts(self, start, end):
+        """Templates in force at some time within start..end; None is the current one."""
+        found = [valid_from for valid_from, to in self.versions if valid_from <= end and start < to]
+        return found + ([None] if self.current_from is None or end >= self.current_from or not found else [])
+
+    def teaching(self, valid_from):
+        """One template's teacher -> groups, dated-change placement -> group and group -> classes: a small index that, unlike an overlay, is kept for every version."""
+        with self.lock:
+            if valid_from not in self.teachings:
+                state, ids = self.state, {d.placementId for d in self.state.datedLessons if d.placementId}
+                if valid_from is None:
+                    loads = [(w.id, w.groupId, ([w.teacherId] if w.teacherId else []) + w.additionalTeacherIds) for w in state.workloads]
+                    placements, groups = {p.id: p.workloadId for p in state.placements if p.id in ids}, {g.id: g.classIds for g in state.groups}
+                else:
+                    doc = self.document(valid_from)
+                    loads = [(w['id'], w['groupId'], ([w['teacherId']] if w['teacherId'] else []) + w['additionalTeacherIds']) for w in doc['workloads']]
+                    placements, groups = {p['id']: p['workloadId'] for p in doc['placements'] if p['id'] in ids}, {g.id: g.classIds for g in state.groups} | {g['id']: g['classIds'] for g in doc['groups']}
+                owner, taught = {}, defaultdict(set)
+                for id, group, teachers in loads:
+                    owner[id] = group
+                    for teacher in teachers: taught[teacher].add(group)
+                self.teachings[valid_from] = dict(taught), {p: owner[w] for p, w in placements.items() if w in owner}, groups
+            return self.teachings[valid_from]
+
+    def taught(self, teachers, start, end):
+        """Classes the teachers taught in any template valid within start..end, current dated changes included."""
+        key = frozenset(teachers), start, end
+        with self.lock:
+            if key not in self.taught_cache:
+                dated = [d for d in self.state.datedLessons if key[0] & set(d.teacherIds or [])]
+                classes = set()
+                for valid_from in self.starts(start, end):
+                    taught, placements, groups = self.teaching(valid_from)
+                    found = {d.groupId for d in dated if d.groupId} | {placements[d.placementId] for d in dated if d.placementId in placements}
+                    for teacher in key[0]: found |= taught.get(teacher, set())
+                    classes |= {c for g in found for c in groups.get(g, ())}
+                self.taught_cache[key] = classes
+                while len(self.taught_cache) > TAUGHT: self.taught_cache.popitem(last=False)
+            self.taught_cache.move_to_end(key)
+            return set(self.taught_cache[key])
 
 
 def annotate(rows, view):

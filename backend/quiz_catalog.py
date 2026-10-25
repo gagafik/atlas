@@ -45,7 +45,7 @@ def register(app,quizzes,Workspace):
                 except HTTPException as exc:
                     if exc.status_code not in [403,404]:raise
                     continue
-                active=ctx['canReview'] if staff else bool(ctx['current'] and ctx['current']['status']!='cancelled' and r[8] in ctx['current']['studentIds'])
+                active=ctx['canReview'] if staff else r[8] in ctx['members']
                 if not history and not active:continue
                 definition=document['definition']
                 items.append(dict(id=r[0],version=r[1],status=r[2],released=bool(r[7]),title=definition['title'],closesAt=definition['closesAt'],opensAt=definition['opensAt'],
