@@ -187,10 +187,8 @@ class QuizFiles:
                 if not row:raise HTTPException(404,'Файл недоступен.')
                 if ctx:
                     quizzes.recheck(db,ctx)
-                    if not ctx['staff']:
-                        current=ctx['current']
-                        if not current or current['status']=='cancelled' or ctx['student'] not in current['studentIds']:
-                            raise HTTPException(403,'Нет действующего доступа к материалам этого урока.')
+                    if not ctx['staff'] and not ctx['enrolled']:
+                        raise HTTPException(403,'Нет действующего доступа к материалам этого урока.')
                     if attemptId:
                         from .quiz_attempts import load
                         view=quizzes.attempt_view(ctx,load(db,workspace,quizId,attemptId))

@@ -141,7 +141,7 @@ class Handover:
         d = adult['detail']
         if not (d['startDate'] <= day <= d['endDate']): return 'Разрешение не действует в выбранный день.'
         sponsor = self.parent(db, snap, w, adult['sponsor_id'], adult['student_id'])
-        if not sponsor or permission_key(sponsor) != adult['sponsor_permissions']: return 'Полномочия родителя изменились. Нужна новая проверка школой.'
+        if not sponsor: return 'Связь родителя с ребёнком больше не действует. Нужна новая проверка школой.'
         return ''
 
     def public_adult(self, db, u, snap, w, adult):
@@ -167,6 +167,7 @@ class Handover:
                  contact=body.contact, startDate=body.startDate.isoformat(), endDate=body.endDate.isoformat(), studentName=pupil.name, classId=pupil.classId,
                  className=snap.entities['class_'][pupil.classId].name, sponsorName=sponsor['name'], proposalReason=body.reason, consentConfirmed=True)
         id = uuid4().hex
+        # sponsor_permissions is stored for compatibility and no longer compared: parent() checks the live link to the child.
         db.execute("INSERT INTO handover_adults(id,workspace,student_id,sponsor_id,sponsor_permissions,version,status,created,updated,document) VALUES (?,?,?,?,?,1,'proposed',?,?,?)", (id,w,pupil.id,sponsor_id,permission_key(sponsor),stamp(),stamp(),encoded(d)))
         self.history(db,u,w,'adult_proposed',pupil.id,body.reason,dict(kind=body.kind),adult=id)
         self.notify(db,u,snap,w,pupil.id,'adult_proposed',True)
@@ -181,8 +182,8 @@ class Handover:
             self.require_enabled(db,w); self.child(db,u,snap,w,student,manager=True)
             if not body.consentChecked or not body.identityChecked: raise HTTPException(422, 'Подтвердите проверку согласия родителя и личности взрослого.')
             sponsor=self.parent(db,snap,w,adult['sponsor_id'],student)
-            if not sponsor or permission_key(sponsor)!=adult['sponsor_permissions'] or adult['detail']['endDate']<today().isoformat():
-                raise HTTPException(409,'Срок или полномочия родителя изменились. Нужно новое предложение.')
+            if not sponsor or adult['detail']['endDate']<today().isoformat():
+                raise HTTPException(409,'Срок или связь родителя с ребёнком изменились. Нужно новое предложение.')
         if action=='revoke' and adult['status'] not in {'proposed','approved'}: raise HTTPException(409,'Разрешение уже недействительно.')
         status={'approve':'approved','reject':'rejected','revoke':'revoked'}[action]
         db.execute('UPDATE handover_adults SET status=?,version=version+1,updated=? WHERE id=?',(status,stamp(),adult['id']))
@@ -202,7 +203,7 @@ class Handover:
         if problem: return problem
         row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(pickup['creator_id'],)).fetchone()
         creator=self.access.public(row) if row else None
-        if not creator or permission_key(creator)!=pickup['creator_permissions']: return 'Полномочия автора заявки изменились.'
+        if not creator or not enabled(creator,snap,w): return 'Автор заявки больше не имеет доступа.'
         if creator['role']=='parent' and pickup['student_id'] not in self.students(db,creator,snap,w): return 'Связь родителя с ребёнком больше не действует.'
         if creator['role']!='parent' and ((self.permission(db,creator,w) or {}).get('role')!='manager' or pickup['student_id'] not in self.students(db,creator,snap,w)):
             return 'Назначение сотрудника, оформившего заявку, больше не действует.'
@@ -233,6 +234,7 @@ class Handover:
         if db.execute("SELECT 1 FROM handover_pickups WHERE workspace=? AND student_id=? AND day=? AND status IN ('requested','arrived','ready','completed')",(w,pupil.id,body.day.isoformat())).fetchone():
             raise HTTPException(409,'У ребёнка уже есть заявка или подтверждённая выдача в этот день.')
         id=uuid4().hex;d=dict(studentName=pupil.name,classId=pupil.classId,className=snap.entities['class_'][pupil.classId].name,adultName=adult['detail']['name'],relationship=adult['detail']['relationship'],locationName=point['name'],note=body.note)
+        # creator_permissions is stored for compatibility and no longer compared: pickup_problem() checks the creator's live link or delegation.
         db.execute("INSERT INTO handover_pickups(id,workspace,student_id,adult_id,adult_version,creator_id,creator_permissions,version,status,day,expected_time,location_id,created,updated,completed_at,returned_at,document) VALUES (?,?,?,?,?,?,?,1,'requested',?,?,?,?,?,NULL,NULL,?)",
                    (id,w,pupil.id,adult['id'],adult['version'],u['id'],permission_key(u),body.day.isoformat(),body.expectedTime,body.locationId,stamp(),stamp(),encoded(d)))
         self.history(db,u,w,'requested',pupil.id,body.note,adult=adult['id'],pickup=id);self.notify(db,u,snap,w,pupil.id,'requested',True)

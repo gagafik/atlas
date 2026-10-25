@@ -99,6 +99,12 @@ def test_changed_parent_rights_invalidate_queue_promotion_and_access(client,setu
         raw=db.execute('SELECT permissions FROM accounts WHERE id=?',(setup[2]['id'],)).fetchone();d=json.loads(raw[0]);d['grants']=[dict(workspace='demo',view='student',entityIds=['s4'])];db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(d),setup[2]['id']))
     ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']=='ineligible';assert members(o,r)==[]
 
+def test_parent_second_child_keeps_queue_place(client,setup):
+    p,o=signed('parent'),signed('other');r=published(client);a=ok(join(p,r));ok(join(o,r,'s3'))
+    with api.connect() as db:
+        raw=db.execute('SELECT permissions FROM accounts WHERE id=?',(setup[2]['id'],)).fetchone();d=json.loads(raw[0]);d['grants']=[dict(workspace='demo',view='student',entityIds=['s3','s4'])];db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(d),setup[2]['id']))
+    ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']=='enrolled'
+
 def test_deadlines_versions_capacity_and_archival(client,setup,monkeypatch):
     r=published(client,capacity=2);p=signed('parent');ok(join(p,r));ok(join(client,r,'s3'))
     current=fresh(client,r);d=current['data']|dict(capacity=1)

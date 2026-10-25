@@ -158,6 +158,7 @@ def register(service,app,Workspace):
                 update(db,previous,user,'cancelled','cancelled','Прежний доступ изменился; создана новая заявка.')
             if db.execute("SELECT count(*) FROM meeting_waitlist WHERE event_id=? AND status IN ('waiting','offered')",(id,)).fetchone()[0]>=20000:raise HTTPException(409,'Достигнут лимит 20 000 действующих заявок мероприятия.')
             wait_id=str(uuid4());stamp=utc(meetings.now());doc=dict(parentName=user['name'],studentName=snap.entities['student'][body.studentId].name,hostName=host['name'],note=body.note,reason='')
+            # permissions is stored for compatibility and no longer compared: the parent-pupil link is checked instead (Meetings.booking_owner).
             db.execute('INSERT INTO meeting_waitlist(id,event_id,workspace,parent_id,student_id,host_id,permissions,status,version,created,updated,document) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                        (wait_id,id,workspace,user['id'],body.studentId,body.hostId,permission_key(user),'waiting',1,stamp,stamp,encoded(doc)))
             history(db,dict(id=wait_id),user,'joined',dict(version=1))

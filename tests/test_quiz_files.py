@@ -129,7 +129,8 @@ def test_current_links_and_race_recheck_before_range(client,monkeypatch,change):
             from test_journal import DAY
             state.datedLessons=[DatedLesson(id='cancel',name='Cancelled',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)]
         api.save('demo',state)
-        assert path().status_code==403
+        # A cancelled lesson does not freeze materials; only leaving the lesson group does.
+        assert path().status_code==(206 if change=='cancelled' else 403)
 
 
 def test_image_inline_range_download_and_workspace_isolation(client):

@@ -7,6 +7,7 @@ from fastapi import HTTPException, Query, Request
 from .access import now
 from .journal import user_ids
 from .notifications import encoded, permission_key
+from .resources import teacher_ids
 
 
 def register(app,quizzes,Workspace):
@@ -28,24 +29,32 @@ def register(app,quizzes,Workspace):
             student="''" if staff else 'm.student_id';name="''" if staff else 'm.name'
             join='' if staff else 'JOIN quiz_members m ON m.workspace=q.workspace AND m.quiz_id=q.id'
             if not staff:clauses.append('m.student_id IN (SELECT value FROM json_each(?))');args.append(encoded(sorted(user_ids(user,workspace,'student'))))
+            if user['role']=='teacher':
+                own=sorted(user_ids(user,workspace,'teacher'))
+                pairs=sorted({w.groupId+'\x1f'+w.subjectId for w in snap.state.workloads if set(own)&set(teacher_ids(w))})
+                # Owner and course teachers manage; the lesson's teachers at creation keep read access in history.
+                link="q.owner_id=? OR json_extract(q.summary,'$.lesson.groupId')||char(31)||json_extract(q.summary,'$.lesson.subjectId') IN (SELECT value FROM json_each(?))"
+                largs=[user['id'],encoded(pairs)]
+                if history:link+=" OR EXISTS(SELECT 1 FROM json_each(q.summary,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))";largs.append(encoded(own))
+                clauses.append('('+link+')');args.extend(largs)
             if not history:clauses.append("q.status<>'withdrawn'")
             if search.strip():
                 db.create_function('atlas_fold',1,str.casefold)
                 clauses.append("instr(atlas_fold(json_extract(q.summary,'$.definition.title')||' '||json_extract(q.summary,'$.lesson.subject')||' '||json_extract(q.summary,'$.lesson.group')),?)>0")
                 args.append(search.strip().casefold())
             if after:clauses.append(f'(q.closes,q.id,{student})>(?,?,?)');args.extend(after)
-            rows=db.execute(f'''SELECT q.id,q.version,q.status,q.closes,q.lesson_key,q.summary,q.published_document IS NOT NULL,q.released,{student},{name}
+            rows=db.execute(f'''SELECT q.id,q.version,q.status,q.closes,q.lesson_key,q.summary,q.published_document IS NOT NULL,q.released,{student},{name},q.owner_id
                 FROM quizzes q {join} WHERE {' AND '.join(clauses)} ORDER BY q.closes,q.id,{student} LIMIT 101''',args).fetchall()
             items=[];last=None;processed=0
             for r in rows[:100]:
                 last=[r[3],r[0],r[8]];processed+=1;document=json.loads(r[5]);document['studentIds']=[r[8]] if r[8] else []
                 quiz=dict(workspace=workspace,id=r[0],version=r[1],status=r[2],closesAt=r[3],lessonKey=r[4],document=document,
-                          published=document if r[6] else None,released=bool(r[7]))
+                          published=document if r[6] else None,released=bool(r[7]),ownerId=r[10])
                 try:ctx=quizzes.resolve(user,snap,quiz,r[8] or None)
                 except HTTPException as exc:
                     if exc.status_code not in [403,404]:raise
                     continue
-                active=ctx['canReview'] if staff else bool(ctx['current'] and ctx['current']['status']!='cancelled' and r[8] in ctx['current']['studentIds'])
+                active=ctx['canReview'] if staff else ctx['enrolled']
                 if not history and not active:continue
                 definition=document['definition']
                 items.append(dict(id=r[0],version=r[1],status=r[2],released=bool(r[7]),title=definition['title'],closesAt=definition['closesAt'],opensAt=definition['opensAt'],

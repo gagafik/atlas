@@ -13,7 +13,18 @@ from .access import now
 from .journal import staff_read, user_ids, snapshot
 from .journal_periods import require_open
 from .notifications import encoded
+from .resources import teacher_ids
 from . import quiz_models as models, quiz_store as store
+
+
+def course_teachers(state,lesson):
+    """Course teachers by workload (group + subject); a one-off substitute is not one."""
+    return {t for w in state.workloads if w.groupId==lesson['groupId'] and w.subjectId==lesson['subjectId'] for t in teacher_ids(w)}
+
+
+def group_pupils(snap,group):
+    g=snap.entities['group'].get(group)
+    return {p.id for p in snap.state.students if p.active and g and (p.classId in g.classIds if g.kind=='whole' else p.id in g.studentIds)}
 
 
 class Quizzes:
@@ -57,17 +68,20 @@ class Quizzes:
         workspace=quiz['workspace'];staff=user['role'] in ['admin','teacher']
         document=quiz['published'] or quiz['document'];lesson=document['lesson']
         current=snap.current_lesson(lesson)
+        # Management follows concrete links (owner, course teacher, admin); today's occurrence of the lesson, a substitution or a cancellation do not matter.
+        owner=user['role']=='teacher' and quiz.get('ownerId')==user['id']
+        course=user['role']=='teacher' and bool(user_ids(user,workspace,'teacher') & course_teachers(snap.state,lesson))
+        manage=user['role']=='admin' or owner or course
         if staff:
-            if not (staff_read(user,workspace,lesson) or current and staff_read(user,workspace,current)):
+            if not (manage or staff_read(user,workspace,lesson)):
                 raise HTTPException(403,'Тест относится к другому уроку.')
         elif not quiz['published'] or student not in user_ids(user,workspace,'student') or student not in document['studentIds']:
             raise HTTPException(403,'Нет доступа к этому назначению теста.')
         if student is not None and student not in document['studentIds']:raise HTTPException(404,'Ученику не назначен этот тест.')
-        active=bool(current and current['status']!='cancelled')
-        enrolled=bool(active and student in current['studentIds'])
+        pupils=group_pupils(snap,lesson['groupId'])
+        enrolled=bool(student is not None and student in document['studentIds'] and student in pupils)
         return dict(user=user,staff=staff,workspace=workspace,quiz=quiz,student=student,current=current,state=snap.state,revision=snap.state.revision,
-                    canReview=bool(staff and active and staff_read(user,workspace,current) and (student is None or enrolled)),
-                    canAnswer=bool(user['role']=='student' and enrolled),key=quiz['lessonKey'])
+                    canReview=bool(staff and manage),canAnswer=bool(user['role']=='student' and enrolled),enrolled=enrolled,groupPupils=pupils,key=quiz['lessonKey'])
 
     def context(self,request,workspace,id,student=None,attempt_id=None):
         user=self.journal.scope(request,workspace);snap=self.snapshots.get(workspace)
@@ -88,7 +102,8 @@ class Quizzes:
 
     def notify(self,db,ctx,action,students=None):
         if action=='quiz.submitted':
-            ids=ctx['current']['teacherIds'] if ctx['current'] else []
+            lesson=(ctx['quiz']['published'] or ctx['quiz']['document'])['lesson']
+            ids=sorted(course_teachers(ctx['state'],lesson) or set(lesson['teacherIds']))
             targets=self.journal.notifications.granted_users(db,ctx['workspace'],'teacher',ids,['teacher'])
         else:
             targets=self.journal.notifications.granted_users(db,ctx['workspace'],'student',students or [],['student','parent'])
@@ -177,7 +192,7 @@ class Quizzes:
             for r in rows:grouped[r[0]].append(dict(id=r[1],number=r[2],status=r[3],startedAt=r[4],deadline=r[5],submittedAt=r[6],score=r[7],maxScore=r[8]))
             names={s['id']:s['name'] for s in document['lesson']['students']}
             result['students']=[dict(id=id,name=names[id],variant=document['variantsByStudent'][id],attempts=grouped[id],
-                                     enrolled=bool(ctx['current'] and ctx['current']['status']!='cancelled' and id in ctx['current']['studentIds'])) for id in document['studentIds']]
+                                     enrolled=id in ctx['groupPupils']) for id in document['studentIds']]
         return result
 
     def questions(self,db,workspace,user,definition,old=None):
@@ -260,7 +275,7 @@ class Quizzes:
         @app.post('/api/journal/quizzes/{id}/actions')
         def action(id:str,body:models.QuizAction,request:Request,workspace:Workspace='school'):
             ctx=self.context(request,workspace,id)
-            if not ctx['canReview']:raise HTTPException(403,'Управлять тестом может действующий учитель урока или администратор.')
+            if not ctx['canReview']:raise HTTPException(403,'Управлять тестом могут автор, учитель курса по нагрузке или администратор.')
             quiz=ctx['quiz']
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
