@@ -206,6 +206,9 @@ export default function App({
   onAuthChange: () => Promise<void>;
   sessionControls: ReactNode;
 }) {
+  // Only an administrator changes a class teacher; the server refuses everyone else, undo and redo included.
+  const canAssignClassTeacher =
+    !session.enabled || session.user?.role === "admin";
   const [activeCycle, setActiveCycle] = useState("weekly");
   const [cycleDate, setCycleDate] = useState("");
   const [workspace, setWorkspaceValue] = useState(
@@ -617,6 +620,10 @@ export default function App({
       </div>
     );
   const s = state;
+  const classTeacherId =
+    mode === "class"
+      ? s.classes.find((c) => c.id === selected)?.classTeacherId
+      : null;
   const currentWeek = weekState(s, activeCycle);
   const title = NAV.find((n) => n.id === page)?.label;
   const selectedItems: Named[] =
@@ -747,6 +754,10 @@ export default function App({
         maxDaily: number("maxDaily"),
         studentCount: get("studentCount") ? number("studentCount") : null,
         profileId: get("profileId"),
+        // A disabled field is not in FormData: keep the stored value instead of clearing it.
+        classTeacherId: canAssignClassTeacher
+          ? get("classTeacherId") || null
+          : (item?.classTeacherId ?? null),
       };
       if (!item)
         next.groups.push({
@@ -987,6 +998,15 @@ export default function App({
     if (type === "workload" && s.placements.some((p) => p.workloadId === id)) {
       setError("Сначала снимите с сетки занятия этой нагрузки.");
       return;
+    }
+    if (type === "teacher") {
+      const led = s.classes.filter((c) => c.classTeacherId === id);
+      if (led.length) {
+        setError(
+          `Учитель — классный руководитель: ${led.map((c) => c.name).join(", ")}. Сначала назначьте другого классного руководителя.`,
+        );
+        return;
+      }
     }
     if (type === "class") {
       next.groups = next.groups.filter(
@@ -1969,6 +1989,13 @@ export default function App({
                     <div className="schedule-subtitle">
                       <span className="status-dot" /> Недельное расписание{" "}
                       <span>·</span> {filteredPlacements.length} занятий
+                      {mode === "class" && classTeacherId && (
+                        <>
+                          {" "}
+                          <span>·</span> Классный руководитель:{" "}
+                          {named(s.teachers, classTeacherId)}
+                        </>
+                      )}
                     </div>
                   </div>
                   {mode === "class" && (
@@ -2439,6 +2466,13 @@ export default function App({
                       render: (r) => (
                         <strong className="class-name">{r.name}</strong>
                       ),
+                    },
+                    {
+                      label: "Классный руководитель",
+                      render: (r) =>
+                        r.classTeacherId
+                          ? named(s.teachers, r.classTeacherId)
+                          : "—",
                     },
                     {
                       label: "Профиль звонков",
@@ -3165,6 +3199,18 @@ export default function App({
                           defaultValue={item?.profileId || "primary"}
                         >
                           {options(s.profiles)}
+                        </select>
+                      </Field>
+                      <Field
+                        label="Классный руководитель"
+                        hint="Получает по умолчанию объяснительные, сводную посещаемость, контроль журналов и похвалы/замечания своего класса. Назначает администратор; смены сохраняются в истории («Пользователи и доступ» → «Права работы с классами»)."
+                      >
+                        <select
+                          name="classTeacherId"
+                          defaultValue={item?.classTeacherId || ""}
+                          disabled={!canAssignClassTeacher}
+                        >
+                          {options(s.teachers, "Не назначен")}
                         </select>
                       </Field>
                       <Field

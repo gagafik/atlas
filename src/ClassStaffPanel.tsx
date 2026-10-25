@@ -3,6 +3,7 @@ import { api } from "./api";
 import {
   classAssignmentChanges,
   classCapabilities,
+  type ClassAssignment,
   type ClassAssignments,
   type ClassCapability,
 } from "./classStaff";
@@ -12,7 +13,13 @@ type Options = {
   revision: number;
   legacy: boolean;
   assignments: ClassAssignments;
-  classes: { id: string; name: string }[];
+  classes: {
+    id: string;
+    name: string;
+    classTeacherId: string | null;
+    classTeacherName: string | null;
+    classTeacherAccounts: string[];
+  }[];
   accounts: {
     id: string;
     name: string;
@@ -30,6 +37,24 @@ type History = {
   before: ClassAssignments;
   after: ClassAssignments;
 };
+type TeacherHistory = {
+  id: number;
+  created: string;
+  actor: string;
+  action: "saved" | "undo" | "redo";
+  className: string;
+  before: { id: string; name: string | null } | null;
+  after: { id: string; name: string | null } | null;
+};
+const actionNames = { saved: "", undo: " · отмена", redo: " · повтор" };
+// A row without revoked duties carries no such key: it must equal what the server stored.
+const tidy = (row: ClassAssignment): ClassAssignment => {
+  const { revoked, ...rest } = row;
+  return revoked?.length ? { ...rest, revoked } : rest;
+};
+const allCapabilities = Object.keys(classCapabilities) as ClassCapability[];
+const capsDiffer = (a: ClassCapability[], b: ClassCapability[]) =>
+  [...a].sort().join() !== [...b].sort().join();
 
 export default function ClassStaffPanel({ workspace }: { workspace: string }) {
   const [expanded, setExpanded] = useState(false),
@@ -44,6 +69,8 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
     [notice, setNotice] = useState("");
   const [history, setHistory] = useState<History[]>([]),
     [next, setNext] = useState<number | null>(null);
+  const [leaderHistory, setLeaderHistory] = useState<TeacherHistory[]>([]),
+    [leaderNext, setLeaderNext] = useState<number | null>(null);
   const lock = useRef(false),
     alive = useRef(true),
     guarded = useRef(false);
@@ -110,6 +137,37 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
   const labels = (caps: ClassCapability[]) =>
     caps.map((c) => classCapabilities[c]).join(", ") || "Нет полномочий";
   const selected = assignments[classId] || [];
+  const current = options?.classes.find((c) => c.id === classId);
+  const leaders = current?.classTeacherAccounts || [];
+  const revokedList = (caps: ClassCapability[]) =>
+    caps.length ? labels(caps) : "ничего не снято";
+  // Switch one default duty of a class teacher account on or off; an empty row disappears.
+  const setDuty = (id: string, cap: ClassCapability, on: boolean) => {
+    const row = selected.find((r) => r.accountId === id) || {
+      accountId: id,
+      capabilities: [],
+    };
+    const revoked = (row.revoked || []).filter((c) => c !== cap);
+    const updated = tidy({
+      ...row,
+      capabilities: on
+        ? row.capabilities
+        : row.capabilities.filter((c) => c !== cap),
+      revoked: on ? revoked : [...revoked, cap],
+    });
+    const rows = (
+      selected.some((r) => r.accountId === id)
+        ? selected.map((r) => (r.accountId === id ? updated : r))
+        : [...selected, updated]
+    ).filter(
+      (r) =>
+        r !== updated || updated.capabilities.length || updated.revoked?.length,
+    );
+    const others = Object.fromEntries(
+      Object.entries(assignments).filter(([key]) => key !== classId),
+    );
+    change(rows.length ? { ...assignments, [classId]: rows } : others);
+  };
   const change = (value: ClassAssignments) => {
     setAssignments(value);
     setReviewed(false);
@@ -121,8 +179,11 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
       (!options?.classes.some((c) => c.id === id) ||
         rows.some(
           (r) =>
-            !r.capabilities.length ||
-            !options?.accounts.some((a) => a.id === r.accountId && a.eligible),
+            (!r.capabilities.length && !r.revoked?.length) ||
+            (r.capabilities.length > 0 &&
+              !options?.accounts.some(
+                (a) => a.id === r.accountId && a.eligible,
+              )),
         )),
   );
   async function loadHistory(before?: number) {
@@ -133,6 +194,18 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
     if (alive.current) {
       setHistory((old) => (before ? [...old, ...result.items] : result.items));
       setNext(result.nextBefore);
+    }
+  }
+  async function loadLeaderHistory(before?: number) {
+    const result = await api(
+      `access/class-staff/teachers/history${before ? `?before=${before}` : ""}`,
+      workspace,
+    );
+    if (alive.current) {
+      setLeaderHistory((old) =>
+        before ? [...old, ...result.items] : result.items,
+      );
+      setLeaderNext(result.nextBefore);
     }
   }
   return (
@@ -147,9 +220,10 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
     >
       <summary>Права работы с классами</summary>
       <p>
-        Назначьте учителя или сотрудника и конкретные полномочия для каждого
-        класса. Они не открывают оценки, чужие журналы для редактирования или
-        управление расписанием.
+        Классный руководитель по умолчанию получает все четыре полномочия своего
+        класса. Здесь можно снять отдельное полномочие у него или назначить
+        заместителя, психолога и других сотрудников. Они не открывают оценки,
+        чужие журналы для редактирования или управление расписанием.
       </p>
       {error && (
         <p role="alert" className="error-banner">
@@ -200,6 +274,38 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
                   ))}
               </select>
             </label>
+            <section className="export-card" aria-label="Классный руководитель">
+              <h4>
+                Классный руководитель:{" "}
+                {current?.classTeacherName ||
+                  "не назначен — назначается в карточке класса администратором"}
+              </h4>
+              {current?.classTeacherId && !leaders.length && (
+                <p>
+                  Ни одна действующая учётная запись учителя не связана с этой
+                  записью, поэтому полномочия по умолчанию пока никому не
+                  выданы.
+                </p>
+              )}
+              {leaders.map((id) => {
+                const row = selected.find((r) => r.accountId === id);
+                return (
+                  <div key={id}>
+                    <strong>{name(id)}</strong>
+                    {allCapabilities.map((cap) => (
+                      <label className="class-staff-check" key={cap}>
+                        <input
+                          type="checkbox"
+                          checked={!row?.revoked?.includes(cap)}
+                          onChange={(e) => setDuty(id, cap, e.target.checked)}
+                        />
+                        {classCapabilities[cap]} — действует по умолчанию
+                      </label>
+                    ))}
+                  </div>
+                );
+              })}
+            </section>
             <label className="field">
               <span>Добавить ответственного сотрудника</span>
               <select
@@ -210,7 +316,9 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
                 {options.accounts
                   .filter(
                     (a) =>
-                      a.eligible && !selected.some((r) => r.accountId === a.id),
+                      a.eligible &&
+                      !leaders.includes(a.id) &&
+                      !selected.some((r) => r.accountId === a.id),
                   )
                   .map((a) => (
                     <option key={a.id} value={a.id}>
@@ -235,58 +343,72 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
             >
               Добавить сотрудника в класс
             </button>
-            {selected.map((row) => (
-              <article className="export-card" key={row.accountId}>
-                <h4>{name(row.accountId)}</h4>
-                {!options.accounts.some(
-                  (a) => a.id === row.accountId && a.eligible,
-                ) && (
-                  <p>
-                    Назначение сейчас не действует. Удалите его или восстановите
-                    доступ сотрудника перед сохранением.
-                  </p>
-                )}
-                {(Object.keys(classCapabilities) as ClassCapability[]).map(
-                  (cap) => (
-                    <label className="class-staff-check" key={cap}>
-                      <input
-                        type="checkbox"
-                        checked={row.capabilities.includes(cap)}
-                        onChange={(e) =>
-                          change({
-                            ...assignments,
-                            [classId]: selected.map((r) =>
-                              r.accountId === row.accountId
-                                ? {
-                                    ...r,
-                                    capabilities: e.target.checked
-                                      ? [...r.capabilities, cap]
-                                      : r.capabilities.filter((c) => c !== cap),
-                                  }
-                                : r,
-                            ),
-                          })
-                        }
-                      />
-                      {classCapabilities[cap]}
-                    </label>
-                  ),
-                )}
-                <button
-                  onClick={() =>
-                    change({
-                      ...assignments,
-                      [classId]: selected.filter(
-                        (r) => r.accountId !== row.accountId,
-                      ),
-                    })
-                  }
-                >
-                  Убрать назначение: {name(row.accountId)}
-                </button>
-              </article>
-            ))}
-            {!selected.length && (
+            {selected
+              .filter((row) => !leaders.includes(row.accountId))
+              .map((row) => (
+                <article className="export-card" key={row.accountId}>
+                  <h4>{name(row.accountId)}</h4>
+                  {row.capabilities.length > 0 &&
+                    !options.accounts.some(
+                      (a) => a.id === row.accountId && a.eligible,
+                    ) && (
+                      <p>
+                        Назначение сейчас не действует. Удалите его или
+                        восстановите доступ сотрудника перед сохранением.
+                      </p>
+                    )}
+                  {row.revoked?.length ? (
+                    <p>
+                      Снятие не действует: сотрудник сейчас не классный
+                      руководитель этого класса ({labels(row.revoked)}).
+                    </p>
+                  ) : null}
+                  {(Object.keys(classCapabilities) as ClassCapability[]).map(
+                    (cap) => (
+                      <label className="class-staff-check" key={cap}>
+                        <input
+                          type="checkbox"
+                          checked={row.capabilities.includes(cap)}
+                          onChange={(e) =>
+                            change({
+                              ...assignments,
+                              [classId]: selected.map((r) =>
+                                r.accountId === row.accountId
+                                  ? tidy({
+                                      ...r,
+                                      capabilities: e.target.checked
+                                        ? [...r.capabilities, cap]
+                                        : r.capabilities.filter(
+                                            (c) => c !== cap,
+                                          ),
+                                      revoked: (r.revoked || []).filter(
+                                        (c) => c !== cap,
+                                      ),
+                                    })
+                                  : r,
+                              ),
+                            })
+                          }
+                        />
+                        {classCapabilities[cap]}
+                      </label>
+                    ),
+                  )}
+                  <button
+                    onClick={() =>
+                      change({
+                        ...assignments,
+                        [classId]: selected.filter(
+                          (r) => r.accountId !== row.accountId,
+                        ),
+                      })
+                    }
+                  >
+                    Убрать назначение: {name(row.accountId)}
+                  </button>
+                </article>
+              ))}
+            {!selected.some((row) => !leaders.includes(row.accountId)) && (
               <p>В этом классе пока нет назначенных сотрудников.</p>
             )}
             <p>
@@ -297,7 +419,7 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
             {invalid && (
               <p role="alert">
                 Выберите хотя бы одно полномочие каждому сотруднику и удалите
-                недействующие назначения.
+                недействующие назначения и пустые строки.
               </p>
             )}
             <button
@@ -317,8 +439,24 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
                     <strong>
                       {className(r.classId)} · {name(r.accountId)}
                     </strong>
-                    <p>Сейчас: {labels(r.before)}</p>
-                    <p>После сохранения: {labels(r.after)}</p>
+                    {capsDiffer(r.before, r.after) && (
+                      <>
+                        <p>Сейчас: {labels(r.before)}</p>
+                        <p>После сохранения: {labels(r.after)}</p>
+                      </>
+                    )}
+                    {capsDiffer(r.beforeRevoked, r.afterRevoked) && (
+                      <>
+                        <p>
+                          Снято у классного руководителя сейчас:{" "}
+                          {revokedList(r.beforeRevoked)}
+                        </p>
+                        <p>
+                          Снято у классного руководителя после сохранения:{" "}
+                          {revokedList(r.afterRevoked)}
+                        </p>
+                      </>
+                    )}
                   </article>
                 ))}
                 {!changes.length && (
@@ -378,7 +516,10 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
                 {classAssignmentChanges(h.before, h.after).map((r) => (
                   <p key={r.classId + r.accountId}>
                     {className(r.classId)} · {name(r.accountId)}:{" "}
-                    {labels(r.before)} → {labels(r.after)}
+                    {capsDiffer(r.before, r.after) &&
+                      `${labels(r.before)} → ${labels(r.after)}`}
+                    {capsDiffer(r.beforeRevoked, r.afterRevoked) &&
+                      ` Снято у классного руководителя: ${revokedList(r.beforeRevoked)} → ${revokedList(r.afterRevoked)}`}
                   </p>
                 ))}
               </article>
@@ -389,6 +530,31 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
                 onClick={() => void run(() => loadHistory(next))}
               >
                 Более ранние изменения полномочий
+              </button>
+            )}
+          </details>
+          <details>
+            <summary>История классных руководителей</summary>
+            <button
+              disabled={busy}
+              onClick={() => void run(() => loadLeaderHistory())}
+            >
+              Загрузить историю классных руководителей
+            </button>
+            {leaderHistory.map((h) => (
+              <p key={h.id}>
+                {h.className}: {h.before?.name || "не назначен"} →{" "}
+                {h.after?.name || "не назначен"} · {h.actor} ·{" "}
+                {new Date(h.created).toLocaleString("ru-RU")}
+                {actionNames[h.action]}
+              </p>
+            ))}
+            {leaderNext && (
+              <button
+                disabled={busy}
+                onClick={() => void run(() => loadLeaderHistory(leaderNext))}
+              >
+                Более ранние смены классных руководителей
               </button>
             )}
           </details>

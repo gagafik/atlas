@@ -43,8 +43,7 @@ def notify_batch(service,db,rows,snap):
     """Resolve recipients once; each account receives at most one event per kind."""
     workspace=rows[0][1];students={r[3] for r in rows};authors={r[2] for r in rows}
     classes={p.classId for id in students if (p:=snap.entities['student'].get(id))}
-    assignments=service.config(db,workspace)['assignments']
-    reviewers={account for class_id in classes for account in assignments.get(class_id,[])}
+    reviewers=service.reviewer_ids(db,workspace,snap,classes)
     journal_changed=rows[0][9] in ['approved','revoked']
     candidates=db.execute("""SELECT * FROM accounts a WHERE active=1 AND (role='admin'
         OR id IN (SELECT value FROM json_each(?)) OR (? AND role IN ('student','parent') AND EXISTS(

@@ -232,7 +232,7 @@ def display_value(state, field, value):
         return ', '.join(names.get(id, id) for id in value) if isinstance(value, list) and value else 'Все недели' if value == [] else names.get(value, value)
     if field == 'buildingId':
         return next((b.name for b in state.campus.buildings if b.id == value), 'Не задано')
-    table = {'teacherId': 'teachers', 'teacherIds': 'teachers', 'eligibleTeacherIds': 'teachers', 'groupIds': 'groups', 'additionalTeacherIds': 'teachers', 'subjectId': 'subjects', 'roomIds': 'rooms', 'requiredRoomIds': 'rooms', 'classIds': 'classes',
+    table = {'classTeacherId': 'teachers', 'teacherId': 'teachers', 'teacherIds': 'teachers', 'eligibleTeacherIds': 'teachers', 'groupIds': 'groups', 'additionalTeacherIds': 'teachers', 'subjectId': 'subjects', 'roomIds': 'rooms', 'requiredRoomIds': 'rooms', 'classIds': 'classes',
              'studentIds': 'students', 'studentId': 'students', 'courseIds': 'courses', 'lockedGroupId': 'groups', 'groupId': 'groups', 'profileId': 'profiles', 'gapProfileId': 'profiles', 'subjectIds': 'subjects', 'otherSubjectIds': 'subjects'}.get(field)
     if table:
         names = {x.id: x.name for x in getattr(state, table)}

@@ -78,6 +78,31 @@ def test_contacts_are_never_copied_and_empty_name_gets_placeholder():
     assert report['placeholders']['teachers'] == 1 and report['dropped']['teacherEmail'] == report['dropped']['teacherMobile'] == 1
 
 
+def test_class_teacher_is_mapped():
+    state, report = imported()
+    assert {c.id: c.classTeacherId for c in state.classes} == {'asc-c-c1abcdefabcdef01': ALPHA, 'asc-c-c1abcdefabcdef02': None, 'asc-c-c1abcdefabcdef03': None}
+    assert report['counts']['classTeachers'] == 1 and report['dropped']['classTeacher'] == 0
+    assert not any('классные руководители' in note or 'Классный руководитель не найден' in note for note in state.importInfo.notes)
+    # An id that matches no teacher is counted and the import still passes; the report has numbers only.
+    lost, lost_report = variant('teacherid="7EABCDEFABCDEF01"', 'teacherid="7EFFFFFFFFFFFF99"')
+    assert lost.classes[0].classTeacherId is None and lost_report['dropped']['classTeacher'] == 1 and lost_report['counts']['classTeachers'] == 0
+    assert 'Классный руководитель не найден среди учителей у 1 классов.' in lost.importInfo.notes
+    assert '7EFFFF' not in json.dumps(lost_report) + json.dumps(lost.importInfo.notes)
+    # The first of several ids leads the class.
+    several, _ = variant('teacherid="7EABCDEFABCDEF01"', 'teacherid="7EABCDEFABCDEF02,7EABCDEFABCDEF01"')
+    assert several.classes[0].classTeacherId == 'asc-t-7eabcdefabcdef02'
+    assert imported(only_used=True)[0].classes[0].classTeacherId == ALPHA
+
+
+def test_class_teacher_without_lessons_survives_only_used():
+    raw = mini().replace(b'<teacher id="P1" name="Person"/>', b'<teacher id="P1" name="Person"/><teacher id="P2" name="Leader"/>').replace(b'<class id="C1" name="Class"/>', b'<class id="C1" name="Class" teacherid="P2"/>')
+    full, _ = import_asc(raw, 'mini.xml')
+    used, report = import_asc(raw, 'mini.xml', only_used=True)
+    assert full.classes[0].classTeacherId == used.classes[0].classTeacherId == 'asc-t-p2'
+    assert [t.id for t in used.teachers] == ['asc-t-p1', 'asc-t-p2'] and report['skipped']['teachers'] == 0
+    assert import_asc(mini(), 'mini.xml')[0].classes[0].classTeacherId is None
+
+
 def test_bells_are_zero_padded_in_primary_profile_and_period_zero_is_dedicated():
     state, report = imported()
     profile, = state.profiles

@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 from .models import Model
 from .access import now
 from .journal import user_ids
+from .class_staff import led
 from .natural import natural
 from .notifications import encoded
 
@@ -156,6 +157,8 @@ class FinalGrades:
         @app.get('/api/final-grades/options')
         def options(request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace);staff=user['role'] in ['admin','teacher']
+            # A class teacher reads the published reports of the current pupils of the own classes.
+            leading=led(user,snap,workspace);pupils={s.id for s in snap.state.students if s.active and s.classId in leading}
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace)
                 scales=[json.loads(r[0]) for r in db.execute('SELECT document FROM grading_scales WHERE workspace=? ORDER BY id',(workspace,))] if staff else []
@@ -163,11 +166,12 @@ class FinalGrades:
                     scope,args=self.scope(user)
                     books=[self.book(db,workspace,r[0]) for r in db.execute('SELECT b.id FROM grading_books b WHERE b.workspace=?'+('' if user['role']=='admin' else ' AND EXISTS(SELECT 1 FROM grading_rows r WHERE r.workspace=b.workspace AND r.book_id=b.id'+scope+')')+' ORDER BY b.created DESC',[workspace,*args])]
                     periods=[self.periods.item(r) for r in db.execute("SELECT * FROM journal_periods WHERE workspace=? AND ever_closed=1 ORDER BY start_day DESC",(workspace,))] if user['role']=='admin' else []
+                    if not periods and pupils:periods=[self.periods.item(r) for r in db.execute('''SELECT p.* FROM journal_periods p WHERE p.workspace=? AND EXISTS(SELECT 1 FROM final_results f WHERE f.workspace=p.workspace AND f.period_id=p.id AND f.student_id IN (SELECT value FROM json_each(?))) ORDER BY p.start_day DESC''',(workspace,encoded(sorted(pupils))))]
                 else:
                     books=[];ids=user_ids(user,workspace,'student')
                     periods=[self.periods.item(r) for r in db.execute('''SELECT p.* FROM journal_periods p WHERE p.workspace=? AND EXISTS(SELECT 1 FROM final_results f WHERE f.workspace=p.workspace AND f.period_id=p.id AND f.student_id IN (SELECT value FROM json_each(?))) ORDER BY p.start_day DESC''',(workspace,encoded(sorted(ids))))]
-                students=[dict(id=s.id,name=s.name) for s in snap.state.students if user['role']=='admin' or user['role'] in ['parent','student'] and s.id in user_ids(user,workspace,'student')]
-                return dict(admin=user['role']=='admin',staff=staff,scales=scales,books=books,periods=periods,students=students,teachers=self.teachers(db,workspace,snap) if user['role']=='admin' else [])
+                students=[dict(id=s.id,name=s.name) for s in snap.state.students if user['role']=='admin' or user['role'] in ['parent','student'] and s.id in user_ids(user,workspace,'student') or s.id in pupils]
+                return dict(admin=user['role']=='admin',staff=staff,classTeacher=bool(leading),scales=scales,books=books,periods=periods,students=students,teachers=self.teachers(db,workspace,snap) if user['role']=='admin' else [])
 
         @app.put('/api/final-grades/scales/{id}')
         def scale_edit(id:str,body:Scale,request:Request,workspace:Workspace='school'):
@@ -286,7 +290,10 @@ class FinalGrades:
         @app.get('/api/final-grades/report')
         def report(request:Request,studentId:str,periodId:str,workspace:Workspace='school'):
             user,snap=self.context(request,workspace)
-            if user['role']!='admin' and (user['role'] not in ['student','parent'] or studentId not in user_ids(user,workspace,'student')):raise HTTPException(403,'Нет доступа к табелю этого ученика.')
+            pupil=snap.entities['student'].get(studentId)
+            family=user['role'] in ['student','parent'] and studentId in user_ids(user,workspace,'student')
+            leader=pupil is not None and pupil.active and pupil.classId in led(user,snap,workspace)
+            if user['role']!='admin' and not family and not leader:raise HTTPException(403,'Нет доступа к табелю этого ученика.')
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace)
                 # Check ownership before revealing period existence or any result.

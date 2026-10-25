@@ -82,6 +82,7 @@ type Row = {
 type Options = {
   admin: boolean;
   staff: boolean;
+  classTeacher?: boolean;
   scales: Scale[];
   books: Book[];
   periods: Period[];
@@ -511,6 +512,9 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     setDraft({ ...draft, ...update });
     setDirty(true);
   };
+  // Families, administrators and the class teacher of the pupils read published reports.
+  const readsReports =
+    !!options?.classTeacher || !options?.staff || options.admin;
   return (
     <section className="absence-panel final-grades-panel">
       <button
@@ -1152,9 +1156,13 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                 )}
               </>
             )}
-            {options && (!options.staff || options.admin) && (
+            {options && readsReports && (
               <>
-                <h3>Опубликованный личный табель</h3>
+                <h3>
+                  {options.classTeacher
+                    ? "Табели учеников вашего класса"
+                    : "Опубликованный личный табель"}
+                </h3>
                 <div className="dated-toolbar">
                   <Select
                     label="Ученик для табеля"

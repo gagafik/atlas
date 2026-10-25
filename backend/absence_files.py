@@ -43,7 +43,7 @@ class AbsenceFiles:
 
     def check(self,db,user,snap,workspace,student):
         self.absences.recheck(db,user,snap,workspace)
-        self.absences.parent(user,snap,workspace,student)
+        return self.absences.parent(user,snap,workspace,student)
 
     def linked(self,db,id):return [meta(r) for r in db.execute("SELECT * FROM absence_files WHERE notice_id=? AND status='ready' ORDER BY created,id",(id,))]
 
@@ -61,7 +61,7 @@ class AbsenceFiles:
             def prepare():
                 user,snap=self.absences.context(request,workspace)
                 with self.access.lock,self.access.connect() as db:
-                    tables(db);db.execute('BEGIN IMMEDIATE');self.check(db,user,snap,workspace,studentId);cleanup(db)
+                    tables(db);db.execute('BEGIN IMMEDIATE');self.absences.require_electronic(db,workspace,self.check(db,user,snap,workspace,studentId));cleanup(db)
                     name=storage.name_for(filename)
                     used,count,pending=db.execute("SELECT coalesce(sum(size),0),count(CASE WHEN notice_id IS NULL THEN 1 END),count(CASE WHEN status='uploading' THEN 1 END) FROM absence_files WHERE workspace=? AND owner_id=?",(workspace,user['id'])).fetchone()
                     if used+storage.MAX_FILE>storage.MAX_STUDENT:raise HTTPException(413,'Лимит хранилища достигнут. Обратитесь к школе.')

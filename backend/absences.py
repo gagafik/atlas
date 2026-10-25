@@ -12,6 +12,8 @@ from .access import LOCAL, now
 from .journal import user_ids
 from .notifications import encoded
 
+DISABLED = 'Электронные записки для этого класса выключены. Свяжитесь с классным руководителем.'
+
 
 def tables(db):
     from .class_staff import tables as staff_tables
@@ -29,6 +31,14 @@ def tables(db):
         id INTEGER PRIMARY KEY,notice_id TEXT,version INTEGER,created TEXT,actor_id TEXT,actor_name TEXT,
         action TEXT,comment TEXT,request_id TEXT,request_hash TEXT,UNIQUE(notice_id,actor_id,request_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS absence_history_notice ON absence_history(notice_id,id)')
+    # A class without a row has electronic notes enabled; rows appear only when someone switches them.
+    db.execute('''CREATE TABLE IF NOT EXISTS absence_class_settings (
+        workspace TEXT NOT NULL,class_id TEXT NOT NULL,version INTEGER NOT NULL,enabled INTEGER NOT NULL,
+        updated TEXT NOT NULL,actor_id TEXT NOT NULL,actor_name TEXT NOT NULL,PRIMARY KEY(workspace,class_id))''')
+    db.execute('''CREATE TABLE IF NOT EXISTS absence_class_history (
+        id INTEGER PRIMARY KEY,workspace TEXT NOT NULL,class_id TEXT NOT NULL,version INTEGER NOT NULL,created TEXT NOT NULL,
+        actor_id TEXT NOT NULL,actor_name TEXT NOT NULL,enabled INTEGER NOT NULL,reason TEXT NOT NULL,request_id TEXT NOT NULL,
+        UNIQUE(workspace,class_id,actor_id,request_id))''')
 
 
 def approvals(db, workspace, lessons):
@@ -72,6 +82,13 @@ class Decision(Model):
     comment: str = Field(default='',max_length=2000)
 
 
+class Electronic(Model):
+    requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
+    version: int = Field(ge=0)
+    enabled: bool
+    reason: str = Field(default='',max_length=500)
+
+
 class Absences:
     def __init__(self,journal,snapshots):
         self.journal,self.access,self.notifications,self.snapshots=journal,journal.access,journal.notifications,snapshots
@@ -97,6 +114,30 @@ class Absences:
     def classes(self,db,user,snapshot,workspace,capability='absence_review'):
         from .class_staff import classes
         return classes(db,user,snapshot,workspace,capability)
+
+    def reviewer_ids(self,db,workspace,snapshot,class_ids):
+        """Candidate recipients for notices of these classes: registry entries and the accounts of their class teachers; can_review still decides."""
+        assignments=self.config(db,workspace)['assignments']
+        leaders={c.classTeacherId for c in snapshot.state.classes if c.id in class_ids and c.classTeacherId}
+        accounts=self.notifications.granted_users(db,workspace,'teacher',leaders,['teacher'])
+        return {account for id in class_ids for account in assignments.get(id,[])}|{u['id'] for u in accounts}
+
+    def electronic(self,db,workspace,class_id):
+        """Switch of electronic notes for one class; no row means enabled."""
+        row=db.execute('SELECT enabled,version,updated,actor_name FROM absence_class_settings WHERE workspace=? AND class_id=?',(workspace,class_id)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='absence_class_settings'").fetchone() else None
+        return dict(enabled=bool(row[0]),version=row[1],updated=row[2],actor=row[3]) if row else dict(enabled=True,version=0,updated=None,actor=None)
+
+    def require_electronic(self,db,workspace,pupil):
+        if not self.electronic(db,workspace,pupil.classId)['enabled']:raise HTTPException(403,DISABLED)
+
+    def can_switch(self,db,user,snapshot,workspace,class_id):
+        """Administrators and the class teacher whose own review duty is not revoked; a registry deputy cannot."""
+        from .class_staff import led
+        return user['role']=='admin' or class_id in led(user,snapshot,workspace) and class_id in self.classes(db,user,snapshot,workspace)
+
+    def leader(self,snapshot,class_id):
+        school=snapshot.entities['class_'].get(class_id);teacher=snapshot.entities['teacher'].get(school.classTeacherId) if school and school.classTeacherId else None
+        return teacher.name if teacher else None
 
     def parent(self,user,snapshot,workspace,student):
         pupil=snapshot.entities['student'].get(student)
@@ -132,7 +173,7 @@ class Absences:
 
     def notify(self,db,row,snapshot,action):
         workspace,student=row[1],row[3];pupil=snapshot.entities['student'].get(student)
-        review_ids=self.config(db,workspace)['assignments'].get(pupil.classId,[]) if pupil else []
+        review_ids=sorted(self.reviewer_ids(db,workspace,snapshot,{pupil.classId})) if pupil else []
         query="SELECT * FROM accounts WHERE active=1 AND (role='admin' OR id=? OR id IN (SELECT value FROM json_each(?)))"
         users=[self.access.public(r) for r in db.execute(query,(row[2],encoded(review_ids)))]
         targets=[u for u in users if self.can_review(db,u,snapshot,workspace,student) or u['id']==row[2] and student in user_ids(u,workspace,'student')]
@@ -181,8 +222,12 @@ class Absences:
             with self.access.lock,self.access.connect() as db:
                 tables(db);self.recheck(db,user,snap,workspace)
                 config=self.config(db,workspace);classes=self.classes(db,user,snap,workspace)
-                pupils=[dict(id=s.id,name=s.name) for s in snap.state.students if s.active and s.id in user_ids(user,workspace,'student')] if user['role']=='parent' else []
+                pupils=[dict(id=s.id,name=s.name,electronicNotes=self.electronic(db,workspace,s.classId)['enabled'],classTeacher=self.leader(snap,s.classId)) for s in snap.state.students if s.active and s.id in user_ids(user,workspace,'student')] if user['role']=='parent' else []
                 result=dict(parent=user['role']=='parent',admin=user['role']=='admin',canReview=user['role']=='admin' or bool(classes),students=pupils,yearStart=settings.yearStart,yearEnd=settings.yearEnd,defaultDate=default.isoformat())
+                if result['canReview']:
+                    from .class_staff import led
+                    leading=led(user,snap,workspace)
+                    result['classSettings']=[dict(id=c.id,name=c.name,classTeacher=self.leader(snap,c.id),**self.electronic(db,workspace,c.id),canChange=user['role']=='admin' or c.id in leading and c.id in classes) for c in snap.state.classes if user['role']=='admin' or c.id in classes]
                 if user['role']=='admin':
                     candidates=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")]
                     result.update(config=config,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],teachers=[dict(id=u['id'],name=u['name'],login=u['login']) for u in candidates if user_ids(u,workspace,'teacher')])
@@ -206,13 +251,14 @@ class Absences:
 
         @app.post('/api/journal/absences/preview')
         def preview(body:Notice,request:Request,workspace:Workspace='school'):
-            user,snap=self.context(request,workspace);self.parent(user,snap,workspace,body.studentId)
+            user,snap=self.context(request,workspace);pupil=self.parent(user,snap,workspace,body.studentId)
             if not snap.state.settings.yearStart<=body.startDate<=body.endDate<=snap.state.settings.yearEnd:raise HTTPException(422,'Период вне учебного года.')
             start,end=body.bounds();lessons=[]
             for offset in range((body.endDate-body.startDate).days+1):
                 for r in snap.student_lessons(body.startDate+timedelta(days=offset),body.studentId):
                     if r['activity']=='lesson' and r['status']!='cancelled' and start<=r['date']+'T'+r['start'] and r['date']+'T'+r['end']<=end:lessons.append(r)
-            with self.access.lock,self.access.connect() as db:self.recheck(db,user,snap,workspace)
+            with self.access.lock,self.access.connect() as db:
+                self.recheck(db,user,snap,workspace);self.require_electronic(db,workspace,pupil)
             return dict(lessons=lessons,revision=snap.state.revision)
 
         @app.post('/api/journal/absences')
@@ -226,6 +272,7 @@ class Absences:
                 if previous:
                     if previous[14]!=fingerprint:raise HTTPException(409,'Этот запрос уже использован для другого заявления.')
                     return self.detail(db,previous,user,snap,workspace)
+                self.require_electronic(db,workspace,pupil)
                 if db.execute("SELECT 1 FROM absence_notices WHERE workspace=? AND student_id=? AND status IN ('pending','approved') AND start_at<? AND end_at>?",(workspace,body.studentId,end,start)).fetchone():raise HTTPException(409,'За этот период уже есть заявление. Уточните его состояние у школы или выберите другой период.')
                 count=db.execute('SELECT count(*) FROM absence_notices WHERE author_id=? AND created>?',(user['id'],(now()-timedelta(hours=1)).isoformat())).fetchone()[0]
                 if count>=10:raise HTTPException(429,'До 10 заявлений в час. Повторите позже.')
@@ -236,6 +283,27 @@ class Absences:
                 row=self.find(db,id,user,snap,workspace);self.notify(db,row,snap,'absence.submitted')
                 self.access.record(db,'absence.submitted',workspace,detail=id)
                 return self.detail(db,row,user,snap,workspace)
+
+        @app.put('/api/journal/absences/classes/{class_id}/electronic')
+        def switch(class_id:str,body:Electronic,request:Request,workspace:Workspace='school'):
+            user,snap=self.context(request,workspace)
+            if class_id not in snap.entities['class_']:raise HTTPException(404,'Класс не найден.')
+            with self.access.lock,self.access.connect() as db:
+                tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
+                if not self.can_switch(db,user,snap,workspace,class_id):raise HTTPException(403,'Электронные записки класса включает классный руководитель или администратор.')
+                current=self.electronic(db,workspace,class_id)
+                view=lambda value:dict(classId=class_id,enabled=value['enabled'],version=value['version'],updated=value['updated'],actor=value['actor'])
+                previous=db.execute('SELECT enabled FROM absence_class_history WHERE workspace=? AND class_id=? AND actor_id=? AND request_id=?',(workspace,class_id,user['id'],body.requestId)).fetchone()
+                if previous:
+                    if bool(previous[0])!=body.enabled:raise HTTPException(409,'Запрос уже использован для другой настройки.')
+                    return view(current)
+                if current['version']!=body.version:raise HTTPException(409,'Настройку записок уже изменили. Обновите раздел.')
+                if current['enabled']==body.enabled:return view(current)
+                stamp=now().isoformat();version=current['version']+1
+                db.execute('INSERT INTO absence_class_settings VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace,class_id) DO UPDATE SET version=excluded.version,enabled=excluded.enabled,updated=excluded.updated,actor_id=excluded.actor_id,actor_name=excluded.actor_name',(workspace,class_id,version,int(body.enabled),stamp,user['id'],user['name']))
+                db.execute('INSERT INTO absence_class_history(workspace,class_id,version,created,actor_id,actor_name,enabled,reason,request_id) VALUES (?,?,?,?,?,?,?,?,?)',(workspace,class_id,version,stamp,user['id'],user['name'],int(body.enabled),body.reason,body.requestId))
+                self.access.record(db,'absence.electronic',workspace,detail=f'{class_id}:{int(body.enabled)}')
+                return view(dict(enabled=body.enabled,version=version,updated=stamp,actor=user['name']))
 
         @app.get('/api/journal/absences/{id}')
         def detail(id:str,request:Request,workspace:Workspace='school'):

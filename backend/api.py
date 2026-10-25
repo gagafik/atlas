@@ -91,6 +91,8 @@ def save(workspace, state, after_save=None, effective=None):
         db.execute('DELETE FROM history WHERE workspace=? AND id NOT IN (SELECT id FROM history WHERE workspace=? ORDER BY id DESC LIMIT 30)', (workspace, workspace))
         # Before after_save: an invalid effective date rolls back the whole save.
         stored = capture(db, workspace, before, state, effective)
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, before, state, 'saved')
         access.record(db,'state.saved',workspace,state.revision)
         if stored:
             access.record(db,'timetable.versioned',workspace,state.revision,detail=f'Прежнее расписание сохранено для {stored[0]:%d.%m.%Y}–{stored[1]-timedelta(days=1):%d.%m.%Y}')
@@ -190,6 +192,8 @@ def undo(body: GenerateRequest, workspace: Workspace = 'school'):
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM history WHERE id=?', (row[0],))
         capture(db, workspace, old, previous)
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, old, previous, 'undo')
         access.record(db,'state.undo',workspace,previous.revision)
         notifications.capture(db,workspace,old,previous,'undo')
         return previous
@@ -210,6 +214,8 @@ def redo(body: GenerateRequest, workspace: Workspace = 'school'):
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM redo_history WHERE id=?', (row[0],))
         capture(db, workspace, old, previous)
+        from .class_staff import record_teachers
+        record_teachers(db, workspace, old, previous, 'redo')
         access.record(db,'state.redo',workspace,previous.revision)
         notifications.capture(db,workspace,old,previous,'redo')
         return previous
