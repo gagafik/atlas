@@ -236,7 +236,7 @@ export function BookingCard({
       </p>
       <div className="ac-controls">
         {b.canChange && b.status === "planned" && (
-          <button disabled={busy} onClick={onPublish}>
+          <button disabled={busy || !b.slotValid} onClick={onPublish}>
             Опубликовать
           </button>
         )}

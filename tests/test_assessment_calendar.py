@@ -1,8 +1,9 @@
 """Assessment calendar: real lessons only, class load limits, СОЧ windows, family view and history."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from pathlib import Path
 from uuid import uuid4
-import pytest
+import pytest, re
 from fastapi.testclient import TestClient
 from backend import api
 from backend.assessment_calendar import PairLessons, audience, class_load, touches
@@ -117,7 +118,7 @@ def test_teacher_books_only_current_pair_on_a_real_lesson(client, monkeypatch):
     change(lambda s: [setattr(w, 'teacherId', 't0') for w in s.workloads if w.id == 'w0'])
     t = signed('teacher')
     assert {(p['groupId'], p['subjectId']) for p in ok(t.get(url('options')))['pairs']} == {('g-d', 'sub2')}
-    assert t.post(url(f"bookings/{first['id']}/move"), json=dict(requestId=str(uuid4()), version=1, day=D24, lessonId='2026-08-24:eng', reason='Перенос')).status_code in [403, 404]
+    assert t.post(url(f"bookings/{first['id']}/move"), json=dict(requestId=str(uuid4()), version=1, day=D24, lessonId='2026-08-24:eng', reason='Перенос')).status_code == 404
     assert t.get(url('slots', groupId='g-a', subjectId='sub2', day=D17)).status_code == 403 and english(t, D24).status_code == 403
     assert first['id'] not in {b['id'] for b in listing(t)}
 
@@ -356,3 +357,167 @@ def test_staff_groups_are_never_bookable_and_parallel_requests_do_not_double_boo
         results = list(pool.map(lambda _: english(t), range(2)))
     assert sorted(r.status_code for r in results) == [200, 409]
     assert len(listing(client)) == 1
+
+
+def test_changing_the_type_rechecks_the_load_and_tells_the_family_once(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'mathteacher', 't0', 'Учитель математики'); guardian(client, 'mother', 's1')
+    t, math, mother = signed('teacher'), signed('mathteacher'), signed('mother')
+    quiz = dict(id='quiz', title='Самостоятельная', short='С/р', category='other', counted=False, window=False, active=True)
+    ok(configure(client, maxPerDay=1, types=ok(client.get(url('options')))['types'] + [quiz]))
+    work = ok(english(t, type='quiz'))
+    ok(book(math, 'g-math', 'sub0', D17, '2026-08-17:math', publish=False))
+    assert unread(mother)['unread'] == 1
+    def stored(): return next(b for b in listing(t, end=D17) if b['id'] == work['id'])
+    def retype(who, version, **extra): return who.post(url(f"bookings/{work['id']}/edit"), json=dict(version=version, typeId='sor', topic='Дроби') | extra)
+    # A topic alone changes nothing for the family.
+    topic = ok(t.post(url(f"bookings/{work['id']}/edit"), json=dict(version=work['version'], typeId='quiz', topic='Другая тема')))
+    assert topic['topic'] == 'Другая тема' and unread(mother)['items'][0]['action'] == 'assessment.published'
+    # Turning the work into a counted one weighs on the class again: refused, and only an administrator may override.
+    refused = retype(t, topic['version'])
+    assert refused.status_code == 409 and '10A' in refused.json()['detail'] and 'Математика' in refused.json()['detail']
+    assert retype(t, topic['version'], overrideReason='Очень надо').status_code == 403
+    assert stored()['typeId'] == 'quiz'
+    forced = ok(retype(client, topic['version'], overrideReason='Решение завуча'))
+    assert forced['typeId'] == 'sor' and forced['short'] == 'СОР' and forced['override'] == 'Решение завуча' and forced['version'] == topic['version'] + 1
+    last = ok(client.get(url(f"bookings/{work['id']}/history")))['items'][-1]
+    assert last['action'] == 'edited' and last['reason'] == 'Решение завуча' and last['data']['after']['typeId'] == 'sor'
+    assert any(e['action'] == 'assessment.override' for e in client.get('/api/access/audit').json())
+    inbox = unread(mother)
+    assert inbox['unread'] == 1 and inbox['items'][0]['action'] == 'assessment.changed'
+    # A type that has been switched off cannot be chosen any more.
+    ok(configure(client, types=[x | dict(active=False) if x['id'] == 'control' else x for x in ok(client.get(url('options')))['types']]))
+    off = retype(t, forced['version'], typeId='control')
+    assert off.status_code == 422 and 'действующий тип' in off.json()['detail']
+
+
+def test_a_colleague_who_only_sees_the_work_cannot_change_it(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'mathteacher', 't0', 'Учитель математики'); t, math = signed('teacher'), signed('mathteacher')
+    work = ok(english(t, publish=False))
+    assert not next(b for b in listing(math) if b['id'] == work['id'])['canChange']
+    move = dict(requestId=str(uuid4()), version=1, day=D24, lessonId='2026-08-24:eng', reason='Чужая работа')
+    for action, body in [('publish', dict(version=1)), ('edit', dict(version=1, typeId='sor', topic='Чужая тема')), ('cancel', dict(version=1, reason='Чужая работа')), ('move', move)]:
+        response = math.post(url(f"bookings/{work['id']}/{action}"), json=body)
+        assert response.status_code == 403, (action, response.text)
+    still = next(b for b in listing(t) if b['id'] == work['id'])
+    assert still['status'] == 'planned' and still['version'] == 1 and still['topic'] == 'Дроби' and history(t, work['id']) == ['created']
+
+
+def test_cancelled_works_and_moves_inside_a_week_do_not_count_against_the_limits(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'mathteacher', 't0', 'Учитель математики'); t, math = signed('teacher'), signed('mathteacher')
+    change(lambda s: s.datedLessons.append(DatedLesson(id='add', name='Разовый', kind='add', onDate=date(2026, 8, 19), groupId='g-a', profileId='secondary', subjectId='sub2', startTime='15:00', endTime='15:40')))
+    ok(configure(client, maxPerDay=1))
+    first = ok(english(t))
+    assert book(math, 'g-math', 'sub0', D17, '2026-08-17:math').status_code == 409
+    ok(t.post(url(f"bookings/{first['id']}/cancel"), json=dict(version=first['version'], reason='Передумали')))
+    free = ok(book(math, 'g-math', 'sub0', D17, '2026-08-17:math'))
+    ok(math.post(url(f"bookings/{free['id']}/cancel"), json=dict(version=free['version'], reason='Освобождаем неделю')))
+    # With one work a week, moving a work to another lesson of the same week is not refused for the work itself.
+    ok(configure(client, maxPerDay=1, maxPerWeek=1))
+    own = ok(english(t))
+    moved = ok(t.post(url(f"bookings/{own['id']}/move"), json=dict(requestId=str(uuid4()), version=own['version'], day='2026-08-19', lessonId='extra:add', reason='Перенос в неделе')))
+    assert moved['day'] == '2026-08-19' and moved['lessonId'] == 'extra:add'
+    assert book(math, 'g-math', 'sub0', D17, '2026-08-17:math').status_code == 409
+
+
+def test_a_move_that_needs_no_override_drops_the_old_one(client):
+    enable(client); create(client, 'teacher'); t = signed('teacher')
+    ok(configure(client, maxPerDay=1))
+    ok(english(t, D24))
+    over = ok(book(client, 'g-math', 'sub0', D24, '2026-08-24:math', overrideReason='Решение завуча'))
+    assert over['override'] == 'Решение завуча' and over['overrideBy'] == 'Администратор'
+    moved = ok(client.post(url(f"bookings/{over['id']}/move"), json=dict(requestId=str(uuid4()), version=over['version'], day=D31, lessonId='2026-08-31:math', reason='Без превышения')))
+    assert moved['override'] == '' and moved['overrideBy'] == ''
+    assert ok(client.get(url(f"bookings/{over['id']}/history")))['items'][-1]['data']['override'] == {}
+
+
+def test_a_type_switched_to_not_counted_stops_weighing_on_the_class(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'mathteacher', 't0', 'Учитель математики'); t, math = signed('teacher'), signed('mathteacher')
+    ok(configure(client, maxPerDay=1))
+    ok(english(t))
+    assert book(math, 'g-math', 'sub0', D17, '2026-08-17:math', type='control').status_code == 409
+    ok(configure(client, types=[x | dict(counted=False) if x['id'] == 'sor' else x for x in ok(client.get(url('options')))['types']]))
+    later = ok(book(math, 'g-math', 'sub0', D17, '2026-08-17:math', type='control'))
+    cell = next(r for r in ok(client.get(url('load', start=D17, end='2026-08-23')))['rows'] if r['name'] == '10A')['cells'][D17]
+    assert later['typeId'] == 'control' and cell['load'] == 1 and [i['short'] for i in cell['items']] == ['К/р']
+
+
+def test_publishing_rechecks_the_lesson_and_the_journal_period(client):
+    d = date.fromisoformat
+    enable(client); create(client, 'teacher'); guardian(client, 'mother', 's1'); t, mother = signed('teacher'), signed('mother')
+    planned = ok(english(t, publish=False))
+    change(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='late', name='Урок отменён директором', kind='cancel', onDate=d(D17), sourceDate=d(D17), placementId='eng')]))
+    refused = t.post(url(f"bookings/{planned['id']}/publish"), json=dict(version=planned['version']))
+    assert refused.status_code == 409 and 'Перенесите работу' in refused.json()['detail']
+    assert ok(family(mother))['items'] == [] and 'assessment.published' not in [i['action'] for i in unread(mother)['items']]
+    assert next(b for b in listing(t) if b['id'] == planned['id'])['status'] == 'planned'
+    # Moved onto a lesson that still stands, the work can be published.
+    moved = ok(t.post(url(f"bookings/{planned['id']}/move"), json=dict(requestId=str(uuid4()), version=planned['version'], day=D24, lessonId='2026-08-24:eng', reason='Урок отменён')))
+    assert ok(t.post(url(f"bookings/{planned['id']}/publish"), json=dict(version=moved['version'])))['status'] == 'published'
+    assert unread(mother)['items'][0]['action'] == 'assessment.published' and ok(family(mother))['items'][0]['day'] == D24
+    # A period closed after the booking blocks the publication, an administrator's too.
+    later = ok(english(t, D31, publish=False))
+    ok(client.put('/api/journal/periods/' + uuid4().hex + '?workspace=demo', json=dict(name='Первая четверть', start=D17, end='2026-10-23', kind='quarter', version=0, reason='Создание периода')))
+    with api.connect() as db: db.execute("UPDATE journal_periods SET status='closed'")
+    for who in [t, client]:
+        closed = who.post(url(f"bookings/{later['id']}/publish"), json=dict(version=later['version']))
+        assert closed.status_code == 409 and 'Период журнала закрыт' in closed.json()['detail']
+
+
+def test_school_events_are_shown_to_staff_only(client):
+    enable(client); create(client, 'teacher'); create(client, 'editor'); guardian(client, 'mother', 's1'); guardian(client, 'pupil', 's2', 'student')
+    change(lambda s: setattr(s, 'events', [Event(id='quarantine', name='Карантин в 10D (корь)', start=date(2026, 9, 3), end=date(2026, 9, 10), kind='extra', effect='cancel', classIds=['c-demo-d'])]))
+    for login in ['mother', 'pupil', 'editor']:
+        assert ok(signed(login).get(url('options')))['schoolEvents'] == [], login
+    for who in [client, signed('teacher')]:
+        assert [e['name'] for e in ok(who.get(url('options')))['schoolEvents']] == ['Карантин в 10D (корь)']
+
+
+def test_far_dates_are_refused_instead_of_overflowing(client):
+    enable(client); create(client, 'teacher'); guardian(client, 'mother', 's1'); t, mother = signed('teacher'), signed('mother')
+    far, early = dict(start='9999-12-01', end='9999-12-31'), dict(start='0001-01-02', end='0001-01-20')
+    for who in [client, t]:
+        assert who.get(url('lesson-days', groupId='g-a', subjectId='sub2', **far)).status_code == 422
+        assert who.get(url('export', classId='c-demo-a', month='9999-12')).status_code == 422
+        assert who.get(url('slots', groupId='g-a', subjectId='sub2', day='9999-12-31')).status_code == 422
+        assert who.get(url('bookings', **far)).status_code == 422 and who.get(url('bookings', **early)).status_code == 422
+    for span in [far, early]:
+        assert client.get(url('load', **span)).status_code == 422
+        assert mother.get(url('family', studentId='s1', **span)).status_code == 422
+    assert 'диапазона' in client.get(url('load', **far)).json()['detail']
+    assert client.get(url('load', start=D17, end='2026-08-30')).status_code == 200 and client.get(url('export', classId='c-demo-a', month='2026-08')).status_code == 200
+
+
+def test_a_coordinator_who_left_or_lost_access_does_not_lock_the_settings(client):
+    enable(client); create(client, 'staff', name='Завуч'); create(client, 'staff', login='second', name='Второй завуч'); create(client, 'editor', name='Составитель')
+    people = {u['login']: u for u in ok(client.get('/api/access/users'))}
+    def edit_account(login, **changes):
+        response = client.put('/api/access/users/' + people[login]['id'], json={k: v for k, v in people[login].items() if k != 'id'} | changes)
+        assert response.status_code == 200, response.text
+    ids = {login: people[login]['id'] for login in ['staff', 'second', 'editor']}
+    ok(configure(client, coordinatorIds=list(ids.values())))
+    # An editor may be named too: the client menu shows the panel to every coordinator role.
+    editor = signed('editor')
+    assert ok(editor.get(url('options')))['coordinator'] and editor.get(url('load', start=D17, end=D31)).status_code == 200
+    assert 'editor' in {c['role'] for c in ok(client.get(url('options')))['candidates']}
+    edit_account('staff', active=False)
+    edit_account('second', workspaces=['demo', 'school'])
+    options = ok(client.get(url('options')))
+    # The leaver is gone and the person whose access changed no longer counts as ticked.
+    assert options['coordinatorIds'] == [ids['editor']] and ids['staff'] not in {c['id'] for c in options['candidates']}
+    assert signed('second').get(url('load', start=D17, end=D31)).status_code == 403
+    # Saving the settings with the stale ids (an older form still sends them) neither fails nor keeps the leaver.
+    saved = ok(configure(client, maxPerDay=3, coordinatorIds=list(ids.values())))
+    assert saved['maxPerDay'] == 3 and set(saved['coordinatorIds']) == {ids['second'], ids['editor']}
+    # Naming somebody again is an explicit act; a person who never was a coordinator has to be valid.
+    assert signed('second').get(url('load', start=D17, end=D31)).status_code == 200
+    assert configure(client, coordinatorIds=['ghost']).status_code == 422
+    assert configure(client, coordinatorIds=[ids['staff']]).status_code == 422
+
+
+def test_print_styles_hide_the_page_only_while_the_panel_is_open():
+    # The stylesheet stays loaded after the panel closes, so an unscoped rule would blank every other printout.
+    css = (Path(__file__).resolve().parents[1] / 'src' / 'AssessmentPanel.css').read_text(encoding='utf-8')
+    block = css[css.index('@media print'):]
+    hiding = re.findall(r'([^{}]+)\{[^{}]*visibility:\s*hidden', block)
+    assert hiding and all('dialog.assessments[open]' in selector for selector in hiding)
+    assert not re.search(r'(^|[\s,}])body \*', block)

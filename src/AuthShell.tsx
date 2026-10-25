@@ -15,6 +15,7 @@ import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { menuRoles } from "./assessmentCalendar";
 const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
@@ -428,9 +429,7 @@ export default function AuthShell() {
               Похвалы и замечания
             </button>
           )}
-          {["admin", "teacher", "staff", "student", "parent"].includes(
-            session.user.role,
-          ) && (
+          {menuRoles.includes(session.user.role) && (
             <button onClick={() => setAssessmentsWorkspace("school")}>
               Календарь контрольных
             </button>

@@ -332,8 +332,9 @@
   }
 }
 
+/* Only while the panel is open: its stylesheet stays loaded after it closes and must not blank other prints. */
 @media print {
-  body * {
+  body:has(dialog.assessments[open]) * {
     visibility: hidden;
   }
   .assessments {
@@ -342,8 +343,8 @@
     border: 0;
     padding: 0;
   }
-  .ac-print,
-  .ac-print * {
+  body:has(dialog.assessments[open]) .ac-print,
+  body:has(dialog.assessments[open]) .ac-print * {
     visibility: visible;
   }
   .ac-print {

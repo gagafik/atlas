@@ -111,6 +111,39 @@ export type Options = {
   candidates: { id: string; name: string; role: string }[];
   schoolEvents: SchoolEvent[];
 };
+// Everybody who can book, coordinate or read gets the menu entry; the administration may
+// name an editor as coordinator, so the roles of coordinators are a subset of the menu roles.
+export const coordinatorRoles = ["editor", "teacher", "staff"];
+export const menuRoles = [
+  "admin",
+  "editor",
+  "teacher",
+  "staff",
+  "student",
+  "parent",
+];
+// The pair and type a booking form may keep once the options of a workspace are known: a value
+// from another workspace, or a type that has been switched off, gives way to the default.
+// A move keeps what it was opened with.
+export function keepChoices(
+  form: { mode: string; pair: string; typeId: string },
+  options: Pick<Options, "pairs" | "types">,
+) {
+  if (form.mode === "move") return { pair: form.pair, typeId: form.typeId };
+  const pairs = options.pairs.map((p) => `${p.groupId}|${p.subjectId}`);
+  const active = options.types.filter((t) => t.active);
+  return {
+    pair: pairs.includes(form.pair)
+      ? form.pair
+      : pairs.length === 1
+        ? pairs[0]
+        : "",
+    typeId: active.some((t) => t.id === form.typeId)
+      ? form.typeId
+      : active[0]?.id || "",
+  };
+}
+
 export type Booking = {
   id: string;
   version: number;

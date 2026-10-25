@@ -4,7 +4,7 @@ import csv,io,json,sqlite3
 
 from fastapi import HTTPException,Query,Request
 from fastapi.responses import Response
-from .assessment_calendar import Config,NewBooking,Move,Edit,Publish,Cancel,STATES,CATEGORIES,PairLessons,audience,lesson_days,class_load,check_window,csv_cell,new_id,stamp,today,label
+from .assessment_calendar import Config,NewBooking,Move,Edit,Publish,Cancel,STATES,CATEGORIES,COORDINATOR_ROLES,PairLessons,audience,lesson_days,class_load,check_days,check_window,csv_cell,new_id,stamp,today,label
 from .journal import key_for
 from .journal_periods import range_locks
 from .notifications import encoded,permission_key
@@ -12,7 +12,6 @@ from .school_forms import enabled,grant_ids
 
 STATUS='^(planned|published|cancelled)$'
 LIMIT=2000
-ROLES=['editor','teacher','staff']
 
 
 def register(service,app,Workspace):
@@ -41,6 +40,11 @@ def register(service,app,Workspace):
         access.record(db,'assessment.override',workspace,detail=encoded(dict(day=day.isoformat(),reason=text)))
         return dict(reason=text,by=user['name'],at=stamp(),issues=messages,bookingIds=ids)
 
+    def open_period(db,workspace,day):
+        """A closed journal period freezes its dates for everybody, administrators included."""
+        closed=range_locks(db,workspace,day.isoformat(),day.isoformat())
+        if closed:raise HTTPException(409,'Период журнала закрыт: '+', '.join(p['name'] for p in closed)+'. Работу на эту дату назначить нельзя.')
+
     def validate_slot(db,user,snap,workspace,cfg,pairs,pl,group,subject,day,lesson_id,typ,text,exclude=None):
         """The date must carry a non-cancelled lesson of the pair, in an open period, free of other works and within the limits."""
         need_pair(pairs,group,subject)
@@ -49,8 +53,7 @@ def register(service,app,Workspace):
         if not settings.yearStart<=day<=settings.yearEnd:raise HTTPException(422,'Дата вне учебного года.')
         row=pl.find(group,subject,day,lesson_id)
         if not row or row['status']=='cancelled':raise HTTPException(422,'В этот день у группы нет такого урока по предмету. Выберите дату и урок из расписания.')
-        closed=range_locks(db,workspace,day.isoformat(),day.isoformat())
-        if closed:raise HTTPException(409,'Период журнала закрыт: '+', '.join(p['name'] for p in closed)+'. Работу на эту дату назначить нельзя.')
+        open_period(db,workspace,day)
         busy=db.execute("SELECT document FROM assessment_bookings WHERE workspace=? AND day=? AND lesson_id=? AND group_id=? AND subject_id=? AND status!='cancelled' AND id!=?",
                         (workspace,day.isoformat(),lesson_id,group,subject,exclude or '')).fetchone()
         if busy:
@@ -90,11 +93,11 @@ def register(service,app,Workspace):
                              key=lambda p:(p['classes'],p['subject'],p['group']))
             period_names={p['id']:p['name'] for p in periods}
             settings=snap.state.settings
-            candidates=[]
+            candidates,keys=[],{}
             if admin:
-                for row in db.execute("SELECT * FROM accounts WHERE active=1 AND role IN ('editor','teacher','staff') ORDER BY name,id"):
+                for row in db.execute('SELECT * FROM accounts WHERE active=1 ORDER BY name,id'):
                     p=access.public(row)
-                    if enabled(p,snap,workspace):candidates.append(dict(id=p['id'],name=p['name'],role=p['role']))
+                    if p['role'] in COORDINATOR_ROLES and enabled(p,snap,workspace):candidates.append(dict(id=p['id'],name=p['name'],role=p['role']));keys[p['id']]=permission_key(p)
             return dict(admin=admin,coordinator=service.coordinator(db,user,workspace,cfg),canBook=bool(pairs),family=bool(own) and not staff,today=today().isoformat(),
                         yearStart=settings.yearStart.isoformat(),yearEnd=settings.yearEnd.isoformat(),
                         types=cfg['types'] if admin else [t for t in cfg['types'] if t['active']],categories=CATEGORIES,states=STATES,
@@ -103,12 +106,16 @@ def register(service,app,Workspace):
                         pairs=pair_rows,classes=[dict(id=c.id,name=c.name) for c in classes],
                         teachers=[dict(id=t.id,name=t.name) for t in sorted(snap.state.teachers,key=lambda t:t.name)] if manager else [],
                         students=[dict(id=s.id,name=s.name,className=names['klass'].get(s.classId,'')) for s in sorted((snap.entities['student'][id] for id in own),key=lambda s:s.name)],
-                        configVersion=cfg['version'] if admin else None,coordinatorIds=[c['id'] for c in cfg['coordinators']] if admin else [],candidates=candidates,
-                        schoolEvents=[dict(name=e.name,start=e.start.isoformat(),end=e.end.isoformat(),effect=e.effect) for e in snap.state.events if e.end>=settings.yearStart and e.start<=settings.yearEnd])
+                        configVersion=cfg['version'] if admin else None,candidates=candidates,
+                        # Only coordinators who still hold the right: a leaver or a changed role/access is not shown as ticked.
+                        coordinatorIds=[c['id'] for c in cfg['coordinators'] if keys.get(c['id'])==c['permissions']],
+                        # Event names of other classes (a quarantine, an excursion) are for staff only.
+                        schoolEvents=[dict(name=e.name,start=e.start.isoformat(),end=e.end.isoformat(),effect=e.effect) for e in snap.state.events if staff and e.end>=settings.yearStart and e.start<=settings.yearEnd])
 
     @app.get(P+'/slots')
     def slots(request:Request,groupId:str=Query(min_length=1,max_length=100),subjectId:str=Query(min_length=1,max_length=100),day:date=Query(),
               typeId:str|None=Query(default=None,max_length=40),exclude:str|None=Query(default=None,max_length=64),workspace:Workspace='school'):
+        check_days(day)
         with service.context(request,workspace) as (db,user,snap):
             cfg=service.config(db,workspace);manager=service.manager(db,user,workspace,cfg);pairs=service.pairs(user,snap,workspace,manager)
             need_pair(pairs,groupId,subjectId)
@@ -197,6 +204,7 @@ def register(service,app,Workspace):
     def export(request:Request,classId:str=Query(min_length=1,max_length=100),month:str=Query(pattern=r'^\d{4}-\d{2}$'),workspace:Workspace='school'):
         try:start=date(int(month[:4]),int(month[5:]),1)
         except ValueError:raise HTTPException(422,'Проверьте месяц.')
+        check_days(start)
         end=(start.replace(day=28)+timedelta(days=4)).replace(day=1)-timedelta(days=1)
         with service.context(request,workspace) as (db,user,snap):
             cfg=service.config(db,workspace);scope,pairs=service.staff_scope(db,user,snap,workspace,cfg);manager=scope=='all'
@@ -288,11 +296,15 @@ def register(service,app,Workspace):
         with service.context(request,workspace,True) as (db,user,snap):
             cfg=service.config(db,workspace);row,manager,pairs=mutable(db,user,snap,workspace,cfg,id,body.version)
             if row['status']!='planned':raise HTTPException(409,'Работа уже опубликована или отменена.')
+            # The family is told about the work only while its lesson is still in the timetable and its period is open.
+            pl=PairLessons(snap.state);found=pl.find(row['group_id'],row['subject_id'],date.fromisoformat(row['day']),row['lesson_id'])
+            if not found or found['status']=='cancelled':raise HTTPException(409,'Урока в расписании больше нет или он отменён. Перенесите работу на другой урок.')
+            open_period(db,workspace,date.fromisoformat(row['day']))
             version=row['version']+1;at=stamp()
             db.execute("UPDATE assessment_bookings SET version=?,updated=?,status='published',published_at=? WHERE workspace=? AND id=?",(version,at,at,workspace,id))
             service.history(db,workspace,user,id,'published','',dict(day=row['day']))
             service.notify_family(db,workspace,snap,dict(id=id,group_id=row['group_id'],version=version),'assessment.published')
-            return reread(db,workspace,id,user,snap,pairs,manager,PairLessons(snap.state))
+            return reread(db,workspace,id,user,snap,pairs,manager,pl)
 
     @app.post(P+'/bookings/{id}/cancel')
     def cancel(id:str,body:Cancel,request:Request,workspace:Workspace='school'):
@@ -322,13 +334,16 @@ def register(service,app,Workspace):
                 if not period:raise HTTPException(422,'Учебный период для окна СОЧ не найден.')
                 if w.start.isoformat()<period['start'] or w.end.isoformat()>period['end']:raise HTTPException(422,f"Окно СОЧ должно лежать внутри периода «{period['name']}».")
                 windows.append(w.model_dump(mode='json'))
-            coordinators=[]
+            coordinators,stored=[],{c['id'] for c in current['coordinators']}
             for id in body.coordinatorIds:
                 row=db.execute('SELECT * FROM accounts WHERE id=? AND active=1',(id,)).fetchone();p=access.public(row) if row else None
-                if not p or p['role'] not in ROLES or not enabled(p,snap,workspace):raise HTTPException(422,'Проверьте ответственных сотрудников.')
+                if not p or p['role'] not in COORDINATOR_ROLES or not enabled(p,snap,workspace):
+                    # A coordinator who has left or changed role drops out; only a newly named person must be valid.
+                    if id in stored:continue
+                    raise HTTPException(422,'Проверьте ответственных сотрудников.')
                 coordinators.append(dict(id=id,name=p['name'],permissions=permission_key(p)))
             value=dict(types=[t.model_dump() for t in body.types],maxPerDay=body.maxPerDay,maxPerWeek=body.maxPerWeek,windows=windows,coordinators=coordinators);version=current['version']+1
             db.execute('INSERT INTO assessment_config VALUES (?,?,?) ON CONFLICT(workspace) DO UPDATE SET version=excluded.version,document=excluded.document',(workspace,version,encoded(value)))
             service.history(db,workspace,user,'','configured',body.reason,dict(before={k:current[k] for k in value},after=value))
             access.record(db,'assessment.configured',workspace,detail=f'Редакция {version} · {body.reason}')
-            return dict(version=version,types=value['types'],maxPerDay=body.maxPerDay,maxPerWeek=body.maxPerWeek,windows=windows,coordinatorIds=body.coordinatorIds)
+            return dict(version=version,types=value['types'],maxPerDay=body.maxPerDay,maxPerWeek=body.maxPerWeek,windows=windows,coordinatorIds=[c['id'] for c in coordinators])

@@ -5,6 +5,7 @@ import {
   addDays,
   clock,
   dayLabel,
+  keepChoices,
   mondayOf,
   monthRange,
   monthTitle,
@@ -154,15 +155,7 @@ export default function AssessmentPanel({
       setOptions(opts);
       setMonth((m) => m || opts.today.slice(0, 7));
       setWeekStart((w) => w || mondayOf(opts.today));
-      setForm((f) => ({
-        ...f,
-        typeId: f.typeId || opts.types.find((t) => t.active)?.id || "",
-        pair:
-          f.pair ||
-          (opts.pairs.length === 1
-            ? `${opts.pairs[0].groupId}|${opts.pairs[0].subjectId}`
-            : ""),
-      }));
+      setForm((f) => ({ ...f, ...keepChoices(f, opts) }));
       return opts;
     } catch (e: any) {
       if (token !== optionSequence.current) return null;
@@ -299,23 +292,25 @@ export default function AssessmentPanel({
       window.confirm("Форма работы не сохранена. Отбросить её и продолжить?")
     );
   }
-  function resetForm() {
-    request.current = { key: "", id: "" };
-    setForm((f) => ({
+  // A new form keeps the pair and type of the last one while they still exist in the options;
+  // another workspace starts empty (its options arrive with loadOptions).
+  function carry(f: FormState): FormState {
+    const next = {
       ...blank(),
       typeId: f.typeId,
       pair: f.mode === "move" ? "" : f.pair,
-    }));
+    };
+    return options ? { ...next, ...keepChoices(next, options) } : next;
+  }
+  function resetForm(otherWorkspace = false) {
+    request.current = { key: "", id: "" };
+    setForm((f) => (otherWorkspace ? blank() : carry(f)));
     setFormOpen(false);
   }
   function openCreate() {
     if (!leave()) return;
     request.current = { key: "", id: "" };
-    setForm((f) => ({
-      ...blank(),
-      typeId: f.typeId,
-      pair: f.mode === "create" ? f.pair : "",
-    }));
+    setForm(carry);
     setFormOpen(true);
   }
   function openMove(b: Booking) {
@@ -478,7 +473,7 @@ export default function AssessmentPanel({
               value={workspace}
               onChange={(e) => {
                 if (!leave()) return;
-                resetForm();
+                resetForm(true);
                 setSelectedId("");
                 setClassId("");
                 setTeacherId("");

@@ -21,6 +21,9 @@ from .school_forms import enabled,grant_ids
 
 STATES={'planned':'Забронировано','published':'Опубликовано','cancelled':'Отменено'}
 CATEGORIES={'summative_unit':'СОР (за раздел)','summative_term':'СОЧ (за четверть)','other':'Другое'}
+# Roles the administration may name as calendar coordinators (the client menu must show the panel to all of them).
+COORDINATOR_ROLES=['editor','teacher','staff']
+YEARS=range(2000,2101)
 def kind(id,title,short,category='other',counted=True,window=False):
     return dict(id=id,title=title,short=short,category=category,counted=counted,window=window,active=True)
 DEFAULT_TYPES=[
@@ -167,11 +170,10 @@ def lesson_days(pl,state,group,subject,start,end):
     """ISO dates in the range on which the group has a lesson of the subject."""
     gs=pl.context(group)[0]
     weekly={(p.day,p.cycleId) for p in gs.placements};extra={c.onDate for c in gs.datedLessons}
-    result,day=[],start
-    while day<=end:
-        cycle=pattern_on(state,day)
+    result=[]
+    for i in range((end-start).days+1):
+        day=start+timedelta(days=i);cycle=pattern_on(state,day)
         if ((cycle is not None and (day.weekday(),cycle) in weekly) or day in extra) and pl.slots(group,subject,day):result.append(day.isoformat())
-        day+=timedelta(days=1)
     return result
 
 
@@ -194,7 +196,13 @@ def touches(b,class_id,members,pupils):
     return class_id in b['class_ids'] and (class_id in b['whole_ids'] or pupils is None or bool(set(b['student_ids'])&pupils&members))
 
 
+def check_days(*days):
+    """Far dates (year 9999) would overflow the week arithmetic, so only school-sized years are accepted."""
+    if any(d.year not in YEARS for d in days):raise HTTPException(422,f'Дата вне допустимого диапазона ({YEARS[0]}–{YEARS[-1]}).')
+
+
 def check_window(start,end,days):
+    check_days(start,end)
     if start>end:raise HTTPException(422,'Начало периода позже окончания.')
     if (end-start).days>days:raise HTTPException(422,f'Период не длиннее {days} дней.')
 
@@ -235,7 +243,7 @@ class AssessmentCalendar:
     def coordinator(self,db,user,workspace,cfg=None):
         """Named by the administration; a change of role, grants or workspaces revokes it by itself."""
         cfg=cfg or self.config(db,workspace)
-        return user['role'] in ['editor','teacher','staff'] and any(c['id']==user['id'] and c['permissions']==permission_key(user) for c in cfg['coordinators'])
+        return user['role'] in COORDINATOR_ROLES and any(c['id']==user['id'] and c['permissions']==permission_key(user) for c in cfg['coordinators'])
 
     def manager(self,db,user,workspace,cfg=None):
         return user['role']=='admin' or self.coordinator(db,user,workspace,cfg)

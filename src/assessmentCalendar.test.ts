@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   addDays,
+  coordinatorRoles,
   dayLabel,
+  keepChoices,
   loadClass,
+  menuRoles,
   mondayOf,
   monthRange,
   monthWeeks,
@@ -46,5 +49,50 @@ describe("assessment calendar dates", () => {
     expect(loadClass(2, 1)).toBe("over");
     expect(loadClass(1, 1)).toBe("");
     expect(loadClass(5, null)).toBe("");
+  });
+});
+
+const pair = (groupId: string, subjectId: string) =>
+  ({ groupId, subjectId }) as never;
+const type = (id: string, active = true) => ({ id, active }) as never;
+describe("booking form choices", () => {
+  const options = {
+    pairs: [pair("g-a", "sub2"), pair("g-d", "sub2")],
+    types: [type("sor"), type("old", false), type("soch")],
+  };
+  it("keeps a pair and a type that still exist", () => {
+    expect(
+      keepChoices(
+        { mode: "create", pair: "g-d|sub2", typeId: "soch" },
+        options,
+      ),
+    ).toEqual({ pair: "g-d|sub2", typeId: "soch" });
+  });
+  it("drops what belongs to another workspace or is switched off", () => {
+    expect(
+      keepChoices({ mode: "create", pair: "g-x|sub9", typeId: "old" }, options),
+    ).toEqual({ pair: "", typeId: "sor" });
+    expect(
+      keepChoices({ mode: "create", pair: "", typeId: "quiz" }, options).typeId,
+    ).toBe("sor");
+  });
+  it("picks the only pair at once", () => {
+    const single = { ...options, pairs: [pair("g-a", "sub2")] };
+    expect(
+      keepChoices({ mode: "create", pair: "g-x|sub9", typeId: "sor" }, single)
+        .pair,
+    ).toBe("g-a|sub2");
+  });
+  it("leaves a move as it was opened", () => {
+    expect(
+      keepChoices({ mode: "move", pair: "g-x|sub9", typeId: "old" }, options),
+    ).toEqual({ pair: "g-x|sub9", typeId: "old" });
+  });
+});
+
+describe("module access in the client", () => {
+  it("shows the menu to every role that can be named coordinator", () => {
+    for (const role of coordinatorRoles) expect(menuRoles).toContain(role);
+    expect(menuRoles).not.toContain("viewer");
   });
 });
