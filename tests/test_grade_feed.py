@@ -52,7 +52,7 @@ def republish(client,record):
 
 
 def previous(score,**values):
-    return dict(score=score,label='',maxScore=10,weight=1,assessment='Проверочная',commentChanged=False)|values
+    return dict(score=score,label='',maxScore=10,weight=1,assessment='Проверочная',category='fo',commentChanged=False)|values
 
 
 def test_draft_saves_are_silent_and_publication_creates_private_newest_first_events(client):
@@ -143,6 +143,27 @@ def test_assessment_changes_are_reported_with_the_values_they_replace(client):
     newest=items(parent)['items'][0]
     # The removed grade keeps the maximum it was given against, never "8 из 5".
     assert (newest['change'],newest['maxScore'],newest['score'],newest['previous']['score'],newest['previous']['maxScore'])==('removed',10,None,8,10)
+
+
+def test_feed_carries_category_and_category_change(client):
+    family(client);parent=signed('parent')
+    saved=published(client);content=saved['document']['content']
+    assert items(parent)['items'][0]['category']=='fo'
+    # A document stored before categories existed has no key and reads as ФО, so it never looks like a change.
+    from backend.grade_feed import describe
+    mark=dict(score=8,label='',comment='');work=dict(maxScore=10,weight=1,name='Проверочная')
+    assert describe(mark,work)==describe(mark,work|dict(category='fo')) and describe(mark,work)!=describe(mark,work|dict(category='sor'))
+    content['assessments'][0]['category']='sor'
+    current=republish(client,saved)
+    newest=items(parent)['items'][0]
+    assert (newest['change'],newest['category'],newest['previous']['category'])==('changed','sor','fo')
+    current['document']['content']['assessments'][0]['category']='soch'
+    current=republish(client,current)
+    newest=items(parent)['items'][0]
+    assert (newest['change'],newest['category'],newest['previous']['category'],newest['score'])==('changed','soch','sor',8)
+    count=events();current['document']['content']['topic']='Другая тема'
+    republish(client,current)
+    assert events()==count
 
 
 def test_each_family_account_signs_through_what_it_has_seen(client):

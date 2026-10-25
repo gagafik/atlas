@@ -6,6 +6,7 @@ from pydantic import Field
 from .access import now
 from .models import Model
 from .notifications import encoded
+from .assessment_categories import category_of
 
 PAGE = 50
 MAX_SEQ = 2**63 - 1
@@ -30,7 +31,7 @@ def graded(projection):
 
 
 def describe(grade, assessment):
-    return (grade['score'], grade['label'], grade['comment'], assessment['maxScore'], assessment['weight'], assessment['name'])
+    return (grade['score'], grade['label'], grade['comment'], assessment['maxScore'], assessment['weight'], assessment['name'], category_of(assessment))
 
 
 def record(db, workspace, key, before, after):
@@ -61,9 +62,9 @@ def record(db, workspace, key, before, after):
             assessment = old_assessments[id] if change == 'removed' else new_assessments[id]
             prior = old_assessments.get(id)
             data = dict(subject=lesson['subject'], date=lesson['date'], start=lesson['start'], teachers=lesson.get('teachers', []),
-                        assessment=assessment['name'], kind=assessment['kind'], maxScore=assessment['maxScore'], weight=assessment['weight'],
+                        assessment=assessment['name'], kind=assessment['kind'], maxScore=assessment['maxScore'], weight=assessment['weight'], category=category_of(assessment),
                         score=b['score'] if b else None, label=b['label'] if b else '', comment=b['comment'] if b else '',
-                        previous=dict(score=a['score'], label=a['label'], maxScore=prior['maxScore'], weight=prior['weight'], assessment=prior['name'],
+                        previous=dict(score=a['score'], label=a['label'], maxScore=prior['maxScore'], weight=prior['weight'], assessment=prior['name'], category=category_of(prior),
                                       commentChanged=bool(b) and a['comment'] != b['comment']) if a else None)
             db.execute('UPDATE grade_events SET hidden=1 WHERE workspace=? AND lesson_key=? AND student_id=? AND assessment_id=? AND hidden=0',
                        (workspace, key, student, id))

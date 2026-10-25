@@ -45,7 +45,7 @@ def test_fresh_database_is_prepared_once_by_the_first_read(client,monkeypatch):
         assert ('journal_schema',journal_reads.SCHEMA) in set(db.execute('SELECT name,version FROM journal_projection_versions'))
 
 
-@pytest.mark.parametrize('marker',['journal_schema','coverage','attendance','homework_queue'])
+@pytest.mark.parametrize('marker',['journal_schema','coverage','attendance','homework_queue','assessment_categories'])
 def test_missing_marker_rebuilds_once_and_returns_the_same_data(client,monkeypatch,marker):
     record,pupil,parent,teacher=setup(client)
     expected=[parent.get(REPORT).json(),teacher.get(QUEUE+'&filter=all').json()]

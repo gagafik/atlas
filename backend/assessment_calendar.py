@@ -207,6 +207,13 @@ def check_window(start,end,days):
     if (end-start).days>days:raise HTTPException(422,f'Период не длиннее {days} дней.')
 
 
+def link_journal(db,workspace,booking_id,assessment_id,user,key,was=None):
+    """Record (or, with None, drop) the journal work a booking was entered as. The link is metadata: the booking version stays, so calendar editors never get a 409."""
+    db.execute("UPDATE assessment_bookings SET document=json_set(document,'$.journal.assessmentId',?) WHERE workspace=? AND id=?",(assessment_id,workspace,booking_id))
+    db.execute('INSERT INTO assessment_history(workspace,booking_id,actor_id,actor_name,created,action,reason,document) VALUES (?,?,?,?,?,?,?,?)',
+               (workspace,booking_id,user['id'],user['name'],stamp(),'journal_linked' if assessment_id else 'journal_unlinked','',encoded(dict(lessonKey=key,assessmentId=assessment_id or was))))
+
+
 class AssessmentCalendar:
     def __init__(self,access,notifications,stamp):
         self.access,self.notifications=access,notifications
@@ -395,7 +402,7 @@ class AssessmentCalendar:
                     author=row['author_name'],created=row['created'],updated=row['updated'],publishedAt=row['published_at'],
                     override=data.get('override',{}).get('reason',''),overrideBy=data.get('override',{}).get('by',''),cancelReason=data.get('cancelReason',''),
                     canChange=row['status']!='cancelled' and (manager or pair in pairs) and (user['role']=='admin' or date.fromisoformat(row['day'])>=today),
-                    slotValid=valid,slotMessage=message)
+                    slotValid=valid,slotMessage=message,journalAssessmentId=(data.get('journal') or {}).get('assessmentId'))
 
     def family_item(self,row,snap,lesson=None):
         data=row['data'];names=self.names(snap);valid,_=self.current(row,lesson)

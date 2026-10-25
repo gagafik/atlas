@@ -8,6 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 from .models import Model
 from .journal import Assessment, Content, Grade, signature, staff_read
 from .journal_periods import locks, require_open
+from .assessment_categories import config, names
 
 
 FOREIGN='Урок по расписанию ведёт другой учитель: оценку в журнал переносит он или администратор. Проверку можно сохранить без оценки.'
@@ -60,6 +61,13 @@ class HomeworkGrading:
         user,workspace=ctx['user'],ctx['workspace']
         return user['role']=='admin' or bool(ctx['current'] and staff_read(user,workspace,ctx['current']))
 
+    def default_category(self, ctx, cfg):
+        """A new work lands in the quiz's journal category when it is still active, else in the school default."""
+        quiz=ctx.get('quiz')
+        wanted=quiz and (quiz['published'] or quiz['document'])['definition'].get('journalCategory','')
+        found=names(cfg).get(wanted)
+        return wanted if found and found['active'] else cfg['defaultCategory']
+
     def prepare(self, ctx, *, db=None):
         if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет учитель курса или администратор.')
         if not self.journal_access(ctx):raise HTTPException(409,FOREIGN)
@@ -90,13 +98,13 @@ class HomeworkGrading:
 
     def options(self, ctx, *, db=None):
         if ctx['canReview'] and not self.journal_access(ctx):
-            return dict(journalVersion=ctx['record']['version'],revision=ctx['revision'],allowed=False,reason=FOREIGN,hasDraftChanges=False,canCreate=False,assessments=[])
+            return dict(journalVersion=ctx['record']['version'],revision=ctx['revision'],allowed=False,reason=FOREIGN,hasDraftChanges=False,canCreate=False,assessments=[],categories=[],defaultCategory='')
         record=self.prepare(ctx) if db is None else self.prepare(ctx,db=db)
         def read(db):
             saved=self.recheck(db,ctx,record)
             reason=self.reason(db,ctx,record)
-            draft=assessment_map(saved['document']);published=assessment_map(saved['published'])
-            return dict(journalVersion=record['version'],revision=ctx['revision'],allowed=not reason,reason=reason,
+            draft=assessment_map(saved['document']);published=assessment_map(saved['published']);cfg=config(db,ctx['workspace'])
+            return dict(journalVersion=record['version'],revision=ctx['revision'],allowed=not reason,reason=reason,categories=cfg['categories'],defaultCategory=self.default_category(ctx,cfg),
                 hasDraftChanges=saved['version']!=saved['publishedVersion'],canCreate=not reason and max(len(draft),len(published))<10,
                 assessments=[dict(**a,selectable=not reason and a==draft.get(id),
                     reason='Параметры этой работы изменены в черновике. Сначала согласуйте их в журнале.' if a!=draft.get(id) else reason,
@@ -117,6 +125,11 @@ class HomeworkGrading:
         draft,published=deepcopy(saved['document']),deepcopy(saved['published'])
         if body.newAssessment:
             assessment=body.newAssessment.model_dump(mode='json')
+            # The calendar link is made in the lesson's journal; a grade form only picks a category.
+            if assessment.pop('bookingId',None):raise HTTPException(422,'Связь с календарём контрольных задаётся в журнале урока.')
+            cfg=config(db,ctx['workspace']);assessment['category']=assessment['category'] or self.default_category(ctx,cfg)
+            found=names(cfg).get(assessment['category'])
+            if not found or not found['active']:raise HTTPException(422,'Выберите действующую категорию работы.')
             if any(body.assessmentId in assessment_map(d) for d in [draft,published]):
                 raise HTTPException(409,'Такая работа уже существует. Выберите её после обновления.')
             for d in [draft,published]:d['content']['assessments'].append(assessment)

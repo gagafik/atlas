@@ -4,8 +4,9 @@ from typing import Annotated, Literal
 import unicodedata
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from .models import Model
+from .assessment_categories import SHAPE
 
 
 class Option(Model):
@@ -93,6 +94,13 @@ class Definition(Model):
     maxAttempts: int = Field(default=1,ge=1,le=10)
     shuffleQuestions: bool = True
     shuffleOptions: bool = True
+    # The journal category a transferred result lands in; empty means the school default.
+    journalCategory: str = Field(default='',max_length=40)
+    @field_validator('journalCategory',mode='before')
+    @classmethod
+    def category_shape(cls,value):
+        if not isinstance(value,str) or not SHAPE.fullmatch(value):raise ValueError('Категория журнала указана неверно.')
+        return value
     @model_validator(mode='after')
     def valid_window(self):
         if self.opensAt.tzinfo is None:self.opensAt=self.opensAt.replace(tzinfo=ZoneInfo('Asia/Qyzylorda'))
