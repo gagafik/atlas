@@ -471,6 +471,9 @@ duties.register(app, Workspace)
 from .hall_screen import HallScreen
 hall_screen = HallScreen(access, notifications, portal_stamp)
 hall_screen.register(app, Workspace)
+from .registers import Registers
+registers = Registers(access, notifications, portal_stamp)
+registers.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
