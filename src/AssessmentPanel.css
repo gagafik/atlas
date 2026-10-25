@@ -1,0 +1,367 @@
+.assessments {
+  width: min(1200px, calc(100vw - 32px));
+  max-height: 92dvh;
+  border: 1px solid #ccd5de;
+  border-radius: 16px;
+  padding: 24px;
+  background: #fff;
+  color: #172c39;
+}
+.assessments::backdrop {
+  background: #10253588;
+}
+.assessments header,
+.ac-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ac-controls {
+  margin: 8px 0;
+}
+.assessments header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.assessments h2,
+.assessments h3 {
+  margin: 0;
+}
+.assessments h3 {
+  margin: 12px 0 6px;
+}
+.assessments fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.assessments label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.assessments p {
+  line-height: 1.5;
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+.assessments .ac-check {
+  flex-direction: row;
+  align-items: center;
+}
+.assessments .ac-wide {
+  display: flex;
+  margin: 8px 0;
+}
+.ac-wide textarea {
+  min-height: 64px;
+}
+.ac-meta {
+  color: #4b5f6d;
+  font-size: 0.92em;
+}
+.ac-form,
+.ac-card {
+  border: 1px solid #dfe6ec;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 12px 0;
+}
+.ac-slots {
+  border: 1px solid #dfe6ec !important;
+  border-radius: 8px;
+  padding: 8px 12px !important;
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+.ac-issues {
+  border: 1px solid #c0532b;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  background: #fdf1ec;
+}
+.ac-issues ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.ac-warn {
+  color: #9a3d1c;
+  font-weight: 600;
+}
+.ac-note {
+  color: #3a4d5a;
+}
+.ac-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #eef2f5;
+  font-size: 0.85em;
+  font-weight: 400;
+  color: #172c39;
+}
+.ac-history {
+  font-size: 0.92em;
+  color: #4b5f6d;
+  padding-left: 20px;
+}
+.ac-edit {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+.ac-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Month: a seven-column grid on wide screens, a list of days on phones. */
+.ac-month {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin: 12px 0;
+}
+.ac-week {
+  display: contents;
+}
+.ac-week-title {
+  display: none;
+}
+.ac-head {
+  text-align: center;
+  font-weight: 600;
+  color: #4b5f6d;
+}
+.ac-day {
+  min-width: 0;
+  min-height: 84px;
+  border: 1px solid #dfe6ec;
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ac-day.ac-other {
+  background: #f4f7f9;
+  opacity: 0.75;
+}
+.ac-day.ac-today {
+  border-color: #1f5f8b;
+  box-shadow: inset 0 0 0 1px #1f5f8b;
+}
+.ac-day.ac-lesson {
+  background: #f1f8f3;
+}
+.ac-daylabel {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+.ac-dow {
+  display: none;
+  font-weight: 400;
+}
+.ac-lessonmark {
+  font-size: 0.75em;
+  font-weight: 400;
+  color: #2f6b45;
+}
+.ac-pick {
+  padding: 0 6px;
+  min-width: 28px;
+}
+.ac-event {
+  margin: 0 !important;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: #eef2f5;
+  font-size: 0.82em;
+  line-height: 1.3 !important;
+}
+.ac-event.cancel {
+  background: #f7e6d9;
+}
+.ac-chip {
+  display: block;
+  text-align: left;
+  border: 1px solid #ccd5de;
+  border-left: 6px solid #6a7d8c;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 0.86em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  background: #fff;
+  color: inherit;
+}
+.ac-chip.summative_unit {
+  border-left-color: #1f5f8b;
+}
+.ac-chip.summative_term {
+  border-left-color: #6b3fa0;
+}
+.ac-chip.planned {
+  border-style: dashed;
+  border-left-style: solid;
+}
+.ac-chip.cancelled {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+.ac-chip[aria-pressed="true"] {
+  outline: 2px solid #1f5f8b;
+}
+.ac-chip .ac-badge,
+.ac-chip .ac-warn {
+  display: block;
+  margin: 2px 0 0;
+}
+.ac-family {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.ac-family li {
+  display: grid;
+  gap: 2px;
+  font-size: 1em;
+  border-left-color: #1f5f8b;
+}
+
+/* School load grid */
+.ac-load,
+.ac-types {
+  border-collapse: collapse;
+  width: 100%;
+}
+.ac-load th,
+.ac-load td,
+.ac-types th,
+.ac-types td {
+  border: 1px solid #dfe6ec;
+  padding: 4px 6px;
+  text-align: center;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.ac-load tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #fff;
+  text-align: left;
+}
+.ac-load thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+}
+.ac-load td small {
+  display: block;
+  color: #4b5f6d;
+}
+.ac-load td.over {
+  background: #fde2e1;
+  font-weight: 700;
+}
+.ac-types td {
+  text-align: left;
+}
+.ac-people {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+  margin-bottom: 12px;
+}
+
+.ac-print {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .assessments {
+    padding: 16px;
+  }
+  .assessments label,
+  .assessments select,
+  .assessments input[type="date"],
+  .assessments input[type="month"] {
+    width: 100%;
+  }
+  .assessments .ac-check {
+    width: auto;
+  }
+  .ac-month {
+    display: block;
+  }
+  .ac-head {
+    display: none;
+  }
+  .ac-week-title {
+    display: block;
+    margin: 12px 0 4px;
+    font-size: 1em;
+    color: #4b5f6d;
+  }
+  .ac-week {
+    display: block;
+  }
+  .ac-day {
+    min-height: 0;
+    margin-bottom: 6px;
+  }
+  .ac-day.ac-blank,
+  .ac-week.ac-blank {
+    display: none;
+  }
+  .ac-dow {
+    display: inline;
+  }
+  .ac-daylabel > span:first-child {
+    display: none;
+  }
+}
+
+/* Only while the panel is open: its stylesheet stays loaded after it closes and must not blank other prints. */
+@media print {
+  body:has(dialog.assessments[open]) * {
+    visibility: hidden;
+  }
+  .assessments {
+    position: static;
+    max-height: none;
+    border: 0;
+    padding: 0;
+  }
+  body:has(dialog.assessments[open]) .ac-print,
+  body:has(dialog.assessments[open]) .ac-print * {
+    visibility: visible;
+  }
+  .ac-print {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    padding: 16px;
+  }
+  .ac-print table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .ac-print th,
+  .ac-print td {
+    border: 1px solid #000;
+    padding: 4px 6px;
+    text-align: left;
+  }
+}
