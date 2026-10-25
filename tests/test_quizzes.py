@@ -202,6 +202,8 @@ def test_cancelled_lesson_does_not_freeze_quiz(client):
     state=api.read('demo');state.datedLessons=[DatedLesson(id='cancel',name='Отмена',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)];api.save('demo',state)
     current=teacher.get('/api/journal/quizzes/test-one?workspace=demo').json();assert current['canManage']
     seen=detail(pupil);assert seen['canStart']
+    catalog=lambda reader:[i['id'] for i in reader.get('/api/journal/quizzes?workspace=demo').json()['items']]
+    assert catalog(pupil)==['test-one'] and catalog(parent)==['test-one'] and catalog(teacher)==['test-one']
     begun=start(pupil,current);assert begun.status_code==200,begun.text
     assert save(pupil,begun.json(),submit=True).status_code==200
     assert [s['enrolled'] for s in current['students']]==[True,True]
@@ -233,16 +235,21 @@ def test_substitute_does_not_take_the_quiz_and_course_teacher_keeps_it(client):
 
 def test_course_teacher_and_owner_manage_after_reassignment(client):
     quiz,pupil,parent,teacher,_=ready(client);unrelated=signed('unrelated')
-    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    catalog=lambda reader:[i['id'] for i in reader.get('/api/journal/quizzes?workspace=demo').json()['items']]
+    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403 and catalog(unrelated)==[]
     state=api.read('demo');w=next(w for w in state.workloads if w.id=='w0');w.additionalTeacherIds=['t1'];api.save('demo',state)
     assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
     assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    # Not the owner: only the group + subject pair of the workload lists the quiz for the second course teacher.
+    assert catalog(unrelated)==['test-one'] and catalog(teacher)==['test-one']
     closed=action(unrelated,quiz,'close');assert closed.status_code==200,closed.text
     state=api.read('demo');w=next(w for w in state.workloads if w.id=='w0');w.teacherId='t1';w.additionalTeacherIds=[];api.save('demo',state)
     assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
     assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
+    # The owner left the workload but still has the quiz in the current list; the new course teacher has it too.
+    assert catalog(teacher)==['test-one'] and catalog(unrelated)==['test-one']
     create(client,'teacher',login='third',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
-    third=signed('third');assert third.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
+    third=signed('third');assert third.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403 and catalog(third)==[]
     assert action(third,closed.json(),'withdraw').status_code==403
 
 
