@@ -179,7 +179,7 @@ def test_fifty_notice_bound_and_current_account_recheck(client,monkeypatch):
     with api.connect() as db:
         row=list(db.execute('SELECT * FROM absence_notices WHERE id=?',(notice['id'],)).fetchone())
         for _ in range(49):
-            row[0]=uuid4().hex;row[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',row)
+            row[0]=uuid4().hex;row[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(row))+')',row)
     notices=client.get(url()).json()['items'];assert len(notices)==50
     preview=prepare(teacher,notices)
     original=api.absences.recheck

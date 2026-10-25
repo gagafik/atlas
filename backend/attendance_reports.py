@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, Request, Response
 from pydantic import Field, model_validator
 from .access import now
+from . import absence_codes
 from .models import Model
 from .notifications import encoded, permission_key
 
@@ -51,12 +52,13 @@ class Export(Period):
     attendance: Literal['all','unmarked','present','absent','late','excused'] = 'all'
 
 
-def empty():return dict(records=0,attendance={s:0 for s in STATES},lateMinutes=0)
+def empty():return dict(records=0,attendance={s:0 for s in STATES},lateMinutes=0,excusedCodes={})
 
 
 def add(target,source):
     target['records']+=source['records'];target['lateMinutes']+=source['lateMinutes']
     for status in STATES:target['attendance'][status]+=source['attendance'][status]
+    for code,count in source['excusedCodes'].items():target['excusedCodes'][code]=target['excusedCodes'].get(code,0)+count
 
 
 def csv_response(rows):
@@ -139,10 +141,12 @@ class AttendanceReports:
         # Annual totals scan the clustered facts sequentially; a class/pupil
         # starts at its own index. No per-pupil join to full lesson descriptions.
         index='INDEXED BY attendance_student' if notice or effective else 'INDEXED BY attendance_day' if user['role']=='admin' and not body.classId and not body.studentId and (body.end-body.start).days<45 else 'INDEXED BY attendance_summary'
-        extra=''',CASE WHEN a.attendance='absent' AND EXISTS(
-                    SELECT 1 FROM absence_notices n WHERE n.workspace=a.workspace AND n.student_id=a.student_id
+        # A note limited to one subject excuses only the lessons of that subject; code '' is a note without a type.
+        covers='''FROM absence_notices n WHERE n.workspace=a.workspace AND n.student_id=a.student_id
                     AND n.status='approved' AND n.start_at<=a.day||'T'||a.start AND n.end_at>=a.day||'T'||a.end
-                ) THEN 'excused' ELSE a.attendance END AS effective''' if effective else ''
+                    AND (n.subject_id IS NULL OR n.subject_id=a.subject_id)'''
+        extra=f''',CASE WHEN a.attendance='absent' AND EXISTS(SELECT 1 {covers}) THEN 'excused' ELSE a.attendance END AS effective,
+                CASE WHEN a.attendance='absent' THEN (SELECT coalesce(n.code_id,'') {covers} ORDER BY 1 LIMIT 1) END AS notice_code''' if effective else ''
         return 'WITH visible AS (SELECT a.*,a.attendance AS raw'+extra+' FROM journal_attendance a '+index+' WHERE '+' AND '.join(where)+') ',args
 
     def summary(self,db,user,snap,workspace,body):
@@ -183,15 +187,19 @@ class AttendanceReports:
         adjusted,adjust_args=self.query(user,snap,workspace,body,pupils,notice=True)
         # Start with approved notices (usually a much smaller set), not an
         # EXISTS lookup for every status counter of every annual pupil record.
-        corrections=db.execute(adjusted+'''SELECT v.student_id,v.subject_id,count(DISTINCT v.lesson_key)
+        # One row per excused lesson first, so overlapping notes never count a lesson twice; then the lessons per type.
+        corrections=db.execute(adjusted+'''SELECT student_id,subject_id,code,count(*) FROM (
+            SELECT v.student_id,v.subject_id,v.lesson_key,min(coalesce(n.code_id,'')) AS code
             FROM absence_notices n CROSS JOIN visible v ON v.workspace=n.workspace AND v.student_id=n.student_id
             AND v.day BETWEEN substr(n.start_at,1,10) AND substr(n.end_at,1,10)
             WHERE n.workspace=? AND n.status='approved' AND v.raw='absent'
             AND n.start_at<=v.day||'T'||v.start AND n.end_at>=v.day||'T'||v.end
-            GROUP BY v.student_id,v.subject_id''',adjust_args+[workspace]).fetchall()
-        for student,subject,count in corrections:
+            AND (n.subject_id IS NULL OR n.subject_id=v.subject_id)
+            GROUP BY v.student_id,v.subject_id,v.lesson_key) GROUP BY 1,2,3''',adjust_args+[workspace]).fetchall()
+        for student,subject,code,count in corrections:
             for item in [students[student],subjects[subject]]:
                 item['attendance']['absent']-=count;item['attendance']['excused']+=count
+                item['excusedCodes'][code]=item['excusedCodes'].get(code,0)+count
         # Unknown IDs are retained in an explicit archive bucket, never silently
         # attributed to a current class. Names come from the last saved lesson.
         missing=[dict(id=id,key=last[15:]) for id,last in latest_students.items() if id not in pupils]
@@ -224,12 +232,14 @@ class AttendanceReports:
         if where:args.append(body.attendance)
         limit=10001 if export else PAGE+1;offset=0 if export else body.offset
         rows=db.execute(query+'''SELECT v.lesson_key,v.day,v.start,v.end,v.subject_id,l.subject,l.group_name,l.teachers,
-            v.raw,v.effective,v.late_minutes,l.version,l.published_at FROM visible v JOIN journal_attendance_lessons l
+            v.raw,v.effective,v.late_minutes,l.version,l.published_at,v.notice_code FROM visible v JOIN journal_attendance_lessons l
             ON l.workspace=v.workspace AND l.lesson_key=v.lesson_key'''+where+' ORDER BY v.day,v.start,v.lesson_key LIMIT ? OFFSET ?',args+[limit,offset]).fetchall()
         if export and len(rows)>10000:raise HTTPException(422,'Более 10 000 записей: сократите период выгрузки уроков.')
-        keys=['lessonKey','date','start','end','subjectId','subject','group','teachers','rawAttendance','attendance','lateMinutes','version','publishedAt']
+        keys=['lessonKey','date','start','end','subjectId','subject','group','teachers','rawAttendance','attendance','lateMinutes','version','publishedAt','absenceCode']
         items=[dict(zip(keys,r)) for r in rows[:limit if export else PAGE]]
-        for item in items:item['excusedByNotice']=item['rawAttendance']=='absent' and item['attendance']=='excused'
+        for item in items:
+            item['excusedByNotice']=item['rawAttendance']=='absent' and item['attendance']=='excused'
+            if not item['excusedByNotice']:item['absenceCode']=None
         pupil=snap.entities['student'].get(body.studentId)
         name=pupil.name if pupil else db.execute(query+'''SELECT m.name FROM visible v JOIN journal_members m
             ON m.workspace=v.workspace AND m.lesson_key=v.lesson_key AND m.student_id=v.student_id AND m.kind='published'
@@ -271,6 +281,8 @@ class AttendanceReports:
                     token=self.token(db,user,snap,workspace,body)
                     value=self.details(db,user,snap,workspace,body)|dict(token=body.token or token,generatedAt=now().isoformat())
                 else:value=self.summary(db,user,snap,workspace,body)
+                # Type names are live and outside the cached summary and its token: a rename shows at once.
+                value['codes']=absence_codes.current(db,workspace)['items']
             self.finish(user,snap,workspace,value['token'],body,'attendance.details_read' if detail else 'attendance.summary_read')
             if not detail:
                 all_students=value['students'];value['students']=all_students[body.offset:body.offset+PAGE]
@@ -294,12 +306,16 @@ class AttendanceReports:
                     token=self.token(db,user,snap,workspace,body);used=body.token or token
                     value=self.details(db,user,snap,workspace,body,export=True)
                     rows=[header+['Ученик','ID ученика','Дата','Начало','Конец','Предмет','Группа','Учителя','Посещаемость','Исходная отметка','Минут опоздания','Принятая объяснительная','Редакция','Опубликовано']]
-                    rows += [prefix+[value['student']['name'],body.studentId,r['date'],r['start'],r['end'],r['subject'],r['group'],r['teachers'],LABELS[r['attendance']],LABELS[r['rawAttendance']],r['lateMinutes'],'Да' if r['excusedByNotice'] else '',r['version'],r['publishedAt']] for r in value['items']]
+                    codes=absence_codes.names(db,workspace)
+                    rows[0].append('Тип отсутствия')
+                    rows += [prefix+[value['student']['name'],body.studentId,r['date'],r['start'],r['end'],r['subject'],r['group'],r['teachers'],LABELS[r['attendance']],LABELS[r['rawAttendance']],r['lateMinutes'],'Да' if r['excusedByNotice'] else '',r['version'],r['publishedAt'],
+                        '' if not r['excusedByNotice'] else codes.get(r['absenceCode'],r['absenceCode']) if r['absenceCode'] else 'Без типа'] for r in value['items']]
                 else:
-                    value=self.summary(db,user,snap,workspace,body);used=value['token']
-                    rows=[header+(['Класс','Ученики','Без опубликованных записей'] if body.view=='classes' else ['Предмет','ID предмета'] if body.view=='subjects' else ['Ученик','ID ученика','Класс','Статус ученика'])+['Записей']+[LABELS[s] for s in STATES]+['Минут опоздания']]
+                    value=self.summary(db,user,snap,workspace,body);used=value['token'];codes=absence_codes.current(db,workspace)['items']
+                    # Appended after the existing columns: one per type of the live list, then notes without a type.
+                    rows=[header+(['Класс','Ученики','Без опубликованных записей'] if body.view=='classes' else ['Предмет','ID предмета'] if body.view=='subjects' else ['Ученик','ID ученика','Класс','Статус ученика'])+['Записей']+[LABELS[s] for s in STATES]+['Минут опоздания']+['Уважительная причина: '+c['name'] for c in codes]+['Уважительная причина: без типа']]
                     for r in value[body.view]:
                         identity=[r['name'],r['students'],r['withoutRecords']] if body.view=='classes' else [r['name'],r['id']] if body.view=='subjects' else [r['name'],r['id'],r['className'],'Активен' if r['active'] else 'Неактивен' if r['active'] is False else 'Вне текущего состава']
-                        rows.append(prefix+identity+[r['records']]+[r['attendance'][s] for s in STATES]+[r['lateMinutes']])
+                        rows.append(prefix+identity+[r['records']]+[r['attendance'][s] for s in STATES]+[r['lateMinutes']]+[r['excusedCodes'].get(c['id'],0) for c in codes]+[r['excusedCodes'].get('',0)])
             response=csv_response(rows);self.finish(user,snap,workspace,used,body,'attendance.exported')
             return response

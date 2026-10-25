@@ -91,6 +91,7 @@ const titles: Record<string, string> = {
   "hall.link_revoked": "Ссылка информационного экрана отозвана",
   "absence.submitted": "Поступило заявление об отсутствии",
   "absence.updated": "Изменилось решение по объяснительной",
+  "absence.recorded": "Школа внесла записку об отсутствии",
   "message.received": "Новое сообщение",
   "message.reported": "Получена жалоба на сообщение",
   "message.moderated": "Изменилось решение по жалобе на сообщение",
