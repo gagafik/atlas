@@ -53,9 +53,12 @@ class HomeworkGrading:
         self.journal=homework.journal
 
     def journal_access(self, ctx):
-        """The grade lands in the journal, which follows its own rule: teachers of the stored or the current lesson."""
+        """The grade lands in the journal, which only its current lesson's teachers (or an admin) may write.
+
+        A frozen past lesson can still list the scheduled teacher while a substitute held it,
+        so the stored lesson alone must not let a course teacher past this check."""
         user,workspace=ctx['user'],ctx['workspace']
-        return user['role']=='admin' or staff_read(user,workspace,ctx['record']['document']['lesson']) or bool(ctx['current'] and staff_read(user,workspace,ctx['current']))
+        return user['role']=='admin' or bool(ctx['current'] and staff_read(user,workspace,ctx['current']))
 
     def prepare(self, ctx, *, db=None):
         if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет учитель курса или администратор.')

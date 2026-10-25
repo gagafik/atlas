@@ -56,8 +56,9 @@ def test_changed_teacher_invalidates_warm_lesson_cache(client,monkeypatch):
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];stale=payload(options(teacher,key))
     state=api.read('demo');state.datedLessons=[DatedLesson(id='replace',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
     api.save('demo',state)
-    # The course teacher still reads the stored lesson, but the journal entry is now the substitute's.
-    changed=options(teacher,key);assert not changed['allowed'] and 'только для просмотра' in changed['reason']
+    # The course teacher still reads the stored lesson, but the journal entry is now the substitute's:
+    # the grade is moved by the lesson's current teacher or an admin.
+    changed=options(teacher,key);assert not changed['allowed'] and 'ведёт другой учитель' in changed['reason']
     assert grade(teacher,key,sent,stale).status_code==409
     assert signed('unrelated').get(f'/api/journal/homework/{key}/grading?workspace=demo&studentId=s1').status_code==403
     state=api.read('demo');state.datedLessons=[];api.save('demo',state)
