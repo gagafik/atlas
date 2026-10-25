@@ -203,6 +203,20 @@ def test_generation_is_idempotent_and_skips_holidays(client):
         assert db.execute('SELECT count(*) FROM duty_previews WHERE token=?', (shown['token'],)).fetchone()[0] == 0
 
 
+def test_generation_follows_day_in_timetable(client):
+    from backend.models import ScheduleDay
+    state = api.read('demo')
+    # Saturday runs Monday's timetable; the next Monday runs Tuesday's.
+    state.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=MON.replace(day=12), day=0),
+                          ScheduleDay(id='mon', name='Как вторник', onDate=MON.replace(day=14), day=1)]
+    api.save('demo', state)
+    tid = save_template(client)['id']
+    shown = preview(client, [tid], end='2026-09-20')
+    assert [c['id'] for c in shown['created']] == [f'duty-{tid}-20260907', f'duty-{tid}-20260912']
+    tuesday = save_template(client, weekday=1, name='Холл, вторник')['id']
+    assert f'duty-{tuesday}-20260914' in [c['id'] for c in preview(client, [tuesday], end='2026-09-20')['created']]
+
+
 def test_skip_kinds_exclusions_and_reading_weeks(client):
     reading = Event(id='r', name='Неделя чтения', kind='reading', effect='note', start=MON.replace(day=14), end=MON.replace(day=18))
     put_commitments(events=[reading])
