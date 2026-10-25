@@ -439,6 +439,9 @@ lost_found.register(app, Workspace)
 from .behaviour import Behaviour
 behaviour = Behaviour(access, notifications, portal_stamp)
 behaviour.register(app, Workspace)
+from .assessment_calendar import AssessmentCalendar
+assessment_calendar = AssessmentCalendar(access, notifications, portal_stamp)
+assessment_calendar.register(app, Workspace)
 from .clubs import Clubs
 clubs = Clubs(access, notifications, portal_stamp)
 clubs.register(app, Workspace)
