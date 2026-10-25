@@ -90,6 +90,37 @@ export function effectiveType(
   return c.onDate !== c.sourceDate ? "move" : "substitution";
 }
 
+// What blocks saving a lesson change before the server check. `row` is the lesson as
+// the day shows it and `saved` the stored record being edited, if any: a stored
+// same-date «Перенос» is displayed at its already shifted time, so an unchanged
+// time is that shift, not an absent one.
+export function lessonProblem(
+  l: DatedLesson,
+  row: { start: string; end: string } | null,
+  saved?: DatedLesson | null,
+) {
+  if (l.kind !== "change") return "";
+  if (l.changeType === "merge" && !l.mergeWith)
+    return "Выберите урок, к которому присоединяется группа.";
+  if (l.changeType === "self_study" && !l.teacherIds?.length)
+    return "Для самостоятельной работы укажите ответственного сотрудника.";
+  const kept =
+    saved?.changeType === "move" &&
+    saved.onDate === saved.sourceDate &&
+    saved.startTime === l.startTime &&
+    saved.endTime === l.endTime;
+  if (
+    l.changeType === "move" &&
+    l.onDate === l.sourceDate &&
+    row &&
+    l.startTime === row.start &&
+    l.endTime === row.end &&
+    !kept
+  )
+    return "Перенос должен менять дату или время урока.";
+  return "";
+}
+
 export function factorLine(f: Factor) {
   return `${f.label}: ${f.points}/${f.max} — ${f.detail}`;
 }

@@ -3,7 +3,9 @@ import pytest
 from fastapi.testclient import TestClient
 from backend import api
 from backend.models import State, Placement, Teacher, DatedLesson, TeacherAbsence, ScheduleDay, Event, Commitment, TimetableRule, SubstitutionWeights
-from backend.models import TeachingPeriod
+from backend.models import TeachingPeriod, Cycles, Named
+from backend.cycles import pattern_on
+from backend.commitments import DutyRequest, allocate_duties
 from backend.seed import initial_state
 from backend.calendar_ops import day_report, change_type, SubstituteRequest, substitute_options
 from backend.editing import inspect_edit
@@ -222,7 +224,7 @@ def test_override_uses_monday_teacher_unavailability_and_bookings():
     assert not any(i['type'] == 'dated_collision' for i in day_report(s, date(2026, 8, 29))['issues'])
 
 
-def test_override_date_uses_the_chosen_weekday_for_rules_and_lunch():
+def test_override_date_uses_the_chosen_weekday_for_lesson_rules():
     s = fixture()
     s.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0)]
     s.rules = [TimetableRule(id='r', name='Учитель занят', kind='availability', scope='teacher', targetIds=['t2'], unavailable=[dict(day=0, start='08:00', end='18:00')])]
@@ -235,6 +237,112 @@ def test_override_date_uses_the_chosen_weekday_for_rules_and_lunch():
     selective = State.model_validate(selective.model_dump())
     next(t for t in selective.teachers if t.id == 't2').unavailable = ['0:1']
     assert any(i['type'] == 'dated_availability' for i in day_report(selective, SAT)['issues'])
+
+
+def later(t): return f'{int(t[:2]) + 1:02d}{t[2:]}'
+
+
+def monday_bells_an_hour_later(s):
+    """The «secondary» profile rings an hour later on Mondays, so a wrong bell source shows."""
+    profile = next(p for p in s.profiles if p.id == 'secondary')
+    profile.dayPeriods = {'0': [p.model_copy(update=dict(start=later(p.start), end=later(p.end))) for p in profile.periods]}
+    return State.model_validate(s.model_dump())
+
+
+def test_override_date_takes_the_bells_of_the_chosen_weekday():
+    s = fixture()
+    s.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0)]
+    s = monday_bells_an_hour_later(s)
+    profile = next(p for p in s.profiles if p.id == 'secondary')
+    monday = profile.dayPeriods['0']
+    expected = {'eng': (monday[1].start, monday[1].end), 'math': (monday[2].start, monday[2].end)}
+    assert expected['eng'] != (profile.periods[1].start, profile.periods[1].end)
+    times = lambda day: {r['placementId']: (r['start'], r['end']) for r in day_report(s, day)['rows']}
+    assert times(MON) == expected and times(SAT) == expected
+
+
+def ab_state(**update):
+    """Weeks A and B; Saturday 22 August is in an A week and runs a Monday of week B."""
+    s = initial_state('demo'); s.events = []
+    s.cycles = Cycles(patterns=[Named(id='A', name='Неделя A'), Named(id='B', name='Неделя B')])
+    s.placements = [Placement(id='engA', workloadId='w0', day=0, period=1, roomId='r0', cycleId='A'),
+                    Placement(id='mathB', workloadId='w4', day=0, period=2, roomId='r1', cycleId='B')]
+    s.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0, cycleId='B')]
+    return State.model_validate(s.model_copy(update=update).model_dump())
+
+
+def test_override_runs_another_week_pattern():
+    s = ab_state()
+    report = day_report(s, SAT)
+    assert [r['id'] for r in report['rows']] == [f'{SAT}:mathB'] and report['cycleId'] == 'B'
+    assert report['scheduleDay']['cycleId'] == 'B' and pattern_on(s, SAT) == 'A'
+    own = day_report(s.model_copy(update=dict(scheduleDays=[])), SAT)
+    assert own['rows'] == [] and own['cycleId'] == 'A'
+    assert [r['id'] for r in day_report(s, MON)['rows']] == [f'{MON}:engA']
+    same_week = s.model_copy(update=dict(scheduleDays=[ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0)]))
+    assert [r['id'] for r in day_report(same_week, SAT)['rows']] == [f'{SAT}:engA']
+
+
+def test_class_selective_override_splits_groups_of_the_chosen_week():
+    s = ab_state(scheduleDays=[ScheduleDay(id='sat', name='Класс А', onDate=SAT, day=0, cycleId='B', classIds=['c-demo-a'])])
+    report = day_report(s, SAT)
+    assert [i['ids'] for i in report['issues'] if i['type'] == 'dated_day_split'] == [[f'{SAT}:mathB']]
+    assert {r['placementId'] for r in report['rows']} == {'mathB'}
+
+
+def test_override_applies_rules_of_the_chosen_week_and_weekday():
+    rule = TimetableRule(id='busy', name='Математик занят', kind='availability', scope='teacher', targetIds=['t0'], days=[0], cycleIds=['B'], unavailable=[dict(day=0, start='08:00', end='18:00')])
+    broken = lambda s: [i['ids'] for i in day_report(s, SAT)['issues'] if i['type'] == 'dated_rule']
+    assert broken(ab_state(rules=[rule])) == [[f'{SAT}:mathB']]
+    assert broken(ab_state(rules=[rule.model_copy(update=dict(cycleIds=['A']))])) == []
+    assert broken(ab_state(rules=[rule.model_copy(update=dict(days=[1]))])) == []
+
+
+def test_override_template_explains_an_emptied_day():
+    rule = TimetableRule(id='min', name='Минимум', kind='daily_load', scope='teacher', targetIds=['t0'], days=[0], cycleIds=['B'], minLessons=1, includeEmptyDays=True)
+    cancel = DatedLesson(id='x', name='Отмена', kind='cancel', placementId='mathB', sourceDate=SAT, onDate=SAT)
+    away = TeacherAbsence(id='away', name='Врач', teacherId='t0', start=SAT, end=SAT, startTime='08:00', endTime='23:00')
+    rules = lambda s: [i['type'] for i in day_report(s, SAT)['issues'] if i['type'] == 'dated_rule']
+    assert rules(ab_state(rules=[rule], datedLessons=[cancel])) == ['dated_rule']
+    # The chosen day's lesson fell inside the absence, so the empty day is explained.
+    assert rules(ab_state(rules=[rule], datedLessons=[cancel], absences=[away])) == []
+
+
+def test_override_applies_to_bookings_and_occupied_lunch():
+    closed = TimetableRule(id='closed', name='Кабинет закрыт', kind='availability', scope='room', targetIds=['r2'], days=[0], cycleIds=['B'], unavailable=[dict(day=0, start='08:00', end='18:00')])
+    lunch = TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t2'], days=[0], cycleIds=['B'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)
+    booking = Commitment(id='book', name='Бронь', kind='booking', onDate=SAT, startTime='16:00', endTime='17:00', roomIds=['r2'])
+    duty = Commitment(id='duty', name='Дежурство', kind='duty', onDate=SAT, startTime='12:00', endTime='13:00', location='Коридор', requiredTeachers=1, teacherIds=['t2'], profileId='secondary')
+    issues = day_report(ab_state(rules=[closed, lunch], commitments=[booking, duty]), SAT)['issues']
+    assert [i['ids'] for i in issues if i['type'] == 'dated_rule'] == [['commitment:book']]
+    assert [i['ids'] for i in issues if i['type'] == 'dated_lunch'] == [['commitment:duty']]
+    # Saturday 29 August is a plain Saturday: rules written for Mondays of week B do not reach it.
+    next_week = date(2026, 8, 29)
+    plain = ab_state(rules=[closed, lunch], scheduleDays=[], commitments=[c.model_copy(update=dict(onDate=next_week)) for c in (booking, duty)])
+    assert day_report(plain, next_week)['issues'] == []
+
+
+def test_override_applies_to_duty_allocation():
+    def duty(id, start, end, day=SAT):
+        return Commitment(id=id, name='Дежурство', kind='duty', onDate=day, startTime=start, endTime=end, location='Коридор', requiredTeachers=1, profileId='secondary', eligibleTeacherIds=['t1'])
+    def run(s, *ids): return allocate_duties(s, DutyRequest(revision=0, commitmentIds=list(ids), seconds=1))
+    next_week = date(2026, 8, 29)
+    # Lesson-number bans and bells come from the Monday the date runs as.
+    s = ab_state(commitments=[duty('a', '09:30', '09:50')])
+    next(t for t in s.teachers if t.id == 't1').unavailable = ['0:1']
+    s = monday_bells_an_hour_later(s)
+    banned = run(s, 'a')
+    assert banned['status'] == 'infeasible' and 'запрет по номеру урока' in banned['details'][0]
+    assert run(s.model_copy(update=dict(commitments=[duty('a', '09:30', '09:50', next_week)])), 'a')['status'] == 'success'
+    # Hard rules follow the week and weekday of the date.
+    hard = TimetableRule(id='hard', name='Занят', kind='availability', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], unavailable=[dict(day=0, start='09:00', end='10:00')])
+    blocked = run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50')]), 'a')
+    assert blocked['status'] == 'infeasible' and 'обязательная недоступность' in blocked['details'][0]
+    assert run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50', next_week)]), 'a')['status'] == 'success'
+    # A lunch rule of the chosen day keeps two short duties from consuming the break.
+    lunch = TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)
+    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20'), duty('b', '12:40', '13:00')]), 'a', 'b')['status'] == 'infeasible'
+    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20', next_week), duty('b', '12:40', '13:00', next_week)]), 'a', 'b')['status'] == 'success'
 
 
 def merge_state(capacity=25):
@@ -263,12 +371,49 @@ def test_merge_rows_skip_teacher_room_collision_and_join_capacity():
     assert 'dated_collision' not in [i['type'] for i in day_report(merge_state(25), MON)['issues']]
 
 
-def test_two_groups_may_join_the_same_host():
-    s = merge_state(40)
-    s.classes.append(s.classes[1].model_copy(update=dict(id='c3', name='10C', studentCount=5)))
+def test_a_stale_merge_blocks_only_the_edit_that_creates_it():
+    valid = merge_state(25)
+    stale = merge_state(25); stale.datedLessons.append(change('hist', MON, teacherIds=['t0']))
+    stale = State.model_validate(stale.model_dump())
+    created = inspect_edit(valid, stale)
+    assert not created['canApply'] and any(i['type'] == 'dated_merge' for i in created['newIssues'])
+    unrelated = State.model_validate(stale.model_copy(update=dict(commitments=[Commitment(id='book', name='Бронь', kind='booking', onDate=MON, startTime='16:00', endTime='17:00', roomIds=['r1'])])).model_dump())
+    later = inspect_edit(stale, unrelated)
+    assert later['canApply'] and later['newIssues'] == []
+    # The notice stays in the day's report until the merge is recreated.
+    assert any(i['type'] == 'dated_merge' for i in day_report(unrelated, MON)['issues'])
+
+
+def crowded(capacity, size=5):
+    """A third group (10C) next to eng merged into hist."""
+    s = merge_state(capacity)
+    s.classes.append(s.classes[1].model_copy(update=dict(id='c3', name='10C', studentCount=size)))
     s.groups.append(s.groups[1].model_copy(update=dict(id='g-c', name='10C', classIds=['c3'])))
     s.workloads.append(s.workloads[1].model_copy(update=dict(id='wc', groupId='g-c', teacherId='t2')))
     s.placements.append(Placement(id='third', workloadId='wc', day=0, period=1, roomId='r1'))
+    return s
+
+
+def test_merge_options_count_groups_already_in_the_host():
+    def hist_option(s, row='third', teacher='t2'):
+        found = substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId=f'{MON}:{row}', teacherId=teacher))['mergeOptions']
+        return next(o for o in found if o['rowId'] == f'{MON}:hist')
+    joining = State.model_validate(crowded(25, 10).model_dump())
+    option = hist_option(joining)
+    # hist (10) already hosts eng (10): a third group of 10 makes 30 places in a room of 25.
+    assert (option['capacity'], option['attendance'], option['fits']) == (25, 30, False)
+    merged = joining.model_copy(update=dict(datedLessons=[*joining.datedLessons, change('third', MON, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist')]))
+    assert [i['message'] for i in day_report(merged, MON)['issues'] if i['type'] == 'dated_capacity'] == ['10D: вместимость 25, участников 30.']
+    roomy = State.model_validate(crowded(30, 10).model_dump())
+    assert (hist_option(roomy)['attendance'], hist_option(roomy)['fits']) == (30, True)
+    roomy_merged = roomy.model_copy(update=dict(datedLessons=merged.datedLessons))
+    assert not [i for i in day_report(roomy_merged, MON)['issues'] if i['type'] == 'dated_capacity']
+    # eng is already one of the groups in hist: editing it does not count it twice.
+    assert (hist_option(joining, 'eng', 't3')['attendance'], hist_option(joining, 'eng', 't3')['fits']) == (20, True)
+
+
+def test_two_groups_may_join_the_same_host():
+    s = crowded(40)
     s.datedLessons.append(change('third', MON, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist'))
     s = State.model_validate(s.model_dump())
     report = day_report(s, MON)
@@ -327,6 +472,10 @@ def test_ranking_order_and_explanations():
     available = [c for c in result['candidates'] if c['available']]
     assert [c['id'] for c in available] == ['t4', 't0', 't1', 't5'] and [c['score'] for c in available] == [80, 35, 35, 20]
     assert {c['id'] for c in result['candidates'] if not c['available']} == {'t2', 't3'}
+    # Free teachers come first whatever the points: the absent subject teacher scores above the best substitute.
+    assert [c['id'] for c in result['candidates']] == ['t4', 't0', 't1', 't5', 't2', 't3']
+    scores = {c['id']: c['score'] for c in result['candidates']}
+    assert scores['t2'] > scores['t4'] and scores['t3'] > scores['t0']
     t4 = {f['key']: f for f in available[0]['factors']}
     assert (t4['subject']['points'], t4['subject']['detail']) == (40, 'Ведёт этот предмет')
     assert t4['group']['points'] == 0
@@ -382,6 +531,25 @@ def test_excluded_change_does_not_count_against_its_own_substitute():
     row = f'{MON}:eng'
     t4 = next(c for c in substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId=row, teacherId='t4'))['candidates'] if c['id'] == 't4')
     assert t4['substitutions'] == 0
+
+
+def test_fairness_counts_takeovers_of_the_month_only():
+    aug24, sep7 = date(2026, 8, 24), date(2026, 9, 7)
+    s = ranked()
+    s.datedLessons = [change('eng', sep7, teacherIds=['t4'], changeType='substitution'),
+                      change('eng', aug24, teacherIds=['t5'], changeType='self_study'),
+                      change('eng2', aug24, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{aug24}:hist'),
+                      DatedLesson(id='mv', name='Перенос', kind='change', placementId='d0', sourceDate=aug24, onDate=date(2026, 8, 25), teacherIds=['t0'], changeType='move'),
+                      change('d2', aug24, teacherIds=['t4'], roomIds=['r0'])]
+    s = State.model_validate(s.model_dump())
+    counts = lambda day, row: {c['id']: c['substitutions'] for c in substitute_options(s, request(day, row))['candidates']}
+    # August: self-study (t5) and a merge (t3) count; a September change, a move and a change that only
+    # restates the planned teacher (t4 keeps his own lesson) do not.
+    assert counts(MON, 'eng') == {'t0': 0, 't1': 0, 't2': 0, 't3': 1, 't4': 0, 't5': 1}
+    august = {c['id']: c for c in substitute_options(s, request(MON, 'eng'))['candidates']}
+    assert next(f for f in august['t5']['factors'] if f['key'] == 'fairness') == dict(key='fairness', label='Равномерность', points=0, max=20, detail='Замен в этом месяце: 1')
+    assert next(f for f in august['t4']['factors'] if f['key'] == 'fairness')['points'] == 20
+    assert counts(sep7, 'eng2') == {'t0': 0, 't1': 0, 't2': 0, 't3': 0, 't4': 1, 't5': 0}
 
 
 def test_weights_api(web):
@@ -499,6 +667,26 @@ def test_day_plan_without_free_teacher_proposes_nothing():
     result = plan(s)
     assert [l['proposal']['action'] for l in result['lessons']] == ['none', 'none']
     assert 'Свободных учителей не найдено' in result['lessons'][0]['proposal']['reason']
+
+
+def test_day_plan_leaves_lessons_outside_a_partial_absence_alone():
+    first, second = (l['row'] for l in plan(ranked())['lessons'])
+    def planned(start, end):
+        s = ranked()
+        s.absences = [TeacherAbsence(id='abs', name='Врач', teacherId='t2', start=MON, end=MON, startTime=start, endTime=end)]
+        return plan(State.model_validate(s.model_dump()))['lessons']
+    lessons = planned(first['start'], first['end'])
+    assert [l['proposal']['action'] for l in lessons] == ['substitution', 'none']
+    reason = lessons[1]['proposal']['reason']
+    assert 'вне времени отсутствия' in reason and f"{first['start']}–{first['end']}" in reason
+    # The lesson stays available for a manual choice, with ranked candidates.
+    assert lessons[1]['row']['actions'] == ['substitution', 'merge', 'self_study', 'cancel', 'none'] and lessons[1]['candidates']
+    # An absence that touches neither lesson proposes nothing; touching only the second proposes only it.
+    assert [l['proposal']['action'] for l in planned('12:00', '13:00')] == ['none', 'none']
+    assert [l['proposal']['action'] for l in planned(second['start'], second['end'])] == ['none', 'substitution']
+    # Without a recorded absence every lesson of the teacher is planned.
+    s = ranked(); s.absences = []
+    assert [l['proposal']['action'] for l in plan(s)['lessons']] == ['substitution', 'substitution']
 
 
 def assignments(*items): return [dict(rowId=f'{MON}:{r}', action=a, **extra) for r, a, extra in items]

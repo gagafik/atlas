@@ -105,7 +105,7 @@ def rank(state, ctx, rows, row, retained, check, teachers=None, exclude=None):
 
 
 def merge_options(ctx, rows, row):
-    """Lessons at the same time a group could join: same teachers and rooms, joint capacity."""
+    """Lessons at the same time a group could join: same teachers and rooms, joint capacity of every group in the host."""
     if any(r.get('mergeWith') == row['id'] for r in rows): return []
     result = []
     for r in rows:
@@ -113,7 +113,9 @@ def merge_options(ctx, rows, row):
                 ctx.maps['groups'][r['groupId']].kind == 'staff' or not (r['start'] < row['end'] and row['start'] < r['end'])): continue
         rooms = [ctx.maps['rooms'][id] for id in r['roomIds']]
         capacity = sum(x.capacity for x in rooms) if rooms and all(x.capacity is not None for x in rooms) else None
-        attendance = r['audienceSize'] + row['audienceSize'] if r['audienceSize'] is not None and row['audienceSize'] is not None else None
+        # Groups already merged into the host take their places too (this lesson's own current merge is not counted twice).
+        sizes = [r['audienceSize'], row['audienceSize'], *(x['audienceSize'] for x in rows if x.get('mergeWith') == r['id'] and x['id'] != row['id'] and x['status'] != 'cancelled')]
+        attendance = sum(sizes) if None not in sizes else None
         result.append(dict(rowId=r['id'], group=r['group'], subject=r['subject'], teachers=r['teachers'], rooms=r['rooms'], teacherIds=r['teacherIds'], roomIds=r['roomIds'],
                            start=r['start'], end=r['end'], capacity=capacity, attendance=attendance,
                            fits=attendance <= capacity if attendance is not None and capacity is not None else None))
@@ -181,14 +183,17 @@ def day_plan(state, body):
             c.update(reasons=check(c['id']), checked=True)
             c['available'] = not c['reasons']
             found += c['available']
-        proposal = next((c for c in ranked if c['checked'] and c['available']), None)
-        ranked.sort(key=lambda c: c['checked'] and not c['available'])
         follow = next((r for r in lessons if r['id'] == row.get('mergeWith')), None) if row['id'] in hosted else None
+        # With a recorded absence the teacher still teaches the lessons it does not touch.
+        outside = bool(absences) and not follow and not any(a.startTime < row['end'] and row['start'] < a.endTime for a in absences)
+        proposal = None if outside else next((c for c in ranked if c['checked'] and c['available']), None)
+        ranked.sort(key=lambda c: c['checked'] and not c['available'])
         actions, note = lesson_scope(state, row)
         result.append(dict(row=dict(id=row['id'], start=row['start'], end=row['end'], group=row['group'], subject=row['subject'], rooms=row['rooms'], teacherIds=row['teacherIds'],
                                     changeId=row['changeId'], changeType=row['changeType'], editable='cancel' in actions, actions=actions, note=note),
                            proposal=dict(action='merge', mergeWith=follow['id']) if follow else
                                     dict(action='substitution', teacherId=proposal['id'], name=proposal['name'], score=proposal['score']) if proposal else
+                                    dict(action='none', reason='Урок вне времени отсутствия (' + '; '.join(f'{a.startTime}–{a.endTime}' for a in absences) + ') — учитель его проводит. Выберите действие, если замена всё же нужна.') if outside else
                                     dict(action='none', reason='Свободных учителей не найдено — выберите объединение, самостоятельную работу или отмену.'),
                            candidates=ranked[:10], busyCount=len(busy), mergeOptions=merge_options(ctx, original, row)))
         # Later lessons must see the proposed substitute as busy and already in school.

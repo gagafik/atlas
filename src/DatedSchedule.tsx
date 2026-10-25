@@ -19,6 +19,7 @@ import {
   CHANGE_TYPES,
   effectiveType,
   factorLine,
+  lessonProblem,
   type MergeOption,
   type RankedTeacher,
 } from "./substitutions";
@@ -396,22 +397,6 @@ export default function DatedSchedule({
       setBusy(false);
     }
   }
-  function lessonProblem(l: DatedLesson, row: DatedRow | null) {
-    if (l.kind !== "change") return "";
-    if (l.changeType === "merge" && !l.mergeWith)
-      return "Выберите урок, к которому присоединяется группа.";
-    if (l.changeType === "self_study" && !l.teacherIds?.length)
-      return "Для самостоятельной работы укажите ответственного сотрудника.";
-    if (
-      l.changeType === "move" &&
-      l.onDate === l.sourceDate &&
-      row &&
-      l.startTime === row.start &&
-      l.endTime === row.end
-    )
-      return "Перенос должен менять дату или время урока.";
-    return "";
-  }
   function pickType(l: DatedLesson, type: ChangeType) {
     setLesson({
       ...l,
@@ -515,7 +500,11 @@ export default function DatedSchedule({
               className="dated-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                const problem = lessonProblem(lesson, selectedRow);
+                const problem = lessonProblem(
+                  lesson,
+                  selectedRow,
+                  s.datedLessons?.find((c) => c.id === lesson.id),
+                );
                 if (problem) setError(problem);
                 else void check("datedLessons", lesson);
               }}

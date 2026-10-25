@@ -3,10 +3,11 @@ import {
   CHANGE_TYPES,
   DEFAULT_WEIGHTS,
   effectiveType,
+  lessonProblem,
   reportCsv,
   type SubstitutionReportData,
 } from "./substitutions";
-import type { ChangeType } from "./types";
+import type { ChangeType, DatedLesson } from "./types";
 
 const lesson = (extra: Record<string, unknown>) =>
   ({
@@ -89,5 +90,63 @@ describe("monthly report CSV", () => {
   });
   it("protects names that Excel would evaluate as formulas", () => {
     expect(reportCsv(report("=HYPERLINK(1)"))).toContain('"\'=HYPERLINK(1)"');
+  });
+});
+
+const record = (extra: Partial<DatedLesson> = {}): DatedLesson => ({
+  id: "c",
+  name: "Перенос",
+  kind: "change",
+  onDate: "2026-08-17",
+  sourceDate: "2026-08-17",
+  placementId: "eng",
+  groupId: null,
+  subjectId: "sub2",
+  startTime: "09:00",
+  endTime: "09:40",
+  teacherIds: ["t2"],
+  roomIds: ["r0"],
+  changeType: "move",
+  mergeWith: null,
+  ...extra,
+});
+const slot = { start: "09:00", end: "09:40" };
+
+describe("lesson form checks", () => {
+  it("rejects a new same-date move that keeps the lesson time", () => {
+    expect(lessonProblem(record(), slot)).toContain("менять дату или время");
+    expect(
+      lessonProblem(record(), slot, record({ changeType: "substitution" })),
+    ).toContain("менять дату или время");
+    expect(
+      lessonProblem(record({ startTime: "15:00", endTime: "15:40" }), slot),
+    ).toBe("");
+    expect(lessonProblem(record({ onDate: "2026-08-18" }), slot)).toBe("");
+  });
+  it("lets a stored same-date move be saved again at its shifted time", () => {
+    const stored = record({ startTime: "15:00", endTime: "15:40" });
+    const shown = { start: "15:00", end: "15:40" };
+    expect(
+      lessonProblem(
+        record({ startTime: "15:00", endTime: "15:40", roomIds: ["r1"] }),
+        shown,
+        stored,
+      ),
+    ).toBe("");
+    // Without the stored shift the same time is a move that moves nothing.
+    expect(
+      lessonProblem(record({ startTime: "15:00", endTime: "15:40" }), shown),
+    ).toContain("менять дату или время");
+  });
+  it("still requires the merge host and the self-study owner", () => {
+    expect(lessonProblem(record({ changeType: "merge" }), slot)).toContain(
+      "присоединяется группа",
+    );
+    expect(
+      lessonProblem(record({ changeType: "self_study", teacherIds: [] }), slot),
+    ).toContain("ответственного");
+    expect(
+      lessonProblem(record({ kind: "cancel", changeType: "cancel" }), slot),
+    ).toBe("");
   });
 });
