@@ -25,7 +25,8 @@ def test_snapshot_reuses_day_for_distinct_users_and_copies_responses(monkeypatch
     first=snapshot.day_rows(day,'student','s1')
     assert first and snapshot.day_rows(day,'student','s3')==first
     assert snapshot.day_rows(day,'student','s2')==[]
-    assert snapshot.day_rows(day,'teacher','t0')==first
+    # Only a teacher's own rows carry the substitution type; the rest is shared.
+    assert [{k:v for k,v in r.items() if k!='changeType'} for r in snapshot.day_rows(day,'teacher','t0')]==first
     first[0]['subject']='caller mutation'
     assert snapshot.day_rows(day,'student','s1')[0]['subject']=='Математика'
     assert calls==[1]

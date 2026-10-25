@@ -26,15 +26,16 @@ LABELS = dict(id='ID записи', name='Имя / название', classId='�
               maxConsecutive='Уроков подряд', shortBreakMinutes='Короткая перемена', lunchStart='Начало окна обеда', lunchEnd='Конец окна обеда', lunchMinutes='Длительность обеда', minDays='Минимум учебных дней', maxDays='Максимум учебных дней', minDayDistance='Расстояние между днями',
               relation='Связь предметов', subjectIds='Первый набор предметов', otherSubjectIds='Второй набор предметов', relationGapMinutes='Перемена для следования',
               effect='Влияние на уроки', onDate='Дата занятия', sourceDate='Исходная дата', placementId='Исходное занятие', teacherIds='Учителя занятия', startTime='Время начала', endTime='Время окончания',
-              groupIds='Группы участников', location='Место', requiredTeachers='Требуется дежурных', eligibleTeacherIds='Кандидаты на дежурство', note='Примечание')
+              groupIds='Группы участников', location='Место', requiredTeachers='Требуется дежурных', eligibleTeacherIds='Кандидаты на дежурство', note='Примечание',
+              changeType='Тип замены', mergeWith='Объединить с уроком')
 ALIASES = dict(name=['ФИО', 'Ф.И.О.', 'Название', 'Имя'], classId=['Класс ученика', 'Class'], teacherId=['Преподаватель', 'Teacher'], subjectId=['Subject'], groupId=['Группа', 'Group'], hours=['Часы', 'Hours'], roomId=['Аудитория', 'Room'], period=['Урок'], externalId=['Код ученика'])
 REFS = dict(classId='classes', classIds='classes', studentId='students', studentIds='students', teacherId='teachers', additionalTeacherIds='teachers', subjectId='subjects', subjectIds='subjects', otherSubjectIds='subjects', groupId='groups', lockedGroupId='groups', roomId='rooms', roomIds='rooms', requiredRoomIds='rooms', profileId='profiles', gapProfileId='profiles', workloadId='workloads', courseIds='courses', cycleId='cycles', cycleIds='cycles', buildingId='buildings')
 REFS.update(teacherIds='teachers', placementId='placements', eligibleTeacherIds='teachers', groupIds='groups')
 COMMON = dict(classes='id name profileId maxDaily studentCount', teachers='id name unavailable', rooms='id name capacity buildingId', subjects='id name color', students='id name classId externalId active', groups='id name kind classIds studentIds rosterStatus rosterNote',
               profiles='id name periods dayPeriods', workloads='id groupId subjectId teacherId hours profileId roomIds maxPerDay', placements='id workloadId day period roomId cycleId locked', events='id name start end kind grades',
               rules='id name kind scope targetIds mode weight unavailable minLessons maxLessons', courses='id name sections', courseRequests='id studentId courseIds required lockedGroupId',
-              datedLessons='id name kind onDate sourceDate placementId groupId profileId subjectId startTime endTime teacherIds roomIds', absences='id name teacherId start end startTime endTime',
-              commitments='id name kind onDate startTime endTime roomIds teacherIds groupIds profileId location requiredTeachers eligibleTeacherIds locked')
+              datedLessons='id name kind onDate sourceDate placementId groupId profileId subjectId startTime endTime teacherIds roomIds changeType mergeWith', absences='id name teacherId start end startTime endTime',
+              commitments='id name kind onDate startTime endTime roomIds teacherIds groupIds profileId location requiredTeachers eligibleTeacherIds locked', scheduleDays='id name onDate day cycleId classIds')
 
 
 def model_for(table):
