@@ -199,9 +199,8 @@ def plan_generation(state, templates, start, end, generated, body):
 
     generated maps (templateId, isoDate) to dict(commitmentId, fingerprint) of earlier runs.
     """
-    from .calendar_ops import DayContext, resolve_day
+    from .calendar_ops import DayContext, cycle_on, resolve_day, weekday_on
     from .commitments import duty_conflicts
-    from .cycles import pattern_on
     if end < start: raise ValueError('Конец периода раньше начала.')
     if (end - start).days > 366: raise ValueError('Период не длиннее 366 дней.')
     if start < state.settings.yearStart or end > state.settings.yearEnd: raise ValueError('Период должен быть внутри учебного года.')
@@ -233,11 +232,14 @@ def plan_generation(state, templates, start, end, generated, body):
             continue
         gone = (set(t.roomIds) - rooms_known) | ((set(t.eligibleTeacherIds) | set(t.teacherIds)) - names.keys())
         if gone: warnings.append(f'Шаблон «{t.name}»: кабинеты или сотрудники шаблона удалены из расписания и пропущены.')
-        for offset in range((t.weekday - start.weekday()) % 7, (end - start).days + 1, 7):
+        for offset in range((end - start).days + 1):
             day = start + timedelta(days=offset)
+            # A school-wide «день в расписании» gives the date another weekday's duties, bells and week.
+            wd = weekday_on(state, day)
+            if wd != t.weekday: continue
             row = dict(date=day.isoformat(), templateId=t.id, template=t.name)
             if day in excluded: skipped.append(row | dict(reason='Исключено вручную')); continue
-            pattern = pattern_on(state, day)
+            pattern = cycle_on(state, day)
             if pattern is None: skipped.append(row | dict(reason='Вне учебного периода')); continue
             if t.cycleIds and pattern not in t.cycleIds: continue
             closure = closure_on(state, day, kinds, everyone)
@@ -247,7 +249,7 @@ def plan_generation(state, templates, start, end, generated, body):
                     partial.add((e.id, day))
                     warnings.append(f'Частичная отмена: {e.name} · {day:%d.%m.%Y}. Проверьте классы события.')
             if profile is None: skipped.append(row | dict(reason='Профиль звонков удалён')); continue
-            times = template_times(profile, t, day.weekday())
+            times = template_times(profile, t, wd)
             if times is None: skipped.append(row | dict(reason='Нет перемены')); continue
             begin, finish = times
             rooms = [r for r in t.roomIds if r in rooms_known]
