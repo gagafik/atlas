@@ -63,14 +63,14 @@ def register(s,app,Workspace):
         except BaseException:file.close();raise
 
     @app.get('/api/registers/visitors')
-    def visitors(request:Request,workspace:Workspace='school',day:date|None=None,inside:bool=False,q:str=Query(default='',max_length=200),before:int=Query(default=9223372036854775807,ge=1),limit:int=Query(default=100,ge=1,le=500)):
+    def visitors(request:Request,workspace:Workspace='school',day:date|None=None,inside:bool=False,q:str=Query(default='',max_length=200),before:int=Query(default=9223372036854775807,ge=1),limit:int|None=Query(default=None,ge=1,le=500)):
         with s.context(request,workspace) as (db,u,snap):
             s.require(db,u,snap,workspace,'visitors');term=q.strip().casefold()
-            if inside:
-                rows=db.execute("SELECT * FROM registers_visitors WHERE workspace=? AND status='inside' AND instr(search,?)>0 ORDER BY arrived,seq LIMIT ?",(workspace,term,limit)).fetchall()
-                return dict(items=[public(r) for r in rows],nextBefore=None,count=len(rows),inside=inside_count(db,workspace))
+            # The "who is in the building" list is the evacuation view: it takes the largest page by default.
+            limit=limit or (500 if inside else 100)
+            where,args=("status='inside'",()) if inside else ('day=?',((day or s.today()).isoformat(),))
             # Pages walk back through registration order; the page itself is shown by arrival time.
-            rows=db.execute('SELECT * FROM registers_visitors WHERE workspace=? AND day=? AND seq<? AND instr(search,?)>0 ORDER BY seq DESC LIMIT ?',(workspace,(day or s.today()).isoformat(),before,term,limit+1)).fetchall()
+            rows=db.execute(f'SELECT * FROM registers_visitors WHERE workspace=? AND {where} AND seq<? AND instr(search,?)>0 ORDER BY seq DESC LIMIT ?',(workspace,*args,before,term,limit+1)).fetchall()
             items,nxt=s.page(rows,limit)
             return dict(items=[public(r) for r in sorted(items,key=lambda r:(r['arrived'],r['seq']))],nextBefore=nxt,count=len(items),inside=inside_count(db,workspace))
 
@@ -100,7 +100,7 @@ def register(s,app,Workspace):
             if len(body.reason)<3:raise HTTPException(422,'Укажите причину исправления.')
             before=json.loads(row['document']);data=body.data
             arrived=row['arrived']
-            if data.arrivedAt and iso(data.arrivedAt)!=row['arrived']:
+            if data.arrivedAt and data.arrivedAt.replace(microsecond=0)!=datetime.fromisoformat(row['arrived']):
                 arrived=iso(arrival(data.arrivedAt))
                 if row['departed'] and arrived>row['departed']:raise HTTPException(422,'Время прихода позже времени ухода.')
             doc=document(data,host(db,snap,workspace,data,before))|dict(badge=data.badge.upper())
@@ -118,7 +118,8 @@ def register(s,app,Workspace):
             if body.action=='depart':
                 if row['status']!='inside':raise HTTPException(409,'Уход уже отмечен или запись аннулирована.')
                 left=body.at or s.now()
-                if iso(left)<row['arrived'] or left>s.now()+timedelta(minutes=2):raise HTTPException(422,'Время ухода раньше прихода или в будущем.')
+                # Compare the moments before any conversion: an absurd year must fail here, not overflow later.
+                if left>s.now()+timedelta(minutes=2) or left<datetime.fromisoformat(row['arrived']):raise HTTPException(422,'Время ухода раньше прихода или в будущем.')
                 db.execute("UPDATE registers_visitors SET version=version+1,status='left',departed=?,updated=? WHERE id=?",(iso(left),stamped,id))
                 s.history(db,workspace,'visitors',id,u,'departed',body.reason,dict(departed=iso(left)))
             else:

@@ -270,6 +270,7 @@ export default function Registers({
   );
   const [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
+    [loading, setLoading] = useState(0),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [tab, setTab] = useState("");
@@ -310,10 +311,13 @@ export default function Registers({
     const tabs = tabsOf(o);
     setTab((t) => (tabs.some(([id]) => id === t) ? t : (tabs[0]?.[0] ?? "")));
   }
-  async function run(task: () => Promise<void>) {
-    setBusy(true);
+  // A background run (a reload after a filter changed) leaves the form enabled:
+  // disabling it would take the focus away from the field the person is typing in.
+  async function run(task: () => Promise<void>, background = false) {
+    if (background) setLoading((n) => n + 1);
+    else setBusy(true);
     setError("");
-    setNotice("");
+    if (!background) setNotice("");
     try {
       await task();
     } catch (e: any) {
@@ -323,7 +327,8 @@ export default function Registers({
         setOptions(null);
       }
     } finally {
-      setBusy(false);
+      if (background) setLoading((n) => n - 1);
+      else setBusy(false);
     }
   }
   useEffect(() => {
@@ -397,7 +402,7 @@ export default function Registers({
           {notice}
         </p>
       )}
-      {busy && (
+      {(busy || loading > 0) && (
         <p role="status" className="rg-noprint">
           Загрузка…
         </p>

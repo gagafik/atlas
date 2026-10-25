@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "./api";
 import { Fact, HistoryList } from "./RegisterParts";
 import {
+  allPages,
   conditions,
   exportHref,
   readBase64,
@@ -69,12 +71,13 @@ export default function RegisterInventory({ ctx }: { ctx: Ctx }) {
   const rooms = options.rooms ?? [],
     staff = options.staff ?? [];
   const filters = { status, q, roomId, category, responsibleId };
-  const path = (before?: number) =>
+  const path = (before?: number, limit?: number) =>
     "registers/inventory?" +
     Object.entries(filters)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join("&") +
-    (before ? "&before=" + before : "");
+    (before ? "&before=" + before : "") +
+    (limit ? "&limit=" + limit : "");
   async function load() {
     const n = ++sequence.current;
     const r = await api(path(), workspace);
@@ -83,11 +86,25 @@ export default function RegisterInventory({ ctx }: { ctx: Ctx }) {
     setNext(r.nextBefore);
   }
   useEffect(() => {
-    void run(load);
+    void run(load, true);
     return () => {
       ++sequence.current;
     };
   }, [workspace, q, roomId, category, status, responsibleId]);
+  // The printout must hold every item of the filter: fetch the pages that are not on screen yet.
+  async function printList() {
+    if (next) {
+      const full = await allPages(
+        { items: items ?? [], nextBefore: next },
+        (b) => api(path(b, 200), workspace),
+      );
+      flushSync(() => {
+        setItems(full.items);
+        setNext(null);
+      });
+    }
+    window.print();
+  }
   const busyForm = Boolean(draft || move || off);
   const leave = () =>
     !busyForm || window.confirm("Отбросить несохранённое действие?");
@@ -225,6 +242,15 @@ export default function RegisterInventory({ ctx }: { ctx: Ctx }) {
     ctx.say(`Загружено предметов: ${r.count}.`);
   }
   const room = rooms.find((r) => r.id === roomId);
+  // What the printed list says about its own filters, so a partial list never passes for the whole school.
+  const scope = [
+    room && `кабинет ${room.name}`,
+    category && `категория «${category}»`,
+    responsibleId &&
+      `ответственный ${staff.find((s) => s.id === responsibleId)?.name ?? ""}`,
+    status === "written_off" && "списанные",
+    q && `поиск «${q}»`,
+  ].filter(Boolean);
   return (
     <section aria-label="Школьный инвентарь">
       <nav className="rg-tabs rg-noprint" aria-label="Вид инвентаря">
@@ -449,7 +475,10 @@ export default function RegisterInventory({ ctx }: { ctx: Ctx }) {
             >
               Выгрузить CSV
             </a>
-            <button onClick={() => window.print()} disabled={!items?.length}>
+            <button
+              onClick={() => void run(printList)}
+              disabled={!items?.length}
+            >
               Печать списка
             </button>
           </div>
@@ -901,9 +930,14 @@ export default function RegisterInventory({ ctx }: { ctx: Ctx }) {
           {items && (
             <div className="rg-print rg-printonly">
               <h3>
-                Инвентарь{room ? `: кабинет ${room.name}` : ""} на{" "}
+                Инвентарь{scope.length ? ": " + scope.join(", ") : ""} на{" "}
                 {options.today}
               </h3>
+              <p>
+                Предметов: {items.length}
+                {next &&
+                  " (показаны не все: нажмите «Печать списка» или «Ещё предметы»)"}
+              </p>
               <table className="rg-table">
                 <thead>
                   <tr>

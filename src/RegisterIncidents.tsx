@@ -61,7 +61,7 @@ export default function RegisterIncidents({ ctx }: { ctx: Ctx }) {
     setNext(r.nextBefore);
   }
   useEffect(() => {
-    void run(load);
+    void run(load, true);
     return () => {
       ++sequence.current;
     };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  allPages,
   can,
   capabilityNames,
   changedFields,
@@ -137,5 +138,41 @@ describe("file reading", () => {
   it("refuses files over the 2 MB limit without reading them", async () => {
     const big = new File([new Uint8Array(MAX_UPLOAD + 1)], "big.csv");
     await expect(readBase64(big)).rejects.toThrow("Файл больше 2 МБ.");
+  });
+});
+
+describe("printing a paged list", () => {
+  const page = (items: number[], nextBefore: number | null) => ({
+    items,
+    nextBefore,
+  });
+  it("follows every page and keeps the order they arrived in", async () => {
+    const pages: Record<number, ReturnType<typeof page>> = {
+      30: page([3, 2], 10),
+      10: page([1], null),
+    };
+    const asked: number[] = [];
+    const all = await allPages(page([5, 4], 30), async (before) => {
+      asked.push(before);
+      return pages[before];
+    });
+    expect(all.items).toEqual([5, 4, 3, 2, 1]);
+    expect(all.nextBefore).toBeNull();
+    expect(asked).toEqual([30, 10]);
+  });
+  it("asks for nothing when the list is already complete", async () => {
+    const first = page([1, 2], null);
+    let calls = 0;
+    const all = await allPages(first, async () => {
+      calls++;
+      return page([], null);
+    });
+    expect(all).toBe(first);
+    expect(calls).toBe(0);
+  });
+  it("refuses to print a list that never ends", async () => {
+    await expect(
+      allPages(page([1], 9), async (before) => page([before], before - 1), 3),
+    ).rejects.toThrow("Список слишком длинный для печати.");
   });
 });

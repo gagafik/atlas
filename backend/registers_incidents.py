@@ -1,5 +1,5 @@
 import json
-from datetime import timedelta
+from datetime import datetime,timedelta
 from uuid import uuid4
 from fastapi import HTTPException,Query,Request
 from .notifications import encoded
@@ -8,6 +8,7 @@ from .registers_models import IncidentAction,IncidentData,IncidentWrite
 from .school_forms import enabled,grant_ids
 
 DATA=list(IncidentData.model_fields)
+FROZEN='Пока сводка опубликована, нельзя менять её текст, вид и дату происшествия и список учеников. Сначала снимите сводку с публикации.'
 
 def register(s,app,Workspace):
     def stored(db,workspace,id):
@@ -32,7 +33,9 @@ def register(s,app,Workspace):
     def link(db,snap,workspace,data,previous):
         """Validate the people, room and moments of a record and freeze their names with it."""
         prev=previous or {};current=s.now();at=data.occurredAt;pupils=snap.entities['student']
-        if at>current+timedelta(minutes=2) or (at<current-timedelta(days=366) and iso(at)!=prev.get('occurredAt')):raise HTTPException(422,'Дата происшествия — не в будущем и не раньше года назад.')
+        # An old date is kept as it was; the comparison runs on moments, before any conversion can overflow.
+        unchanged=bool(prev.get('occurredAt')) and at.replace(microsecond=0)==datetime.fromisoformat(prev['occurredAt'])
+        if at>current+timedelta(minutes=2) or (at<current-timedelta(days=366) and not unchanged):raise HTTPException(422,'Дата происшествия — не в будущем и не раньше года назад.')
         if any(n.at<at-timedelta(hours=1) or n.at>current+timedelta(minutes=2) for n in data.parentNotices):raise HTTPException(422,'Время сообщения родителям не может быть в будущем или намного раньше происшествия.')
         kept={p['id']:p for p in prev.get('students',[])};students=[]
         for id in data.studentIds:
@@ -88,7 +91,8 @@ def register(s,app,Workspace):
                 if previous['status']=='closed':raise HTTPException(409,'Закрытую запись сначала откройте повторно.')
                 if len(body.reason)<3:raise HTTPException(422,'Укажите причину изменения.')
                 before=json.loads(previous['document'])
-                if previous['summary_published'] and body.data.familySummary!=before['familySummary']:raise HTTPException(409,'Сначала снимите сводку для семьи с публикации.')
+                # Families see the text, kind, date and their own child: the admin approved exactly that audience.
+                if previous['summary_published'] and (body.data.familySummary!=before['familySummary'] or body.data.kind!=before['kind'] or set(body.data.studentIds)!=set(before['studentIds']) or body.data.occurredAt.replace(microsecond=0)!=datetime.fromisoformat(before['occurredAt'])):raise HTTPException(409,FROZEN)
             elif body.version!=0:raise HTTPException(422,'Новая запись создаётся с нулевой версией.')
             else:before=None
             doc=link(db,snap,workspace,body.data,before);stamped=s.now().isoformat()

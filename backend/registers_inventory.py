@@ -92,10 +92,13 @@ def register(s,app,Workspace):
         staff=defaultdict(list)
         for p in s.staff_list(db,snap,workspace):staff[p['name'].strip().casefold()].append(p)
         labels={v.casefold():k for k,v in CONDITIONS.items()}|{k:k for k in CONDITIONS}
+        # tabular lists formula cells as (row, column) counted from 0; a line number counts rows from 1.
+        formulas={(row+1,col) for row,col in parsed['sheets'][0].get('formulas',[])}
         items=[];errors=[];seen={}
         for line,r in table[1:]:
             get=lambda k:r[index[k]].strip() if k in index and index[k]<len(r) else ''
             try:
+                if (used:=next((COLUMNS[k] for k,col in index.items() if (line,col) in formulas),None)):raise ValueError(f'В ячейке колонки «{used}» формула. Сохраните её как значение.')
                 number=get('number');values=dict(number=number,title=get('title'),category=get('category'),location=get('location'),serial=get('serial'),note=get('note'),roomId='',responsibleId='')
                 if get('room'):
                     found=rooms.get(get('room').casefold(),[])
@@ -239,11 +242,12 @@ def register(s,app,Workspace):
                 if row['status']!='active':raise HTTPException(409,'Предмет уже списан.')
                 day=body.on or s.today()
                 if day>s.today() or (doc['acquiredOn'] and day.isoformat()<doc['acquiredOn']):raise HTTPException(422,'Дата списания не может быть в будущем или раньше поступления.')
-                status='written_off';doc|=dict(writtenOffOn=day.isoformat(),writtenOffReason=body.reason,writtenOffBy=u['name'])
+                status='written_off';off=dict(on=day.isoformat(),reason=body.reason,by=u['name']);doc|=dict(writtenOffOn=off['on'],writtenOffReason=off['reason'],writtenOffBy=off['by'])
             else:
                 if u['role']!='admin':raise HTTPException(403,'Восстановить списанный предмет может администрация.')
                 if row['status']!='written_off':raise HTTPException(409,'Предмет не списан.')
-                status='active';doc|=dict(writtenOffOn='',writtenOffReason='',writtenOffBy='')
+                # The card forgets a cancelled write-off; the history keeps its date, reason and author.
+                status='active';off=dict(on=doc.get('writtenOffOn',''),reason=doc.get('writtenOffReason',''),by=doc.get('writtenOffBy',''));doc|=dict(writtenOffOn='',writtenOffReason='',writtenOffBy='')
             db.execute('UPDATE registers_inventory SET version=version+1,status=?,updated=?,document=? WHERE id=?',(status,s.now().isoformat(),encoded(doc),id))
-            s.history(db,workspace,'inventory',id,u,dict(write_off='written_off',restore='restored')[body.action],body.reason,dict(before=row['status'],after=status))
+            s.history(db,workspace,'inventory',id,u,dict(write_off='written_off',restore='restored')[body.action],body.reason,dict(before=row['status'],after=status,writtenOff=off))
             return s.remember(db,u,body,key,public(db,snap,workspace,stored(db,workspace,id)))

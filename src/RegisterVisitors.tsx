@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { api } from "./api";
 import { clockTime, displayTime, schoolInput, schoolISO } from "./meetings";
 import { HistoryList } from "./RegisterParts";
 import {
+  allPages,
   documentTypes,
   exportHref,
   staySince,
@@ -63,10 +65,8 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
     const timer = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(timer);
   }, []);
-  const path = (before?: number) =>
-    view === "inside"
-      ? `registers/visitors?inside=true&q=${encodeURIComponent(q)}`
-      : `registers/visitors?day=${day}&q=${encodeURIComponent(q)}${before ? "&before=" + before : ""}`;
+  const path = (before?: number, limit?: number) =>
+    `registers/visitors?${view === "inside" ? "inside=true" : "day=" + day}&q=${encodeURIComponent(q)}${before ? "&before=" + before : ""}${limit ? "&limit=" + limit : ""}`;
   async function load() {
     const n = ++sequence.current;
     const r: List = await api(path(), workspace);
@@ -74,7 +74,7 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
   }
   useEffect(() => {
     setHistory(null);
-    void run(load);
+    void run(load, true);
     return () => {
       ++sequence.current;
     };
@@ -153,6 +153,27 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
     await load();
     ctx.say("Запись аннулирована.");
   }
+  // The printout must hold the whole day: fetch the pages that are not on screen yet.
+  async function printDay() {
+    if (list?.nextBefore) {
+      const full = await allPages(list, (b) => api(path(b, 500), workspace));
+      flushSync(() => setList(full));
+    }
+    window.print();
+  }
+  const moreButton = list?.nextBefore ? (
+    <button
+      className="rg-noprint"
+      onClick={() =>
+        void run(async () => {
+          const r: List = await api(path(list.nextBefore!), workspace);
+          setList({ ...r, items: [...list.items, ...r.items] });
+        })
+      }
+    >
+      Ещё записи
+    </button>
+  ) : null;
   async function showHistory(id: string, more = false) {
     const r: History = await api(
       `registers/history/visitors/${id}${more && history?.data.nextBefore ? "?before=" + history.data.nextBefore : ""}`,
@@ -351,7 +372,7 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
           >
             Скачать CSV за день
           </a>
-          <button onClick={() => window.print()}>Печать</button>
+          <button onClick={() => void run(printDay)}>Печать</button>
         </div>
       )}
       <form
@@ -377,6 +398,7 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
           <p role="status" className="rg-noprint">
             Сейчас в здании: {list.inside}
             {q && ` · найдено: ${list.count}`}
+            {list.nextBefore && ` · показано: ${sorted.length}`}
           </p>
           {!sorted.length && <p>В здании посетителей нет.</p>}
           <ul className="rg-cards">
@@ -402,11 +424,17 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
               </li>
             ))}
           </ul>
+          {moreButton}
         </>
       )}
       {list && view === "day" && (
         <div className="rg-print">
           <h3>Журнал посетителей за {day}</h3>
+          <p>
+            Записей: {sorted.length}
+            {list.nextBefore &&
+              " (показаны не все: нажмите «Печать» или «Ещё записи»)"}
+          </p>
           {!sorted.length && <p>За этот день записей нет.</p>}
           {sorted.length > 0 && (
             <div className="rg-scroll">
@@ -462,19 +490,7 @@ export default function RegisterVisitors({ ctx }: { ctx: Ctx }) {
               </table>
             </div>
           )}
-          {list.nextBefore && (
-            <button
-              className="rg-noprint"
-              onClick={() =>
-                void run(async () => {
-                  const r: List = await api(path(list.nextBefore!), workspace);
-                  setList({ ...r, items: [...list.items, ...r.items] });
-                })
-              }
-            >
-              Ещё записи
-            </button>
-          )}
+          {moreButton}
         </div>
       )}
       {history && (

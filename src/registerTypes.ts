@@ -6,7 +6,8 @@ export type Ctx = {
   user: Account;
   workspace: string;
   options: Options;
-  run: (task: () => Promise<void>) => Promise<void>;
+  // background: a reload after a filter change; it must not disable the form the person is typing in.
+  run: (task: () => Promise<void>, background?: boolean) => Promise<void>;
   mutate: (path: string, body: object, method?: string) => Promise<any>;
   dirty: (value: boolean) => void;
   say: (text: string) => void;
@@ -308,6 +309,20 @@ export function changedFields(before: any, after: any) {
     )
       names.add(fieldNames[key]);
   return [...names];
+}
+
+// Follows `nextBefore` until a list is complete, so a printout never silently stops at the first page.
+export async function allPages<
+  T extends { items: any[]; nextBefore: number | null },
+>(first: T, more: (before: number) => Promise<T>, maxPages = 100): Promise<T> {
+  let all = first;
+  for (let n = 0; all.nextBefore && n < maxPages; n++) {
+    const page = await more(all.nextBefore);
+    all = { ...page, items: [...all.items, ...page.items] };
+  }
+  if (all.nextBefore)
+    throw new Error("Список слишком длинный для печати. Уточните фильтры.");
+  return all;
 }
 
 export const MAX_UPLOAD = 2_000_000;

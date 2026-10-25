@@ -77,6 +77,22 @@ function Detail({ entry }: { entry: HistoryEntry }) {
       </>
     );
   }
+  if (
+    (entry.action === "written_off" || entry.action === "restored") &&
+    d.writtenOff?.on
+  )
+    return (
+      <p>
+        {entry.action === "restored"
+          ? "Отменено списание от "
+          : "Дата списания: "}
+        {d.writtenOff.on}
+        {entry.action === "restored" && d.writtenOff.reason
+          ? ` (причина списания: ${d.writtenOff.reason})`
+          : ""}
+        {d.writtenOff.by ? ` · оформил: ${d.writtenOff.by}` : ""}
+      </p>
+    );
   const names = changedFields(d.before, d.after);
   if (!names.length) return null;
   const keys = Object.keys(fieldNames).filter(

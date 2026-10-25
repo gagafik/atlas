@@ -22,8 +22,12 @@ ZONE=ZoneInfo('Asia/Qyzylorda')
 DENIED=dict(visitors='Журнал посетителей доступен назначенным сотрудникам и администрации.',incidents='Журнал происшествий доступен администрации и сотрудникам с отдельным правом.',inventory='Инвентарь школы доступен назначенным ответственным и администрации.')
 def stamp():return now().isoformat()
 def today():return now().astimezone(ZONE).date()
-def iso(value):return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
-def local_day(value):return value.astimezone(ZONE).date().isoformat()
+def iso(value):
+    try:return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    except OverflowError:raise HTTPException(422,'Некорректная дата и время.') from None
+def local_day(value):
+    try:return value.astimezone(ZONE).date().isoformat()
+    except OverflowError:raise HTTPException(422,'Некорректная дата и время.') from None
 def version(row,value):
     if row['version']!=value:raise HTTPException(409,'Запись изменилась. Обновите данные перед действием.')
 def cell(v):
