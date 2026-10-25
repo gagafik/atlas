@@ -920,7 +920,8 @@ export default function HallScreens({
                 />
               </label>
               <label>
-                Текст ({note.text.length} из 600)
+                Текст ({note.text.length} из 600; длинный текст на экране идёт
+                частями)
                 <textarea
                   maxLength={600}
                   value={note.text}

@@ -175,6 +175,8 @@
   font-size: 0.7em;
 }
 .hall-notes {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -182,6 +184,21 @@
   border: 2px solid #2c4a40;
   border-radius: 0.5em;
   background: #11231e;
+}
+/* The panel is cut off, so long texts are split into parts that fit; the probe measures them in this very layout. */
+.hall-note-view {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.hall-probe {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .hall-notes h2 {
   display: flex;
@@ -261,5 +278,12 @@
   }
   .hall-board:not(.hall-fixed) .hall-what {
     display: block;
+  }
+  .hall-board:not(.hall-fixed) .hall-note-view {
+    flex: none;
+    overflow: visible;
+  }
+  .hall-board:not(.hall-fixed) .hall-probe {
+    display: none;
   }
 }

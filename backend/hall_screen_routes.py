@@ -34,6 +34,10 @@ def register(service,app,Workspace):
 
     def reload(db,workspace,id,snap,instant):return service.summary(service.screen(db,workspace,id),snap,instant)
 
+    def capacity(db,workspace,instant):
+        if db.execute("SELECT count(*) FROM hall_announcements WHERE workspace=? AND status='active' AND ends>?",(workspace,iso(instant))).fetchone()[0]>=MAX_ANNOUNCEMENTS:
+            raise HTTPException(422,f'Не больше {MAX_ANNOUNCEMENTS} действующих объявлений.')
+
     def screens(db,workspace,ids):
         active={r[0] for r in db.execute("SELECT id FROM hall_screens WHERE workspace=? AND status='active'",(workspace,))}
         if not set(ids)<=active:raise HTTPException(422,'Выберите действующие экраны.')
@@ -43,7 +47,11 @@ def register(service,app,Workspace):
         with service.context(request,workspace) as (db,user,snap):
             admin(user);instant=service.instant()
             rows=db.execute('SELECT * FROM hall_screens WHERE workspace=? ORDER BY status,created,rowid',(workspace,)).fetchall()
-            notes=db.execute('SELECT * FROM hall_announcements WHERE workspace=? AND ends>=? ORDER BY starts DESC,seq DESC LIMIT 100',(workspace,iso(instant-timedelta(days=30)))).fetchall()
+            # Every announcement that can still be shown comes first, whatever its start; only the finished ones are cut.
+            moment=iso(instant)
+            notes=db.execute("SELECT * FROM hall_announcements WHERE workspace=? AND status='active' AND ends>?",(workspace,moment)).fetchall()
+            notes+=db.execute("SELECT * FROM hall_announcements WHERE workspace=? AND ends>=? AND NOT (status='active' AND ends>?) ORDER BY starts DESC,seq DESC LIMIT 100",(workspace,iso(instant-timedelta(days=30)),moment)).fetchall()
+            notes.sort(key=lambda r:(r['starts'],r['seq']),reverse=True)
             return dict(screens=[service.summary(r,snap,instant) for r in rows],announcements=[service.announcement_summary(r,instant) for r in notes],
                         buildings=[dict(id=b.id,name=b.name) for b in snap.state.campus.buildings],teacherNames=NAMES,
                         today=instant.astimezone(ZONE).date().isoformat(),timeZone='Asia/Qyzylorda',maxScreens=MAX_SCREENS)
@@ -124,8 +132,7 @@ def register(service,app,Workspace):
             instant=service.instant()
             if body.endsAt<=instant:raise HTTPException(422,'Окончание показа уже прошло.')
             screens(db,workspace,body.screenIds)
-            if db.execute("SELECT count(*) FROM hall_announcements WHERE workspace=? AND status='active' AND ends>?",(workspace,iso(instant))).fetchone()[0]>=MAX_ANNOUNCEMENTS:
-                raise HTTPException(422,f'Не больше {MAX_ANNOUNCEMENTS} действующих объявлений.')
+            capacity(db,workspace,instant)
             id=uuid4().hex;data=body.model_dump(mode='json',exclude={'requestId','startsAt','endsAt'})
             db.execute("INSERT INTO hall_announcements(id,workspace,version,status,starts,ends,author_id,author_name,created,updated,document) VALUES (?,?,1,'active',?,?,?,?,?,?,?)",
                        (id,workspace,iso(body.startsAt),iso(body.endsAt),user['id'],user['name'],iso(instant),iso(instant),encoded(data)))
@@ -140,6 +147,8 @@ def register(service,app,Workspace):
             if row['version']!=body.version:raise HTTPException(409,'Объявление изменилось. Обновите список.')
             if row['status']!='active':raise HTTPException(409,'Объявление снято.')
             if iso(body.endsAt)!=row['ends'] and body.endsAt<=instant:raise HTTPException(422,'Окончание показа уже прошло.')
+            # A finished announcement brought back by a new end takes a place like a new one.
+            if row['ends']<=iso(instant)<iso(body.endsAt):capacity(db,workspace,instant)
             # Screens that were chosen earlier and have been removed since may stay in the list.
             screens(db,workspace,[s for s in body.screenIds if s not in row['data']['screenIds']])
             data=body.model_dump(mode='json',exclude={'version','startsAt','endsAt'})
@@ -173,19 +182,17 @@ def register(service,app,Workspace):
     @app.get('/hall-api/display')
     def display(request:Request):
         """Public and tokenless for the session guard (it covers /api/ only); the secret arrives in a header, never in a path or query."""
-        client=request.client.host if request.client else 'unknown'
-        service.limiter.check(client)
-        raw=request.headers.get('x-hall-token','')
-        if not TOKEN.fullmatch(raw):
+        client=request.client.host if request.client else 'unknown';raw=request.headers.get('x-hall-token','');instant=service.instant();row=notes=None
+        if TOKEN.fullmatch(raw):
+            with closing(access.read_connect()) as db:
+                db.row_factory=sqlite3.Row;db.execute('BEGIN')
+                # Reading never creates the tables: before the first screen exists every token is simply unknown.
+                found=db.execute("SELECT * FROM hall_screens WHERE token=? AND status='active'",(digest(raw),)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name='hall_screens'").fetchone() else None
+                if found and not (found['token_expires'] and found['token_expires']<=iso(instant)):row,notes=found,service.announcements(db,found['workspace'],instant)
+        if not row:
+            # Unknown tokens are counted per address; a valid link is never held back by them.
             service.limiter.failed(client);return not_found()
-        instant=service.instant()
-        with closing(access.read_connect()) as db:
-            db.row_factory=sqlite3.Row;db.execute('BEGIN')
-            # Reading never creates the tables: before the first screen exists every token is simply unknown.
-            row=db.execute("SELECT * FROM hall_screens WHERE token=? AND status='active'",(digest(raw),)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name='hall_screens'").fetchone() else None
-            if not row or row['token_expires'] and row['token_expires']<=iso(instant):
-                service.limiter.failed(client);return not_found()
-            notes=service.announcements(db,row['workspace'],instant)
+        service.limiter.hit(row['id'])
         payload=service.payload(service.snapshots.get(row['workspace']),row,notes,instant)
         etag='"'+hashlib.sha256(encoded({k:v for k,v in payload.items() if k!='serverTime'}).encode()).hexdigest()+'"'
         headers={'ETag':etag,'Cache-Control':'private, no-cache','Vary':'X-Hall-Token','X-Atlas-Server-Time':instant.astimezone(timezone.utc).isoformat(),

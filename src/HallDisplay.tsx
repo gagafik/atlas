@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { startPolling } from "./polling";
 import HallBoard from "./HallBoard";
-import { stale, tokenFromHash, type HallPayload } from "./hallScreen";
+import {
+  pollInterval,
+  stale,
+  tokenFromHash,
+  type HallPayload,
+} from "./hallScreen";
 import "./HallDisplay.css";
 
 const GONE =
@@ -28,6 +33,7 @@ export default function HallDisplay() {
     setLastOk(0);
     if (!token) return;
     let active = true,
+      dead = false,
       etag = "";
     const controller = new AbortController();
     const poll = startPolling(
@@ -51,7 +57,9 @@ export default function HallDisplay() {
           }
           if (r.status === 404) {
             // A revoked, expired or archived link must stop showing data at once.
+            // It cannot come back, so it is only retried rarely (see pollInterval).
             etag = "";
+            dead = true;
             setData(null);
             setGone(true);
             setFailed(false);
@@ -68,6 +76,7 @@ export default function HallDisplay() {
             return false;
           }
           etag = r.headers.get("ETag") || "";
+          dead = false;
           setData(value);
           setGone(false);
           setFailed(false);
@@ -79,7 +88,13 @@ export default function HallDisplay() {
           return false;
         }
       },
-      { interval: 60000, background: () => true, maxDelay: 120000 },
+      {
+        interval: () => pollInterval(dead),
+        background: () => true,
+        get maxDelay() {
+          return Math.max(120000, pollInterval(dead));
+        },
+      },
     );
     return () => {
       active = false;

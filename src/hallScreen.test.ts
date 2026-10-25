@@ -3,8 +3,10 @@ import {
   KIND_LABEL,
   dayHeading,
   describe,
+  fitParts,
   pageSize,
   paginate,
+  pollInterval,
   schoolClock,
   stale,
   tokenFromHash,
@@ -80,6 +82,20 @@ suite("change descriptions", () => {
       describe(item({ kind: "room", previousRooms: "301", rooms: "303" })),
     ).not.toContain("каб.");
   });
+  it("tells where a one-off lesson is held, since it has no earlier room", () => {
+    expect(describe(item({ kind: "added", rooms: "302" }))).toBe(
+      "Дополнительный урок · каб. 302",
+    );
+    expect(describe(item({ kind: "added", rooms: "" }))).toBe(
+      "Дополнительный урок",
+    );
+    expect(describe(item({ kind: "added" }))).toBe("Дополнительный урок");
+    expect(
+      describe(
+        item({ kind: "moved_in", movedFrom: "2026-11-02", rooms: "302" }),
+      ),
+    ).toBe("Перенесён с 02.11");
+  });
   it("labels every kind with text, not colour alone", () => {
     for (const kind of [
       "substitution",
@@ -149,5 +165,51 @@ suite("link token", () => {
     expect(tokenFromHash("#" + "a".repeat(101))).toBe("");
     expect(tokenFromHash("#" + token + "%20")).toBe("");
     expect(tokenFromHash("#%E0%A4%A")).toBe("");
+  });
+});
+
+suite("long announcements", () => {
+  const words = Array.from({ length: 40 }, (_, i) => `слово${i}`).join(" ");
+  const upTo = (n: number) => (part: string) => part.length <= n;
+  it("keeps a text that fits in one piece", () => {
+    expect(fitParts("Короткий текст", upTo(100))).toEqual(["Короткий текст"]);
+    expect(fitParts("", upTo(100))).toEqual([""]);
+  });
+  it("splits a long text into parts that all fit and lose nothing", () => {
+    const parts = fitParts(words, upTo(60));
+    expect(parts.length).toBeGreaterThan(3);
+    for (const part of parts) {
+      expect(part.length).toBeLessThanOrEqual(60);
+      expect(part).toBe(part.trim());
+    }
+    expect(parts.join(" ")).toBe(words);
+  });
+  it("fills each part before starting the next", () => {
+    const parts = fitParts(words, upTo(60));
+    parts.slice(0, -1).forEach((part, i) => {
+      const next = parts[i + 1].split(" ")[0];
+      expect(part.length + 1 + next.length).toBeGreaterThan(60);
+    });
+  });
+  it("keeps line breaks inside a part", () => {
+    const text = "Актовый зал," + String.fromCharCode(10) + "вход свободный";
+    expect(fitParts(text, upTo(100))).toEqual([text]);
+  });
+  it("always moves on, even when nothing fits", () => {
+    expect(fitParts("раз два три", () => false)).toEqual(["раз", "два", "три"]);
+    const long = "я".repeat(100);
+    const parts = fitParts(long, () => false);
+    expect(parts.join("")).toBe(long);
+    expect(parts.every((part) => part.length <= 40)).toBe(true);
+  });
+});
+
+suite("polling", () => {
+  it("asks once a minute, and rarely after the link has gone", () => {
+    expect(pollInterval(false)).toBe(60000);
+    // With the polling jitter of 10 %, a dead link adds at most two unknown tokens in the ten minutes the server counts.
+    expect(
+      Math.floor(600000 / (pollInterval(true) * 0.9)) + 1,
+    ).toBeLessThanOrEqual(2);
   });
 });

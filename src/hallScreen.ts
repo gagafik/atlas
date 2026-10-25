@@ -111,9 +111,44 @@ export function describe(item: HallItem): string {
     default:
       text = "Изменение";
   }
-  if (item.previousRooms !== undefined && item.kind !== "room" && item.rooms)
+  // A lesson with a known earlier room says where it is now; a one-off lesson has no earlier room, so it always says.
+  if (
+    item.rooms &&
+    item.kind !== "room" &&
+    (item.previousRooms !== undefined || item.kind === "added")
+  )
     text += ` · каб. ${item.rooms}`;
   return text;
+}
+
+/** How often a TV asks. A dead link (404) never comes back, and each unknown token counts against the school's network address, so it is retried rarely. */
+export const pollInterval = (gone: boolean) => (gone ? 600000 : 60000);
+
+/**
+ * Cuts an announcement into parts that each fit the panel. `fits` measures a candidate in the real layout;
+ * a part is never empty, so a word that cannot fit still moves on. Overlong runs without spaces are cut at 40 signs.
+ */
+export function fitParts(text: string, fits: (part: string) => boolean) {
+  const words = text.match(/\S{1,40}\s*/g) ?? [];
+  const join = (from: number, count: number) =>
+    words
+      .slice(from, from + count)
+      .join("")
+      .trimEnd();
+  const parts: string[] = [];
+  for (let from = 0; from < words.length;) {
+    let low = 1,
+      high = words.length - from;
+    if (fits(join(from, high))) low = high;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (fits(join(from, mid))) low = mid;
+      else high = mid - 1;
+    }
+    parts.push(join(from, low));
+    from += low;
+  }
+  return parts.length ? parts : [text];
 }
 
 /** Rows that fit one page. Sizes are designed for a 40 px root font at 1080 p; scale is the actual root font over 40. */

@@ -180,27 +180,36 @@ def present(items,state,data,local,today):
 
 
 class Limiter:
-    """Process-local limits for the public endpoint: requests per minute and invalid tokens per ten minutes, per client address."""
+    """Process-local limits for the public endpoint: 30 requests a minute for each link and 10 unknown tokens in ten minutes for each client address.
+    Only unknown tokens count against an address, so a TV left on a dead link, or a guesser on the same network, cannot hold back a valid link."""
     def __init__(self,clock=monotonic):
         self.clock,self.lock=clock,Lock()
         self.hits,self.misses=OrderedDict(),OrderedDict()
 
-    def add(self,table,client,moment):
-        queue=table.setdefault(client,deque());queue.append(moment);table.move_to_end(client)
+    def add(self,table,key,moment):
+        queue=table.setdefault(key,deque());queue.append(moment);table.move_to_end(key)
         while len(table)>2048:table.popitem(last=False)
 
-    def check(self,client):
+    def refuse(self):
+        raise HTTPException(429,'Слишком много запросов. Повторите позже.',headers={'Retry-After':'60','Cache-Control':'no-store'})
+
+    def hit(self,link):
+        """A request with a valid link."""
         moment=self.clock()
         with self.lock:
-            hits,misses=self.hits.get(client,deque()),self.misses.get(client,deque())
+            hits=self.hits.get(link,deque())
             while hits and hits[0]<=moment-60:hits.popleft()
-            while misses and misses[0]<=moment-600:misses.popleft()
-            if len(hits)>=30 or len(misses)>=10:
-                raise HTTPException(429,'Слишком много запросов. Повторите позже.',headers={'Retry-After':'60','Cache-Control':'no-store'})
-            self.add(self.hits,client,moment)
+            if len(hits)>=30:self.refuse()
+            self.add(self.hits,link,moment)
 
     def failed(self,client):
-        with self.lock:self.add(self.misses,client,self.clock())
+        """A request with an unknown token. Past the limit it is refused and not counted, so the block runs out ten minutes after the tenth miss."""
+        moment=self.clock()
+        with self.lock:
+            misses=self.misses.get(client,deque())
+            while misses and misses[0]<=moment-600:misses.popleft()
+            if len(misses)>=10:self.refuse()
+            self.add(self.misses,client,moment)
 
     def reset(self):
         with self.lock:self.hits.clear();self.misses.clear()

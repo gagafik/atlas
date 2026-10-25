@@ -1,14 +1,26 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   KIND_LABEL,
   dayHeading,
   describe,
+  fitParts,
   pageSize,
   paginate,
   schoolClock,
   type HallPayload,
 } from "./hallScreen";
 import "./HallDisplay.css";
+
+interface Slide {
+  title: string;
+  text: string;
+}
 
 /** The board itself: shared by the TV page and the administrator's preview. Every value is rendered as text. */
 export default function HallBoard({
@@ -27,12 +39,17 @@ export default function HallBoard({
   tools?: ReactNode;
 }) {
   const board = useRef<HTMLElement>(null);
+  const view = useRef<HTMLDivElement>(null);
+  const ruler = useRef<HTMLElement>(null);
   const [size, setSize] = useState(10);
   const [page, setPage] = useState(0);
+  const [layout, setLayout] = useState(0);
+  const [fit, setFit] = useState<{ key: string; slides: Slide[] } | null>(null);
   useEffect(() => {
     const measure = () => {
       const el = board.current;
       if (!el) return;
+      setLayout((n) => n + 1);
       // A phone shows the whole list; only a wall display pages.
       if (!fixed && window.innerWidth <= 600) return setSize(1000);
       const font = parseFloat(getComputedStyle(el).fontSize) || 40;
@@ -51,6 +68,44 @@ export default function HallBoard({
     };
   }, [fixed]);
   useEffect(() => {
+    // Late fonts change how the text wraps.
+    const fonts = typeof document === "undefined" ? undefined : document.fonts;
+    if (!fonts) return;
+    const again = () => setLayout((n) => n + 1);
+    void fonts.ready.then(again);
+    fonts.addEventListener?.("loadingdone", again);
+    return () => fonts.removeEventListener?.("loadingdone", again);
+  }, []);
+  const notes = data.announcements;
+  const key = JSON.stringify(notes);
+  useLayoutEffect(() => {
+    const box = view.current,
+      rule = ruler.current,
+      title = rule?.querySelector("h3"),
+      text = rule?.querySelector("p");
+    // A phone lets the panel grow; elsewhere the panel is cut off, so long texts are split into parts that fit it.
+    if (
+      !box ||
+      !title ||
+      !text ||
+      box.clientHeight < 40 ||
+      (!fixed && window.innerWidth <= 600)
+    )
+      return setFit(null);
+    const slides: Slide[] = [];
+    for (const note of notes) {
+      title.textContent = note.title;
+      const fits = (part: string) => {
+        text.textContent = part;
+        return rule!.scrollHeight <= box.clientHeight;
+      };
+      for (const part of fitParts(note.text, fits))
+        slides.push({ title: note.title, text: part });
+    }
+    title.textContent = text.textContent = "";
+    setFit({ key, slides });
+  }, [key, layout, fixed]);
+  useEffect(() => {
     const timer = setInterval(
       () => setPage((n) => n + 1),
       Math.max(8, data.pageSeconds) * 1000,
@@ -63,8 +118,11 @@ export default function HallBoard({
       ? Math.max(3, Math.floor((size - data.days.length) / data.days.length))
       : size;
   const now = schoolClock(clock, data.utcOffsetMinutes);
-  const notes = data.announcements;
-  const note = notes.length ? notes[page % notes.length] : null;
+  const slides: Slide[] =
+    fit && fit.key === key
+      ? fit.slides
+      : notes.map((n) => ({ title: n.title, text: n.text }));
+  const note = slides.length ? slides[page % slides.length] : null;
   return (
     <main
       ref={board}
@@ -135,16 +193,22 @@ export default function HallBoard({
           <aside className="hall-notes" aria-label="Объявления">
             <h2>
               Объявления
-              {notes.length > 1 && (
+              {slides.length > 1 && (
                 <small>
-                  {(page % notes.length) + 1} из {notes.length}
+                  {(page % slides.length) + 1} из {slides.length}
                 </small>
               )}
             </h2>
-            <article key={page % notes.length}>
-              <h3>{note.title}</h3>
-              {note.text && <p>{note.text}</p>}
-            </article>
+            <div className="hall-note-view" ref={view}>
+              <article key={page % slides.length}>
+                <h3>{note.title}</h3>
+                {note.text && <p>{note.text}</p>}
+              </article>
+              <article className="hall-probe" aria-hidden="true" ref={ruler}>
+                <h3 />
+                <p />
+              </article>
+            </div>
           </aside>
         )}
       </div>
