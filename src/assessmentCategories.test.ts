@@ -6,6 +6,7 @@ import {
   categoryOf,
   configProblem,
   presetOf,
+  staleVersion,
   textColor,
   type Draft,
 } from "./assessmentCategories";
@@ -107,6 +108,46 @@ describe("configProblem", () => {
     cfg.policy.shares[0].percent = "";
     expect(configProblem(cfg)).toContain("число от 0 до 100");
   });
+  it("rejects shares with more than two decimals instead of rounding them", () => {
+    // The server stores hundredths and answers 422 to 50.004.
+    const cfg = defaults();
+    cfg.policy.shares = [
+      { categoryId: "fo", percent: "50.004" },
+      { categoryId: "sor", percent: "49.996" },
+      { categoryId: "soch", percent: "0" },
+    ];
+    expect(configProblem(cfg)).toBe(
+      "Правило школы: доля — не более двух знаков после запятой.",
+    );
+    cfg.policy.shares = [
+      { categoryId: "fo", percent: "33.333" },
+      { categoryId: "sor", percent: "33.333" },
+      { categoryId: "soch", percent: "33.336" },
+    ];
+    expect(configProblem(cfg)).toContain("не более двух знаков");
+    cfg.policy.shares = [
+      { categoryId: "fo", percent: ".5" },
+      { categoryId: "sor", percent: "49.5" },
+      { categoryId: "soch", percent: "50" },
+    ];
+    expect(configProblem(cfg)).toBe("");
+    const withRule = defaults();
+    withRule.rules.push({
+      id: "a".repeat(32),
+      name: "Физика",
+      subjectIds: [],
+      classIds: [],
+      method: "average",
+      missing: "renormalize",
+      shares: [
+        { categoryId: "fo", percent: "60.001" },
+        { categoryId: "sor", percent: "39.999" },
+      ],
+    });
+    expect(configProblem(withRule)).toBe(
+      "Правило «Физика»: доля — не более двух знаков после запятой.",
+    );
+  });
   it("reports duplicate ids and names, an inactive default and a shared calendar type", () => {
     const duplicate = defaults();
     duplicate.categories[1].id = "fo";
@@ -173,5 +214,19 @@ describe("textColor", () => {
     expect(textColor("#000000")).toBe("#fff");
     expect(textColor("#2563eb")).toBe("#fff");
     expect(textColor("#d97706")).toBe("#111");
+  });
+});
+
+describe("staleVersion", () => {
+  it("reloads the editor only for a 409, so other failures keep the draft", () => {
+    expect(staleVersion(Object.assign(new Error("x"), { status: 409 }))).toBe(
+      true,
+    );
+    for (const status of [403, 422, 500, undefined])
+      expect(staleVersion(Object.assign(new Error("x"), { status }))).toBe(
+        false,
+      );
+    expect(staleVersion(new Error("Сервер недоступен."))).toBe(false);
+    expect(staleVersion(null)).toBe(false);
   });
 });

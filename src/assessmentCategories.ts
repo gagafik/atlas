@@ -101,6 +101,7 @@ export function textColor(hex: string): string {
   return (light + 0.05) / 0.0556 > 1.05 / (light + 0.05) ? "#111" : "#fff";
 }
 
+const SHARE_TEXT = /^\d{0,3}(\.\d{1,2})?$/;
 const cents = (percent: string | number) =>
   String(percent).trim() === ""
     ? Number.NaN
@@ -114,6 +115,9 @@ function policyProblem(p: Policy, ids: Set<string>, where: string): string {
     const value = cents(s.percent);
     if (!Number.isFinite(value) || value < 0 || value > 10000)
       return `${where}: доля — число от 0 до 100.`;
+    // The server keeps hundredths; cents() would round 50.004 away and the save would fail with a 422.
+    if (!SHARE_TEXT.test(String(s.percent).trim()))
+      return `${where}: доля — не более двух знаков после запятой.`;
     if (!ids.has(s.categoryId))
       return `${where}: доля ссылается на неизвестную категорию.`;
     if (used.has(s.categoryId))
@@ -125,6 +129,10 @@ function policyProblem(p: Policy, ids: Set<string>, where: string): string {
     ? ""
     : `${where}: доли категорий должны в сумме давать 100 % (сейчас ${sum / 100} %).`;
 }
+
+// Only a stale version (409) means the editor must show the server copy; any other failed save keeps the admin's draft.
+export const staleVersion = (error: unknown) =>
+  (error as { status?: number } | null)?.status === 409;
 
 // First Russian problem the server would reject, or "" when the configuration may be sent.
 export function configProblem(cfg: Draft): string {

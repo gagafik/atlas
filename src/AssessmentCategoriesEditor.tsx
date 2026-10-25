@@ -5,6 +5,7 @@ import {
   METHODS,
   MISSING,
   configProblem,
+  staleVersion,
   type Category,
   type CategoryConfig,
   type Draft,
@@ -202,7 +203,7 @@ export default function AssessmentCategoriesEditor({
       );
       onSaved();
     } catch (e: any) {
-      onSaved();
+      if (staleVersion(e)) onSaved();
       setError(e.message);
     } finally {
       setBusy(false);

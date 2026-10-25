@@ -3,6 +3,8 @@ from copy import deepcopy
 from datetime import date
 from fractions import Fraction
 import json
+from pathlib import Path
+import re
 from uuid import uuid4
 import pytest
 from backend import api
@@ -74,6 +76,9 @@ def test_admin_edit_is_versioned_and_validated(client):
     current = ok(client.get(CAT))
     wrong = put_config(client, categories=categories, policy=dict(policy, shares=policy['shares'][:3] + [dict(categoryId='project', percent=9)]))
     assert wrong.status_code == 422
+    # Shares are kept in hundredths: the editor refuses more decimals so that it never sends a value like this.
+    fine = put_config(client, categories=categories, policy=dict(policy, shares=[dict(categoryId=id, percent=p) for id, p in [('fo', '20.004'), ('sor', '19.996'), ('soch', '50'), ('project', '10')]]))
+    assert fine.status_code == 422 and 'decimal places' in fine.text
     dropped = put_config(client, categories=[c for c in categories if c['id'] != 'sor'], policy=dict(shares=[dict(categoryId=id, percent=p) for id, p in [('fo', 50), ('soch', 40), ('project', 10)]], method='average', missing='renormalize'))
     assert dropped.status_code == 422 and 'нельзя удалить' in dropped.text
     inactive = [dict(c, active=False) if c['id'] == 'fo' else c for c in categories]
@@ -224,6 +229,22 @@ def actions(db, id):
     return [r[0] for r in db.execute('SELECT action FROM assessment_history WHERE booking_id=? ORDER BY seq', (id,))]
 
 
+def labelled():
+    """Booking history actions that the client shows in Russian (actionLabels in src/assessmentCalendar.ts)."""
+    source = (Path(__file__).resolve().parents[1] / 'src' / 'assessmentCalendar.ts').read_text(encoding='utf-8')
+    block = source[source.index('export const actionLabels'):]
+    return re.findall(r'^\s+(\w+): "', block[:block.index('};')], re.M)
+
+
+def test_every_booking_history_action_has_a_russian_label():
+    root = Path(__file__).resolve().parents[1] / 'backend'
+    # Booking-bound history rows come from the calendar routes and from link_journal.
+    written = set(re.findall(r"service\.history\(db,workspace,user,id,'(\w+)'", (root / 'assessment_calendar_routes.py').read_text(encoding='utf-8')))
+    written |= set(re.findall(r"'(journal_(?:un)?linked)'", (root / 'assessment_calendar.py').read_text(encoding='utf-8')))
+    assert {'created', 'moved', 'edited', 'published', 'cancelled', 'journal_linked', 'journal_unlinked'} <= written
+    assert written <= set(labelled()), sorted(written - set(labelled()))
+
+
 def test_booking_link_category_and_unlink(client, clock):
     enable(client)
     created = ok(english(client)); id = created['id']
@@ -240,6 +261,8 @@ def test_booking_link_category_and_unlink(client, clock):
         count = len(actions(db, id)); version = db.execute('SELECT version FROM assessment_bookings WHERE id=?', (id,)).fetchone()[0]
     assert version == 1
     assert ok(client.get(url('bookings', start=D17, end=D17)))['items'][0]['journalAssessmentId'] == 'cal'
+    shown = [h['action'] for h in ok(client.get(url(f'bookings/{id}/history')))['items']]
+    assert shown[-1] == 'journal_linked' and set(shown) <= set(labelled())
     same = write(client, saved.json()); assert same.status_code == 200
     with api.connect() as db: assert len(actions(db, id)) == count
     # The teacher may override the mapped category of the work.
