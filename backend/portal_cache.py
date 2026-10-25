@@ -52,7 +52,9 @@ class Snapshot:
                                    teacher=set(row['originalTeacherIds']) | set(row['teacherIds']),
                                    room=row['roomIds'],group=row['groupIds'])
                     for kind, ids in targets.items():
-                        for id in set(ids): index[kind,id].append(projected)
+                        # Substitution types are shown to teachers only, never to pupils and parents.
+                        shown = projected | dict(changeType=row.get('changeType')) if kind == 'teacher' else projected
+                        for id in set(ids): index[kind,id].append(shown)
                 self.days[day] = dict(index)
                 if len(self.days)>8: self.days.popitem(last=False)
             self.days.move_to_end(day)

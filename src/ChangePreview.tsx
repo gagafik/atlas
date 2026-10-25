@@ -51,8 +51,12 @@ const TABLES: Record<string, string> = {
   datedLessons: "Изменения по датам",
   absences: "Отсутствия учителей",
   commitments: "Бронирования и дежурства",
+  scheduleDays: "Дни в расписании",
 };
 const FIELDS: Record<string, string> = {
+  changeType: "Тип замены",
+  mergeWith: "Объединение с уроком",
+  day: "День недели",
   groupIds: "Группы участников",
   requiredTeachers: "Требуется дежурных",
   eligibleTeacherIds: "Кандидаты",

@@ -43,7 +43,7 @@ def public_document(state, body):
         meta = 'Повторяющиеся недели. Изменения по отдельным датам сюда не входят.'
         count = len(rows)
     else:
-        from .calendar_ops import DayContext, resolve_day, dates
+        from .calendar_ops import DayContext, resolve_day, dates, TYPES
         if body.firstDate < state.settings.yearStart or body.lastDate > state.settings.yearEnd:
             raise ValueError('Период публикации должен находиться в учебном году.')
         ctx = DayContext(state)
@@ -58,7 +58,8 @@ def public_document(state, body):
                 items.append('<h3>' + str(day) + '</h3>')
                 for row in selected:
                     count += 1
-                    status = ('Отменено' if row['status'] == 'cancelled' else 'Дежурство' if row['activity'] == 'duty' else 'Бронирование' if row['activity'] == 'booking' else 'Изменено' if row['status'] == 'changed' else 'Разовое занятие' if row['status'] == 'added' else 'По расписанию')
+                    status = (TYPES[row['changeType']] if body.view == 'teacher' and row.get('changeType') and row['status'] != 'cancelled' else
+                              'Отменено' if row['status'] == 'cancelled' else 'Дежурство' if row['activity'] == 'duty' else 'Бронирование' if row['activity'] == 'booking' else 'Изменено' if row['status'] == 'changed' else 'Разовое занятие' if row['status'] == 'added' else 'По расписанию')
                     values = [row['subject'], row['group'], status]
                     if body.showTimes: values.insert(0, row['start'] + '–' + row['end'])
                     if body.showTeachers: values.append(row['teachers'])
