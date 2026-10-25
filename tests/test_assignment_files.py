@@ -162,8 +162,9 @@ def test_limits_types_and_global_quota(client,monkeypatch):
 
 def test_deadline_boundary_atomic_rejection_and_draft_preservation(client,monkeypatch):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']
-    content=record['document']['content'];legacy=homework.fingerprint(record['document'])
+    content=record['document']['content'];legacy=homework.legacy_fingerprint(record['document'])
     assert legacy==hashlib.sha256(encoded([content['homework'],content['dueDate']]).encode()).hexdigest()
+    assert homework.fingerprint(record['document'])==homework.substance('online',[])
     record=save_materials(teacher,record,[],homeworkLatePolicy='block')
     before=datetime(2026,8,19,18,59,59,tzinfo=timezone.utc)
     monkeypatch.setattr(homework,'now',lambda:before)
@@ -177,7 +178,7 @@ def test_deadline_boundary_atomic_rejection_and_draft_preservation(client,monkey
     unchanged=get(pupil,key);assert unchanged['draft']['text']=='Сохранить после срока' and unchanged['version']==draft.json()['version']
     assert get(parent,key)['submitted']['text']=='Решение ученика'
     record=save_materials(teacher,record,[],homeworkLatePolicy='allow')
-    current=get(pupil,key);assert current['canSubmit'] and current['assignmentChanged']
+    current=get(pupil,key);assert current['canSubmit'] and not current['assignmentChanged']  # a late-policy change is not substantive
     final=answer(pupil,key,current).json();assert final['submitted']['late'] and final['submitted']['latePolicy']=='allow'
     assert final['submitted']['attempt']==2
 

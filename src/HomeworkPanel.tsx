@@ -41,6 +41,7 @@ interface Work {
   deadline: HomeworkDeadline;
   assignmentFiles: Material[];
   latePolicy: "allow" | "block";
+  submission: "online" | "offline";
   deadlineClosed: boolean;
   canSaveDraft: boolean;
   assignment: string;
@@ -339,10 +340,17 @@ function StudentWork({
           или разрешить позднюю сдачу.
         </p>
       )}
+      {work.submission === "offline" && (
+        <p className="info-line">
+          Задание выполняется без онлайн-сдачи: работу показывают учителю на
+          уроке.
+        </p>
+      )}
       {work.assignmentChanged && (
         <p className="info-line">
-          После отправки условия задания изменились. Прежняя работа сохранена;
-          новый ответ отправляется по текущим условиям и сроку.
+          После отправки изменились файлы задания или способ сдачи. Прежняя
+          работа сохранена; новый ответ отправляется по текущим условиям и
+          сроку.
         </p>
       )}
       {work.submitted && (
@@ -355,6 +363,7 @@ function StudentWork({
           <p className="journal-text">{work.submitted.text}</p>
           <RecordedHomeworkGrade value={work.submitted.grading} />
           {(work.assignmentChanged ||
+            work.submitted.homework !== work.homework ||
             work.submitted.dueDate !== work.dueDate ||
             (work.submitted.deadlineVersion || 0) !==
               work.deadline.version) && (

@@ -6,8 +6,11 @@ from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
 
 from .models import Model
-from .journal import Assessment, Content, Grade, signature
+from .journal import Assessment, Content, Grade, signature, staff_read
 from .journal_periods import locks, require_open
+
+
+FOREIGN='Урок по расписанию ведёт другой учитель: оценку в журнал переносит он или администратор. Проверку можно сохранить без оценки.'
 
 
 class ReviewGrade(Model):
@@ -49,8 +52,17 @@ class HomeworkGrading:
         self.homework=homework
         self.journal=homework.journal
 
+    def journal_access(self, ctx):
+        """The grade lands in the journal, which only its current lesson's teachers (or an admin) may write.
+
+        A frozen past lesson can still list the scheduled teacher while a substitute held it,
+        so the stored lesson alone must not let a course teacher past this check."""
+        user,workspace=ctx['user'],ctx['workspace']
+        return user['role']=='admin' or bool(ctx['current'] and staff_read(user,workspace,ctx['current']))
+
     def prepare(self, ctx, *, db=None):
-        if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет действующий учитель урока или администратор.')
+        if not ctx['canReview']:raise HTTPException(403,'Оценку выставляет учитель курса или администратор.')
+        if not self.journal_access(ctx):raise HTTPException(409,FOREIGN)
         # Homework.context already resolved this lesson against its cached state.
         # recheck() validates that state, account and journal again in the transaction.
         return self.journal.resolved_entry(ctx['state'],ctx['workspace'],ctx['user'],ctx['key'],ctx['record'],ctx['current'],db=db)
@@ -77,6 +89,8 @@ class HomeworkGrading:
         return self.journal.unpack(row)
 
     def options(self, ctx, *, db=None):
+        if ctx['canReview'] and not self.journal_access(ctx):
+            return dict(journalVersion=ctx['record']['version'],revision=ctx['revision'],allowed=False,reason=FOREIGN,hasDraftChanges=False,canCreate=False,assessments=[])
         record=self.prepare(ctx) if db is None else self.prepare(ctx,db=db)
         def read(db):
             saved=self.recheck(db,ctx,record)
