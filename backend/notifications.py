@@ -63,6 +63,9 @@ def student_ids(user, workspace):
     return {id for g in user['grants'] if g['workspace'] == workspace and g['view'] == 'student' for id in g['entityIds']}
 
 
+TITLE_SIZE = dict(duty=300)  # characters; a duty notice joins up to three sentences and has always kept 300
+
+
 def clip(text, size=200):
     text = ' '.join(str(text).split())
     return text if len(text) <= size else text[:size-1].rstrip() + '…'
@@ -83,7 +86,7 @@ def safe_target(value):
     if isinstance(day, str) and re.fullmatch(r'\d{4}-\d\d-\d\d', day):
         try: date.fromisoformat(day); result['day'] = day
         except ValueError: pass
-    title = clip(value['title']) if isinstance(value.get('title'), str) else ''
+    title = clip(value['title'], TITLE_SIZE.get(result.get('module'), 200)) if isinstance(value.get('title'), str) else ''
     if title: result['title'] = title
     return result or None
 
@@ -233,13 +236,22 @@ def open_forms(db, user, workspace, data, kids):
 
 OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
                forms=open_forms, timetable=lambda *args: {}, duty=lambda *args: {})
+# These lead to the account's own record; every other module needs a child the family account still has.
+OWN = ('forms', 'duty')
+# Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
+NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
+
+
+def linkable(user, module):
+    return module in OPENERS and not (module == 'duty' and user['role'] in NO_DUTY_SCREEN)
 
 
 def navigation(db, user, workspace, data):
     """Where an entry leads for this account right now, or None. Only ids and a day: never the record's content."""
+    if not linkable(user, data['module']): return None
     listed = [s['id'] for s in data.get('students') or []]
     kids = [id for id in listed if id in student_ids(user, workspace)] if user['role'] in FAMILY else listed
-    if listed and not kids and user['role'] in FAMILY: return None
+    if user['role'] in FAMILY and not kids and data['module'] not in OWN: return None
     found = OPENERS[data['module']](db, user, workspace, data, kids)
     if found is None: return None
     return dict(module=data['module'], workspace=workspace, recordId=data.get('recordId'), studentId=kids[0] if kids else None,
@@ -357,15 +369,24 @@ class Notifications:
         return result
 
     def redact(self, db, user_ids, first, last):
-        """Blank title and children of the unread and read entries whose topic lies in [first, last]; a prefix p is p..p+U+FFFF."""
-        db.execute("UPDATE notifications SET target=json_remove(json_remove(target,'$.title'),'$.students') WHERE user_id IN (SELECT value FROM json_each(?)) AND topic>=? AND topic<=? AND target IS NOT NULL",
+        """Blank title, children and module of the unread and read entries whose topic lies in [first, last]; a prefix p is p..p+U+FFFF.
+
+        Without its module an entry leads nowhere: opening it cannot answer for a record the account lost or that was corrected.
+        """
+        db.execute("UPDATE notifications SET target=json_remove(target,'$.title','$.students','$.module') WHERE user_id IN (SELECT value FROM json_each(?)) AND topic>=? AND topic<=? AND target IS NOT NULL",
                    (encoded(list(user_ids)), first, last))
+
+    def retract(self, db, user_ids, topic):
+        """The event this topic told about no longer holds: older entries lose their text, the unread ones disappear."""
+        self.redact(db, user_ids, topic, topic)
+        db.execute('DELETE FROM notifications WHERE user_id IN (SELECT value FROM json_each(?)) AND topic=? AND read_at IS NULL', (encoded(list(user_ids)), topic))
 
     def deliver(self, db, users, workspace, revision, action, topic=None, target=None, supersede=False):
         """topic: at most one unread entry per user and topic; a newer event replaces it.
 
         target: where the entry leads and its short title, a dict or a function of the recipient (never private text).
         supersede: the older entries of the topic, read ones too, lose their title and children: only the newest stays readable.
+        An account that muted the category gets no new entry, but its older entries are still retracted.
         """
         self.tables(db)
         category = category_of(action)
@@ -374,11 +395,11 @@ class Notifications:
         from .web_push import enqueue
         for user in users:
             pref = prefs[user['id']]
-            if category != SYSTEM and category in pref['muted']: continue
+            muted = category != SYSTEM and category in pref['muted']
+            if topic and supersede: self.retract(db, [user['id']], topic)
+            elif topic and not muted: db.execute('DELETE FROM notifications WHERE user_id=? AND topic=? AND read_at IS NULL', (user['id'], topic))
+            if muted: continue
             safe = safe_target(target(user) if callable(target) else target)
-            if topic:
-                if supersede: self.redact(db, [user['id']], topic, topic)
-                db.execute('DELETE FROM notifications WHERE user_id=? AND topic=? AND read_at IS NULL', (user['id'], topic))
             notice = db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,topic,category,target) VALUES (?,?,?,?,?,?,?,?,?)',
                        (user['id'], permission_key(user), workspace, revision, created, action, topic, category, encoded(safe) if safe else None)).lastrowid
             enqueue(db, user, notice, quiet_until=quiet_until(pref))
@@ -409,7 +430,7 @@ class Notifications:
                 if not students: return item | dict(restricted=True)
             if data.get('title'): item['title'] = data['title']
             if students: item['students'] = students
-            if data.get('module') in OPENERS and data.get('title'): item['link'] = True
+            if linkable(user, data.get('module')) and data.get('title'): item['link'] = True
             return item
 
         @app.get('/api/notifications/inbox')

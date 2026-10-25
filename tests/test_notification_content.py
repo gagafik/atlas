@@ -448,3 +448,272 @@ def test_service_worker_labels_match_categories():
     for id, push in PUSH_LABELS.items(): assert f'{id}: "{push}"' in worker, id
     client_side = (Path(__file__).resolve().parent.parent / 'src' / 'notifications.ts').read_text(encoding='utf-8')
     for id, push in PUSH_LABELS.items(): assert f'{id}: "{push}"' in client_side, id
+
+
+def attend(record, student, mark, minutes=0):
+    for row in record['document']['content']['records']:
+        if row['studentId'] == student: row.update(attendance=mark, lateMinutes=minutes)
+    return record
+
+
+def read(c, *ids):
+    c.post('/api/notifications/read', json=dict(ids=list(ids))).raise_for_status()
+
+
+def regrant(client, account, *students):
+    update = {k: v for k, v in account.items() if k != 'id'}
+    update['grants'] = [dict(workspace='demo', view='student', entityIds=list(students))]
+    assert client.put('/api/access/users/' + account['id'], json=update).status_code == 200
+
+
+def test_absence_is_told_beside_grade_and_homework(client):
+    family(client)
+    parent, other = signed('parent'), signed('other-parent')
+    record = attend(graded(entry(client, lesson(client)['lessonKey'])), 's1', 'absent')
+    assert write(client, record, publish=True).status_code == 200
+    (absence,) = items(parent, 'journal.updated')
+    assert absence['title'] == 'Английский язык, 17.08: отмечено отсутствие' and absence['students'][0]['id'] == 's1'
+    assert len(items(parent, 'journal.grade')) == 1 and len(items(parent, 'journal.homework')) == 1
+    # The ordinary first 'present' mark is not worth an entry beside the grade and the homework.
+    assert items(other, 'journal.updated') == [] and len(items(other, 'journal.grade')) == 1
+
+
+def test_changed_attendance_replaces_the_older_mark_beside_other_news(client):
+    family(client)
+    parent = signed('parent')
+    key = lesson(client)['lessonKey']
+    saved = republish(client, attend(entry(client, key), 's1', 'late', 7))
+    (late,) = items(parent, 'journal.updated')
+    assert late['title'] == 'Английский язык, 17.08: отмечено опоздание (7 мин)'
+    # The lateness becomes an absence in a publication that also sets homework: one mark remains, and it is the new one.
+    saved['document']['content'].update(homework='Прочитать страницу 12', dueDate='2026-08-19')
+    saved = republish(client, attend(saved, 's1', 'absent'))
+    (absent,) = items(parent, 'journal.updated')
+    assert absent['title'] == 'Английский язык, 17.08: отмечено отсутствие' and absent['id'] != late['id']
+    assert len(items(parent, 'journal.homework')) == 1 and 'опоздание' not in json.dumps(inbox(parent), ensure_ascii=False)
+    # Read, then corrected to 'present' in a publication that also brings a grade: the old text goes, the correction is told.
+    read(parent, absent['id'])
+    republish(client, attend(graded(saved), 's1', 'present'))
+    old, new = sorted(items(parent, 'journal.updated'), key=lambda i: i['id'])
+    assert old['id'] == absent['id'] and 'title' not in old and new['title'] == 'Английский язык, 17.08: отмечено присутствие'
+    assert 'отсутствие' not in json.dumps(inbox(parent), ensure_ascii=False)
+
+
+def test_hidden_lesson_notice_goes_when_the_lesson_is_published_again(client):
+    family(client)
+    parent = signed('parent')
+    saved = published(client)
+
+    def withdraw(record):
+        client.post('/api/journal/withdraw?workspace=demo', json=dict(lessonKey=record['lessonKey'], version=record['version'])).raise_for_status()
+
+    withdraw(saved)
+    assert len(items(parent, 'journal.withdrawn')) == 1
+    saved = republish(client, entry(client, saved['lessonKey']))
+    # The unread notice is gone and the new grade is there.
+    assert items(parent, 'journal.withdrawn') == [] and len(items(parent, 'journal.grade')) == 1
+    withdraw(saved)
+    (notice,) = items(parent, 'journal.withdrawn')
+    read(parent, notice['id'])
+    republish(client, entry(client, saved['lessonKey']))
+    (old,) = items(parent, 'journal.withdrawn')
+    assert old['id'] == notice['id'] and 'title' not in old and 'запись урока скрыта' not in json.dumps(inbox(parent), ensure_ascii=False)
+
+
+@pytest.mark.parametrize('seen', [False, True])
+def test_muted_category_still_retracts_older_grade_titles(client, seen):
+    family(client)
+    parent = signed('parent')
+    saved = published(client)
+    (grade,) = items(parent, 'journal.grade')
+    if seen: read(parent, grade['id'])
+    parent.put('/api/notifications/preferences', json=dict(muted=['grades'])).raise_for_status()
+    saved['document']['content']['records'][0]['grades'][0]['score'] = 3
+    republish(client, saved)
+    text = json.dumps(inbox(parent), ensure_ascii=False)
+    assert '8 из 10' not in text and '3 из 10' not in text
+    old = items(parent, 'journal.grade')
+    if seen:
+        # Read: still listed, with no text and no way in.
+        assert len(old) == 1 and 'title' not in old[0] and 'link' not in old[0] and open_notice(parent, grade['id']).status_code == 404
+    else:
+        assert old == []
+
+
+@pytest.mark.parametrize('seen', [False, True])
+def test_muted_category_still_retracts_withdrawn_behaviour_note(client, seen):
+    enable(client); behaviour.teacher(client, 'math', 't1'); behaviour.guardian(client, 'mother', 's2')
+    teacher, mother = signed('math'), signed('mother')
+    note = behaviour.ok(behaviour.note(teacher, ['s2'], 'unprepared', 'Тайный текст замечания'))['ids'][0]
+    (published,) = items(mother, 'behaviour.published')
+    if seen: read(mother, published['id'])
+    mother.put('/api/notifications/preferences', json=dict(muted=['behaviour'])).raise_for_status()
+    current = behaviour.staff_list(teacher)[0]
+    assert client.post(behaviour.url(f'notes/{note}/withdraw'), json=dict(version=current['version'], reason='Не тому ученику')).status_code == 200
+    assert items(mother, 'behaviour.withdrawn') == []
+    old = items(mother, 'behaviour.published')
+    if seen:
+        assert len(old) == 1 and not {'title', 'students', 'link'} & set(old[0]) and open_notice(mother, published['id']).status_code == 404
+    else:
+        assert old == []
+    assert 'Не готов к уроку' not in json.dumps(inbox(mother), ensure_ascii=False)
+
+
+def test_redacted_entry_leads_nowhere_even_for_a_family_that_lost_the_child(client, assessment_clock):
+    enable(client); create(client, 'teacher'); account = assessments.guardian(client, 'mother', 's1')
+    teacher, mother = signed('teacher'), signed('mother')
+    work = assessments.ok(assessments.english(teacher))
+    (published,) = items(mother, 'assessment.published')
+    read(mother, published['id'])
+    moved = teacher.post(assessments.url(f"bookings/{work['id']}/move"), json=dict(requestId=str(uuid4()), version=work['version'], day=assessments.D24, lessonId='2026-08-24:eng', reason='Болезнь'))
+    assert moved.status_code == 200, moved.text
+    (old,) = items(mother, 'assessment.published')
+    assert 'title' not in old and 'link' not in old
+    # Two locks: the blanked entry has lost its module and the family guard wants a child, so either alone keeps it shut.
+    with api.connect() as db:
+        assert db.execute("SELECT json_extract(target,'$.module') FROM notifications WHERE id=?", (old['id'],)).fetchone()[0] is None
+    # The corrected entry still opens; the blanked one never does, whatever the account's children are.
+    (shifted,) = items(mother, 'assessment.moved')
+    assert open_notice(mother, shifted['id']).status_code == 200 and open_notice(mother, old['id']).status_code == 404
+    regrant(client, account, 's3')
+    fresh = signed('mother')
+    assert open_notice(fresh, old['id']).status_code == 404 and open_notice(fresh, shifted['id']).status_code == 404
+
+
+def test_only_the_owner_can_open_an_entry(client):
+    family(client)
+    parent, teacher = signed('parent'), signed('teacher')
+    published(client)
+    (grade,) = items(parent, 'journal.grade')
+    unread = inbox(parent)['unread']
+    # The administrator and a teacher of the lesson see the lesson, but an entry id is no key to somebody else's inbox.
+    for other in (client, teacher): assert open_notice(other, grade['id']).status_code == 404
+    assert inbox(parent)['unread'] == unread and items(parent, 'journal.grade')[0]['read'] is False
+
+
+def test_timetable_entry_is_refused_once_the_child_is_lost(client):
+    enable(client); account = create(client, 'parent')
+    parent = signed('parent')
+    saves.rebase(client)
+    state = api.read('demo'); state.placements[0].period = 0
+    api.save('demo', state)
+    assert saves.announce(client)['notified'] == 1
+    (notice,) = items(parent, 'timetable.published')
+    assert open_notice(parent, notice['id']).status_code == 200
+    regrant(client, account, 's3')
+    fresh = signed('parent')
+    assert open_notice(fresh, notice['id']).status_code == 404
+
+
+def test_sibling_that_lost_one_child_sees_only_the_other(client):
+    family(client)
+    account = create(client, 'parent', login='siblings', grants=[dict(workspace='demo', view='student', entityIds=['s1', 's2'])])
+    published(client)
+    regrant(client, account, 's1')
+    parent = signed('siblings')
+    (homework,) = items(parent, 'journal.homework')
+    assert homework['students'] == [dict(id='s1', name=pupil_name('s1'))] and open_notice(parent, homework['id']).json()['studentId'] == 's1'
+    lost = [g for g in items(parent, 'journal.grade') if g.get('restricted')]
+    assert len(lost) == 1 and not {'title', 'students', 'link'} & set(lost[0])
+    assert pupil_name('s2') not in json.dumps(inbox(parent), ensure_ascii=False)
+
+
+def test_journal_entry_needs_the_pupil_on_the_published_roster(client):
+    family(client)
+    parent, other = signed('parent'), signed('other-parent')
+    published(client)
+    (grade,), (theirs,) = items(parent, 'journal.grade'), items(other, 'journal.grade')
+    with api.access.lock, api.connect() as db:
+        db.execute("DELETE FROM journal_members WHERE kind='published' AND student_id='s1'")
+    assert open_notice(parent, grade['id']).status_code == 404 and open_notice(other, theirs['id']).status_code == 200
+
+
+def test_quiz_entry_needs_a_quiz_member(client, quiz_clock):
+    quiz, pupil, parent, teacher, _ = quiz_tests.ready(client)
+    (published,) = items(parent, 'quiz.published')
+    assert open_notice(parent, published['id']).status_code == 200
+    with api.access.lock, api.connect() as db:
+        db.execute("DELETE FROM quiz_members WHERE student_id='s1'")
+    assert open_notice(parent, published['id']).status_code == 404
+
+
+def test_behaviour_entry_needs_a_visible_published_note_of_the_child(client):
+    enable(client); behaviour.teacher(client, 'math', 't1'); behaviour.guardian(client, 'mother', 's2')
+    teacher, mother = signed('math'), signed('mother')
+    note = behaviour.ok(behaviour.note(teacher, ['s2'], 'unprepared', 'Текст'))['ids'][0]
+    (published,) = items(mother, 'behaviour.published')
+
+    def change(column, value):
+        with api.access.lock, api.connect() as db: db.execute(f'UPDATE behaviour_notes SET {column}=? WHERE id=?', (value, note))
+
+    assert open_notice(mother, published['id']).status_code == 200
+    for column, wrong, right in [('visible', 0, 1), ('status', 'withdrawn', 'published'), ('student_id', 's3', 's2')]:
+        change(column, wrong)
+        assert open_notice(mother, published['id']).status_code == 404, column
+        change(column, right)
+    assert open_notice(mother, published['id']).status_code == 200
+
+
+def test_assessment_entry_needs_a_published_work(client, assessment_clock):
+    enable(client); create(client, 'teacher'); assessments.guardian(client, 'mother', 's1')
+    teacher, mother = signed('teacher'), signed('mother')
+    work = assessments.ok(assessments.english(teacher))
+    (published,) = items(mother, 'assessment.published')
+
+    def status(value):
+        with api.access.lock, api.connect() as db: db.execute('UPDATE assessment_bookings SET status=? WHERE id=?', (value, work['id']))
+
+    status('cancelled')
+    assert open_notice(mother, published['id']).status_code == 404
+    status('published')
+    assert open_notice(mother, published['id']).status_code == 200
+
+
+def test_meeting_entry_needs_the_booking_parent_and_child(client, monkeypatch):
+    id, host, account = meet.setup(client, monkeypatch)
+    meet.publish(client, id)
+    parent = signed('parent')
+    booking = meet.ok(meet.book(parent, id, meet.slots(parent, id)[0], note='Личный вопрос'))['id']
+    (booked,) = items(parent, 'meeting.booked')
+
+    def change(column, value):
+        with api.access.lock, api.connect() as db: db.execute(f'UPDATE meeting_bookings SET {column}=? WHERE id=?', (value, booking))
+
+    for column, wrong, right in [('parent_id', 'somebody-else', account['id']), ('student_id', 's3', 's1')]:
+        change(column, wrong)
+        assert open_notice(parent, booked['id']).status_code == 404, column
+        change(column, right)
+    assert open_notice(parent, booked['id']).status_code == 200
+
+
+def test_form_entry_needs_the_applicant(client):
+    enable(client); create(client, 'parent'); reviewer = create(client, 'staff')
+    id = forms.new(client, 'application')
+    forms.configure(client, id, questions=[dict(id='q', title='Reason', kind='text')])
+    forms.assign(client, id, reviewer, 'review'); forms.publish(client, id)
+    parent, staff = signed('parent'), signed('staff')
+    sent = forms.answer(parent, id, answers={'q': 'Личные обстоятельства'}).json()
+    review = forms.route(id, '/responses/' + sent['id'] + '/review')
+    decided = staff.post(review, json=forms.request(version=sent['version'], formVersion=forms.get(staff, id)['version'], action='approved', comment='Да'))
+    assert decided.status_code == 200, decided.text
+    (decision,) = items(parent, 'forms.reviewed')
+    assert open_notice(parent, decision['id']).status_code == 200
+    with api.access.lock, api.connect() as db: db.execute("UPDATE school_form_answers SET user_id='somebody-else' WHERE id=?", (sent['id'],))
+    assert open_notice(parent, decision['id']).status_code == 404
+
+
+def test_duty_notice_keeps_its_whole_text_and_has_no_link_for_managers(client):
+    enable(client); create(client, 'teacher'); create(client, 'editor', login='school-editor', workspaces=['demo'])
+    teacher, editor = signed('teacher'), signed('school-editor')
+    text = ' '.join(f'Назначено: {n:02d}.09.2026, 12:00–12:05, Спортивный зал №2 (большой), 2 этаж.' for n in range(1, 5))
+    assert 200 < len(text) <= 300
+    with api.access.lock, api.connect() as db:
+        users = [api.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE login IN ('teacher','school-editor')")]
+        api.notifications.deliver(db, users, 'demo', 1, 'duty.changed', target=dict(module='duty', title=text))
+    (own,) = items(teacher, 'duty.changed')
+    assert own['title'] == text and own['link'] is True and open_notice(teacher, own['id']).json()['module'] == 'duty'
+    # The administrator and editor shells have no duty section, so no button is offered and nothing is opened.
+    (managed,) = items(editor, 'duty.changed')
+    assert managed['title'] == text and 'link' not in managed and open_notice(editor, managed['id']).status_code == 404
+    too_long = safe_target(dict(module='duty', title='я' * 400))['title']
+    assert len(too_long) == 300 and too_long.endswith('…')

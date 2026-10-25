@@ -48,10 +48,19 @@ def grade_parts(old, new):
     return parts
 
 
+def attendance_mark(projection):
+    return (projection['record']['attendance'], projection['record']['lateMinutes']) if projection else ('unmarked', 0)
+
+
+def beside_other_news(old, new):
+    """Is a changed attendance mark worth its own entry next to a grade or homework entry? Not the usual first 'present'."""
+    first, last = attendance_mark(old), attendance_mark(new)
+    return first != last and not (first[0] == 'unmarked' and last[0] == 'present')
+
+
 def attendance_title(old, new, subject, day):
     """Text for a changed attendance mark, else None."""
-    first = (old['record']['attendance'], old['record']['lateMinutes']) if old else ('unmarked', 0)
-    last = (new['record']['attendance'], new['record']['lateMinutes'])
+    first, last = attendance_mark(old), attendance_mark(new)
     if first == last or last[0] == 'unmarked': return None
     return f"{subject}, {day_label(day)}: отмечено {ATTENDANCE[last[0]]}" + (f" ({last[1]} мин)" if last[0] == 'late' and last[1] else '')
 
@@ -85,6 +94,8 @@ def deliver_journal(notifications, db, workspace, version, key, before, after):
             notifications.deliver(db, [user], workspace, version, 'journal.withdrawn', topic=base + 'withdrawn',
                                   target=dict(recordId=key, day=day, students=pupils(kids), title=f"{subject}, {day_label(day)}: запись урока скрыта"))
         return
+    # Published again after a withdrawal: the notice that the lesson was hidden no longer holds.
+    if before is None: notifications.retract(db, [user['id'] for user in users], base + 'withdrawn')
     parts = {id: grade_parts(old[id], new[id]) for id in changed}
     before_hw, after_hw = homework_state(before), homework_state(after)
     kind = 'new' if after_hw[0] and not before_hw[0] else 'changed' if after_hw[0] and after_hw != before_hw else 'removed' if before_hw[0] and not after_hw[0] else None
@@ -105,7 +116,8 @@ def deliver_journal(notifications, db, workspace, version, key, before, after):
             notifications.deliver(db, [user], workspace, version, 'journal.homework', topic=base + 'homework', supersede=True,
                                   target=dict(module='journal', recordId=key, day=day, students=pupils(family), title=title))
         for kid in kids:
-            if kid in covered: continue
+            # An absence, a lateness or a correction is told and replaces the older mark, also beside a grade or homework entry.
+            if kid in covered and not beside_other_news(old[kid], new[kid]): continue
             title = attendance_title(old[kid], new[kid], subject, day) or f"{subject}, {day_label(day)}: обновлена запись урока"
             notifications.deliver(db, [user], workspace, version, 'journal.updated', topic=f'{base}{kid}:lesson', supersede=True,
                                   target=dict(module='journal', recordId=key, day=day, students=pupils([kid]), title=title))

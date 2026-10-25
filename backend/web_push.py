@@ -112,8 +112,10 @@ def revoke_session(db, user_id, session_hash, endpoint_hash=None):
     db.execute("UPDATE push_outbox SET status='cancelled',lease=NULL,last_error='signed_out' WHERE device_id IN (SELECT id FROM push_devices WHERE user_id=? AND active=0)", (user_id,))
 
 
-def enqueue(db, user, notice_id, *, device_id=None, clock=time.time, quiet_until=None):
-    """Inside the producer transaction; no I/O or key generation on the save path. quiet_until: epoch second before which the push waits."""
+def enqueue(db, user, notice_id, *, device_id=None, clock=time.time, quiet_until=None, immediate=False):
+    """Inside the producer transaction; no I/O or key generation on the save path. quiet_until: epoch second before which the push waits.
+
+    immediate: a device test replaces even a job that waits for the quiet hours to end."""
     if user['id'] == 'local': return
     stamp = clock()
     until = quiet_until or 0
@@ -126,8 +128,8 @@ def enqueue(db, user, notice_id, *, device_id=None, clock=time.time, quiet_until
             notification_id=excluded.notification_id,generation=push_outbox.generation+1,
             status=CASE WHEN push_outbox.status='sending' AND push_outbox.device_version=excluded.device_version THEN 'sending' ELSE 'queued' END,
             attempts=CASE WHEN push_outbox.status IN ('queued','sending') AND push_outbox.device_version=excluded.device_version THEN push_outbox.attempts ELSE 0 END,
-            available=CASE WHEN push_outbox.status='queued' AND push_outbox.device_version=excluded.device_version THEN max(push_outbox.available,?) ELSE excluded.available END,
-            expires=excluded.expires,completed=NULL''', (id,version,notice_id,max(stamp+2,until),max(stamp+86400,until+3600),until))
+            available=CASE WHEN ? THEN excluded.available WHEN push_outbox.status='queued' AND push_outbox.device_version=excluded.device_version THEN max(push_outbox.available,?) ELSE excluded.available END,
+            expires=excluded.expires,completed=NULL''', (id,version,notice_id,max(stamp+2,until),max(stamp+86400,until+3600),int(immediate),until))
 
 
 def retry_seconds(value, stamp):
@@ -389,7 +391,7 @@ class PushService:
                 notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,category) VALUES (?,?,?,?,?,?,?)',
                     (row[0],permission_key(user),'school',0,now().isoformat(),'push.test',SYSTEM)).lastrowid
                 db.execute('DELETE FROM notifications WHERE user_id=? AND id NOT IN (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500)',(row[0],row[0]))
-                enqueue(db,user,notice,device_id=id,clock=self.clock)
+                enqueue(db,user,notice,device_id=id,clock=self.clock,immediate=True)
                 db.execute('UPDATE push_devices SET last_test=? WHERE id=?',(self.clock(),id))
                 return dict(status='queued')
 

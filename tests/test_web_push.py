@@ -428,6 +428,11 @@ def test_config_subscription_and_queue_survive_verified_backup(client,push,tmp_p
     assert service.process_one() and queue()[0][1]=='sent' and len(calls)==1
 
 
+def after_enqueue(clock):
+    """Enqueueing stamps a job with real time, so a slow setup (accounts are hashed) must not decide whether it is due yet."""
+    clock[0]=max(row[3] for row in queue())+1
+
+
 def quiet_around(user,clock):
     """Quiet hours that began an hour ago and end within the next hour of school time."""
     local=datetime.fromtimestamp(clock,ZoneInfo('Asia/Qyzylorda'))
@@ -453,7 +458,7 @@ def test_quiet_hours_defer_push_without_losing_it(client,push):
 
 def test_quiet_hours_set_after_enqueue_defer_at_send_time(client,push):
     account=enable(client);subscribe(client);notify(account)
-    service,clock,calls=push;clock[0]+=3
+    service,clock,calls=push;after_enqueue(clock)
     end=quiet_around(client,clock[0]).timestamp()
     job=service.claim()
     prepared=service.prepare(job)
@@ -477,12 +482,26 @@ def test_test_push_ignores_muting_and_quiet_hours(client,push):
     assert json.loads(calls[0][3])=={'type':'atlas-update','category':'system'}
 
 
+def test_test_push_replaces_a_job_waiting_for_the_quiet_hours_to_end(client,push):
+    account=enable(client);device,_=subscribe(client)
+    service,clock,calls=push
+    end=quiet_around(client,clock[0]).timestamp()
+    notify(account)
+    assert queue()[0][3]>=end
+    assert client.post(BASE+'/devices/'+device['id']+'/test',json=dict(version=device['version'])).status_code==202
+    # The test does not wait behind the real event: it is due in seconds and shows the test label.
+    assert queue()[0][3]<end and queue()[0][1]=='queued'
+    clock[0]+=3
+    assert service.process_one() and len(calls)==1
+    assert json.loads(calls[0][3])=={'type':'atlas-update','category':'system'}
+
+
 def test_payload_carries_only_category(client,push):
     family(client)
     parent=signed('parent');subscribe(parent)
     service,clock,calls=push
     published(client)
-    clock[0]+=3
+    after_enqueue(clock)
     assert service.process_one() and len(calls)==1
     payload=calls[-1][3]
     assert set(json.loads(payload))=={'type','category'} and json.loads(payload)['type']=='atlas-update'
@@ -498,6 +517,6 @@ def test_push_label_follows_the_newest_unmuted_notice(client,push):
     parent.put('/api/notifications/preferences',json=dict(muted=['homework'])).raise_for_status()
     service,clock,calls=push
     published(client)
-    clock[0]+=3
+    after_enqueue(clock)
     assert service.process_one()
     assert json.loads(calls[0][3])['category']=='grades'
