@@ -6,7 +6,11 @@ type Roster = {
   version: number;
   managerId: string;
   limit: number;
-  members: (Person & { accessible: boolean; canManage: boolean })[];
+  members: (Person & {
+    accessible: boolean;
+    history: boolean;
+    canManage: boolean;
+  })[];
 };
 const roleNames: Record<string, string> = {
   admin: "Администратор",
@@ -133,14 +137,20 @@ export default function MessageGroupManagement({
                   {person.id === roster.managerId
                     ? " · Управляет обсуждением"
                     : ""}
-                  {!person.accessible ? " · Доступ сейчас отсутствует" : ""}
+                  {person.history
+                    ? " · Нет учебной связи: только чтение"
+                    : !person.accessible
+                      ? " · Нет доступа к обсуждению"
+                      : ""}
                 </span>
                 {person.id !== roster.managerId && (
                   <button
                     onClick={() => {
                       if (
                         !window.confirm(
-                          `Исключить ${person.name}? Доступ к истории и файлам обсуждения закроется.`,
+                          person.accessible || person.history
+                            ? `Исключить ${person.name}? Новые сообщения станут недоступны; история до исключения останется у участника только для чтения.`
+                            : `Исключить ${person.name}? У этого аккаунта сейчас нет доступа к обсуждению.`,
                         )
                       )
                         return;

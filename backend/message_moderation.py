@@ -84,7 +84,9 @@ class MessageModeration:
                     return dict(id=prior[0])
                 post = db.execute('SELECT thread_id,author_id,author_name,created,body FROM message_posts WHERE id=?', (post_id,)).fetchone()
                 if not post: raise HTTPException(404, 'Сообщение недоступно.')
-                thread, _ = self.messages.find(db,post[0],user,directory,self.messages.thread_accounts(db,post[0],user))
+                thread, _, through = self.messages.readable(db,post[0],user,directory,self.messages.thread_accounts(db,post[0],user))
+                # A former participant may report only what they could read.
+                if through is not None and post_id > through: raise HTTPException(404, 'Сообщение недоступно.')
                 if post[1] == user['id']: raise HTTPException(422, 'Нельзя пожаловаться на своё сообщение.')
                 if self.state(db,post_id)['hidden']: raise HTTPException(409, 'Сообщение уже скрыто администратором.')
                 if db.execute('SELECT 1 FROM message_reports WHERE reporter_id=? AND post_id=?',(user['id'],post_id)).fetchone(): raise HTTPException(409, 'Вы уже отправили жалобу на это сообщение. Проверьте её состояние в разделе жалоб.')

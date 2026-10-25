@@ -139,6 +139,18 @@ def test_report_rate_limit_and_paginated_owner_isolation(client):
     assert signed('student').get(url('reports')).json()['items']==[]
 
 
+def test_former_member_reports_only_seen_posts(client):
+    people,parent,teacher,thread,post,file=seed(client)
+    seen=detail(teacher,thread)['posts'][0]['id']
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove')).status_code==200
+    assert teacher.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),text='Позже')).status_code==200
+    later=detail(teacher,thread)['posts'][-1]['id']
+    assert detail(parent,thread)['readOnly']
+    # A removed participant may still report what they saw before the removal, never what came after.
+    assert report(parent,later).status_code==404
+    assert report(parent,seen).status_code==200
+
+
 def test_backup_restores_hidden_evidence_and_decisions(client,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
     _,parent,teacher,thread,post,file=seed(client)
@@ -160,7 +172,7 @@ def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     assert client.post(url('recovery/'+thread),json=body).status_code==409
     deactivate(client,people['teacher'])
     before=api.read('demo').model_dump()
-    assert parent.get(url('threads/'+thread)).status_code==404
+    assert detail(parent,thread)['readOnly']
     assert parent.get(url('recovery')).status_code==403
     item=client.get(url('recovery')).json()['items'][0]
     assert item['id']==thread and {c['id'] for c in item['candidates']}=={successor['id']}
@@ -172,6 +184,10 @@ def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     assert client.get(url('threads/'+thread)).status_code==404
     value=detail(new,thread);assert value['canManage'] and value['authorId']==people['teacher']['id']
     assert detail(parent,thread)['posts'][-1]['text'].endswith(body['reason'])
+    # The recovery notice reaches the members who are linked now; the deactivated manager keeps the bound they had.
+    with api.connect() as db:
+        marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(thread,)));latest=db.execute('SELECT latest_id FROM message_threads WHERE id=?',(thread,)).fetchone()[0]
+    assert marks[people['teacher']['id']]<latest and {v for k,v in marks.items() if k!=people['teacher']['id']}=={latest}
     assert api.read('demo').model_dump()==before
 
 

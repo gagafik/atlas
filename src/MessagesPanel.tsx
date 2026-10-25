@@ -33,6 +33,7 @@ type Thread = {
   latestId: number;
   authorId: string;
   managerId: string;
+  readOnly?: boolean;
 };
 type Post = {
   id: number;
@@ -887,6 +888,13 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
           <p>
             {kinds[detail.kind]} · {statuses[detail.status]}
           </p>
+          {detail.readOnly && (
+            <p role="status">
+              Только чтение: учебная связь или участие в переписке изменились.
+              Доступна история до этого момента; новые сообщения отправить
+              нельзя.
+            </p>
+          )}
           {!!detail.participants.length && (
             <details className="message-receipts">
               <summary>
@@ -973,6 +981,8 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             <p>
               {detail.acknowledged ? (
                 "Вы подтвердили ознакомление."
+              ) : detail.readOnly ? (
+                "Подтверждение недоступно: связь с учеником изменилась."
               ) : (
                 <button
                   className="primary"
@@ -984,7 +994,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               )}
             </p>
           )}
-          {(detail.canReply || replyVersion > 0) && (
+          {!detail.readOnly && (detail.canReply || replyVersion > 0) && (
             <fieldset className="access-fields message-reply" disabled={busy}>
               {!detail.canReply && (
                 <p>Ответы закрыты. Черновик можно редактировать и сохранять.</p>
@@ -1058,13 +1068,13 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               </button>
             </fieldset>
           )}
-          {detail.kind === "group" && !detail.canManage && (
+          {detail.kind === "group" && !detail.canManage && !detail.readOnly && (
             <button
               disabled={busy}
               onClick={() => {
                 if (
                   !window.confirm(
-                    "Выйти из обсуждения? Доступ к его сообщениям и вложениям закроется.",
+                    "Выйти из обсуждения? Новые сообщения станут недоступны; прежняя история останется только для чтения.",
                   )
                 )
                   return;
@@ -1154,6 +1164,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                 <span>
                   {kinds[t.kind]} · {statuses[t.status]}
                   {t.unread ? " · Новое" : ""}
+                  {t.readOnly ? " · Только чтение" : ""}
                   {t.requireAck &&
                   !t.acknowledged &&
                   t.authorId !== options.userId

@@ -61,7 +61,7 @@ def test_read_marks_preferences_pagination_and_account_isolation(client):
     assert TestClient(api.app).get('/api/notifications/inbox').status_code == 401
 
 
-def test_grant_changes_revoke_old_inbox_and_editor_scope(client):
+def test_grant_changes_keep_own_inbox_and_editor_scope(client):
     enable(client)
     user = create(client,'student')
     create(client,'editor',workspaces=['school'])
@@ -73,7 +73,15 @@ def test_grant_changes_revoke_old_inbox_and_editor_scope(client):
     update['grants'] = [dict(workspace='demo',view='student',entityIds=['s3'])]
     assert client.put('/api/access/users/'+user['id'],json=update).status_code == 200
     assert pupil.get('/api/notifications/inbox').status_code == 401
-    assert inbox(signed('student'))['items'] == []
+    # The entry carries no record content, so the owner keeps it; the sections it opens check current access.
+    fresh = signed('student'); old = inbox(fresh)
+    assert old['unread'] == 1 and set(old['items'][0]) == {'id','workspace','revision','created','action','read'} and old['items'][0]['action'] == 'saved'
+    # A change that only touches the former child's class creates nothing for the new grants.
+    state = api.read('demo'); state.placements[0].period = 1
+    api.save('demo',state)
+    assert inbox(fresh)['unread'] == 1 and inbox(editor)['unread'] == 0
+    assert fresh.post('/api/notifications/read',json={'ids':[old['items'][0]['id']]}).status_code == 200
+    assert inbox(fresh)['unread'] == 0
 
 
 def test_dated_lessons_commitments_closures_and_private_reasons(client):

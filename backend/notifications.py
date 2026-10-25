@@ -1,4 +1,4 @@
-"""Transactional, permission-scoped inbox. No pupil data in notification text."""
+"""Transactional personal inbox. No pupil data in notification text."""
 from collections import defaultdict
 from datetime import timedelta
 import hashlib
@@ -17,7 +17,7 @@ def encoded(value):
 
 
 def permission_key(user):
-    # Password changes keep the inbox; changes of role/grants revoke old entries.
+    # Stored with each entry: background push skips entries made under other rights; the inbox keeps the owner's history.
     return hashlib.sha256(encoded({k: user[k] for k in ['role', 'workspaces', 'grants']}).encode()).hexdigest()
 
 
@@ -109,6 +109,7 @@ class Notifications:
     def tables(self, db):
         db.execute('CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_owner ON notifications(user_id,permissions,id)')
+        db.execute('CREATE INDEX IF NOT EXISTS notification_user ON notifications(user_id,id)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_age ON notifications(created)')
         cols = {r[1] for r in db.execute('PRAGMA table_info(notifications)')}
         if 'topic' not in cols:
@@ -186,12 +187,12 @@ class Notifications:
 
         @app.get('/api/notifications/inbox')
         def inbox(request: Request, beforeId: int | None = None, unreadOnly: bool = False):
-            user_id, permissions = owner(request)
+            user_id, _ = owner(request)
             with self.access.lock, self.access.connect() as db:
                 self.tables(db)
                 cutoff = (now()-timedelta(days=90)).isoformat()
-                clause = 'user_id=? AND permissions=? AND created>=?'
-                params = [user_id, permissions, cutoff]
+                clause = 'user_id=? AND created>=?'
+                params = [user_id, cutoff]
                 count, latest = db.execute(f'SELECT count(CASE WHEN read_at IS NULL THEN 1 END),coalesce(max(id),0) FROM notifications WHERE {clause}', params).fetchone()
                 if beforeId is not None: clause += ' AND id<?'; params.append(beforeId)
                 if unreadOnly: clause += ' AND read_at IS NULL'
@@ -211,11 +212,11 @@ class Notifications:
         @app.post('/api/notifications/read')
         def mark(body: ReadItems, request: Request):
             if bool(body.ids) == (body.throughId is not None): raise HTTPException(422, 'Укажите записи или границу списка.')
-            user_id, permissions = owner(request)
+            user_id, _ = owner(request)
             selection = 'id<=?' if body.throughId is not None else 'id IN (' + ','.join('?' for _ in body.ids) + ')'
             values = [body.throughId] if body.throughId is not None else body.ids
             with self.access.lock, self.access.connect() as db:
                 self.tables(db)
-                db.execute(f'UPDATE notifications SET read_at=? WHERE user_id=? AND permissions=? AND {selection}',
-                           [now().isoformat() if body.read else None, user_id, permissions, *values])
+                db.execute(f'UPDATE notifications SET read_at=? WHERE user_id=? AND {selection}',
+                           [now().isoformat() if body.read else None, user_id, *values])
             return dict(status='updated')
