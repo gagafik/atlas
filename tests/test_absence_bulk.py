@@ -57,7 +57,8 @@ def test_preview_private_details_and_atomic_effect_with_replay(client):
     own=parent.get('/api/notifications/inbox').json()['items']
     assert sum(n['action']=='absence.updated' for n in own)==1
     other=signed('other-parent').get('/api/notifications/inbox').json()['items']
-    assert sum(n['action']=='journal.updated' for n in other)==2  # journal publication, then batch
+    # The publication told this family about the grade and the homework; the batch adds one lesson update.
+    assert sorted(n['action'] for n in other if n['action'].startswith('journal.'))==['journal.grade','journal.homework','journal.updated']
     assert not any(n['action']=='absence.updated' for n in other)
 
 

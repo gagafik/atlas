@@ -6,6 +6,23 @@ const PUBLIC_FILES = [
   "/icons/atlas-192.png",
   "/icons/atlas-512.png",
 ];
+// Fixed lock-screen text per notification category (mirrors backend/notifications.py CATEGORIES and src/notifications.ts).
+const LABELS = {
+  grades: "Новая оценка",
+  homework: "Новое ДЗ",
+  journal: "Обновление журнала",
+  absences: "Объяснительная",
+  quizzes: "Тест",
+  assessments: "Контрольная работа",
+  behaviour: "Запись о поведении",
+  messages: "Новое сообщение",
+  meetings: "Встреча",
+  forms: "Форма или заявление",
+  timetable: "Изменение расписания",
+  duty: "Дежурство",
+  other: "Обновление в Атласе",
+  system: "Проверка уведомлений",
+};
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(SHELL_CACHE).then((cache) => cache.addAll(PUBLIC_FILES)),
@@ -48,10 +65,24 @@ self.addEventListener("fetch", (event) => {
   }
 });
 self.addEventListener("push", (event) => {
-  // Never display payload contents, links, account names or private school data.
+  // Only a category id from the fixed list above is read from the payload; names, marks, links and any other field are never shown.
+  let category = null;
+  try {
+    const data = event.data?.json();
+    if (
+      data &&
+      typeof data.category === "string" &&
+      Object.hasOwn(LABELS, data.category)
+    )
+      category = data.category;
+  } catch {
+    /* unreadable payload: generic text */
+  }
   event.waitUntil(
     self.registration.showNotification("Атлас", {
-      body: "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.",
+      body: category
+        ? LABELS[category] + ". Откройте приложение, чтобы посмотреть."
+        : "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.",
       icon: "/icons/atlas-192.png",
       tag: "atlas-updates",
     }),

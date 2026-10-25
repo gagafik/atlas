@@ -59,7 +59,7 @@ def test_grade_publication_updates_report_history_notification_and_keeps_schedul
     history=parent.get(f'/api/journal/homework/{key}/history?workspace=demo&studentId=s1').json()['items']
     assert history[0]['submitted']['grading']==evidence and 'grading' not in history[-1]['submitted']
     notifications=[n['action'] for n in parent.get('/api/notifications/inbox').json()['items']]
-    assert 'homework.reviewed' in notifications and notifications.count('journal.updated')==2
+    assert 'homework.reviewed' in notifications and notifications.count('journal.grade')==1 and notifications.count('journal.updated')==0
     assert api.read('demo')==before
 
 

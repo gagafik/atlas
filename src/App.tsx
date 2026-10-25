@@ -22,6 +22,7 @@ import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
 import MessagesPanel from "./MessagesPanel";
 import AssistantPanel from "./AssistantPanel";
+import TimetableAnnounce from "./TimetableAnnounce";
 import { roleNames, type AuthStatus } from "./auth";
 import { patterns, weekState, activeIn, cycleHours, patternOn } from "./cycles";
 import ChangePreview from "./ChangePreview";
@@ -1899,6 +1900,12 @@ export default function App({
                       >
                         <Redo2 size={17} />
                       </button>
+                      <TimetableAnnounce
+                        workspace={workspace}
+                        revision={s.revision}
+                        notify={setToast}
+                        fail={setError}
+                      />
                       <button
                         className="icon-button"
                         title="Скачать выбранное расписание в CSV"

@@ -400,7 +400,9 @@ class Journal:
     def notify(self, db, workspace, version, before, after, key=None):
         if key:
             from .grade_feed import record
+            from .journal_notices import deliver_journal
             record(db,workspace,key,before,after)
+            return deliver_journal(self.notifications,db,workspace,version,key,before,after)
         ids = {r['studentId'] for d in [before,after] if d for r in d['content']['records']}
         changed = {id for id in ids if (pupil_projection(before,id) if before else None) != (pupil_projection(after,id) if after else None)}
         targets = self.notifications.granted_users(db,workspace,'student',changed,['student','parent'])

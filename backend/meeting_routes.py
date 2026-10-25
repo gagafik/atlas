@@ -235,7 +235,7 @@ def register(service,app,Workspace):
                 db.execute('UPDATE meeting_bookings SET status=?,version=version+1,document=? WHERE id=?',(body.action,encoded(document),id))
                 if body.action!='scheduled':db.execute("UPDATE meeting_reminders SET status='skipped' WHERE booking_id=? AND status='pending'",(id,))
                 service.history(db,event,user,body.action,dict(version=booking['version']+1),id);status=body.action
-                if owner:=service.booking_owner(db,booking,snap,workspace):service.notifications.deliver(db,[owner],workspace,booking['version']+1,'meeting.updated')
+                if owner:=service.booking_owner(db,booking,snap,workspace):service.notifications.deliver(db,[owner],workspace,booking['version']+1,'meeting.updated',target=service.notice(id,event,document,booking['starts_at'],'Итог встречи отмечен'))
             return service.remember(db,user,body,fingerprint,dict(id=id,status=status,version=booking['version']+1))
 
     @app.get('/api/meetings/bookings/{id}/history')

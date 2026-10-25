@@ -132,6 +132,18 @@ small {
 .icon-button:hover {
   background: #ebf0e8;
 }
+.announce-button {
+  position: relative;
+}
+.announce-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0392b;
+}
 .text-button {
   border: none;
   background: none;
@@ -3929,6 +3941,48 @@ main {
 .notification-list h3 {
   font-size: 16px;
   margin: 0 0 8px;
+}
+.notification-list .notice-group-block {
+  display: grid;
+  gap: 12px;
+}
+.notification-list h3.notice-group {
+  margin: 8px 0 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #dce3db;
+}
+.notification-list h4 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+.notification-list .notice-title {
+  font-weight: 600;
+}
+.notification-list .notice-child {
+  color: #58675d;
+  font-size: 14px;
+}
+.notification-list .notice-title,
+.notification-list .notice-child {
+  overflow-wrap: anywhere;
+}
+.notification-prefs summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+.notification-prefs fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #dce3db;
+  border-radius: 10px;
+  min-width: 0;
+}
+.notification-prefs .quiet-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 .notification-list p {
   margin: 6px 0;

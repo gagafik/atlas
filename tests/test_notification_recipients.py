@@ -64,7 +64,7 @@ def test_grading_skips_unrelated_accounts_but_respects_mute_and_family_expiry(cl
     monkeypatch.setattr(api.access,'public',checked)
     grade(teacher,key,sent,mark).raise_for_status()
     assert parent.get('/api/notifications/inbox').json()['unread']==0
-    assert {i['action'] for i in pupil.get('/api/notifications/inbox').json()['items']}=={'journal.updated','homework.reviewed'}
+    assert {i['action'] for i in pupil.get('/api/notifications/inbox').json()['items']}=={'journal.grade','homework.reviewed'}
     with api.connect() as db:
         assert not db.execute("SELECT 1 FROM notifications WHERE user_id='expired-parent'").fetchone()
         assert db.execute("SELECT count(*) FROM notifications WHERE user_id='current-parent'").fetchone()[0]==2

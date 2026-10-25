@@ -28,10 +28,14 @@ def register(service,app,Workspace):
     def items(rows,snap,user=None,staff_view=True):
         return [service.public(dict(r)|dict(data=json.loads(r['document'])),snap,staff_view,user) for r in rows]
 
-    def publish(db,workspace,row,user,version,data):
+    def publish(db,workspace,row,user,version,data,snap):
         """Bring a note into force: number its letter and tell the family if it is visible."""
         if data.get('letter') and not data.get('letterNumber'):data['letterNumber']=service.letter_number(db,workspace)
-        if row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.published')
+        if row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.published',note(row,data['category'],snap))
+
+    def note(row,category,snap,kind=None):
+        pupil=snap.entities['student'].get(row['student_id'])
+        return dict(id=row['id'],kind=kind or row['kind'],category=category,name=pupil.name if pupil else '')
 
     @app.get('/api/behaviour/options')
     def options(request:Request,workspace:Workspace='school'):
@@ -86,8 +90,8 @@ def register(service,app,Workspace):
                           requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
                           approvedBy=user['name'] if category['approval'] and status=='published' else '')
                 if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'])
-                row=dict(student_id=student,visible=int(body.visible))
-                if status=='published':publish(db,workspace,row,user,1,data)
+                row=dict(id=id,student_id=student,kind=category['kind'],visible=int(body.visible))
+                if status=='published':publish(db,workspace,row,user,1,data,snap)
                 db.execute('''INSERT INTO behaviour_notes(id,batch,workspace,student_id,class_id,version,status,kind,category_id,day,author_id,author_name,created,updated,document,visible)
                               VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)''',(id,batch,workspace,student,pupil.classId,status,category['kind'],category['id'],body.day.isoformat(),user['id'],user['name'],created,created,encoded(data),int(body.visible)))
                 service.history(db,workspace,user,id,'created','',data|dict(visible=body.visible,status=status))
@@ -134,7 +138,7 @@ def register(service,app,Workspace):
             if row['version']!=body.version:raise HTTPException(409,'Запись изменилась. Обновите список.')
             if row['status']!='pending':raise HTTPException(409,'Запись не ждёт согласования.')
             data=row['data']|dict(approvedBy=user['name'],decision=body.reason.strip());version=row['version']+1
-            publish(db,workspace,row,user,version,data)
+            publish(db,workspace,row,user,version,data,snap)
             db.execute("UPDATE behaviour_notes SET version=?,updated=?,status='published',document=? WHERE id=?",(version,stamp(),encoded(data),id))
             service.history(db,workspace,user,id,'approved',body.reason.strip(),data)
             service.notify_accounts(db,workspace,{row['author_id']},version,'behaviour.decided',user['id'])
@@ -230,7 +234,7 @@ def register(service,app,Workspace):
             if row['status']=='published' and data['letter'] and not data.get('letterNumber'):data['letterNumber']=service.letter_number(db,workspace)
             db.execute('UPDATE behaviour_notes SET version=?,updated=?,kind=?,category_id=?,document=? WHERE id=?',(version,stamp(),category['kind'],category['id'],encoded(data),id))
             service.history(db,workspace,user,id,'edited',body.reason,dict(before=row['data'],after=data))
-            if row['status']=='published' and row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.changed')
+            if row['status']=='published' and row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.changed',note(row,category['title'],snap,category['kind']))
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.post('/api/behaviour/notes/{id}/withdraw')
@@ -240,7 +244,7 @@ def register(service,app,Workspace):
             data=row['data']|dict(withdrawReason=body.reason);version=row['version']+1
             db.execute("UPDATE behaviour_notes SET version=?,updated=?,status='withdrawn',document=? WHERE id=?",(version,stamp(),encoded(data),id))
             service.history(db,workspace,user,id,'withdrawn',body.reason,data)
-            if row['status']=='published' and row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.withdrawn')
+            if row['status']=='published' and row['visible']:service.notify_family(db,workspace,[row['student_id']],version,'behaviour.withdrawn',note(row,row['data']['category'],snap))
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.post('/api/behaviour/notes/{id}/acknowledge')

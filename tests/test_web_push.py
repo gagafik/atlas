@@ -1,6 +1,7 @@
 """Synthetic subscriptions and an injected transport; never contacts push providers."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta, datetime, timezone
+from zoneinfo import ZoneInfo
 import json
 import time
 from uuid import uuid4
@@ -13,6 +14,7 @@ from backend import api, web_push
 from backend.access import digest, now
 from backend.notifications import permission_key
 from test_access import client, enable, create, signed, PASSWORD, HEADERS
+from test_grade_feed import family, published
 
 BASE='/api/notifications/push'
 
@@ -23,8 +25,8 @@ def push(monkeypatch):
     monkeypatch.setenv('ATLAS_WEB_PUSH_SUBJECT','mailto:admin@example.org')
     clock=[time.time()]
     calls=[]
-    def send(subscription,key,subject):
-        calls.append((subscription,key,subject))
+    def send(subscription,key,subject,payload=web_push.PAYLOAD):
+        calls.append((subscription,key,subject,payload))
         return 201,None
     runner=web_push.PushService(api.access,send=send,clock=lambda:clock[0])
     return runner,clock,calls
@@ -410,6 +412,9 @@ def test_transport_encrypts_generic_payload_and_refuses_redirects_without_real_n
     assert 'vapid ' in request.headers['Authorization']
     plain=decrypt(request.body,private_key=receiver,auth_secret=web_push.decode(data['keys']['auth']),version='aes128gcm')
     assert plain.decode()==web_push.PAYLOAD
+    web_push.transport({k:data[k] for k in ['endpoint','keys']},private,'mailto:admin@example.org',web_push.push_payload('grades'))
+    plain=decrypt(calls[1][0].body,private_key=receiver,auth_secret=web_push.decode(data['keys']['auth']),version='aes128gcm')
+    assert json.loads(plain)=={'type':'atlas-update','category':'grades'}
 
 
 def test_config_subscription_and_queue_survive_verified_backup(client,push,tmp_path,monkeypatch):
@@ -421,3 +426,78 @@ def test_config_subscription_and_queue_survive_verified_backup(client,push,tmp_p
     assert client.get(BASE+'/options').json()['publicKey']==public
     service,clock,calls=push;clock[0]+=3
     assert service.process_one() and queue()[0][1]=='sent' and len(calls)==1
+
+
+def quiet_around(user,clock):
+    """Quiet hours that began an hour ago and end within the next hour of school time."""
+    local=datetime.fromtimestamp(clock,ZoneInfo('Asia/Qyzylorda'))
+    user.put('/api/notifications/preferences',json=dict(quietStart=(local-timedelta(hours=1)).strftime('%H:%M'),quietEnd=(local+timedelta(hours=1)).strftime('%H:%M'))).raise_for_status()
+    return local.replace(second=0,microsecond=0)+timedelta(hours=1)
+
+
+def test_quiet_hours_defer_push_without_losing_it(client,push):
+    account=enable(client);subscribe(client)
+    service,clock,calls=push
+    end=quiet_around(client,clock[0]).timestamp()
+    notify(account)
+    # The inbox entry is there at once; only the push waits for the end of the quiet hours.
+    assert client.get('/api/notifications/inbox').json()['unread']==1
+    assert queue()[0][1]=='queued' and queue()[0][3]>=end
+    clock[0]+=3
+    assert not service.process_one() and not calls
+    notify(account)
+    assert queue()[0][3]>=end and queue()[0][5]==2
+    clock[0]=end+3
+    assert service.process_one() and len(calls)==1 and queue()[0][1]=='sent'
+
+
+def test_quiet_hours_set_after_enqueue_defer_at_send_time(client,push):
+    account=enable(client);subscribe(client);notify(account)
+    service,clock,calls=push;clock[0]+=3
+    end=quiet_around(client,clock[0]).timestamp()
+    job=service.claim()
+    prepared=service.prepare(job)
+    assert prepared=={'defer':end}
+    service.defer(job,prepared['defer'])
+    row=queue()[0]
+    assert row[1]=='queued' and row[3]==end and row[2]==0
+    assert not service.process_one() and not calls
+    clock[0]=end+3
+    assert service.process_one() and len(calls)==1
+
+
+def test_test_push_ignores_muting_and_quiet_hours(client,push):
+    enable(client);device,_=subscribe(client)
+    client.put('/api/notifications/preferences',json=dict(enabled=False)).raise_for_status()
+    service,clock,calls=push
+    quiet_around(client,clock[0])
+    assert client.post(BASE+'/devices/'+device['id']+'/test',json=dict(version=device['version'])).status_code==202
+    clock[0]+=3
+    assert service.process_one() and len(calls)==1
+    assert json.loads(calls[0][3])=={'type':'atlas-update','category':'system'}
+
+
+def test_payload_carries_only_category(client,push):
+    family(client)
+    parent=signed('parent');subscribe(parent)
+    service,clock,calls=push
+    published(client)
+    clock[0]+=3
+    assert service.process_one() and len(calls)==1
+    payload=calls[-1][3]
+    assert set(json.loads(payload))=={'type','category'} and json.loads(payload)['type']=='atlas-update'
+    # Newest unread entry of the publication names the category: homework follows the grade.
+    assert json.loads(payload)['category']=='homework'
+    for private in ['Английский','обратная связь','s1','Проверочная','Комментарий']:
+        assert private not in payload
+
+
+def test_push_label_follows_the_newest_unmuted_notice(client,push):
+    family(client)
+    parent=signed('parent');subscribe(parent)
+    parent.put('/api/notifications/preferences',json=dict(muted=['homework'])).raise_for_status()
+    service,clock,calls=push
+    published(client)
+    clock[0]+=3
+    assert service.process_one()
+    assert json.loads(calls[0][3])['category']=='grades'

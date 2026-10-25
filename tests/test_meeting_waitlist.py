@@ -170,7 +170,7 @@ def test_notification_failure_rolls_back_entire_operation(client,monkeypatch,sta
     eid,t,p,parent,wid=prepared(client,monkeypatch)
     if stage=='accept':offered(client,parent,eid,wid)
     snapshot=records();original=api.notifications.deliver
-    def fail(*args):original(*args);raise RuntimeError('synthetic delivery failure')
+    def fail(*args,**kwargs):original(*args,**kwargs);raise RuntimeError('synthetic delivery failure')
     monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):
         if stage=='offer':offered(client,parent,eid,wid)

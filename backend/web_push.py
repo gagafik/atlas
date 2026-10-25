@@ -16,13 +16,18 @@ from fastapi import HTTPException, Request
 from pydantic import Field, SecretStr, field_validator
 from starlette.concurrency import run_in_threadpool
 from .access import COOKIE, Credentials, digest, now
-from .notifications import permission_key
+from .notifications import PUSH_LABELS, SYSTEM, encoded, permission_key, preference_map, quiet_until
 
 PROVIDERS = {'fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com'}
 MAX_DEVICES = 10
 MAX_ATTEMPTS = 6
 LEASE = 60
 PAYLOAD = '{"type":"atlas-update"}'
+
+
+def push_payload(category):
+    """The only thing a push carries: a category id from the fixed list; the service worker maps it to a fixed label."""
+    return encoded(dict(type='atlas-update', category=category if category in PUSH_LABELS else 'other'))
 
 
 def b64(value):
@@ -107,10 +112,11 @@ def revoke_session(db, user_id, session_hash, endpoint_hash=None):
     db.execute("UPDATE push_outbox SET status='cancelled',lease=NULL,last_error='signed_out' WHERE device_id IN (SELECT id FROM push_devices WHERE user_id=? AND active=0)", (user_id,))
 
 
-def enqueue(db, user, notice_id, *, device_id=None, clock=time.time):
-    """Inside the producer transaction; no I/O or key generation on the save path."""
+def enqueue(db, user, notice_id, *, device_id=None, clock=time.time, quiet_until=None):
+    """Inside the producer transaction; no I/O or key generation on the save path. quiet_until: epoch second before which the push waits."""
     if user['id'] == 'local': return
     stamp = clock()
+    until = quiet_until or 0
     devices = db.execute('''SELECT id,version FROM push_devices WHERE user_id=? AND active=1
         AND account_version=? AND expires>? AND (? IS NULL OR id=?)''',
         (user['id'],user['version'],stamp,device_id,device_id)).fetchall()
@@ -120,8 +126,8 @@ def enqueue(db, user, notice_id, *, device_id=None, clock=time.time):
             notification_id=excluded.notification_id,generation=push_outbox.generation+1,
             status=CASE WHEN push_outbox.status='sending' AND push_outbox.device_version=excluded.device_version THEN 'sending' ELSE 'queued' END,
             attempts=CASE WHEN push_outbox.status IN ('queued','sending') AND push_outbox.device_version=excluded.device_version THEN push_outbox.attempts ELSE 0 END,
-            available=CASE WHEN push_outbox.status='queued' AND push_outbox.device_version=excluded.device_version THEN push_outbox.available ELSE excluded.available END,
-            expires=excluded.expires,completed=NULL''', (id,version,notice_id,stamp+2,stamp+86400))
+            available=CASE WHEN push_outbox.status='queued' AND push_outbox.device_version=excluded.device_version THEN max(push_outbox.available,?) ELSE excluded.available END,
+            expires=excluded.expires,completed=NULL''', (id,version,notice_id,max(stamp+2,until),max(stamp+86400,until+3600),until))
 
 
 def retry_seconds(value, stamp):
@@ -131,7 +137,7 @@ def retry_seconds(value, stamp):
     except (ValueError,TypeError,OverflowError): return 0
 
 
-def transport(subscription, private_key, subject):
+def transport(subscription, private_key, subject, payload=PAYLOAD):
     """Only known HTTPS push services; no redirects, proxies or response bodies."""
     import requests
     from pywebpush import webpush, WebPushException
@@ -150,7 +156,7 @@ def transport(subscription, private_key, subject):
     with PushSession() as session:
         session.trust_env=False
         try:
-            response=webpush(subscription_info=subscription,data=PAYLOAD,vapid_private_key=private_key,
+            response=webpush(subscription_info=subscription,data=payload,vapid_private_key=private_key,
                 vapid_claims={'sub':subject},ttl=300,timeout=(3,8),requests_session=session,
                 headers={'Urgency':'normal','Topic':'atlas-updates'})
         except WebPushException as exc:
@@ -230,15 +236,25 @@ class PushService:
             if not queue or not device or not account:return None
             valid=device[13] and device[8]==job['version'] and device[12]>self.clock() and account[4] and account[5]==device[7]
             if not valid:return None
-            pref=db.execute('SELECT enabled FROM notification_preferences WHERE user_id=?',(account[0],)).fetchone()
-            if pref and not pref[0]:return None
+            prefs=preference_map(db,[account[0]])[account[0]]
             user=self.access.public(account)
             cutoff=datetime.fromtimestamp(self.clock()-86400,timezone.utc).isoformat()
-            notice=db.execute('''SELECT 1 FROM notifications WHERE user_id=? AND permissions=? AND read_at IS NULL
-                AND id<=? AND created>=? LIMIT 1''',(user['id'],permission_key(user),job['notice'],cutoff)).fetchone()
+            # The newest unread entry whose category is not muted names the push; muting everything cancels it.
+            notice=db.execute('''SELECT coalesce(category,'other') FROM notifications WHERE user_id=? AND permissions=? AND read_at IS NULL
+                AND id<=? AND created>=? AND coalesce(category,'other') NOT IN (SELECT value FROM json_each(?)) ORDER BY id DESC LIMIT 1''',
+                (user['id'],permission_key(user),job['notice'],cutoff,encoded(sorted(prefs['muted'])))).fetchone()
             if not notice:return None
+            # Quiet hours delay the push, never the inbox entry; a device test ignores them.
+            until=quiet_until(prefs,self.clock()) if notice[0]!=SYSTEM else None
+            if until:return dict(defer=until)
             _,private=self.config(db)
-            return dict(endpoint=device[2],keys=dict(p256dh=device[3],auth=device[4])),private
+            return dict(endpoint=device[2],keys=dict(p256dh=device[3],auth=device[4])),private,push_payload(notice[0])
+
+    def defer(self,job,until):
+        """Put a claimed job back until the quiet hours end; a newer event keeps its generation."""
+        with self.transaction() as db:
+            db.execute("UPDATE push_outbox SET status='queued',available=?,lease=NULL,lease_until=NULL,attempts=max(attempts-1,0),expires=max(expires,?) WHERE device_id=? AND lease=?",
+                       (until,until+3600,job['device'],job['token']))
 
     def finish(self,job,status,retry_after=None):
         stamp=self.clock()
@@ -273,7 +289,8 @@ class PushService:
         if not job:return False
         prepared=self.prepare(job)
         if prepared is None:self.finish(job,None);return True
-        try:status,retry=self.send(prepared[0],prepared[1],subject)
+        if isinstance(prepared,dict):self.defer(job,prepared['defer']);return True
+        try:status,retry=self.send(prepared[0],prepared[1],subject,prepared[2])
         except Exception:
             # Endpoint URLs, credentials and provider response bodies are private.
             status,retry=0,None
@@ -368,11 +385,9 @@ class PushService:
                 if not device:raise HTTPException(404,'Устройство не найдено.')
                 if device[0]!=body.version or not device[1] or device[2]!=row[5] or device[4]<=self.clock():raise HTTPException(409,'Включите уведомления на устройстве заново.')
                 if device[3] and device[3]>self.clock()-60:raise HTTPException(429,'Проверку можно повторить через минуту.')
-                pref=db.execute('SELECT enabled FROM notification_preferences WHERE user_id=?',(row[0],)).fetchone()
-                if pref and not pref[0]:raise HTTPException(409,'Сначала включите сохранение новых уведомлений.')
                 user=self.access.public(row)
-                notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action) VALUES (?,?,?,?,?,?)',
-                    (row[0],permission_key(user),'school',0,now().isoformat(),'push.test')).lastrowid
+                notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,category) VALUES (?,?,?,?,?,?,?)',
+                    (row[0],permission_key(user),'school',0,now().isoformat(),'push.test',SYSTEM)).lastrowid
                 db.execute('DELETE FROM notifications WHERE user_id=? AND id NOT IN (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500)',(row[0],row[0]))
                 enqueue(db,user,notice,device_id=id,clock=self.clock)
                 db.execute('UPDATE push_devices SET last_test=? WHERE id=?',(self.clock(),id))
