@@ -58,6 +58,23 @@ def bind(db, ids, workspace, key, owner):
     db.executemany('INSERT OR IGNORE INTO assignment_file_links VALUES (?)',[(id,) for id in ids])
 
 
+def copy(db, ids, workspace, source, key, owner, day):
+    """Attach the stored files of one lesson to another: new metadata rows share the bytes, nothing is uploaded again."""
+    count=db.execute('SELECT count(*) FROM assignment_files WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()[0]
+    if count+len(ids)>MAX_TASK: raise HTTPException(413,'Достигнут лимит материалов урока с учётом истории.')
+    root=root_for(db);created=[]
+    for id in ids:
+        row=db.execute("SELECT filename,size,sha256,coalesce(blob_id,id) FROM assignment_files WHERE id=? AND workspace=? AND lesson_key=? AND status='ready'",(id,workspace,source)).fetchone()
+        if not row or not files.file_path(root,row[3]).is_file(): raise HTTPException(409,'Материал задания недоступен в хранилище. Обновите журнал.')
+        new=uuid4().hex
+        # The day is the target lesson's: staff downloads find the lesson through it.
+        db.execute('INSERT INTO assignment_files (id,workspace,lesson_key,owner_id,filename,size,created,status,sha256,day,blob_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                   (new,workspace,key,owner,row[0],row[1],now().isoformat(),'ready',row[2],day.isoformat(),row[3]))
+        created.append(new)
+    bind(db,created,workspace,key,owner)
+    return created
+
+
 def unused_rows(db, limit=20, days=1):
     stale,old=files.cutoffs(days)
     return [(r[0],r[1]) for r in db.execute('''SELECT f.id,f.size FROM assignment_files f WHERE

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
+import HomeworkParallelPanel from "./HomeworkParallelPanel";
+import { nextLessonText, type NextLesson } from "./homeworkBulk";
 import LessonMaterials from "./LessonMaterials";
 import LessonTopic, { SavedPlanTopic } from "./LessonTopic";
 import AssignmentFilesPanel, {
@@ -177,6 +179,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false),
     [epoch, setEpoch] = useState(0);
+  const [dueNote, setDueNote] = useState(""),
+    [dueBusy, setDueBusy] = useState(false);
   const sequence = useRef(0),
     saveLock = useRef(false),
     // Changes whenever the report selection does, so a late page or export is dropped.
@@ -451,6 +455,28 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     }
   }
   const editable = !!entry?.writable && !entry.needsSync && !busy;
+  useEffect(() => setDueNote(""), [entry?.lessonKey]);
+  // Only the date is taken from the timetable and saved; a later timetable change does not move it.
+  async function dueNextLesson() {
+    if (!entry || dueBusy) return;
+    setDueBusy(true);
+    setError("");
+    setDueNote("");
+    try {
+      const r: NextLesson = await api(
+        `journal/homework-next-lesson?${new URLSearchParams({ lessonKey: entry.lessonKey, day: entry.document.lesson.date })}`,
+        workspace,
+      );
+      if (r.date) {
+        content((c) => ({ ...c, dueDate: r.date }));
+        setDueNote(nextLessonText(r));
+      } else setError(nextLessonText(r));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDueBusy(false);
+    }
+  }
   function adminPanel(name: JournalPanelName) {
     switch (name) {
       case "finalGrades":
@@ -806,6 +832,16 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                         }
                       />
                     </label>
+                    <div className="journal-due-next">
+                      <button
+                        type="button"
+                        disabled={!entry.document.content.homework || dueBusy}
+                        onClick={() => void dueNextLesson()}
+                      >
+                        К следующему уроку
+                      </button>
+                      {dueNote && <small role="status">{dueNote}</small>}
+                    </div>
                     <label className="field">
                       <span>Сдача работы</span>
                       <select
@@ -1354,6 +1390,17 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       )}
                     </section>
                   )}
+                  {entry.hasPublished &&
+                    entry.publishedVersion === entry.version &&
+                    entry.document.content.homework.trim() && (
+                      <HomeworkParallelPanel
+                        key={workspace + entry.lessonKey + entry.version}
+                        workspace={workspace}
+                        entry={entry}
+                        disabled={dirty || busy}
+                        onPublished={() => setEpoch((n) => n + 1)}
+                      />
+                    )}
                   {!!entry.version && (
                     <HomeworkPanel
                       key={workspace + entry.lessonKey + entry.publishedVersion}

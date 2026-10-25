@@ -137,6 +137,8 @@ class Homework:
             created TEXT,actor_name TEXT,action TEXT,document TEXT)''')
         db.execute('CREATE INDEX IF NOT EXISTS homework_history_target ON homework_history(workspace,lesson_key,student_id,id)')
         files.tables(db)
+        from .homework_bulk import tables as request_tables
+        request_tables(db)
 
     def context(self, request, workspace, key, student=None):
         user=self.journal.scope(request,workspace)
@@ -265,6 +267,10 @@ class Homework:
         self.queue=HomeworkQueue(self)
         self.queue.register(app,Workspace)
         deadlines.HomeworkDeadlines(self).register(app,Workspace)
+        from .homework_bulk import HomeworkBulk
+        HomeworkBulk(self).register(app,Workspace)
+        from .homework_parallel import HomeworkParallel
+        HomeworkParallel(self).register(app,Workspace)
         materials.AssignmentFiles(self).register(app,Workspace)
         grading=HomeworkGrading(self)
 
