@@ -43,7 +43,7 @@ def effective(db,ctx,student=None):
 
 
 def permitted(ctx):
-    return bool(ctx['canReview'] and ctx['student'] in ctx['current']['studentIds'] and ctx['roster'][ctx['student']].get('enrolled',True))
+    return bool(ctx['canReview'] and ctx['student'] in ctx['members'] and ctx['roster'][ctx['student']].get('enrolled',True))
 
 
 def view(db,ctx):

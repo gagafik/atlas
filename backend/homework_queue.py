@@ -138,8 +138,7 @@ class HomeworkQueue:
                             contexts[key]=None
                     ctx=contexts[key]
                     if not ctx or student not in ctx['roster']:continue
-                    current=ctx['current']
-                    enrolled=bool(current and current['status']!='cancelled' and student in current['studentIds'] and ctx['roster'][student].get('enrolled',True))
+                    enrolled=bool(student in ctx['members'] and ctx['roster'][student].get('enrolled',True))
                     active=ctx['canReview'] if staff else enrolled
                     if not active and not history:continue
                     is_changed=bool(r[18]);needs_answer=r[15] in ['not_submitted','returned'] or is_changed

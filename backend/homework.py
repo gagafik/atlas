@@ -109,8 +109,8 @@ class Homework:
         roster={s['id']:s for s in published['lesson']['students']}
         if student is not None and student not in roster:
             raise HTTPException(404,'Ученик не включён в опубликованное задание.')
-        current_ids=set(current['studentIds']) if current and current['status']!='cancelled' else set()
-        return dict(user=user,staff=staff,state=state,record=record,published=published,roster=roster,current=current,
+        current_ids=set(current['studentIds'])&snapshot.active if current and current['status']!='cancelled' else set()
+        return dict(user=user,staff=staff,state=state,record=record,published=published,roster=roster,current=current,members=current_ids,
                     revision=state.revision,workspace=workspace,key=key,student=student,assignment=fingerprint(published),
                     canReview=bool(staff and current and current['status']!='cancelled' and staff_read(user,workspace,current)),
                     canSubmit=bool(user['role']=='student' and student in current_ids and roster[student].get('enrolled',True)))

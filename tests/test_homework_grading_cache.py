@@ -1,5 +1,6 @@
 """Reuse resolved lessons without retaining stale school, account or journal access."""
 from copy import deepcopy
+from datetime import date
 
 import pytest
 from backend import api,journal,portal_cache
@@ -49,7 +50,9 @@ def test_journal_entry_resolves_only_the_needed_day(client,monkeypatch,persisted
     assert result['needsSync']==persisted
 
 
-def test_changed_teacher_invalidates_warm_lesson_cache(client):
+def test_changed_teacher_invalidates_warm_lesson_cache(client,monkeypatch):
+    # On the lesson day a new teacher must still sync the publication; later days keep the teachers it was published with.
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];stale=payload(options(teacher,key))
     state=api.read('demo');state.datedLessons=[DatedLesson(id='replace',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
     api.save('demo',state)

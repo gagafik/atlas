@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Request
@@ -14,6 +14,7 @@ from .scheduling import validate_schedule
 from .solver_process import solve_isolated as solve
 from .optimization import Optimization
 from .editing import EditRequest, edit, inspect_edit
+from .timetable_history import archived, capture, current_from
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,18 +78,23 @@ def portal_stamp(workspace):
     return str(DB.resolve()), revision
 
 
-def save(workspace, state, after_save=None):
+def save(workspace, state, after_save=None, effective=None):
     with db_lock, connect() as db:
         row = db.execute('SELECT revision, document FROM workspaces WHERE id=?', (workspace,)).fetchone()
         if row is None or state.revision != row[0]:
             raise HTTPException(409, 'Данные изменились в другом окне. Обновите страницу перед сохранением.')
+        before = State.model_validate_json(row[1])
         db.execute('INSERT INTO history (workspace,created,document) VALUES (?,?,?)', (workspace, datetime.now(timezone.utc).isoformat(), row[1]))
         db.execute('DELETE FROM redo_history WHERE workspace=?', (workspace,))
         state = state.model_copy(update={'revision': state.revision + 1})
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (state.revision, state.model_dump_json(), workspace))
         db.execute('DELETE FROM history WHERE workspace=? AND id NOT IN (SELECT id FROM history WHERE workspace=? ORDER BY id DESC LIMIT 30)', (workspace, workspace))
+        # Before after_save: an invalid effective date rolls back the whole save.
+        stored = capture(db, workspace, before, state, effective)
         access.record(db,'state.saved',workspace,state.revision)
-        notifications.capture(db,workspace,State.model_validate_json(row[1]),state)
+        if stored:
+            access.record(db,'timetable.versioned',workspace,state.revision,detail=f'Прежнее расписание сохранено для {stored[0]:%d.%m.%Y}–{stored[1]-timedelta(days=1):%d.%m.%Y}')
+        notifications.capture(db,workspace,before,state)
         if after_save is not None:
             after_save(db,state)
         return state
@@ -103,16 +109,19 @@ def get_state(workspace: Workspace = 'school'):
 
 
 @app.put('/api/state')
-def put_state(state: State, workspace: Workspace = 'school'):
+def put_state(state: State, workspace: Workspace = 'school', effectiveFrom: date | None = None):
     from .calendar_ops import operational_dates, check_dates
     from .editing import new_issues
     current = require_revision(workspace, state.revision)
     days = operational_dates(current) | operational_dates(state)
-    if days:
-        added = new_issues({'issues': check_dates(current, days)}, {'issues': check_dates(state, days)})
-        if added:
-            raise HTTPException(422, 'Изменение создаёт проблемы в расписании по датам: ' + '; '.join(i['message'] for i in added[:3]))
-    return save(workspace, state)
+    checks = [(state, days)]
+    if effectiveFrom and (early := {d for d in days if d < effectiveFrom}):
+        # Earlier days keep the replaced template and pupils; only the candidate's own dated changes can be new problems there.
+        checks = [(state, days - early), (archived(current, state), early)]
+    added = [i for candidate, ds in checks if ds for i in new_issues({'issues': check_dates(current, ds)}, {'issues': check_dates(candidate, ds)})]
+    if added:
+        raise HTTPException(422, 'Изменение создаёт проблемы в расписании по датам: ' + '; '.join(i['message'] for i in added[:3]))
+    return save(workspace, state, effective=effectiveFrom)
 
 
 @app.get('/api/check')
@@ -175,13 +184,14 @@ def undo(body: GenerateRequest, workspace: Workspace = 'school'):
         row = db.execute('SELECT id,document FROM history WHERE workspace=? ORDER BY id DESC LIMIT 1', (workspace,)).fetchone()
         if not row:
             raise HTTPException(400, 'Нет сохранённых действий для отмены.')
-        previous = State.model_validate_json(row[1])
+        previous, old = State.model_validate_json(row[1]), State.model_validate_json(current[1])
         db.execute('INSERT INTO redo_history (workspace,created,document) VALUES (?,?,?)', (workspace, datetime.now(timezone.utc).isoformat(), current[1]))
         previous.revision = current[0] + 1
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM history WHERE id=?', (row[0],))
+        capture(db, workspace, old, previous)
         access.record(db,'state.undo',workspace,previous.revision)
-        notifications.capture(db,workspace,State.model_validate_json(current[1]),previous,'undo')
+        notifications.capture(db,workspace,old,previous,'undo')
         return previous
 
 
@@ -194,13 +204,14 @@ def redo(body: GenerateRequest, workspace: Workspace = 'school'):
         row = db.execute('SELECT id,document FROM redo_history WHERE workspace=? ORDER BY id DESC LIMIT 1', (workspace,)).fetchone()
         if not row:
             raise HTTPException(400, 'Нет действий для повтора.')
-        previous = State.model_validate_json(row[1])
+        previous, old = State.model_validate_json(row[1]), State.model_validate_json(current[1])
         previous.revision = current[0] + 1
         db.execute('INSERT INTO history (workspace,created,document) VALUES (?,?,?)', (workspace, datetime.now(timezone.utc).isoformat(), current[1]))
         db.execute('UPDATE workspaces SET revision=?,document=? WHERE id=?', (previous.revision, previous.model_dump_json(), workspace))
         db.execute('DELETE FROM redo_history WHERE id=?', (row[0],))
+        capture(db, workspace, old, previous)
         access.record(db,'state.redo',workspace,previous.revision)
-        notifications.capture(db,workspace,State.model_validate_json(current[1]),previous,'redo')
+        notifications.capture(db,workspace,old,previous,'redo')
         return previous
 
 
@@ -208,7 +219,7 @@ def redo(body: GenerateRequest, workspace: Workspace = 'school'):
 def history_status(workspace: Workspace = 'school'):
     with db_lock, connect() as db:
         return {key: db.execute(f'SELECT count(*) FROM {table} WHERE workspace=?', (workspace,)).fetchone()[0]
-                for key, table in [('undo', 'history'), ('redo', 'redo_history')]}
+                for key, table in [('undo', 'history'), ('redo', 'redo_history')]} | dict(currentFrom=current_from(db, workspace))
 
 
 def require_revision(workspace, revision):
@@ -247,7 +258,7 @@ class ApplyPreview(BaseModel):
 
 
 @app.post('/api/editor/apply')
-def apply_preview(body: ApplyPreview, workspace: Workspace = 'school'):
+def apply_preview(body: ApplyPreview, workspace: Workspace = 'school', effectiveFrom: date | None = None):
     with db_lock, connect() as db:
         row = db.execute('SELECT revision,document,can_apply FROM previews WHERE id=? AND workspace=?', (body.token, workspace)).fetchone()
     if not row:
@@ -258,7 +269,7 @@ def apply_preview(body: ApplyPreview, workspace: Workspace = 'school'):
         raise HTTPException(422, 'Изменение создаёт новые нарушения. Выберите другое размещение.')
     candidate = State.model_validate_json(row[1])
     candidate.revision = row[0]
-    return save(workspace, candidate)
+    return save(workspace, candidate, effective=effectiveFrom)
 
 
 class SlotRequest(BaseModel):

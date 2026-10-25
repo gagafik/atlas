@@ -297,3 +297,19 @@ def test_cli_never_overwrites_databases_it_did_not_create(tmp_path):
                           cwd=tmp_path, capture_output=True, text=True, encoding='utf-8', timeout=120)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip().splitlines()[-1] == 'LOADED []'
+
+
+def test_cli_refuses_to_replace_a_workspace_that_keeps_timetable_history(tmp_path):
+    db = tmp_path / 'dated.db'
+    assert cli(FIXTURE, '--db', db, cwd=tmp_path).returncode == 0
+    with closing(sqlite3.connect(db)) as connection, connection:
+        # The shape the application leaves after a save: older versions would overlay the replaced document.
+        connection.execute('CREATE TABLE timetable_current (workspace TEXT PRIMARY KEY, valid_from TEXT)')
+        connection.execute("INSERT INTO timetable_current VALUES ('school', '2026-08-17')")
+    refused = cli(FIXTURE, '--db', db, '--force', cwd=tmp_path)
+    assert refused.returncode != 0 and 'историю расписания' in refused.stderr
+    with closing(sqlite3.connect(db)) as connection:
+        assert connection.execute("SELECT revision FROM workspaces WHERE id='school'").fetchone() == (0,)
+    with closing(sqlite3.connect(db)) as connection, connection:
+        connection.execute("UPDATE timetable_current SET workspace='other'")
+    assert cli(FIXTURE, '--db', db, '--force', cwd=tmp_path).returncode == 0
