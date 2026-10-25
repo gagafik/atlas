@@ -56,7 +56,7 @@ def view(db,ctx):
     minimum=max(today,date.fromordinal(current.toordinal()+1)) if current and current<date.max else None
     maximum=date.fromordinal(min(date.max.toordinal(),date.fromisoformat(base).toordinal()+366)) if base else None
     return dict(version=row[0] if row else 0,baseDueDate=base,effectiveDueDate=content['dueDate'],deadlineClosed=deadline_closed(content),
-                canEdit=bool(base and permitted(ctx) and ctx['online']),minDate=minimum.isoformat() if minimum else None,maxDate=maximum.isoformat() if maximum else None,
+                canEdit=bool(base and permitted(ctx) and ctx['online']),canRevoke=bool(active and permitted(ctx)),minDate=minimum.isoformat() if minimum else None,maxDate=maximum.isoformat() if maximum else None,
                 extension=dict(dueDate=row[2],reason=row[3],updated=row[4],actor=row[5]) if active else None)
 
 
@@ -90,7 +90,8 @@ class HomeworkDeadlines:
         def change(key:str,body:ChangeDeadline,request:Request,workspace:Workspace='school'):
             ctx=self.homework.context(request,workspace,key,body.studentId)
             if not permitted(ctx):raise HTTPException(403,'Срок меняет учитель курса или администратор для ученика действующего урока.')
-            if not ctx['online']:raise HTTPException(422,'Индивидуальный срок задаётся только для онлайн-сдачи.')
+            # A leftover individual date of a lesson turned offline can still be cancelled, but not set.
+            if body.action=='extend' and not ctx['online']:raise HTTPException(422,'Индивидуальный срок задаётся только для онлайн-сдачи.')
             if body.assignment!=ctx['assignment']:raise HTTPException(409,'Условия задания изменились. Обновите работу.')
             with self.access.lock,self.access.connect() as db:
                 self.homework.tables(db);db.execute('BEGIN IMMEDIATE');self.homework.recheck(db,ctx)

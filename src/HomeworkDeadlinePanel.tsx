@@ -7,6 +7,7 @@ export interface HomeworkDeadline {
   effectiveDueDate: string | null;
   deadlineClosed: boolean;
   canEdit: boolean;
+  canRevoke?: boolean;
   minDate: string | null;
   maxDate: string | null;
   extension: {
@@ -29,7 +30,7 @@ interface Change {
 const labels = {
   extend: "Срок продлён",
   revoke: "Продление отменено",
-  invalidated: "Продление завершено после изменения задания",
+  invalidated: "Продление завершено после изменения публикации",
 };
 const dateLabel = (value: string | null) =>
   value ? value.split("-").reverse().join(".") : "не указан";
@@ -63,7 +64,10 @@ export default function HomeworkDeadlinePanel({
     [historyOpen, setHistoryOpen] = useState(false),
     [next, setNext] = useState<number | null>(null);
   const alive = useRef(true);
-  const dirty = open && Boolean(dueDate || reason || action === "revoke");
+  // A lesson turned offline keeps its individual date: it can only be cancelled.
+  const mode = value.canEdit ? action : "revoke",
+    canChange = value.canEdit || Boolean(value.canRevoke);
+  const dirty = open && Boolean(dueDate || reason || mode === "revoke");
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -98,8 +102,8 @@ export default function HomeworkDeadlinePanel({
       studentId,
       assignment,
       version: value.version,
-      action,
-      dueDate: action === "extend" ? dueDate : null,
+      action: mode,
+      dueDate: mode === "extend" ? dueDate : null,
       reason,
     });
     if (!alive.current) return;
@@ -145,7 +149,7 @@ export default function HomeworkDeadlinePanel({
         </p>
       )}
       <div className="dated-toolbar">
-        {value.canEdit && !open && (
+        {canChange && !open && (
           <button disabled={disabled || busy} onClick={() => setOpen(true)}>
             Изменить срок ученика
           </button>
@@ -157,7 +161,7 @@ export default function HomeworkDeadlinePanel({
           История сроков
         </button>
       </div>
-      {open && value.canEdit && (
+      {open && canChange && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -169,18 +173,18 @@ export default function HomeworkDeadlinePanel({
             <label className="field">
               <span>Действие со сроком</span>
               <select
-                value={action}
+                value={mode}
                 onChange={(e) =>
                   setAction(e.target.value as "extend" | "revoke")
                 }
               >
-                <option value="extend">Продлить срок</option>
+                {value.canEdit && <option value="extend">Продлить срок</option>}
                 {value.extension && (
                   <option value="revoke">Отменить продление</option>
                 )}
               </select>
             </label>
-            {action === "extend" ? (
+            {mode === "extend" ? (
               <label className="field">
                 <span>Новый срок сдачи</span>
                 <input
@@ -221,9 +225,9 @@ export default function HomeworkDeadlinePanel({
               <button
                 className="primary"
                 type="submit"
-                disabled={!reason.trim() || (action === "extend" && !dueDate)}
+                disabled={!reason.trim() || (mode === "extend" && !dueDate)}
               >
-                {action === "extend"
+                {mode === "extend"
                   ? "Сохранить продление"
                   : "Отменить продление"}
               </button>
@@ -255,7 +259,7 @@ export default function HomeworkDeadlinePanel({
               <p>
                 Прежний срок: {dateLabel(item.previousDueDate)}.{" "}
                 {item.action === "invalidated"
-                  ? "Действуют новые опубликованные условия задания."
+                  ? "Индивидуальный срок больше не действует."
                   : `Новый срок: ${dateLabel(item.dueDate || item.baseDueDate || null)}.`}
               </p>
               <p className="journal-text">{item.reason}</p>

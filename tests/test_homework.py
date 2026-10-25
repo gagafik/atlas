@@ -182,15 +182,18 @@ def test_schedule_changes_and_account_revocation_block_writes(client,monkeypatch
     assert get(parent,key)['submitted']['text']=='Решение ученика'
     assert not get(pupil,key)['canSubmit']
     assert answer(pupil,key,sent,'withdraw').status_code==403
-    assert review(teacher,key,sent).status_code==200  # the course teacher checks work that was already sent
     state=api.read('demo');state.datedLessons=[];api.save('demo',state)
     original=api.homework.context
     def revoke(*args,**kwargs):
         ctx=original(*args,**kwargs)
         with api.connect() as db: db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(ctx['user']['id'],))
         return ctx
-    monkeypatch.setattr(api.homework,'context',revoke)
-    assert answer(pupil,key,sent,'withdraw').status_code==409
+    # The answer is still unreviewed and its version current, so only the account recheck can refuse this withdrawal.
+    with monkeypatch.context() as patched:
+        patched.setattr(api.homework,'context',revoke)
+        refused=answer(pupil,key,sent,'withdraw');assert refused.status_code==409 and 'Учётная запись изменилась' in refused.text
+    state=api.read('demo');state.datedLessons=[DatedLesson(id='cancel-again',name='Отмена',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)];api.save('demo',state)
+    assert review(teacher,key,sent).status_code==200  # the course teacher checks work that was already sent
 
 
 def test_gc_keeps_draft_and_submitted_history_but_removes_abandoned_uploads(client):
@@ -335,6 +338,10 @@ def test_substitute_cannot_review_but_course_teacher_can(client):
     assert get(substitute,key)['canReview'] is False and substitute.get(grading_url(key)).status_code==403
     options=teacher.get(grading_url(key));assert options.status_code==200
     assert options.json()['allowed'] is False and options.json()['reason']==FOREIGN
+    # Posting a grade is refused with the same explanation, writes nothing, and a plain review still works.
+    from test_homework_grading import payload,grade
+    refused=grade(teacher,key,sent,payload(options.json()));assert refused.status_code==409 and refused.json()['detail']==FOREIGN
+    assert get(teacher,key)['status']=='submitted' and 'grading' not in get(teacher,key)['submitted']
     assert review(teacher,key,sent).json()['status']=='accepted'
 
 

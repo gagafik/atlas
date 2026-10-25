@@ -218,6 +218,26 @@ def test_offline_homework_has_no_individual_deadline(client):
     assert change(teacher,key,current).status_code==422
 
 
+def test_extension_survives_offline_switch_and_can_still_be_revoked(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    assert change(teacher,key,get(teacher,key)).status_code==200
+    record['document']['content']['homeworkSubmission']='offline'
+    assert write(client,record,publish=True).status_code==200
+    current=get(teacher,key);deadline=current['deadline']
+    assert deadline['extension'] and deadline['version']==1 and get(pupil,key)['dueDate']=='2026-08-24'
+    # Nothing new can be granted, but the leftover date can be taken back by those who may change deadlines.
+    assert not deadline['canEdit'] and deadline['canRevoke']
+    assert not get(parent,key)['deadline']['canRevoke'] and not get(pupil,key)['deadline']['canRevoke']
+    assert change(teacher,key,current,due='2026-08-25').status_code==422
+    assert change(signed('unrelated'),key,current,due=None,action='revoke').status_code==403
+    assert change(parent,key,current,due=None,action='revoke').status_code==403
+    revoked=change(teacher,key,current,due=None,action='revoke');assert revoked.status_code==200,revoked.text
+    assert revoked.json()['extension'] is None and not revoked.json()['canRevoke']
+    actual=get(pupil,key);assert actual['dueDate']=='2026-08-19' and actual['deadline']['version']==2
+    assert [h['action'] for h in history(pupil,key).json()['items']]==['revoke','extend']
+    assert change(teacher,key,get(teacher,key),due=None,action='revoke').status_code==409
+
+
 def test_validation_and_concurrent_cas_notify_exactly_once(client):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey'];current=get(teacher,key)
     for extra in [dict(due='2026-08-19'),dict(due='2027-08-21'),dict(reason='  '),dict(due=None)]:
