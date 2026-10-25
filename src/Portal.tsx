@@ -12,6 +12,7 @@ import MessagesPanel from "./MessagesPanel";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
+import MyDuties from "./MyDuties";
 interface Space {
   id: string;
   name: string;
@@ -170,23 +171,25 @@ export default function Portal({
           <h1>
             {section === "class-staff"
               ? "Работа с классами"
-              : section === "curriculum"
-                ? "Учебные планы"
-                : section === "materials"
-                  ? "Учебные материалы"
-                  : section === "family"
-                    ? "Мои дети и доступ"
-                    : section === "messages"
-                      ? "Сообщения"
-                      : section === "quizzes"
-                        ? "Контрольные и тесты"
-                        : section === "homework"
-                          ? "Домашние задания"
-                          : section === "journal"
-                            ? "Учебный журнал"
-                            : section === "courses"
-                              ? "Выбор курсов"
-                              : "Моё расписание"}
+              : section === "duties"
+                ? "Мои дежурства"
+                : section === "curriculum"
+                  ? "Учебные планы"
+                  : section === "materials"
+                    ? "Учебные материалы"
+                    : section === "family"
+                      ? "Мои дети и доступ"
+                      : section === "messages"
+                        ? "Сообщения"
+                        : section === "quizzes"
+                          ? "Контрольные и тесты"
+                          : section === "homework"
+                            ? "Домашние задания"
+                            : section === "journal"
+                              ? "Учебный журнал"
+                              : section === "courses"
+                                ? "Выбор курсов"
+                                : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -216,6 +219,14 @@ export default function Portal({
           >
             Расписание
           </button>
+          {session.user!.role === "teacher" && (
+            <button
+              aria-pressed={section === "duties"}
+              onClick={() => setSection("duties")}
+            >
+              Мои дежурства
+            </button>
+          )}
           <button
             aria-pressed={section === "messages"}
             onClick={() => setSection("messages")}
@@ -276,6 +287,23 @@ export default function Portal({
         <ClassStaffWorkspace />
       ) : section === "family" ? (
         <FamilyPortal />
+      ) : section === "duties" ? (
+        <>
+          <label className="field">
+            <span>Рабочее пространство</span>
+            <select
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {workspace && <MyDuties key={workspace} workspace={workspace} />}
+        </>
       ) : section === "messages" ? (
         <>
           <label className="field">

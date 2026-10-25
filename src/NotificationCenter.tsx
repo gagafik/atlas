@@ -10,6 +10,7 @@ interface Notice {
   created: string;
   action: string;
   read: boolean;
+  detail?: string;
 }
 interface Inbox {
   items: Notice[];
@@ -77,6 +78,10 @@ const titles: Record<string, string> = {
   "documents.issued": "Вам доступен школьный документ",
   "documents.changed": "Изменилось состояние школьного документа",
   "documents.revoked": "Школьный документ отозван",
+  "duty.reminder": "Напоминание о дежурстве",
+  "duty.changed": "Изменились ваши дежурства",
+  "duty.swap_requested": "Запрошена замена дежурного",
+  "duty.swap_decided": "Принято решение по замене дежурства",
   "push.test": "Проверка фоновых уведомлений",
   "absence.submitted": "Поступило заявление об отсутствии",
   "absence.updated": "Изменилось решение по объяснительной",
@@ -378,6 +383,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
               {inbox.items.map((item) => (
                 <article key={item.id} className={item.read ? "" : "unread"}>
                   <h3>{titles[item.action] || titles.saved}</h3>
+                  {item.detail && <p>{item.detail}</p>}
                   {item.action.startsWith("library.") && (
                     <button
                       onClick={() =>
