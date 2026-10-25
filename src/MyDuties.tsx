@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { addDays, requestId, shortDate } from "./dutySchedule";
+import { addDays, canAskSwap, requestId, shortDate } from "./dutySchedule";
 import { SWAP_STATUS, type Swap } from "./DutySwaps";
 import "./DutySchedule.css";
 
@@ -259,7 +259,7 @@ export default function MyDuties({ workspace }: { workspace: string }) {
                       )}
                     </div>
                     <div className="dated-actions duty-noprint">
-                      {i.canSwap && !i.swap && asking?.id !== i.id && (
+                      {canAskSwap(i) && asking?.id !== i.id && (
                         <button
                           disabled={busy}
                           onClick={() =>

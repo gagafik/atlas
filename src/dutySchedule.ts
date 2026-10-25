@@ -25,6 +25,37 @@ export interface DutyTemplate {
   cycleIds: string[];
   note: string;
 }
+/** Fields the server accepts back when a template is saved; anything else (id, version, extra keys) is refused. */
+export type TemplateFields = Omit<DutyTemplate, "id" | "version" | "active">;
+const TEMPLATE_KEYS: (keyof TemplateFields)[] = [
+  "name",
+  "weekday",
+  "profileId",
+  "afterPeriod",
+  "startTime",
+  "endTime",
+  "location",
+  "roomIds",
+  "buildingId",
+  "requiredTeachers",
+  "eligibleTeacherIds",
+  "teacherIds",
+  "cycleIds",
+  "note",
+];
+/** The editable part of a listed template, copied by name so a key the server adds later is never posted back. */
+export function templateFields(t: DutyTemplate): TemplateFields {
+  return Object.fromEntries(
+    TEMPLATE_KEYS.map((key) => [key, t[key]]),
+  ) as unknown as TemplateFields;
+}
+/** A teacher may ask again unless a request is waiting; a rejected or withdrawn one does not block. */
+export function canAskSwap(item: {
+  canSwap: boolean;
+  swap: "pending" | "approved" | "rejected" | null;
+}) {
+  return item.canSwap && item.swap !== "pending";
+}
 export interface DutySettings {
   version: number;
   enabled: boolean;

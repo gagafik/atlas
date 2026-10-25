@@ -83,7 +83,7 @@ def register(service, app, Workspace):
                 db.execute('UPDATE duty_templates SET version=?,updated=?,document=? WHERE workspace=? AND id=?', (version, stamp(), encoded(document), workspace, id))
             service.history(db, workspace, user, 'template', id, action, body.reason, dict(before=before, after=document))
             access.record(db, 'duties.template_saved', workspace, snap.state.revision, detail=body.template.name)
-            return service.remember(db, user, body, key, dict(id=id, version=version, active=True, updated=stamp()) | document)
+            return service.remember(db, user, body, key, dict(id=id, version=version, active=True) | document)
 
     @app.post('/api/duties/templates/{id}/archive')
     def archive_template(id: str, body: TemplateArchive, request: Request, workspace: Workspace = 'school'):
@@ -98,7 +98,7 @@ def register(service, app, Workspace):
             document = json.loads(row['document'])
             service.history(db, workspace, user, 'template', id, 'archived', body.reason, dict(before=document))
             access.record(db, 'duties.template_archived', workspace, snap.state.revision, detail=document['name'])
-            return service.remember(db, user, body, key, dict(id=id, version=row['version'] + 1, active=False, updated=stamp()) | document)
+            return service.remember(db, user, body, key, dict(id=id, version=row['version'] + 1, active=False) | document)
 
     @app.get('/api/duties/templates/{id}/history')
     def template_history(id: str, request: Request, workspace: Workspace = 'school'):

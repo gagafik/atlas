@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   addDays,
   breakAfter,
+  canAskSwap,
   fairnessCsv,
   generationRanges,
   minutesText,
   monthRange,
   rosterCsv,
+  templateFields,
   templateTime,
   weekRange,
   type DutyTemplate,
@@ -209,5 +211,60 @@ describe("Duty roster helpers", () => {
     expect(minutesText(25)).toBe("25 мин");
     expect(minutesText(135)).toBe("2 ч 15 мин");
     expect(minutesText(60)).toBe("1 ч 0 мин");
+  });
+  it("posts back only the template fields when a listed template is edited", () => {
+    const listed = {
+      id: "0123456789abcdef",
+      version: 3,
+      active: true,
+      updated: "2026-09-01T00:00:00+00:00",
+      future: "x",
+      name: "Холл",
+      weekday: 0,
+      profileId: "secondary",
+      afterPeriod: 4,
+      startTime: null,
+      endTime: null,
+      location: "Холл 1 этажа",
+      roomIds: ["r0"],
+      buildingId: null,
+      requiredTeachers: 2,
+      eligibleTeacherIds: ["t0", "t1"],
+      teacherIds: ["t0"],
+      cycleIds: [],
+      note: "",
+    } as unknown as DutyTemplate;
+    const fields = templateFields(listed);
+    expect(Object.keys(fields).sort()).toEqual(
+      [
+        "afterPeriod",
+        "buildingId",
+        "cycleIds",
+        "eligibleTeacherIds",
+        "endTime",
+        "location",
+        "name",
+        "note",
+        "profileId",
+        "requiredTeachers",
+        "roomIds",
+        "startTime",
+        "teacherIds",
+        "weekday",
+      ].sort(),
+    );
+    expect(fields).toMatchObject({
+      name: "Холл",
+      afterPeriod: 4,
+      teacherIds: ["t0"],
+    });
+  });
+  it("lets a teacher ask again after a rejection but not while a request waits", () => {
+    expect(canAskSwap({ canSwap: true, swap: null })).toBe(true);
+    expect(canAskSwap({ canSwap: true, swap: "rejected" })).toBe(true);
+    expect(canAskSwap({ canSwap: true, swap: "approved" })).toBe(true);
+    expect(canAskSwap({ canSwap: true, swap: "pending" })).toBe(false);
+    expect(canAskSwap({ canSwap: false, swap: null })).toBe(false);
+    expect(canAskSwap({ canSwap: false, swap: "rejected" })).toBe(false);
   });
 });

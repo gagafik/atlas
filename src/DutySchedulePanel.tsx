@@ -12,10 +12,12 @@ import {
   generationRanges,
   requestId,
   shortDate,
+  templateFields,
   templatePlace,
   templateTime,
   type DutyProps,
   type DutyTemplate,
+  type TemplateFields,
 } from "./dutySchedule";
 import "./DutySchedule.css";
 
@@ -78,7 +80,7 @@ export default function DutySchedulePanel({
   );
 }
 
-type Fields = Omit<DutyTemplate, "id" | "version" | "active">;
+type Fields = TemplateFields;
 interface Draft {
   id: string | null;
   version: number;
@@ -503,10 +505,13 @@ function DutyTemplates({ state: s, workspace }: DutyProps) {
               <button
                 disabled={busy}
                 onClick={() => {
-                  const { id, version, active, ...fields } = t;
-                  void active;
                   setArchiving(null);
-                  setDraft({ id, version, reason: "", fields });
+                  setDraft({
+                    id: t.id,
+                    version: t.version,
+                    reason: "",
+                    fields: templateFields(t),
+                  });
                 }}
               >
                 Изменить

@@ -264,7 +264,8 @@ def plan_generation(state, templates, start, end, generated, body):
                 made = generated.get(key)
                 if (body.updateUntouched and made and current.kind == 'duty' and not current.locked and made['fingerprint'] != digest
                         and fingerprint(commitment_fields(current)) == made['fingerprint']):
-                    try: replacement = Commitment(id=cid, kind='duty', teacherIds=[x for x in current.teacherIds if not eligible or x in eligible], **fields)
+                    # Only the template's own fields change; groups, student count and the like are kept as the administration set them.
+                    try: replacement = Commitment.model_validate(current.model_dump() | fields | dict(teacherIds=[x for x in current.teacherIds if not eligible or x in eligible]))
                     except ValueError as exc: skipped.append(row | dict(reason=reason_of(exc))); continue
                     updated.append(replacement); replaced[cid] = replacement; keys.append((t.id, day.isoformat(), cid, digest))
                 else: existing += 1
@@ -454,7 +455,8 @@ class DutySchedule:
                    (workspace, entity, id, user['id'], user['name'], stamp(), action, reason, encoded(document)))
 
     def public_template(self, row):
-        return dict(id=row['id'], version=row['version'], active=bool(row['active']), updated=row['updated']) | json.loads(row['document'])
+        # Exactly the template fields plus id, version and active: the client posts the fields back when editing.
+        return dict(id=row['id'], version=row['version'], active=bool(row['active'])) | json.loads(row['document'])
 
     def register(self, app, Workspace):
         from .duty_schedule_routes import register
