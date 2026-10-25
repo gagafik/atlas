@@ -148,7 +148,7 @@ class Clubs:
             if free<=0:break
             r=unpack(raw)
             owner=self.account(db,r['user_id'])
-            valid=owner and enabled(owner,snap,club['workspace']) and permission_key(owner)==r['data']['requesterPermissions'] and (self.manager(db,owner,club) or r['student_id'] in self.pupils(owner,snap,club['workspace']))
+            valid=owner and enabled(owner,snap,club['workspace']) and (self.manager(db,owner,club) or r['student_id'] in self.pupils(owner,snap,club['workspace']))  # the requester's link to the pupil, not a hash of their rights
             if not self.eligible(snap,club,r['student_id']) or not valid:self.change_member(db,u,snap,club,r,'ineligible','Ученик или полномочия заявителя изменились. Нужна новая запись.');continue
             if self.conflict(db,club,r['student_id']):break  # Do not silently bypass a conflicting FIFO head.
             self.change_member(db,u,snap,club,r,'enrolled','Зачисление по порядку очереди.');promoted.append(r['id']);free-=1

@@ -6,7 +6,7 @@ import pytest
 from backend import api,meetings,meeting_routes,meeting_reminders
 from backend.models import TeacherAbsence
 from test_access import client,create,signed
-from test_meetings import BASE,setup,publish,slots,book,bookings,event,path,request,ok,apply,transition,new,hosts
+from test_meetings import BASE,setup,publish,slots,book,bookings,event,path,request,ok,apply,transition,new,hosts,regrant
 
 
 def options(c,id,**params):return c.get('/api/meetings/bookings/'+id+'/reschedule-options',params=dict(workspace='demo',**params))
@@ -187,3 +187,10 @@ def test_access_or_cancellation_change_invalidates_a_previously_loaded_candidate
     before=records()
     assert options(client,bid).status_code==409 and transfer(client,bid,body).status_code==409
     assert records()==before
+
+
+def test_second_child_does_not_block_admin_transfer(client,monkeypatch):
+    eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
+    regrant(p['id'],['s1','s2'],'student')
+    assert options(client,bid).status_code==200
+    ok(transfer(client,bid,body));assert bookings(parent,eid)[0]['startsAt']==target['startsAt']

@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime,timedelta,timezone
+import json
 from uuid import uuid4
 from urllib.parse import quote
 import pytest
@@ -41,6 +42,11 @@ def publish(client,id):apply(client,id);ok(transition(client,id,'publish'))
 def slots(client,id):return ok(client.get(path('events/'+id+'/slots')))['items']
 def book(client,id,slot,student='s1',**kw):return client.post(path('slots/'+slot['id']+'/book'),json=request(version=slot['version'],eventVersion=event(client,id)['version'],studentId=student,**kw))
 def bookings(client,id):return ok(client.get(path('bookings')+'&eventId='+id))['items']
+def regrant(account_id,ids,view):
+    # An unrelated or real change of the account's rights: bumps the version and rewrites the grants.
+    with api.connect() as db:
+        raw=json.loads(db.execute('SELECT permissions FROM accounts WHERE id=?',(account_id,)).fetchone()[0]);raw['grants']=[dict(workspace='demo',view=view,entityIds=ids)]
+        db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(raw),account_id))
 
 
 def test_admin_owns_availability_teacher_agenda_parent_privacy_and_unchanged_school(client,monkeypatch):
@@ -299,3 +305,38 @@ def test_parent_cancels_then_can_rebook_and_event_cancel_preserves_history(clien
     assert all(b['status']=='cancelled' for b in bookings(parent,id))
     assert all(s['status']=='blocked' for s in slots(parent,id))
     assert len(bookings(signed('teacher'),id))==2
+
+
+def test_second_child_keeps_booking_reminder_and_cancel(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
+    regrant(p['id'],['s1','s2'],'student')
+    assert len(bookings(parent,id))==1 and len(ok(parent.get(path('bookings/'+bid+'/history'))))==1
+    assert bookings(client,id)[0]['parentAccessCurrent'] is True
+    monkeypatch.setattr(meeting_reminders,'now',lambda:BASE-timedelta(minutes=30))
+    assert api.meetings.reminders.process_one()
+    with api.connect() as db:
+        assert db.execute("SELECT count(*) FROM notifications WHERE action='meeting.reminder' AND user_id=?",(p['id'],)).fetchone()[0]==1
+    ok(parent.post(path('bookings/'+bid),json=request(version=1,action='cancel')))
+    assert bookings(parent,id)[0]['status']=='cancelled'
+
+
+def test_lost_child_link_hides_booking(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
+    regrant(p['id'],['s2'],'student')
+    assert bookings(parent,id)==[] and parent.get(path('bookings/'+bid+'/history')).status_code==404
+    assert bookings(client,id)[0]['parentAccessCurrent'] is False
+    monkeypatch.setattr(meeting_reminders,'now',lambda:BASE-timedelta(minutes=30))
+    assert api.meetings.reminders.process_one()
+    with api.connect() as db:
+        assert db.execute("SELECT count(*) FROM notifications WHERE action='meeting.reminder' AND user_id=?",(p['id'],)).fetchone()[0]==0
+
+
+def test_host_keeps_assignment_after_unrelated_grant_change(client,monkeypatch):
+    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');ok(book(parent,id,slots(parent,id)[0]))
+    regrant(t['id'],['t2','t3'],'teacher')
+    assert event(client,id)['hosts'][0]['current'] is True
+    assert 'blocked' not in {s['status'] for s in slots(client,id)} and len(bookings(signed('teacher'),id))==1
+    regrant(t['id'],['t3'],'teacher')
+    assert event(client,id)['hosts'][0]['current'] is False
+    assert {s['status'] for s in slots(client,id)} <= {'blocked','occupied'}
+    assert bookings(signed('teacher'),id)==[]

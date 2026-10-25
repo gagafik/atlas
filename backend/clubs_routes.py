@@ -143,6 +143,7 @@ def register(s,app,Workspace):
             s.bump(db,c);s.advance(db,u,snap,c)
             counts={r[0]:r[1] for r in db.execute("SELECT status,count(*) FROM club_members WHERE club_id=? AND status IN ('enrolled','waiting') GROUP BY status",(id,))}
             status='enrolled' if counts.get('enrolled',0)<c['data']['capacity'] and not counts.get('waiting',0) else 'waiting'
+            # requesterPermissions is stored for compatibility and no longer compared: Clubs.advance checks the requester's link to the pupil.
             p=snap.entities['student'][body.studentId];mid=uuid4().hex;data=dict(studentName=p.name,className=snap.entities['class_'][p.classId].name,decision=body.reason,requesterPermissions=permission_key(u))
             db.execute('INSERT INTO club_members(id,club_id,workspace,student_id,user_id,version,status,created,updated,enrolled_on,left_on,document) VALUES (?,?,?,?,?,1,?,?,?,?,?,?)',(mid,id,workspace,p.id,u['id'],status,stamp(),stamp(),today() if status=='enrolled' else '','',encoded(data)))
             s.history(db,u,c,mid,'joined',body.reason,dict(studentId=p.id,studentName=p.name,status=status));s.notify(db,u,snap,c,[p.id])
