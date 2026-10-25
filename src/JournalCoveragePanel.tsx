@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { download } from "./utils";
+import JournalCoverageReminders from "./JournalCoverageReminders";
+import {
+  classCardLines,
+  ruDate,
+  schoolDays,
+  type ClassSummary,
+} from "./journalCoverage";
 
 const labels: Record<string, string> = {
   missing: "Журнал не создан",
@@ -20,6 +27,8 @@ type Options = {
   yearStart: string;
   yearEnd: string;
   today: string;
+  canConfigure: boolean;
+  reminders: { enabled: boolean; afterDays: number; weeklyDigest: boolean };
 };
 type Query = {
   start: string;
@@ -66,6 +75,19 @@ type Detail = {
   nextOffset: number | null;
   total: number;
 };
+type Summary = {
+  token: string;
+  asOf: string;
+  classes: ClassSummary[];
+  // Administrators only: teachers without an account who still have unfilled lessons.
+  unbound?: {
+    teacherId: string | null;
+    teacher: string;
+    lessons: number;
+    since: string;
+    classNames: string[];
+  }[];
+};
 const initial: Query = {
   start: "",
   end: "",
@@ -88,7 +110,9 @@ export default function JournalCoveragePanel({
   const [query, setQuery] = useState<Query>(initial),
     [applied, setApplied] = useState<Query | null>(null);
   const [result, setResult] = useState<Result | null>(null),
-    [detail, setDetail] = useState<Detail | null>(null);
+    [detail, setDetail] = useState<Detail | null>(null),
+    [summary, setSummary] = useState<Summary | null>(null);
+  const [remindersOpen, setRemindersOpen] = useState(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const detailRef = useRef<HTMLElement | null>(null);
@@ -144,15 +168,17 @@ export default function JournalCoveragePanel({
       setBusy(false);
     }
   };
-  const change = (values: Partial<Query>) => {
+  const change = (values: Partial<Query>, keepSummary = false) => {
     setQuery((q) => ({ ...q, ...values }));
     setResult(null);
     setApplied(null);
     setDetail(null);
+    if (!keepSummary) setSummary(null);
     setError("");
   };
-  const load = async (offset = 0) => {
-    const filters = offset && applied ? applied : query;
+  // asOf pins a drill-down to the moment of the class summary; it is sent without a token.
+  const load = async (offset = 0, filters?: Query, asOf?: string) => {
+    filters ??= offset && applied ? applied : query;
     const value: Result = await api(
       "journal/coverage/report",
       workspace,
@@ -160,7 +186,11 @@ export default function JournalCoveragePanel({
       {
         ...filters,
         offset,
-        ...(offset && result ? { token: result.token, asOf: result.asOf } : {}),
+        ...(offset && result
+          ? { token: result.token, asOf: result.asOf }
+          : asOf
+            ? { asOf }
+            : {}),
       },
     );
     setResult((old) =>
@@ -170,6 +200,29 @@ export default function JournalCoveragePanel({
     );
     setApplied(filters);
     if (!offset) setDetail(null);
+  };
+  const classes = async () => {
+    setDetail(null);
+    setSummary(
+      await api("journal/coverage/classes", workspace, "POST", {
+        ...query,
+        mode: "classes",
+        classId: "",
+        teacherId: "",
+        status: "all",
+      }),
+    );
+  };
+  const drill = (classId: string) => {
+    if (!summary) return;
+    const filters: Query = {
+      ...query,
+      mode: "classes",
+      classId,
+      status: "issues",
+    };
+    change({ mode: "classes", classId, status: "issues" }, true);
+    void run(() => load(0, filters, summary.asOf));
   };
   const pupils = async (lesson: Lesson, offset = 0) => {
     if (!result || !applied) return;
@@ -238,10 +291,18 @@ export default function JournalCoveragePanel({
             известного ученика.
           </p>
           <p>
-            Изменения расписания применяются и к прошлым датам: исторических
-            версий учебного плана здесь пока нет. Домашнее задание и оценки не
-            обязательны для каждого урока.
+            Прошлые даты проверяются по версии расписания и составам,
+            действовавшим в тот день; опубликованный прошедший урок — по своему
+            опубликованному составу. Домашнее задание и оценки не обязательны
+            для каждого урока.
           </p>
+          {options?.reminders.enabled && (
+            <p>
+              Если урок не заполнен через{" "}
+              {schoolDays(options.reminders.afterDays)} после него, учитель
+              получает одно напоминание в уведомлениях.
+            </p>
+          )}
           {error && (
             <p role="alert" className="error-banner">
               {error}
@@ -359,8 +420,74 @@ export default function JournalCoveragePanel({
                   </select>
                 </label>
                 <button type="submit">Проверить заполнение</button>
+                {options.modes.includes("classes") && (
+                  <button type="button" onClick={() => void run(classes)}>
+                    Сводка по классам
+                  </button>
+                )}
               </fieldset>
             </form>
+          )}
+          {options?.canConfigure && (
+            <details
+              className="absence-panel"
+              open={remindersOpen}
+              onToggle={(e) => setRemindersOpen(e.currentTarget.open)}
+            >
+              <summary>Напоминания учителям</summary>
+              {remindersOpen && (
+                <JournalCoverageReminders
+                  workspace={workspace}
+                  onSaved={(value) =>
+                    setOptions((o) => o && { ...o, reminders: value })
+                  }
+                />
+              )}
+            </details>
+          )}
+          {summary && (
+            <section aria-label="Сводка по классам">
+              <h3>Сводка по классам</h3>
+              <p>
+                На момент {new Date(summary.asOf).toLocaleString("ru-RU")} · по
+                времени вашего устройства. Урок, общий для нескольких классов,
+                учитывается в каждом из них.
+              </p>
+              {!summary.classes.length && <p>Классов для сводки нет.</p>}
+              <div className="attendance-cards">
+                {summary.classes.map((c) => (
+                  <article className="absence-card" key={c.classId}>
+                    <h4>{c.className}</h4>
+                    {classCardLines(c).map((line) => (
+                      <p key={line}>{line}</p>
+                    ))}
+                    <button disabled={busy} onClick={() => drill(c.classId)}>
+                      Уроки класса
+                    </button>
+                  </article>
+                ))}
+              </div>
+              {!!summary.unbound?.length && (
+                <section aria-label="Уроки без учётной записи учителя">
+                  <h3>Уроки без учётной записи учителя</h3>
+                  <p>Привяжите учётную запись в разделе доступа.</p>
+                  <div className="attendance-cards">
+                    {summary.unbound.map((g) => (
+                      <article
+                        className="absence-card"
+                        key={g.teacherId ?? "none"}
+                      >
+                        <h4>{g.teacher}</h4>
+                        <p>
+                          Не заполнено уроков: {g.lessons} · с {ruDate(g.since)}
+                        </p>
+                        <p>Классы: {g.classNames.join(", ")}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </section>
           )}
           {result && applied && (
             <section aria-label="Результат контроля журналов">
