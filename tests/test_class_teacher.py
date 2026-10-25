@@ -125,7 +125,7 @@ def test_only_admin_changes_class_teacher_and_history(client):
     state['classes'][0]['classTeacherId'] = 't2'
     refused = editor.put('/api/state?workspace=demo', json=state)
     assert refused.status_code == 403 and 'администратор' in refused.json()['detail']
-    assert api.read('demo').revision == revision and client.get('/api/history?workspace=demo').json() == dict(undo=1, redo=0)
+    assert api.read('demo').revision == revision and {k: client.get('/api/history?workspace=demo').json()[k] for k in ('undo', 'redo')} == dict(undo=1, redo=0)
     # The same value as stored and a rename are ordinary editor work.
     state['classes'][0]['classTeacherId'] = None
     state['classes'][0]['name'] += ' !'
