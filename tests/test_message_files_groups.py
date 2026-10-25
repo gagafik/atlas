@@ -61,7 +61,7 @@ def test_attachment_binding_owner_draft_workspace_and_target(client):
     assert download(parent,id).status_code==404
 
 
-def test_group_class_replies_members_and_removal_revoke_file_access(client):
+def test_group_removal_keeps_history_until_removal(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
     id=group(teacher);before=api.read('demo').model_dump()
     first=detail(parent,id);assert first['kind']=='group' and first['canReply']
@@ -72,14 +72,57 @@ def test_group_class_replies_members_and_removal_revoke_file_access(client):
     assert download(parent,file).status_code==200
     current=detail(teacher,id)
     assert parent.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['other']['id'],action='remove')).status_code==403
+    material=current['latestId']
     assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['parent']['id'],action='remove')).status_code==200
-    assert parent.get(url('threads/'+id)).status_code==404 and download(parent,file).status_code==404
-    assert parent.get(url()).json()['items']==[]
+    draft2=str(uuid4());file2=upload(teacher,draft2,id).json()['id']
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='После исключения',draftId=draft2,fileIds=[file2])).status_code==200
+    # The removed parent reads what was published before the removal and nothing after it.
+    value=detail(parent,id);texts=[p['text'] for p in value['posts']]
+    assert value['readOnly'] and not value['canReply'] and not value['canManage'] and value['participants']==[]
+    assert 'Материал' in texts and 'После исключения' not in texts and value['latestId']==material
+    assert download(parent,file).status_code==200 and download(parent,file2).status_code==404
+    with api.connect() as db:
+        marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(id,)))
+        latest=db.execute('SELECT latest_id FROM message_threads WHERE id=?',(id,)).fetchone()[0]
+    assert marks[people['parent']['id']]==material and {v for k,v in marks.items() if k!=people['parent']['id']}=={latest}
+    assert parent.get(url(q='После')).json()['items']==[]
+    found=parent.get(url(q='Материал')).json()['items'];assert len(found)==1 and found[0]['readOnly'] and found[0]['latestId']==value['latestId']
+    assert parent.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Нельзя')).status_code==404
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=detail(teacher,id)['latestId'])).status_code==422
+    assert parent.get(url(unreadOnly=True)).json()['items'][0]['id']==id
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=value['latestId'])).status_code==200
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='И ещё')).status_code==200
+    assert parent.get(url(unreadOnly=True)).json()['items']==[]
+    assert [i['id'] for i in parent.get(url()).json()['items']]==[id]
     assert download(other,file).status_code==200
     current=detail(other,id)
     assert other.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['other']['id'],action='leave')).status_code==200
-    assert other.get(url('threads/'+id)).status_code==404
+    assert detail(other,id)['readOnly']
     assert api.read('demo').model_dump()==before
+
+
+def test_frozen_thread_ranks_by_last_readable_post(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
+    assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove')).status_code==200
+    direct=teacher.post(url(),json=payload(people['parent']['id'])).json()['id']
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Позже')).status_code==200
+    # The group kept its place from before the removal, so later activity does not push it above the new dialogue.
+    assert [t['id'] for t in parent.get(url()).json()['items']]==[direct,id]
+
+
+def test_class_move_freezes_group_but_keeps_direct_dialog(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
+    direct=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    state=api.read('demo')
+    for pupil in state.students:
+        if pupil.id=='s1':pupil.classId='c-demo-d'
+    api.save('demo',state)
+    unread=lambda:parent.get('/api/notifications/inbox').json()['unread']
+    before=unread()
+    for user in [parent,signed('student')]:assert detail(user,id)['readOnly']
+    assert detail(parent,direct)['canReply'] and not detail(parent,direct)['readOnly']
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Только для класса')).status_code==200
+    assert 'Только для класса' not in [p['text'] for p in detail(parent,id)['posts']] and unread()==before
 
 
 def test_group_contacts_scope_and_assignment_change(client):
@@ -94,8 +137,10 @@ def test_group_contacts_scope_and_assignment_change(client):
     for w in state.workloads:
         if w.teacherId=='t2':w.teacherId='t1'
     api.save('demo',state)
-    assert teacher.get(url('threads/'+id)).status_code==404
+    value=detail(teacher,id);assert value['readOnly'] and not value['canReply']
     assert detail(client,id)['canReply']
+    assert client.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Новое')).status_code==200
+    assert 'Новое' not in [p['text'] for p in detail(teacher,id)['posts']]
 
 
 def test_upload_interrupted_by_group_removal_and_closed_thread(client,monkeypatch):
@@ -177,8 +222,7 @@ def test_group_scope_changes_and_revocation_after_post_limit(client):
     for workload in state.workloads:
         if workload.teacherId=='t2':workload.teacherId='t1'
     api.save('demo',state)
-    assert teacher.get(url('threads/'+id)).status_code==404
-    assert parent.get(url('threads/'+id)).status_code==404
+    for user in [teacher,parent]:assert detail(user,id)['readOnly']
 
 
 def test_published_attachments_survive_orphan_cleanup(client):

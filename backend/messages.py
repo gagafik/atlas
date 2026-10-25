@@ -120,6 +120,9 @@ class Messages:
             thread_id TEXT,user_id TEXT,role TEXT,scope_students TEXT,read_id INTEGER DEFAULT 0,ack_version INTEGER,
             PRIMARY KEY(thread_id,user_id))''')
         db.execute('CREATE INDEX IF NOT EXISTS message_member_owner ON message_members(user_id,thread_id)')
+        # Last post published while the participant had a live link; NULL marks a row from before this column (no read-only history).
+        if 'live_through' not in {r[1] for r in db.execute('PRAGMA table_info(message_members)')}:
+            db.execute('ALTER TABLE message_members ADD COLUMN live_through INTEGER')
         db.execute('''CREATE TABLE IF NOT EXISTS message_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT,author_id TEXT,author_name TEXT,created TEXT,body TEXT)''')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_thread ON message_posts(thread_id,id)')
@@ -209,6 +212,22 @@ class Messages:
         if not member: raise HTTPException(404,'Переписка недоступна.')
         return thread,member
 
+    def visible(self,db,thread,user,directory,accounts):
+        """(member row, None) with a live link; (row, last readable post) for kept history; None without access."""
+        if row:=self.member(db,thread,user,directory,accounts): return row,None
+        row=db.execute('SELECT role,scope_students,read_id,ack_version,live_through FROM message_members WHERE thread_id=? AND user_id=?',(thread['id'],user['id'])).fetchone()
+        # Past messages stay with the people who took part; a switch between family and staff roles is a different person's account.
+        if not row or not row[4] or (row[0] in FAMILY)!=(user['role'] in FAMILY) or not directory.enabled(user): return None
+        if thread['kind']=='announcement' and thread['status']=='withdrawn' and user['id']!=thread['authorId']: return None
+        return row[:4],min(row[4],thread['latestId'])
+
+    def readable(self,db,id,user,directory,accounts):
+        row=db.execute('SELECT * FROM message_threads WHERE id=? AND workspace=?',(id,directory.workspace)).fetchone()
+        thread=self.thread(db,row) if row else None
+        found=self.visible(db,thread,user,directory,accounts) if thread else None
+        if not found: raise HTTPException(404,'Переписка недоступна.')
+        return thread,*found
+
     def rate(self,db,user):
         count=db.execute('SELECT count(*) FROM message_posts WHERE author_id=? AND created>?',(user['id'],(now()-timedelta(minutes=5)).isoformat())).fetchone()[0]
         if count>=30: raise HTTPException(429,'Слишком много сообщений. Попробуйте через несколько минут.')
@@ -225,6 +244,10 @@ class Messages:
                       (thread['id'],user['id'],user['name'],now().isoformat(),text)).lastrowid
         db.execute('UPDATE message_threads SET latest_id=? WHERE id=?',(id,thread['id']))
         return id
+
+    def advance(self,db,thread_id,post_id,users):
+        # Linked participants may later read the history up to this post, even after losing the link.
+        db.execute('UPDATE message_members SET live_through=? WHERE thread_id=? AND (live_through IS NULL OR live_through<?) AND user_id IN (SELECT value FROM json_each(?))',(post_id,thread_id,post_id,encoded([u['id'] for u in users])))
 
     def body_valid(self,body):
         if not body.text and not body.fileIds:raise HTTPException(422,'Напишите сообщение или приложите файл.')
@@ -313,6 +336,7 @@ class Messages:
                 db.executemany('INSERT INTO message_members (thread_id,user_id,role,scope_students) VALUES (?,?,?,?)',[(id,u['id'],u['role'],encoded(ids)) for u,ids in [(user,scopes),*recipients]])
                 if body.kind=='group':db.execute('INSERT INTO message_group_scopes VALUES (?,?,?)',(id,'contacts' if body.recipientIds else 'audience',encoded(body.groupIds)))
                 post=self.post(db,dict(id=id),user,body.text)
+                self.advance(db,id,post,[user,*(u for u,_ in recipients)])
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post,new=True)
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
@@ -326,33 +350,39 @@ class Messages:
             with self.access.lock,self.access.connect() as db:
                 self.tables(db)
                 db.create_function('casefold',1,lambda value:value.casefold(),deterministic=True)
-                rows=db.execute('''SELECT t.* FROM message_threads t JOIN message_members m ON m.thread_id=t.id AND m.user_id=?
-                    WHERE t.workspace=? AND (? IS NULL OR t.latest_id<?) AND (?=0 OR t.latest_id>m.read_id)
-                    AND (instr(casefold(t.title),?)>0 OR EXISTS(SELECT 1 FROM message_posts p WHERE p.thread_id=t.id AND instr(casefold(p.body),?)>0
+                # Rank and search by the post each participant may read, so a thread kept as history does not show later activity.
+                rows=db.execute('''SELECT t.*,coalesce(m.live_through,t.latest_id) FROM message_threads t JOIN message_members m ON m.thread_id=t.id AND m.user_id=?
+                    WHERE t.workspace=? AND (? IS NULL OR coalesce(m.live_through,t.latest_id)<?) AND (?=0 OR t.latest_id>m.read_id)
+                    AND (instr(casefold(t.title),?)>0 OR EXISTS(SELECT 1 FROM message_posts p WHERE p.thread_id=t.id AND p.id<=coalesce(m.live_through,t.latest_id) AND instr(casefold(p.body),?)>0
                         AND NOT EXISTS(SELECT 1 FROM message_moderation h WHERE h.post_id=p.id AND h.hidden=1)))
-                    ORDER BY t.latest_id DESC LIMIT 101''',(user['id'],workspace,before,before,int(unreadOnly),q.casefold(),q.casefold())).fetchall()
+                    ORDER BY coalesce(m.live_through,t.latest_id) DESC LIMIT 101''',(user['id'],workspace,before,before,int(unreadOnly),q.casefold(),q.casefold())).fetchall()
                 accounts=self.accounts(db,thread_ids=[r[0] for r in rows[:100] if r[2] in ['direct','group']])
                 items=[]
                 for row in rows[:100]:
-                    thread=self.thread(db,row);member=self.member(db,thread,user,directory,accounts)
-                    if member: items.append(thread|dict(unread=thread['latestId']>member[2],acknowledged=member[3]==thread['version']))
-            return dict(items=items,nextBefore=rows[99][10] if len(rows)>100 else None)
+                    thread=self.thread(db,row[:11]);found=self.visible(db,thread,user,directory,accounts)
+                    if not found: continue
+                    member,through=found;latest=thread['latestId'] if through is None else through
+                    if unreadOnly and latest<=member[2]: continue
+                    items.append(thread|dict(latestId=latest,unread=latest>member[2],acknowledged=member[3]==thread['version'],readOnly=through is not None))
+            return dict(items=items,nextBefore=rows[99][11] if len(rows)>100 else None)
 
         @app.get('/api/messages/threads/{id}')
         def detail(id:str,request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
             user,directory=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);accounts=self.thread_accounts(db,id,user)
-                thread,member=self.find(db,id,user,directory,accounts)
-                posts=db.execute('SELECT id,author_id,author_name,created,body FROM message_posts WHERE thread_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 51',(id,before,before)).fetchall()
+                thread,member,through=self.readable(db,id,user,directory,accounts)
+                bound=thread['latestId'] if through is None else through
+                posts=db.execute('SELECT id,author_id,author_name,created,body FROM message_posts WHERE thread_id=? AND id<=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 51',(id,bound,before,before)).fetchall()
                 peers=[]
-                if thread['authorId']==user['id'] or thread['kind'] in ['direct','group']:
+                # Read receipts of a former participant would reveal activity after their access ended.
+                if through is None and (thread['authorId']==user['id'] or thread['kind'] in ['direct','group']):
                     for uid,read_id,ack in db.execute('SELECT user_id,read_id,ack_version FROM message_members WHERE thread_id=?',(id,)):
                         if uid!=user['id'] and (peer:=accounts.get(uid)) and self.member(db,thread,peer,directory,accounts):
                             peers.append(dict(id=uid,name=peer['name'],read=read_id>=thread['latestId'],acknowledged=ack==thread['version']))
                 attachments=self.files.for_posts(db,[r[0] for r in posts[:50]])
                 hidden={r[0] for r in db.execute('SELECT post_id FROM message_moderation WHERE hidden=1 AND post_id IN (SELECT value FROM json_each(?))',(encoded([r[0] for r in posts[:50]]),))}
-                return thread|dict(userId=user['id'],canReply=thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=thread['managerId']==user['id'],
+                return thread|dict(userId=user['id'],latestId=bound,readOnly=through is not None,canReply=through is None and thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=through is None and thread['managerId']==user['id'],
                     acknowledged=member[3]==thread['version'],participants=peers,posts=[dict(zip(['id','authorId','author','created','text'],row))|dict(text='Сообщение скрыто администратором.' if row[0] in hidden else row[4],hidden=row[0] in hidden,files=[] if row[0] in hidden else attachments[row[0]]) for row in reversed(posts[:50])],
                     nextBefore=posts[49][0] if len(posts)>50 else None)
 
@@ -372,8 +402,9 @@ class Messages:
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post)
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
-                targets=[u for uid,u in accounts.items() if uid!=user['id'] and self.member(db,thread,u,directory,accounts)]
-                self.notifications.deliver(db,targets,workspace,thread['version'],'message.received')
+                live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
+                self.advance(db,id,post,live)
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received')
                 self.access.record(db,'message.replied',workspace,detail=id)
             return dict(id=id)
 
@@ -382,8 +413,10 @@ class Messages:
             user,directory=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
-                thread,_=self.find(db,id,user,directory,self.thread_accounts(db,id,user))
-                if not db.execute('SELECT 1 FROM message_posts WHERE thread_id=? AND id=?',(id,body.throughId)).fetchone(): raise HTTPException(422,'Укажите сообщение из этой переписки.')
+                thread,_,through=self.readable(db,id,user,directory,self.thread_accounts(db,id,user))
+                if through is not None and body.throughId>through or not db.execute('SELECT 1 FROM message_posts WHERE thread_id=? AND id=?',(id,body.throughId)).fetchone(): raise HTTPException(422,'Укажите сообщение из этой переписки.')
+                # Opening proves the live link: a row from before live_through, or one left stale, may read everything up to now.
+                if through is None: self.advance(db,id,thread['latestId'],[user])
                 db.execute('UPDATE message_members SET read_id=max(read_id,?) WHERE thread_id=? AND user_id=?',(body.throughId,id,user['id']))
             return dict(ok=True)
 
@@ -419,10 +452,14 @@ class Messages:
                 if body.userId==thread['managerId']:raise HTTPException(422,'Перед выходом передайте управление другому участнику или закройте обсуждение.')
                 # A manager can remove a now-inactive account to free a place.
                 if not db.execute('SELECT 1 FROM message_members m WHERE m.thread_id=? AND m.user_id=? AND NOT EXISTS (SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id)',(id,body.userId)).fetchone():raise HTTPException(404,'Участник недоступен.')
+                # Record what the leaver or removed member may keep before the exclusion closes the link; rows from before live_through get their bound here too.
+                if (target:=accounts.get(body.userId)) and self.member(db,thread,target,directory,accounts): self.advance(db,id,thread['latestId'],[target])
                 db.execute('INSERT INTO message_exclusions VALUES (?,?,?,?)',(id,body.userId,body.action,now().isoformat()))
                 # Access revocation must remain possible after the posting limit is reached.
                 post=self.post(db,thread,user,'Участник вышел из обсуждения.' if body.action=='leave' else 'Управляющий изменил состав обсуждения.',limit=False)
                 db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))
-                self.notifications.deliver(db,[u for uid,u in accounts.items() if uid!=user['id'] and self.member(db,thread,u,directory,accounts)],workspace,thread['version']+1,'message.received')
+                live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
+                self.advance(db,id,post,live)
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version']+1,'message.received')
                 self.access.record(db,'message.participant_'+body.action,workspace,detail=id+' · '+body.userId)
             return dict(ok=True)
