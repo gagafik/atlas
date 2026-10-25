@@ -72,6 +72,10 @@ def write_db(path, workspace, state, force):
             try: previous = json.loads(row[1])['settings']['name']
             except (TypeError, ValueError, KeyError): previous = None
             if previous != NAME: raise SystemExit(f'Рабочая область «{workspace}» не похожа на временный импорт aSc и не заменяется.')
+            # The import writes the document without capturing timetable versions; old versions must not overlay a new import.
+            try: dated = db.execute('SELECT 1 FROM timetable_current WHERE workspace=?', (workspace,)).fetchone()
+            except sqlite3.OperationalError: dated = None
+            if dated: raise SystemExit(f'Рабочая область «{workspace}» уже ведёт историю расписания и не заменяется; укажите новый файл.')
             state = state.model_copy(update={'revision': row[0] + 1})
             db.execute('UPDATE workspaces SET revision=?, document=? WHERE id=? AND revision=?', (state.revision, state.model_dump_json(), workspace, row[0]))
 
