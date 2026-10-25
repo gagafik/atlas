@@ -2,7 +2,7 @@ from datetime import date,datetime,timezone
 import csv,io,json
 from copy import deepcopy
 import pytest
-from backend import api,journal_coverage
+from backend import api,journal,journal_coverage
 from backend.models import DatedLesson,Event,SchoolClass,Student,Placement
 from test_access import client,enable,create,signed
 from test_absences import setup
@@ -68,19 +68,22 @@ def test_calendar_closures_moves_extra_lessons_and_old_publications(client):
     assert report(client,start='2026-08-18',end='2026-08-18').json()['counts']['expected']==2
 
 
-def test_current_roster_new_pupil_inactive_and_partial_roster_never_green(client):
+def test_current_roster_new_pupil_inactive_and_partial_roster_never_green(client,monkeypatch):
+    # Pinned to the evening of the lesson day: later days keep the roster a lesson was published with.
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17));day=dict(asOf='2026-08-17T18:00:00Z')
     known();key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
     state=api.read('demo');state.students.append(Student(id='new',name='New pupil',classId='c-demo-a'));api.save('demo',state)
-    value=english(report(client).json());assert value['status']=='stale' and value['missingPupils']==1
-    assert details(client,key).json()['pupils'][0]['id']=='new'
+    value=english(report(client,**day).json());assert value['status']=='stale' and value['missingPupils']==1
+    frozen=english(report(client).json());assert frozen['status']=='complete' and not frozen['needsSync'] and frozen['pupils']==2
+    assert details(client,key,**day).json()['pupils'][0]['id']=='new'
     synced=entry(client,key,syncRoster=True);synced['document']['content']['records'][-1]['attendance']='present';write(client,synced,publish=True,syncRoster=True)
-    assert english(report(client).json())['status']=='complete'
+    assert english(report(client,**day).json())['status']=='complete'
     state=api.read('demo');next(s for s in state.students if s.id=='new').active=False;api.save('demo',state)
-    assert english(report(client).json())['status']=='stale'
+    assert english(report(client,**day).json())['status']=='stale'
     state=api.read('demo');state.classes[0].studentCount=30;api.save('demo',state)
-    assert english(report(client).json())['rosterUnknown']
+    assert english(report(client,**day).json())['rosterUnknown']
     state=api.read('demo');state.classes[0].studentCount=None;api.save('demo',state)
-    assert english(report(client).json())['rosterUnknown']
+    assert english(report(client,**day).json())['rosterUnknown']
 
 
 def test_school_clock_cutoff_future_lessons_and_validation(client,monkeypatch):
@@ -214,11 +217,13 @@ def test_publication_transaction_failure_keeps_control_unchanged(client,monkeypa
 
 
 def test_substitute_teacher_scope_and_deleted_roster_publication(client):
-    _,_,parent,teacher=setup(client);other=signed('other-teacher');known()
+    _,_,parent,teacher=setup(client);other=signed('other-teacher');known();day=dict(asOf='2026-08-17T18:00:00Z')
     key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
     state=api.read('demo');state.datedLessons=[DatedLesson(id='substitute',name='Substitute',kind='change',placementId='eng',sourceDate=date(2026,8,17),onDate=date(2026,8,17),teacherIds=['t1'])];api.save('demo',state)
     assert report(teacher,mode='teaching').json()['counts']['orphaned']==1
-    replacement=report(other,mode='teaching').json();assert replacement['counts']['stale']==1 and english(replacement)['canOpen']
+    replacement=report(other,mode='teaching',**day).json();assert replacement['counts']['stale']==1 and english(replacement)['canOpen']
+    # An earlier day keeps the teachers it was published with, so the substitute does not make it stale.
+    frozen=english(report(other,mode='teaching').json());assert frozen['status']=='complete' and not frozen['needsSync'] and frozen['canOpen']
     assert details(other,key,mode='teaching').status_code==200
     # Whole-class membership disappears; the old publication must remain visible
     # for administrators to inspect or withdraw, without inventing attendance.

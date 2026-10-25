@@ -1,6 +1,6 @@
 from datetime import date
 import pytest
-from backend import api
+from backend import api, journal
 from backend.models import Student, DatedLesson
 from test_access import client, enable, create, signed
 
@@ -115,7 +115,9 @@ def test_stale_versions_rollback_and_audit(client,monkeypatch):
     assert entry(client,record['lessonKey'])['version']==saved['version']
 
 
-def test_sync_membership_keeps_historical_marks_and_adds_unmarked_pupils(client):
+def test_sync_membership_keeps_historical_marks_and_adds_unmarked_pupils(client,monkeypatch):
+    # On the lesson day a changed roster still asks for review; later days keep the published roster (test_journal_history).
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
     record=graded(entry(client,lesson(client,'Математика')['lessonKey']))
     saved=write(client,record,publish=True).json()
     state=api.read('demo')
@@ -198,7 +200,8 @@ def test_account_permission_race_rechecked_in_transaction(client,monkeypatch):
     with api.connect() as db:assert db.execute('SELECT count(*) FROM journal_entries').fetchone()[0]==0
 
 
-def test_published_members_index_is_independent_of_draft_and_rebuildable(client):
+def test_published_members_index_is_independent_of_draft_and_rebuildable(client,monkeypatch):
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
     record=graded(entry(client,lesson(client,'Математика')['lessonKey']))
     assert write(client,record,publish=True).status_code==200
     state=api.read('demo');next(g for g in state.groups if g.id=='g-math').studentIds.append('s2');api.save('demo',state)

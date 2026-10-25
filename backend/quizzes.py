@@ -78,7 +78,9 @@ class Quizzes:
         elif not quiz['published'] or student not in user_ids(user,workspace,'student') or student not in document['studentIds']:
             raise HTTPException(403,'Нет доступа к этому назначению теста.')
         if student is not None and student not in document['studentIds']:raise HTTPException(404,'Ученику не назначен этот тест.')
-        pupils=group_pupils(snap,lesson['groupId'])
+        # Pupils: the lesson's roster on its own date (a later transfer keeps the right, leaving the school ends it);
+        # a cancellation does not freeze the quiz. Without a dated lesson, the current group decides.
+        pupils=set(current['studentIds'])&snap.active if current else group_pupils(snap,lesson['groupId'])
         enrolled=bool(student is not None and student in document['studentIds'] and student in pupils)
         return dict(user=user,staff=staff,workspace=workspace,quiz=quiz,student=student,current=current,state=snap.state,revision=snap.state.revision,
                     canReview=bool(staff and manage),canAnswer=bool(user['role']=='student' and enrolled),enrolled=enrolled,groupPupils=pupils,key=quiz['lessonKey'])

@@ -65,6 +65,8 @@ export interface JournalEntry {
   needsSync: boolean;
   currentDate: string | null;
   futureLesson?: boolean;
+  // A publication of an earlier day keeps its roster, time and teachers.
+  rosterFrozen?: boolean;
   hasPublished: boolean;
   publishedVersion: number | null;
   publishedAt: string | null;

@@ -57,6 +57,7 @@ interface DayLesson {
   publishedVersion: number | null;
   hasPublished: boolean;
   archived: boolean;
+  frozen?: boolean;
 }
 interface History {
   version: number;
@@ -697,6 +698,13 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       Урок ещё не прошёл. Тему, домашнее задание и материалы
                       можно опубликовать заранее; посещаемость и оценки
                       публикуются в день урока.
+                    </p>
+                  )}
+                  {entry.rosterFrozen && entry.hasPublished && (
+                    <p className="info-line">
+                      Состав, время и учителя урока зафиксированы при
+                      публикации: последующие изменения расписания и составов
+                      их не меняют.
                     </p>
                   )}
                   {entry.needsSync && entry.writable && (

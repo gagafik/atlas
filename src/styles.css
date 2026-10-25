@@ -597,6 +597,15 @@ main {
 .toolbar-buttons svg {
   width: 15px;
 }
+.effective-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+.effective-from input {
+  max-width: 9.5rem;
+}
 .schedule-filters {
   display: flex;
   justify-content: space-between;
@@ -2386,6 +2395,9 @@ main {
   }
 }
 @media (max-width: 420px) {
+  .toolbar-buttons {
+    flex-wrap: wrap;
+  }
   .student-week {
     grid-template-columns: 1fr;
   }
