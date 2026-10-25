@@ -7,7 +7,7 @@ import pytest
 from backend import api,homework,homework_files
 from backend.models import DatedLesson
 from test_access import client,enable,create,signed,HEADERS
-from test_journal import lesson,entry,write,graded,DAY
+from test_journal import lesson,entry,write,graded,report,DAY
 
 
 def setup(client):
@@ -155,8 +155,9 @@ def test_stale_versions_assignment_changes_and_withdraw_review_race(client):
         a=pool.submit(answer,pupil,key,sent,'withdraw')
         b=pool.submit(review,teacher,key,sent)
         assert sorted([a.result().status_code,b.result().status_code])==[200,409]
-    updated=entry(client,key);updated['document']['content']['homework']='Новое задание'
-    assert write(client,updated,publish=True).status_code==200
+    from test_assignment_files import upload as upload_material,save_materials
+    updated=entry(client,key);material=upload_material(client,updated).json()
+    save_materials(client,updated,[material['id']],homework='Новое задание')
     assert answer(pupil,key,current).status_code==409
     latest=get(pupil,key);assert latest['canSubmit']
     newer=answer(pupil,key,latest,text='Новое решение').json()
@@ -181,15 +182,18 @@ def test_schedule_changes_and_account_revocation_block_writes(client,monkeypatch
     assert get(parent,key)['submitted']['text']=='Решение ученика'
     assert not get(pupil,key)['canSubmit']
     assert answer(pupil,key,sent,'withdraw').status_code==403
-    assert review(teacher,key,sent).status_code==403
     state=api.read('demo');state.datedLessons=[];api.save('demo',state)
     original=api.homework.context
     def revoke(*args,**kwargs):
         ctx=original(*args,**kwargs)
         with api.connect() as db: db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(ctx['user']['id'],))
         return ctx
-    monkeypatch.setattr(api.homework,'context',revoke)
-    assert answer(pupil,key,sent,'withdraw').status_code==409
+    # The answer is still unreviewed and its version current, so only the account recheck can refuse this withdrawal.
+    with monkeypatch.context() as patched:
+        patched.setattr(api.homework,'context',revoke)
+        refused=answer(pupil,key,sent,'withdraw');assert refused.status_code==409 and 'Учётная запись изменилась' in refused.text
+    state=api.read('demo');state.datedLessons=[DatedLesson(id='cancel-again',name='Отмена',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)];api.save('demo',state)
+    assert review(teacher,key,sent).status_code==200  # the course teacher checks work that was already sent
 
 
 def test_gc_keeps_draft_and_submitted_history_but_removes_abandoned_uploads(client):
@@ -223,7 +227,7 @@ def test_publication_withdrawn_during_upload_discards_the_file(client,monkeypatc
         assert not list(homework_files.root_for(db).glob('*.bin'))
 
 
-def test_old_teacher_loses_review_rights_after_replacement_and_parent_grants_revoke_files(client):
+def test_course_teacher_keeps_review_after_replacement_and_parent_grants_revoke_files(client):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey'];current=get(pupil,key)
     file=upload(pupil,key,current['assignment']).json()['id']
     sent=answer(pupil,key,current,files=[file]).json()
@@ -231,8 +235,8 @@ def test_old_teacher_loses_review_rights_after_replacement_and_parent_grants_rev
     state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
     api.save('demo',state)
     assert get(teacher,key)['submitted']['text']=='Решение ученика'
-    assert review(teacher,key,sent).status_code==403
-    assert review(signed('unrelated'),key,sent).status_code==200
+    assert review(signed('unrelated'),key,sent).status_code==403  # a substitute reads but does not review
+    assert review(teacher,key,sent).status_code==200
     account=parent.get('/api/auth/status').json()['user']
     body={k:v for k,v in account.items() if k!='id'};body['grants'][0]['entityIds']=['s2']
     assert client.put('/api/access/users/'+account['id'],json=body).status_code==200
@@ -255,3 +259,107 @@ def test_full_backup_restores_private_answer_and_authorized_download(client,tmp_
     assert get(parent,key)==expected
     assert download(parent,key,file).content==b'Answer to restore'
     assert download(signed('other-pupil'),key,file).status_code==403
+
+
+def grading_url(key): return f'/api/journal/homework/{key}/grading?workspace=demo&studentId=s1'
+
+
+def unread(client): return client.get('/api/notifications/inbox').json()['unread']
+
+
+def test_typo_and_deadline_edits_keep_accepted_work(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    sent=answer(pupil,key,get(pupil,key)).json();assert review(teacher,key,sent).status_code==200
+    token=get(pupil,key)['assignment'];original=record['document']['content']['homework']
+    for field,value in [('homework','Прочитать страницу 12.'),('dueDate','2026-08-26'),('homeworkLatePolicy','block')]:
+        edited=entry(client,key);edited['document']['content'][field]=value
+        assert write(client,edited,publish=True).status_code==200
+        for reader in [pupil,parent]:
+            work=get(reader,key);assert work['status']=='accepted' and not work['assignmentChanged'] and work['assignment']==token
+        work=get(pupil,key);assert work['canSaveDraft'] is False and work['canSubmit'] is False
+        # The pupil sees the current text, while the answer keeps the conditions it was given under.
+        assert work['homework']=='Прочитать страницу 12.' and work['submitted']['homework']==original
+    assert get(teacher,key)['status']=='accepted'
+
+
+def test_substantive_changes_reopen_accepted_work(client):
+    from test_assignment_files import upload as upload_material,save_materials
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    sent=answer(pupil,key,get(pupil,key)).json()
+    material=upload_material(client,record).json();save_materials(client,record,[material['id']])
+    work=get(pupil,key);assert work['assignmentChanged'] and work['canSubmit']
+    assert review(teacher,key,sent).status_code==409  # the token the teacher saw is outdated
+    current=get(teacher,key);assert current['assignmentChanged']
+    assert review(teacher,key,current).status_code==409  # changed conditions cannot be accepted
+    assert review(teacher,key,current,'returned','Выполните по новым материалам').status_code==200
+
+
+def test_stale_conditions_between_context_and_write_conflict(client,monkeypatch):
+    record,pupil,_,_=setup(client);key=record['lessonKey'];current=get(pupil,key);original=api.homework.context
+    def raced(*args,**kwargs):
+        ctx=original(*args,**kwargs)
+        moved=entry(client,key);moved['document']['content']['dueDate']='2026-08-26'
+        assert write(client,moved,publish=True).status_code==200
+        return ctx
+    monkeypatch.setattr(api.homework,'context',raced)
+    assert answer(pupil,key,current).status_code==409
+    with api.connect() as db: assert db.execute('SELECT count(*) FROM homework_submissions').fetchone()[0]==0
+
+
+def test_offline_homework_rejects_online_answers(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    sent=answer(pupil,key,get(pupil,key)).json()
+    for fields,message in [(dict(homeworkLatePolicy='block'),'только при онлайн-сдаче'),(dict(homework='',dueDate=None),'относится к домашнему заданию')]:
+        invalid=entry(client,key);invalid['document']['content'].update(homeworkSubmission='offline',**fields)
+        response=write(client,invalid,publish=True);assert response.status_code==422 and message in response.text
+    offline=entry(client,key);offline['document']['content']['homeworkSubmission']='offline'
+    assert write(client,offline,publish=True).status_code==200
+    work=get(pupil,key);assert work['submission']=='offline' and not work['canSaveDraft'] and not work['canSubmit']
+    response=answer(pupil,key,work,'draft');assert response.status_code==409 and 'без онлайн-отправки' in response.text
+    assert answer(pupil,key,work).status_code==409
+    assert upload(pupil,key,work['assignment']).status_code==403
+    # An answer sent before the switch belongs to other conditions, but it can still be withdrawn.
+    assert work['assignmentChanged'] and get(teacher,key)['assignmentChanged']
+    assert answer(pupil,key,work,'withdraw').status_code==200 and get(pupil,key)['submitted'] is None
+    assert report(parent).json()['rows'][0]['content']['homeworkSubmission']=='offline'
+
+
+def test_substitute_cannot_review_but_course_teacher_can(client):
+    from backend.homework_grading import FOREIGN
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    state=api.read('demo')
+    state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
+    api.save('demo',state);substitute=signed('unrelated')
+    write(substitute,entry(substitute,key,syncRoster=True),publish=True,syncRoster=True).raise_for_status()
+    waiting=(unread(teacher),unread(substitute))
+    sent=answer(pupil,key,get(pupil,key)).json()
+    assert (unread(teacher),unread(substitute))==(waiting[0]+1,waiting[1])
+    assert review(substitute,key,sent).status_code==403
+    assert get(substitute,key)['canReview'] is False and substitute.get(grading_url(key)).status_code==403
+    options=teacher.get(grading_url(key));assert options.status_code==200
+    assert options.json()['allowed'] is False and options.json()['reason']==FOREIGN
+    # Posting a grade is refused with the same explanation, writes nothing, and a plain review still works.
+    from test_homework_grading import payload,grade
+    refused=grade(teacher,key,sent,payload(options.json()));assert refused.status_code==409 and refused.json()['detail']==FOREIGN
+    assert get(teacher,key)['status']=='submitted' and 'grading' not in get(teacher,key)['submitted']
+    assert review(teacher,key,sent).json()['status']=='accepted'
+
+
+def test_workload_change_moves_review_rights(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    sent=answer(pupil,key,get(pupil,key)).json()
+    state=api.read('demo');next(w for w in state.workloads if w.id=='w0').teacherId='t1';api.save('demo',state)
+    assert get(teacher,key)['canReview'] is False and review(teacher,key,sent).status_code==403
+    assert get(teacher,key)['submitted']['text']=='Решение ученика'  # a past teacher keeps read access
+    assert review(signed('unrelated'),key,sent).status_code==200
+
+
+def test_extra_lesson_without_workload_falls_back_to_lesson_teachers(client):
+    record,pupil,parent,teacher=setup(client)
+    state=api.read('demo')
+    state.datedLessons=[DatedLesson(id='extra',name='Дополнительный урок',kind='add',onDate='2026-08-18',groupId='g-a',subjectId='sub0',teacherIds=['t1'],roomIds=['r0'],profileId='primary',startTime='09:00',endTime='09:45')]
+    api.save('demo',state);key=lesson(client,subject='Математика',day='2026-08-18')['lessonKey']
+    extra=graded(entry(client,key,day='2026-08-18'));assert write(client,extra,publish=True).status_code==200
+    sent=answer(pupil,key,get(pupil,key)).json()
+    assert review(teacher,key,sent).status_code==403
+    assert review(signed('unrelated'),key,sent).status_code==200

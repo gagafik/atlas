@@ -73,6 +73,7 @@ class Content(Model):
     materials: list[MaterialReference] = Field(default_factory=list, max_length=10)
     curriculum: TopicReference | None = None
     homeworkLatePolicy: Literal['allow','block'] = 'allow'
+    homeworkSubmission: Literal['online','offline'] = 'online'
     assessments: list[Assessment] = Field(default_factory=list, max_length=10)
     records: list[PupilRecord] = Field(default_factory=list, max_length=1000)
 
@@ -94,6 +95,8 @@ class Content(Model):
         if self.homeworkFiles and not self.homework.strip(): raise ValueError('Добавьте описание задания к материалам.')
         if self.homeworkLatePolicy=='block' and (not self.dueDate or not self.homework.strip()):
             raise ValueError('Для закрытия приёма укажите задание и срок.')
+        if self.homeworkSubmission=='offline' and not self.homework.strip(): raise ValueError('Способ сдачи относится к домашнему заданию.')
+        if self.homeworkSubmission=='offline' and self.homeworkLatePolicy=='block': raise ValueError('Закрыть приём после срока можно только при онлайн-сдаче.')
         return self
 
 
@@ -185,7 +188,8 @@ def pupil_projection(document, student_id):
                     homeworkFiles=document['content'].get('homeworkFiles',[]),
                     materials=document['content'].get('materials',[]),
                     curriculum=document['content'].get('curriculum'),
-                    homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow')),record=record)
+                    homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow'),
+                    homeworkSubmission=document['content'].get('homeworkSubmission','online')),record=record)
 
 
 def summary(rows):

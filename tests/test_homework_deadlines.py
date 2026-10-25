@@ -147,18 +147,19 @@ def test_current_teacher_cancelled_and_removed_membership(client):
     record,pupil,_,teacher=setup(client);key=record['lessonKey'];current=get(teacher,key)
     state=api.read('demo');state.datedLessons=[DatedLesson(id='replace',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
     api.save('demo',state);replacement=signed('unrelated')
-    assert change(teacher,key,current).status_code==403
-    assert change(replacement,key,get(replacement,key)).status_code==200
+    # The course teacher keeps the right to extend; a substitute reads the work but cannot.
+    assert change(replacement,key,get(replacement,key)).status_code==403
+    assert change(teacher,key,current).status_code==200
     state=api.read('demo');group=next(g for g in state.groups if g.id==record['document']['lesson']['groupId'])
     group.kind='elective';group.studentIds=['s2'];api.save('demo',state)
-    assert not get(pupil,key)['canSubmit'] and not get(replacement,key)['deadline']['canEdit']
-    assert change(replacement,key,get(replacement,key)).status_code==403
+    assert not get(pupil,key)['canSubmit'] and not get(teacher,key)['deadline']['canEdit']
+    assert change(teacher,key,get(teacher,key)).status_code==403
     state=api.read('demo');state.datedLessons=[DatedLesson(id='cancel',name='Отмена',kind='cancel',placementId='eng',sourceDate=DAY,onDate=DAY)]
     api.save('demo',state)
     assert change(client,key,get(client,key)).status_code==403
 
 
-@pytest.mark.parametrize('mode',['changed','withdrawn'])
+@pytest.mark.parametrize('mode',['text','deadline','cleared','withdrawn'])
 def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mode):
     record,pupil,_,teacher=setup(client);key=record['lessonKey'];current=get(pupil,key)
     assert change(teacher,key,current).status_code==200
@@ -167,17 +168,74 @@ def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mod
     assert get(pupil,key)['deadline']['version']==1
     draft=entry(client,key);draft['document']['content']['homework']='Новое условие'
     assert write(client,draft).status_code==200 and get(pupil,key)['deadline']['version']==1
-    if mode=='changed':assert write(client,entry(client,key),publish=True).status_code==200
+    def publish_due(due):
+        moved=entry(client,key);moved['document']['content']['dueDate']=due
+        assert write(client,moved,publish=True).status_code==200
+    if mode=='text':
+        assert write(client,entry(client,key),publish=True).status_code==200
+        actual=get(pupil,key)
+        # A new text is not a reason to cancel an individual date.
+        assert actual['assignment']==current['assignment'] and actual['deadline']['version']==1 and actual['deadline']['extension']
+        assert actual['dueDate']=='2026-08-24' and [h['action'] for h in history(pupil,key).json()['items']]==['extend']
+        return
+    if mode=='deadline':
+        publish_due('2026-08-22')  # still before the individual date
+        assert get(pupil,key)['deadline']['version']==1 and get(pupil,key)['deadline']['extension']
+        publish_due('2026-08-24')  # reaches the individual date
+    elif mode=='cleared':publish_due(None)
     else:
         assert client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=key,version=entry(client,key)['version'])).status_code==200
         assert history(pupil,key).status_code==404
-    restored=entry(client,key);restored['document']['content']['homework']=record['document']['content']['homework']
-    assert write(client,restored,publish=True).status_code==200
+        restored=entry(client,key);restored['document']['content']['homework']=record['document']['content']['homework']
+        assert write(client,restored,publish=True).status_code==200
     actual=get(pupil,key)
     assert actual['assignment']==current['assignment'] and actual['deadline']['extension'] is None
-    assert actual['deadline']['version']==2 and actual['dueDate']=='2026-08-19'
-    assert [h['action'] for h in history(pupil,key).json()['items']]==['invalidated','extend']
+    assert actual['deadline']['version']==2 and actual['dueDate']=={'deadline':'2026-08-24','cleared':None,'withdrawn':'2026-08-19'}[mode]
+    events=history(pupil,key).json()['items']
+    assert [h['action'] for h in events]==['invalidated','extend']
+    assert {'deadline':'перенесён','cleared':'снят','withdrawn':'отозвана'}[mode] in events[0]['reason']
     assert change(teacher,key,current).status_code==409
+
+
+def test_extension_survives_material_change_and_queue_keeps_it(client):
+    from test_assignment_files import upload as upload_material, save_materials
+    from test_homework_queue import RANGE
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    assert change(teacher,key,get(teacher,key)).status_code==200
+    material=upload_material(client,record).json();save_materials(client,record,[material['id']])
+    actual=get(pupil,key);assert actual['deadline']['version']==1 and actual['deadline']['extension'] and actual['dueDate']=='2026-08-24'
+    assert items(parent,start='2026-08-24',end='2026-08-24')[0]['extended'] is True
+    # Each pupil of the lesson appears exactly once, whether or not an individual date applies.
+    rows=[(r['lessonKey'],r['studentId']) for r in items(client,filter='all',**RANGE) if r['lessonKey']==key]
+    assert rows.count((key,'s1'))==1 and len(rows)==len(set(rows))
+
+
+def test_offline_homework_has_no_individual_deadline(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    record['document']['content']['homeworkSubmission']='offline'
+    assert write(client,record,publish=True).status_code==200
+    current=get(teacher,key);assert not current['deadline']['canEdit']
+    assert change(teacher,key,current).status_code==422
+
+
+def test_extension_survives_offline_switch_and_can_still_be_revoked(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
+    assert change(teacher,key,get(teacher,key)).status_code==200
+    record['document']['content']['homeworkSubmission']='offline'
+    assert write(client,record,publish=True).status_code==200
+    current=get(teacher,key);deadline=current['deadline']
+    assert deadline['extension'] and deadline['version']==1 and get(pupil,key)['dueDate']=='2026-08-24'
+    # Nothing new can be granted, but the leftover date can be taken back by those who may change deadlines.
+    assert not deadline['canEdit'] and deadline['canRevoke']
+    assert not get(parent,key)['deadline']['canRevoke'] and not get(pupil,key)['deadline']['canRevoke']
+    assert change(teacher,key,current,due='2026-08-25').status_code==422
+    assert change(signed('unrelated'),key,current,due=None,action='revoke').status_code==403
+    assert change(parent,key,current,due=None,action='revoke').status_code==403
+    revoked=change(teacher,key,current,due=None,action='revoke');assert revoked.status_code==200,revoked.text
+    assert revoked.json()['extension'] is None and not revoked.json()['canRevoke']
+    actual=get(pupil,key);assert actual['dueDate']=='2026-08-19' and actual['deadline']['version']==2
+    assert [h['action'] for h in history(pupil,key).json()['items']]==['revoke','extend']
+    assert change(teacher,key,get(teacher,key),due=None,action='revoke').status_code==409
 
 
 def test_validation_and_concurrent_cas_notify_exactly_once(client):

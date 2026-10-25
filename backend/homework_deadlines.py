@@ -38,12 +38,13 @@ def load(db,ctx,student=None):
 
 def effective(db,ctx,student=None):
     content=ctx['published']['content'];row=load(db,ctx,student)
-    active=bool(row and row[2] and row[1]==ctx['assignment'])
+    active=bool(row and row[2])
     return dict(content,dueDate=row[2] if active else content['dueDate']),row,active
 
 
 def permitted(ctx):
-    return bool(ctx['canReview'] and ctx['student'] in ctx['members'] and ctx['roster'][ctx['student']].get('enrolled',True))
+    current=ctx['current']
+    return bool(ctx['canReview'] and current and current['status']!='cancelled' and ctx['student'] in ctx['members'] and ctx['roster'][ctx['student']].get('enrolled',True))
 
 
 def view(db,ctx):
@@ -55,7 +56,7 @@ def view(db,ctx):
     minimum=max(today,date.fromordinal(current.toordinal()+1)) if current and current<date.max else None
     maximum=date.fromordinal(min(date.max.toordinal(),date.fromisoformat(base).toordinal()+366)) if base else None
     return dict(version=row[0] if row else 0,baseDueDate=base,effectiveDueDate=content['dueDate'],deadlineClosed=deadline_closed(content),
-                canEdit=bool(base and permitted(ctx)),minDate=minimum.isoformat() if minimum else None,maxDate=maximum.isoformat() if maximum else None,
+                canEdit=bool(base and permitted(ctx) and ctx['online']),canRevoke=bool(active and permitted(ctx)),minDate=minimum.isoformat() if minimum else None,maxDate=maximum.isoformat() if maximum else None,
                 extension=dict(dueDate=row[2],reason=row[3],updated=row[4],actor=row[5]) if active else None)
 
 
@@ -65,19 +66,20 @@ def history_write(db,workspace,key,student,version,created,actor,action,document
 
 
 def invalidate(db,workspace,key):
-    """Shared condition changes permanently expire extensions, including on withdrawal."""
-    from .homework import fingerprint
+    """An individual date ends only when the publication is withdrawn or loses its homework, the general date is removed, or it reaches the individual date."""
     rows=db.execute('SELECT student_id,version,assignment,due_date FROM homework_extensions WHERE workspace=? AND lesson_key=? AND due_date IS NOT NULL',(workspace,key)).fetchall()
     if not rows:return
     raw=db.execute('SELECT published_document FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()
     document=json.loads(raw[0]) if raw and raw[0] else None
-    current=fingerprint(document) if document and document['content']['homework'] else None
+    content=document['content'] if document and document['content']['homework'] else None
+    base=content['dueDate'] if content else None
     for student,version,assignment,due in rows:
-        if current==assignment:continue
-        created=now().isoformat();reason='Условия задания изменены или публикация отозвана.'
+        if content and base and base<due:continue
+        created=now().isoformat()
+        reason='Публикация задания отозвана.' if not content else 'Общий срок снят.' if not base else 'Общий срок перенесён на дату индивидуального или позже.'
         db.execute('UPDATE homework_extensions SET version=version+1,due_date=NULL,reason=?,created=?,actor_name=? WHERE workspace=? AND lesson_key=? AND student_id=?',
                    (reason,created,'Система',workspace,key,student))
-        history_write(db,workspace,key,student,version+1,created,'Система','invalidated',dict(previousDueDate=due,dueDate=None,reason=reason,assignment=assignment))
+        history_write(db,workspace,key,student,version+1,created,'Система','invalidated',dict(previousDueDate=due,dueDate=None,baseDueDate=base,reason=reason,assignment=assignment))
 
 
 class HomeworkDeadlines:
@@ -87,7 +89,9 @@ class HomeworkDeadlines:
         @app.put('/api/journal/homework/{key}/deadline')
         def change(key:str,body:ChangeDeadline,request:Request,workspace:Workspace='school'):
             ctx=self.homework.context(request,workspace,key,body.studentId)
-            if not permitted(ctx):raise HTTPException(403,'Срок меняет действующий учитель урока или администратор для ученика этого урока.')
+            if not permitted(ctx):raise HTTPException(403,'Срок меняет учитель курса или администратор для ученика действующего урока.')
+            # A leftover individual date of a lesson turned offline can still be cancelled, but not set.
+            if body.action=='extend' and not ctx['online']:raise HTTPException(422,'Индивидуальный срок задаётся только для онлайн-сдачи.')
             if body.assignment!=ctx['assignment']:raise HTTPException(409,'Условия задания изменились. Обновите работу.')
             with self.access.lock,self.access.connect() as db:
                 self.homework.tables(db);db.execute('BEGIN IMMEDIATE');self.homework.recheck(db,ctx)

@@ -5,7 +5,7 @@ import sqlite3
 # DDL that reads rely on, so an older database is migrated once under the lock instead of failing.
 # Change READY together with a projection's own version in its tables() function.
 SCHEMA=1
-READY={('attendance',2),('coverage',1),('homework_queue',1),('journal_schema',SCHEMA)}
+READY={('attendance',2),('coverage',1),('homework_queue',2),('journal_schema',SCHEMA)}
 MISSING_TABLES={'accounts','workspaces','journal_entries','journal_history','journal_members','journal_periods','journal_projection_versions',
     'journal_attendance','homework_queue_tasks','homework_queue_answers','homework_extensions'}
 
