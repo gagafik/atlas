@@ -75,19 +75,23 @@ class HomeworkQueue:
             placements={p.id for p in state.placements if p.workloadId in loads}
             placements|={d.placementId for d in state.datedLessons if own&set(d.teacherIds or []) and d.placementId}
             extras={d.id for d in state.datedLessons if not d.placementId and own&set(d.teacherIds or [])}
+            # The course (workload group + subject) reviews, so its lessons are candidates whoever teaches them today.
+            pairs=sorted({(w.groupId,w.subjectId) for w in state.workloads if own&set(teacher_ids(w))})
             clauses.append('''(EXISTS (SELECT 1 FROM json_each(q.draft_teachers) t WHERE t.value IN (SELECT value FROM json_each(?)))
                 OR q.source_kind='placement' AND q.source_id IN (SELECT value FROM json_each(?))
-                OR q.source_kind='extra' AND q.source_id IN (SELECT value FROM json_each(?)))''')
-            args.extend([encoded(sorted(own)),encoded(sorted(placements)),encoded(sorted(extras))])
+                OR q.source_kind='extra' AND q.source_id IN (SELECT value FROM json_each(?))
+                OR EXISTS (SELECT 1 FROM json_each(?) p WHERE json_extract(p.value,'$[0]')=q.group_id AND json_extract(p.value,'$[1]')=q.subject_id))''')
+            args.extend([encoded(sorted(own)),encoded(sorted(placements)),encoded(sorted(extras)),encoded([list(p) for p in pairs])])
         elif not staff:
             clauses.append('m.student_id IN (SELECT value FROM json_each(?))');args.append(encoded(sorted(user_ids(user,workspace,'student'))))
         changed='(a.assignment IS NOT NULL AND a.assignment<>q.assignment)'
         status="coalesce(a.status,'not_submitted')"
-        todo=f"({status} IN ('not_submitted','returned') OR {changed})"
-        if selected in ['todo','overdue']:clauses.append(todo)
+        # Homework without online submission is never a to-do once its day has passed: there is nothing to send.
+        todo=f"(({status} IN ('not_submitted','returned') OR {changed}) AND (q.submission='online' OR {{sort}}>=?))"
+        if selected in ['todo','overdue']:clauses.append(todo);args.append(today)
         elif selected!='all':
             clauses.extend([f'{status}=?',f'NOT {changed}']);args.append(selected)
-        if selected=='overdue':clauses.append('{due}<?');args.append(today)
+        if selected=='overdue':clauses.append("{due}<? AND q.submission='online'");args.append(today)
         if search:
             clauses.append("instr(atlas_fold(q.subject||' '||q.group_name||' '||m.name),?)>0");args.append(search.casefold())
 
@@ -100,16 +104,16 @@ class HomeworkQueue:
                 due='x.due_date' if extended else 'q.due_date'
                 source='''homework_extensions x INDEXED BY homework_extension_due
                     JOIN homework_queue_tasks q ON q.workspace=x.workspace AND q.lesson_key=x.lesson_key''' if extended else 'homework_queue_tasks q'
-                extra="x.due_date IS NOT NULL AND x.assignment=q.assignment AND x.student_id=m.student_id" if extended else '''NOT EXISTS (
+                extra="x.due_date IS NOT NULL AND x.student_id=m.student_id" if extended else '''NOT EXISTS (
                     SELECT 1 FROM homework_extensions x WHERE x.workspace=q.workspace AND x.lesson_key=q.lesson_key
-                    AND x.student_id=m.student_id AND x.assignment=q.assignment AND x.due_date IS NOT NULL)'''
+                    AND x.student_id=m.student_id AND x.due_date IS NOT NULL)'''
                 where=['q.workspace=?','{sort} BETWEEN ? AND ?',*clauses];values=[workspace,low.isoformat(),high.isoformat(),*args]
                 if position:
                     where.append('({sort},q.lesson_key,m.student_id)'+('<' if descending else '>')+'(?,?,?)');values.extend(position)
                 where=' AND '.join(where).format(sort=sort,due=due)
                 rows.extend(db.execute(f'''SELECT q.workspace,q.lesson_key,{sort},q.lesson_date,{due},q.subject,q.group_name,q.preview,
                     q.assignment,q.source_kind,q.source_id,q.draft_teachers,q.late_policy,
-                    m.student_id,m.name,{status},a.submitted_at,coalesce(a.late,0),{changed},q.due_date,{int(extended)}
+                    m.student_id,m.name,{status},a.submitted_at,coalesce(a.late,0),{changed},q.due_date,{int(extended)},q.submission
                     FROM {source} JOIN journal_members m ON m.workspace=q.workspace AND m.lesson_key=q.lesson_key AND m.kind='published'
                     LEFT JOIN homework_queue_answers a ON a.workspace=q.workspace AND a.lesson_key=q.lesson_key AND a.student_id=m.student_id
                     WHERE {where} AND {extra} ORDER BY {sort} {order},q.lesson_key {order},m.student_id {order} LIMIT ?''',(*values,count)).fetchall())
@@ -142,13 +146,14 @@ class HomeworkQueue:
                     enrolled=bool(current and current['status']!='cancelled' and student in current['studentIds'] and ctx['roster'][student].get('enrolled',True))
                     active=ctx['canReview'] if staff else enrolled
                     if not active and not history:continue
+                    online=r[21]!='offline'
                     is_changed=bool(r[18]);needs_answer=r[15] in ['not_submitted','returned'] or is_changed
-                    closed=bool(r[12]=='block' and r[4] and r[4]<today)
+                    closed=bool(online and r[12]=='block' and r[4] and r[4]<today)
                     items.append(dict(lessonKey=key,studentId=student,student=r[14],subject=r[5],group=r[6],preview=r[7],
                         lessonDate=r[3],dueDate=r[4],baseDueDate=r[19],extended=bool(r[20]),status=r[15],submittedAt=r[16],late=bool(r[17]),assignmentChanged=is_changed,
-                        overdue=bool(needs_answer and r[4] and r[4]<today),deadlineClosed=closed,readOnly=not active,
+                        overdue=bool(online and needs_answer and r[4] and r[4]<today),deadlineClosed=closed,readOnly=not active,submission=r[21],
                         canReview=bool(ctx['canReview'] and r[15]=='submitted' and not is_changed),
-                        canSubmit=bool(user['role']=='student' and enrolled and needs_answer and not closed)))
+                        canSubmit=bool(user['role']=='student' and online and enrolled and needs_answer and not closed)))
                     if len(items)>=limit:break
                 budget-=processed
                 if processed<len(rows):next_cursor=self.cursor_save([token,index,*last]);break

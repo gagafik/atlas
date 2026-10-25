@@ -774,6 +774,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                             homeworkLatePolicy: e.target.value
                               ? c.homeworkLatePolicy
                               : "allow",
+                            homeworkSubmission: e.target.value
+                              ? c.homeworkSubmission
+                              : "online",
                           }))
                         }
                       />
@@ -796,9 +799,40 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       />
                     </label>
                     <label className="field">
+                      <span>Сдача работы</span>
+                      <select
+                        disabled={!entry.document.content.homework}
+                        value={
+                          entry.document.content.homeworkSubmission || "online"
+                        }
+                        onChange={(e) =>
+                          content((c) => ({
+                            ...c,
+                            homeworkSubmission: e.target.value as
+                              "online" | "offline",
+                            homeworkLatePolicy:
+                              e.target.value === "offline"
+                                ? "allow"
+                                : c.homeworkLatePolicy,
+                          }))
+                        }
+                      >
+                        <option value="online">
+                          Ученики отправляют ответ в Атласе
+                        </option>
+                        <option value="offline">
+                          Без онлайн-сдачи (показывают на уроке)
+                        </option>
+                      </select>
+                    </label>
+                    <label className="field">
                       <span>Приём после срока</span>
                       <select
-                        disabled={!entry.document.content.dueDate}
+                        disabled={
+                          !entry.document.content.dueDate ||
+                          entry.document.content.homeworkSubmission ===
+                            "offline"
+                        }
                         value={
                           entry.document.content.homeworkLatePolicy || "allow"
                         }
@@ -1342,6 +1376,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           : "разрешена с отметкой"}
                         .
                       </p>
+                      {historical.document.content.homeworkSubmission ===
+                        "offline" && <p>Сдача: без онлайн-сдачи.</p>}
                       <SavedPlanTopic
                         value={historical.document.content.curriculum}
                       />

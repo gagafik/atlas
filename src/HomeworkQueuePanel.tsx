@@ -21,6 +21,7 @@ interface Item {
   assignmentChanged: boolean;
   overdue: boolean;
   deadlineClosed: boolean;
+  submission: "online" | "offline";
   readOnly: boolean;
   canReview: boolean;
   canSubmit: boolean;
@@ -283,10 +284,17 @@ export default function HomeworkQueuePanel({
                 </p>
                 <div className="homework-queue-tags">
                   <span>
-                    {item.assignmentChanged
-                      ? "Условия изменены — нужна новая отправка"
-                      : labels[item.status]}
+                    {item.submission === "offline"
+                      ? item.status === "not_submitted"
+                        ? "Показать на уроке"
+                        : labels[item.status]
+                      : item.assignmentChanged
+                        ? "Условия изменены — нужна новая отправка"
+                        : labels[item.status]}
                   </span>
+                  {item.submission === "offline" && (
+                    <span>Без онлайн-сдачи</span>
+                  )}
                   {item.overdue && <span>Срок прошёл</span>}
                   {item.deadlineClosed && <span>Приём закрыт</span>}
                   {item.late && <span>Отправлено после срока</span>}

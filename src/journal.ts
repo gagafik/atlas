@@ -28,6 +28,7 @@ export interface JournalContent {
   materials?: MaterialSnapshot[];
   curriculum?: TopicReference | null;
   homeworkLatePolicy?: "allow" | "block";
+  homeworkSubmission?: "online" | "offline";
   dueDate: string | null;
   assessments: Assessment[];
   records: PupilRecord[];

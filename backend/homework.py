@@ -19,6 +19,7 @@ from .models import Model
 from .journal import staff_read, user_ids
 from .portal_cache import PortalSnapshots
 from .notifications import encoded
+from .resources import teacher_ids
 from . import homework_files as files
 from . import assignment_files as materials
 from .homework_grading import HomeworkGrading, ReviewGrade
@@ -44,13 +45,66 @@ class Review(Model):
     grading: ReviewGrade | None = None
 
 
-def fingerprint(document):
+def legacy_fingerprint(document):
+    """Pre-F4 token (text and deadline included); only migration reads it."""
     content=document['content']
     fields=[content['homework'],content['dueDate']]
     # Keep old submissions comparable when the new settings retain their defaults.
     if content.get('homeworkFiles') or content.get('homeworkLatePolicy','allow')!='allow':
         fields.extend([content.get('homeworkFiles',[]),content.get('homeworkLatePolicy','allow')])
     return hashlib.sha256(encoded(fields).encode()).hexdigest()
+
+
+def substance(mode, files):
+    return hashlib.sha256(encoded(['homework-substance',mode,sorted(files)]).encode()).hexdigest()
+
+
+def fingerprint(document):
+    """Substantive conditions: online submission on/off and the set of assignment files. Text, deadline and late policy are not substantive."""
+    content=document['content']
+    return substance(content.get('homeworkSubmission','online'),content.get('homeworkFiles',[]))
+
+
+def conditions(document):
+    """Everything a pupil is shown; guards writes against a stale context without reopening answers."""
+    content=document['content']
+    return hashlib.sha256(encoded([fingerprint(document),content['homework'],content['dueDate'],content.get('homeworkLatePolicy','allow')]).encode()).hexdigest()
+
+
+def course_teachers(state, lesson):
+    """Teachers of the course by workload (group + subject), as live_lessons.pairs decides; a substitution never makes one."""
+    return {id for w in state.workloads if w.groupId==lesson['groupId'] and w.subjectId==lesson['subjectId'] for id in teacher_ids(w)}
+
+
+def migrate_fingerprints(db):
+    """Move stored tokens to the substantive fingerprint once (idempotent). Answers to older conditions keep their old token and stay changed; history is never rewritten."""
+    tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'homework_submissions' in tables:
+        position=0;cached=(None,None)
+        while rows:=db.execute('SELECT rowid,workspace,lesson_key,document FROM homework_submissions WHERE rowid>? ORDER BY rowid LIMIT 500',(position,)).fetchall():
+            position=rows[-1][0]
+            for rowid,workspace,key,raw in rows:
+                document=json.loads(raw);sent=document.get('submitted')
+                if not sent:continue
+                if cached[0]!=(workspace,key):cached=((workspace,key),publication_tokens(db,workspace,key))
+                tokens=cached[1]
+                # Without a publication the answer is described by its own files; otherwise only answers to the current conditions move.
+                new=substance('online',sent.get('assignmentFileIds',[])) if tokens is None else tokens[1] if sent['assignment']==tokens[0] else None
+                if new and new!=sent['assignment']:
+                    sent['assignment']=new
+                    db.execute('UPDATE homework_submissions SET document=? WHERE rowid=?',(encoded(document),rowid))
+    if 'homework_extensions' in tables:
+        for workspace,key,student,assignment in db.execute('SELECT workspace,lesson_key,student_id,assignment FROM homework_extensions').fetchall():
+            tokens=publication_tokens(db,workspace,key)
+            if tokens and assignment==tokens[0]:
+                db.execute('UPDATE homework_extensions SET assignment=? WHERE workspace=? AND lesson_key=? AND student_id=?',(tokens[1],workspace,key,student))
+
+
+def publication_tokens(db, workspace, key):
+    """(legacy, current) tokens of the published homework, or None when it is withdrawn or has no homework."""
+    row=db.execute('SELECT published_document FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,key)).fetchone()
+    document=json.loads(row[0]) if row and row[0] else None
+    return (legacy_fingerprint(document),fingerprint(document)) if document and document['content']['homework'] else None
 
 
 def overdue(content, instant=None):
@@ -102,7 +156,12 @@ class Homework:
         if not record: raise HTTPException(404,'Домашнее задание не найдено.')
         published=record['published']
         current=snapshot.current_lesson(record['document']['lesson'])
-        if staff and not (staff_read(user,workspace,record['document']['lesson']) or current and staff_read(user,workspace,current)):
+        # The course (workload) teachers review; a substitute only reads. A one-off lesson without a workload falls back to its live teachers.
+        course=course_teachers(state,record['document']['lesson'])
+        live=current if current and current['status']!='cancelled' else None
+        reviewers=course or (set(live['teacherIds']) if live else set())
+        own=user_ids(user,workspace,'teacher') if user['role']=='teacher' else set()
+        if staff and not (user['role']=='admin' or own&reviewers or staff_read(user,workspace,record['document']['lesson']) or current and staff_read(user,workspace,current)):
             raise HTTPException(403,'Нет доступа к работам этого урока.')
         if not published or not published['content']['homework']:
             raise HTTPException(404,'Сначала опубликуйте домашнее задание в журнале.')
@@ -112,7 +171,8 @@ class Homework:
         current_ids=set(current['studentIds']) if current and current['status']!='cancelled' else set()
         return dict(user=user,staff=staff,state=state,record=record,published=published,roster=roster,current=current,
                     revision=state.revision,workspace=workspace,key=key,student=student,assignment=fingerprint(published),
-                    canReview=bool(staff and current and current['status']!='cancelled' and staff_read(user,workspace,current)),
+                    conditions=conditions(published),online=published['content'].get('homeworkSubmission','online')=='online',reviewers=reviewers,
+                    canReview=bool(staff and (user['role']=='admin' or own&reviewers)),
                     canSubmit=bool(user['role']=='student' and student in current_ids and roster[student].get('enrolled',True)))
 
     def recheck(self, db, context):
@@ -123,7 +183,7 @@ class Homework:
         if not row or row[0]!=context['revision'] or not publication or not publication[0]:
             raise HTTPException(409,'Урок или доступ изменился. Откройте задание заново.')
         document=json.loads(publication[0])
-        if fingerprint(document)!=context['assignment'] or {s['id'] for s in document['lesson']['students']}!=set(context['roster']):
+        if conditions(document)!=context['conditions'] or {s['id'] for s in document['lesson']['students']}!=set(context['roster']):
             raise HTTPException(409,'Опубликованное задание изменилось. Откройте его заново.')
 
     def load(self,db,ctx,student):
@@ -133,7 +193,7 @@ class Homework:
 
     def editable(self,ctx,document):
         sent=document['submitted']
-        return ctx['canSubmit'] and (sent is None or status(document)=='returned' or sent['assignment']!=ctx['assignment'])
+        return ctx['canSubmit'] and ctx['online'] and (sent is None or status(document)=='returned' or sent['assignment']!=ctx['assignment'])
 
     def attachment_list(self,db,ids):
         return [files.meta(row) for id in ids if (row:=db.execute("SELECT * FROM homework_files WHERE id=? AND status='ready'",(id,)).fetchone())]
@@ -151,7 +211,8 @@ class Homework:
             answer=dict(assignment=ctx['assignment'],homework=ctx['published']['content']['homework'],dueDate=ctx['published']['content']['dueDate'],
                         timezone='Asia/Qyzylorda',subject=ctx['published']['lesson']['subject'],staff=ctx['staff'],canReview=ctx['canReview'],
                         maxFileBytes=files.MAX_FILE,maxFiles=5,assignmentFiles=materials.attachments(db,content.get('homeworkFiles',[])),
-                        latePolicy=content.get('homeworkLatePolicy','allow'),deadlineClosed=deadline_closed(content))
+                        latePolicy=content.get('homeworkLatePolicy','allow'),deadlineClosed=deadline_closed(content),
+                        submission=content.get('homeworkSubmission','online'))
             if ctx['student'] is None:
                 summaries=[]
                 for id,pupil in ctx['roster'].items():
@@ -179,7 +240,7 @@ class Homework:
     def notify(self,db,ctx,student,version,action):
         role='teacher' if action in ['homework.submitted','homework.withdrawn'] else 'family'
         targets=self.journal.notifications.granted_users(db,ctx['workspace'],'teacher' if role=='teacher' else 'student',
-            ctx['current']['teacherIds'] if role=='teacher' else [student],['teacher'] if role=='teacher' else ['parent','student'])
+            sorted(ctx['reviewers']) if role=='teacher' else [student],['teacher'] if role=='teacher' else ['parent','student'])
         self.journal.notifications.deliver(db,targets,ctx['workspace'],version,action)
 
     def persist(self,db,ctx,version,document,action):
@@ -218,6 +279,7 @@ class Homework:
         def answer(key:str,body:Answer,request:Request,workspace:Workspace='school'):
             ctx=self.context(request,workspace,key,body.studentId)
             if not ctx['canSubmit']: raise HTTPException(403,'Отправить работу может только ученик действующего урока.')
+            if body.action!='withdraw' and not ctx['online']: raise HTTPException(409,'Это задание сдаётся без онлайн-отправки: работу показывают учителю на уроке.')
             if body.assignment!=ctx['assignment']: raise HTTPException(409,'Задание изменилось. Откройте его заново.')
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
@@ -251,7 +313,7 @@ class Homework:
         @app.post('/api/journal/homework/{key}/review')
         def review(key:str,body:Review,request:Request,workspace:Workspace='school'):
             ctx=self.context(request,workspace,key,body.studentId)
-            if not ctx['canReview']: raise HTTPException(403,'Проверка доступна действующему учителю урока или администратору.')
+            if not ctx['canReview']: raise HTTPException(403,'Проверку выполняет учитель курса или администратор.')
             if body.assignment!=ctx['assignment']: raise HTTPException(409,'Задание изменилось. Обновите его перед проверкой.')
             if body.decision=='returned' and not body.comment: raise HTTPException(422,'Укажите, что нужно доработать.')
             if body.grading and body.decision!='accepted':raise HTTPException(422,'Оценка записывается при принятии работы. Возврат не меняет оценку.')
@@ -287,7 +349,7 @@ class Homework:
             reservation=None;handle=None;complete=False
             def prepare():
                 ctx=self.context(request,workspace,key,studentId)
-                if not ctx['canSubmit'] or assignment!=ctx['assignment']: raise HTTPException(403,'Загрузка для этого задания сейчас недоступна.')
+                if not ctx['canSubmit'] or not ctx['online'] or assignment!=ctx['assignment']: raise HTTPException(403,'Загрузка для этого задания сейчас недоступна.')
                 with self.access.lock,self.access.connect() as db:
                     self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,ctx)
                     _,document=self.load(db,ctx,studentId)
