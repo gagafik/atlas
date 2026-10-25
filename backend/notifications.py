@@ -110,8 +110,11 @@ class Notifications:
         db.execute('CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_owner ON notifications(user_id,permissions,id)')
         db.execute('CREATE INDEX IF NOT EXISTS notification_age ON notifications(created)')
-        if 'topic' not in {r[1] for r in db.execute('PRAGMA table_info(notifications)')}:
+        cols = {r[1] for r in db.execute('PRAGMA table_info(notifications)')}
+        if 'topic' not in cols:
             db.execute('ALTER TABLE notifications ADD COLUMN topic TEXT')
+        if 'detail' not in cols:
+            db.execute('ALTER TABLE notifications ADD COLUMN detail TEXT')
         db.execute('CREATE INDEX IF NOT EXISTS notification_topic ON notifications(user_id,topic)')
         db.execute('CREATE TABLE IF NOT EXISTS notification_preferences (user_id TEXT PRIMARY KEY,enabled INTEGER)')
         from .web_push import tables
@@ -140,6 +143,8 @@ class Notifications:
             if not changed: continue
             recipients.append(user)
         self.deliver(db,recipients,workspace,after.revision,action)
+        from .duty_schedule import notify_changes
+        notify_changes(self, db, workspace, before, after)
 
     def granted_users(self, db, workspace, view, entity_ids, roles):
         """Select indexed candidates, then enforce effective grants without caching them.
@@ -158,16 +163,16 @@ class Notifications:
                 result.append(user)
         return result
 
-    def deliver(self, db, users, workspace, revision, action, topic=None):
-        """topic: at most one unread entry per user and topic; a newer event replaces it."""
+    def deliver(self, db, users, workspace, revision, action, topic=None, detail=None):
+        """topic: at most one unread entry per user and topic; a newer event replaces it. detail: short text shown in the inbox (never pupil data)."""
         self.tables(db)
         muted = {r[0] for r in db.execute('SELECT user_id FROM notification_preferences WHERE enabled=0')}
         created = now().isoformat()
         for user in users:
             if user['id'] in muted: continue
             if topic: db.execute('DELETE FROM notifications WHERE user_id=? AND topic=? AND read_at IS NULL', (user['id'], topic))
-            notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,topic) VALUES (?,?,?,?,?,?,?)',
-                       (user['id'], permission_key(user), workspace, revision, created, action, topic)).lastrowid
+            notice=db.execute('INSERT INTO notifications (user_id,permissions,workspace,revision,created,action,topic,detail) VALUES (?,?,?,?,?,?,?,?)',
+                       (user['id'], permission_key(user), workspace, revision, created, action, topic, detail[:300] if detail else None)).lastrowid
             from .web_push import enqueue
             enqueue(db,user,notice)
             db.execute('DELETE FROM notifications WHERE user_id=? AND id NOT IN (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 500)', (user['id'], user['id']))
@@ -189,9 +194,9 @@ class Notifications:
                 count, latest = db.execute(f'SELECT count(CASE WHEN read_at IS NULL THEN 1 END),coalesce(max(id),0) FROM notifications WHERE {clause}', params).fetchone()
                 if beforeId is not None: clause += ' AND id<?'; params.append(beforeId)
                 if unreadOnly: clause += ' AND read_at IS NULL'
-                rows = db.execute(f'SELECT id,workspace,revision,created,action,read_at FROM notifications WHERE {clause} ORDER BY id DESC LIMIT 51', params).fetchall()
+                rows = db.execute(f'SELECT id,workspace,revision,created,action,read_at,detail FROM notifications WHERE {clause} ORDER BY id DESC LIMIT 51', params).fetchall()
                 preference = db.execute('SELECT enabled FROM notification_preferences WHERE user_id=?', (user_id,)).fetchone()
-            items = [dict(id=r[0],workspace=r[1],revision=r[2],created=r[3],action=r[4],read=bool(r[5])) for r in rows[:50]]
+            items = [dict(id=r[0],workspace=r[1],revision=r[2],created=r[3],action=r[4],read=bool(r[5]))|({'detail':r[6]} if r[6] else {}) for r in rows[:50]]
             return dict(items=items, unread=count, latestId=latest, nextBeforeId=items[-1]['id'] if len(rows)>50 else None, enabled=not preference or bool(preference[0]))
 
         @app.put('/api/notifications/preferences')

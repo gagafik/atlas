@@ -465,6 +465,9 @@ handover.register(app, Workspace)
 from .live_lessons import LiveLessons
 live_lessons = LiveLessons(access, portal_stamp)
 live_lessons.register(app, Workspace)
+from .duty_schedule import DutySchedule
+duties = DutySchedule(access, notifications, portal_stamp, read, save)
+duties.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

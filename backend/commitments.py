@@ -107,6 +107,25 @@ def edit_commitments(state, body):
     return State.model_validate(candidate.model_dump())
 
 
+def duty_conflicts(state, ctx, rows, c, teacher):
+    """Why a teacher cannot cover duty c; rows are that day's other non-cancelled rows."""
+    from .cycles import active_in, pattern_on
+    reasons = []
+    if any(teacher in r['teacherIds'] and c.startTime < r['end'] and r['start'] < c.endTime for r in rows):
+        reasons.append('урок, бронирование или другое дежурство')
+    if any(a.teacherId == teacher and a.start <= c.onDate <= a.end and c.startTime < a.endTime and a.startTime < c.endTime for a in state.absences):
+        reasons.append('отсутствие')
+    bells = ctx.maps['profiles'][c.profileId].for_day(c.onDate.weekday())
+    if any(f'{c.onDate.weekday()}:{i}' in ctx.maps['teachers'][teacher].unavailable and c.startTime < p.end and p.start < c.endTime for i,p in enumerate(bells)):
+        reasons.append('запрет по номеру урока')
+    if any(rule.enabled and rule.kind == 'availability' and rule.mode == 'hard' and rule.scope == 'teacher'
+           and (not rule.targetIds or teacher in rule.targetIds) and (not rule.days or c.onDate.weekday() in rule.days)
+           and active_in(rule, pattern_on(state, c.onDate))
+           and any(w.day == c.onDate.weekday() and c.startTime < w.end and w.start < c.endTime for w in rule.unavailable) for rule in state.rules):
+        reasons.append('обязательная недоступность')
+    return reasons
+
+
 class DutyRequest(Model):
     revision: int
     commitmentIds: list[str] = Field(min_length=1, max_length=200)
@@ -143,19 +162,7 @@ def allocate_duties(state, body):
     for c in slots:
         choices = c.eligibleTeacherIds or list(teachers)
         for teacher in choices:
-            reasons = []
-            if any(teacher in r['teacherIds'] and c.startTime < r['end'] and r['start'] < c.endTime for r in fixed[c.onDate]):
-                reasons.append('урок, бронирование или другое дежурство')
-            if any(a.teacherId == teacher and a.start <= c.onDate <= a.end and c.startTime < a.endTime and a.startTime < c.endTime for a in state.absences):
-                reasons.append('отсутствие')
-            bells = ctx.maps['profiles'][c.profileId].for_day(c.onDate.weekday())
-            if any(f'{c.onDate.weekday()}:{i}' in teachers[teacher].unavailable and c.startTime < p.end and p.start < c.endTime for i,p in enumerate(bells)):
-                reasons.append('запрет по номеру урока')
-            if any(rule.enabled and rule.kind == 'availability' and rule.mode == 'hard' and rule.scope == 'teacher'
-                   and (not rule.targetIds or teacher in rule.targetIds) and (not rule.days or c.onDate.weekday() in rule.days)
-                   and active_in(rule, pattern_on(state, c.onDate))
-                   and any(w.day == c.onDate.weekday() and c.startTime < w.end and w.start < c.endTime for w in rule.unavailable) for rule in state.rules):
-                reasons.append('обязательная недоступность')
+            reasons = duty_conflicts(state, ctx, fixed[c.onDate], c, teacher)
             if reasons:
                 unavailable[c.id, teacher] = ', '.join(reasons)
             else: variables[c.id, teacher] = model.new_bool_var(f'duty:{c.id}:{teacher}')

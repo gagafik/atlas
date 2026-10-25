@@ -4,6 +4,7 @@ import { api } from "./api";
 import { uid, named, csvCell, download } from "./utils";
 import ChangePreview, { type Preview } from "./ChangePreview";
 import { Multi } from "./DatedSchedule";
+import DutySchedulePanel from "./DutySchedulePanel";
 
 interface Allocation {
   status: string;
@@ -33,7 +34,7 @@ export default function CommitmentsPanel({
 }) {
   const all = s.commitments || [];
   const initial = all.find((x) => x.id === initialId);
-  const [tab, setTab] = useState<"booking" | "duty">(
+  const [tab, setTab] = useState<"booking" | "duty" | "schedule">(
     initial?.kind || "booking",
   );
   const [value, setValue] = useState<Commitment | null>(initial || null);
@@ -233,6 +234,45 @@ export default function CommitmentsPanel({
       "text/csv;charset=utf-8",
     );
   }
+  const tabs = (
+    <div
+      className="exchange-tabs"
+      role="group"
+      aria-label="Бронирования и дежурства"
+    >
+      {(
+        [
+          ["booking", "Бронирования"],
+          ["duty", "Дежурства"],
+          ["schedule", "График дежурств"],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          className={tab === id ? "selected" : ""}
+          onClick={() => {
+            setTab(id);
+            setSelected([]);
+            close();
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+  if (tab === "schedule")
+    return (
+      <div className="commitments-panel dated-panel">
+        {tabs}
+        <DutySchedulePanel
+          state={s}
+          workspace={workspace}
+          onState={onState}
+          onAllocate={() => setTab("duty")}
+        />
+      </div>
+    );
   return (
     <div className="commitments-panel dated-panel">
       <p className="info-line">
@@ -240,30 +280,7 @@ export default function CommitmentsPanel({
         заменами. Бронирования и дежурства действуют в указанные даты, в том
         числе во время каникул; учебные часы не меняются.
       </p>
-      <div
-        className="exchange-tabs"
-        role="group"
-        aria-label="Бронирования и дежурства"
-      >
-        {(
-          [
-            ["booking", "Бронирования"],
-            ["duty", "Дежурства"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            className={tab === id ? "selected" : ""}
-            onClick={() => {
-              setTab(id);
-              setSelected([]);
-              close();
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {tabs}
       <div className="dated-toolbar">
         <button className="primary" disabled={busy} onClick={() => create(tab)}>
           {tab === "booking" ? "Забронировать кабинет" : "Добавить дежурство"}
