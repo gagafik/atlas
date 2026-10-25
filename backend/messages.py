@@ -413,8 +413,10 @@ class Messages:
             user,directory=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
-                _,_,through=self.readable(db,id,user,directory,self.thread_accounts(db,id,user))
+                thread,_,through=self.readable(db,id,user,directory,self.thread_accounts(db,id,user))
                 if through is not None and body.throughId>through or not db.execute('SELECT 1 FROM message_posts WHERE thread_id=? AND id=?',(id,body.throughId)).fetchone(): raise HTTPException(422,'Укажите сообщение из этой переписки.')
+                # Opening proves the live link: a row from before live_through, or one left stale, may read everything up to now.
+                if through is None: self.advance(db,id,thread['latestId'],[user])
                 db.execute('UPDATE message_members SET read_id=max(read_id,?) WHERE thread_id=? AND user_id=?',(body.throughId,id,user['id']))
             return dict(ok=True)
 
@@ -450,6 +452,8 @@ class Messages:
                 if body.userId==thread['managerId']:raise HTTPException(422,'Перед выходом передайте управление другому участнику или закройте обсуждение.')
                 # A manager can remove a now-inactive account to free a place.
                 if not db.execute('SELECT 1 FROM message_members m WHERE m.thread_id=? AND m.user_id=? AND NOT EXISTS (SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id)',(id,body.userId)).fetchone():raise HTTPException(404,'Участник недоступен.')
+                # Record what the leaver or removed member may keep before the exclusion closes the link; rows from before live_through get their bound here too.
+                if (target:=accounts.get(body.userId)) and self.member(db,thread,target,directory,accounts): self.advance(db,id,thread['latestId'],[target])
                 db.execute('INSERT INTO message_exclusions VALUES (?,?,?,?)',(id,body.userId,body.action,now().isoformat()))
                 # Access revocation must remain possible after the posting limit is reached.
                 post=self.post(db,thread,user,'Участник вышел из обсуждения.' if body.action=='leave' else 'Управляющий изменил состав обсуждения.',limit=False)

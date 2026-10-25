@@ -208,3 +208,70 @@ def test_new_manager_scope_checked_after_assignment_change_and_backup(client,tmp
     assert detail(parent,thread)['readOnly']
     assert roster(successor,thread).status_code==404
     assert add(successor,thread,[people['staff']['id']],3).status_code==404
+
+
+def leave_class():
+    state=api.read('demo')
+    for pupil in state.students:
+        if pupil.id=='s1':pupil.classId='c-demo-d'
+    api.save('demo',state)
+
+
+def marks(thread):
+    with api.connect() as db:
+        return dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(thread,))),db.execute('SELECT latest_id FROM message_threads WHERE id=?',(thread,)).fetchone()[0]
+
+
+def test_added_member_reads_history_after_the_class_changes(client):
+    people=setup(client);teacher=signed('teacher');thread=group(teacher)
+    late=create(client,'parent',login='late',name='Поздний участник');late_user=signed('late')
+    assert add(teacher,thread,[late['id']],1).status_code==200
+    leave_class()
+    value=detail(late_user,thread);assert value['readOnly'] and len(value['posts'])==2
+
+
+def test_readmitted_member_keeps_what_was_said_while_removed(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove')).status_code==200
+    assert teacher.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),text='Пока вас нет')).status_code==200
+    assert add(teacher,thread,[people['parent']['id']],2).status_code==200
+    leave_class()
+    texts=[p['text'] for p in detail(parent,thread)['posts']]
+    assert detail(parent,thread)['readOnly'] and 'Пока вас нет' in texts and len(texts)==4
+
+
+def test_every_post_path_advances_only_the_members_with_a_live_link(client):
+    people=setup(client);teacher=signed('teacher');student=signed('student');thread=group(teacher)
+    next_user=create(client,'teacher',login='next');assert add(teacher,thread,[next_user['id']],1).status_code==200
+    values,latest=marks(thread);assert latest==2 and set(values.values())=={2}
+    assert transfer(teacher,thread,next_user['id'],2).status_code==200
+    values,latest=marks(thread);assert latest==3 and set(values.values())=={3}
+    # The removal notice reaches the remaining members but not the person removed before it was published.
+    assert signed('next').post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove')).status_code==200
+    values,latest=marks(thread);assert latest==4 and values[people['parent']['id']]==3 and {v for k,v in values.items() if k!=people['parent']['id']}=={4}
+    assert student.post(url('threads/'+thread+'/participants'),json=dict(version=4,userId=people['student']['id'],action='leave')).status_code==200
+    values,latest=marks(thread);assert latest==5 and values[people['student']['id']]==4 and values[next_user['id']]==5
+
+
+def test_leaving_or_removal_in_a_pre_migration_group_keeps_its_history(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');student=signed('student');thread=group(teacher)
+    with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL')
+    assert parent.post(url('threads/'+thread+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='leave')).status_code==200
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=2,userId=people['student']['id'],action='remove')).status_code==200
+    # Both were linked when they went, so their bound is the last post before their own notice.
+    for user,count in [(parent,1),(student,2)]:
+        value=detail(user,thread);assert value['readOnly'] and len(value['posts'])==count and value['latestId']==count
+        assert [t['id'] for t in user.get(url()).json()['items']]==[thread]
+
+
+def test_roster_tells_read_only_history_from_no_access(client):
+    people=setup(client);teacher=signed('teacher');thread=group(teacher)
+    away=create(client,'parent',login='away');assert add(teacher,thread,[away['id']],1).status_code==200
+    body={k:v for k,v in away.items() if k!='id'}|dict(active=False)
+    assert client.put('/api/access/users/'+away['id'],json=body).status_code==200
+    leave_class()
+    with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL WHERE thread_id=? AND user_id=?',(thread,people['student']['id']))
+    states={p['id']:(p['accessible'],p['history']) for p in roster(teacher,thread).json()['members']}
+    assert states[people['teacher']['id']]==(True,False) and states[away['id']]==(False,False)
+    assert states[people['parent']['id']]==(False,True) and states[people['student']['id']]==(False,False)
+

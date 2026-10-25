@@ -118,6 +118,39 @@ def test_legacy_rows_without_live_through_stay_hidden_after_link_loss(client):
         assert user.get(url('threads/'+id)).status_code==404 and user.get(url()).json()['items']==[]
 
 
+def test_opening_a_legacy_dialog_records_the_bound_before_the_link_is_lost(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher')
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL')
+    # Only the participant who opened the dialogue after the upgrade is covered; the other row stays unknown.
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=detail(parent,id)['latestId'])).status_code==200
+    with api.connect() as db:marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(id,)))
+    assert marks[people['parent']['id']]==detail(parent,id)['latestId'] and marks[people['teacher']['id']] is None
+    state=api.read('demo')
+    for workload in state.workloads:
+        if workload.teacherId=='t2':workload.teacherId='t1'
+        workload.additionalTeacherIds=[t for t in workload.additionalTeacherIds if t!='t2']
+    api.save('demo',state)
+    value=detail(parent,id);assert value['readOnly'] and len(value['posts'])==1
+    assert [t['id'] for t in parent.get(url()).json()['items']]==[id]
+    assert teacher.get(url('threads/'+id)).status_code==404 and teacher.get(url()).json()['items']==[]
+
+
+def test_switching_between_family_and_staff_sides_drops_the_history(client):
+    people=setup(client);parent=signed('parent');teacher_id=people['teacher']['id']
+    id=parent.post(url(),json=payload(teacher_id)).json()['id']
+    # The teacher login now belongs to a family: it must not read a staff-to-family dialogue.
+    update={k:v for k,v in people['teacher'].items() if k!='id'}|dict(role='parent',grants=[dict(workspace='demo',view='student',entityIds=['s2'])])
+    assert client.put('/api/access/users/'+teacher_id,json=update).status_code==200
+    former=signed('teacher')
+    assert former.get(url('threads/'+id)).status_code==404 and former.get(url()).json()['items']==[]
+    # A change within the family side keeps the history read-only.
+    update={k:v for k,v in people['parent'].items() if k!='id'}|dict(role='student')
+    assert client.put('/api/access/users/'+people['parent']['id'],json=update).status_code==200
+    pupil=signed('parent');value=detail(pupil,id)
+    assert value['readOnly'] and not value['canReply'] and len(value['posts'])==1
+
+
 def test_child_added_and_removed_keep_only_own_history(client):
     people=setup(client);teacher_id=people['teacher']['id']
     multi=create(client,'parent',login='multi',grants=[dict(workspace='demo',view='student',entityIds=['s1','s3'])])

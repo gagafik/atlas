@@ -184,6 +184,10 @@ def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     assert client.get(url('threads/'+thread)).status_code==404
     value=detail(new,thread);assert value['canManage'] and value['authorId']==people['teacher']['id']
     assert detail(parent,thread)['posts'][-1]['text'].endswith(body['reason'])
+    # The recovery notice reaches the members who are linked now; the deactivated manager keeps the bound they had.
+    with api.connect() as db:
+        marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(thread,)));latest=db.execute('SELECT latest_id FROM message_threads WHERE id=?',(thread,)).fetchone()[0]
+    assert marks[people['teacher']['id']]<latest and {v for k,v in marks.items() if k!=people['teacher']['id']}=={latest}
     assert api.read('demo').model_dump()==before
 
 

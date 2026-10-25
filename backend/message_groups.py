@@ -76,8 +76,10 @@ class MessageGroups:
                 members = []
                 for uid, name, role in rows:
                     account = accounts.get(uid)
-                    accessible = bool(account and self.messages.member(db, thread, account, directory, accounts))
-                    members.append(dict(id=uid, name=name or 'Недоступный аккаунт', role=role, accessible=accessible,
+                    found = self.messages.visible(db, thread, account, directory, accounts) if account else None
+                    accessible = bool(found and found[1] is None)
+                    # history: no live link, but the member still reads what was published while linked.
+                    members.append(dict(id=uid, name=name or 'Недоступный аккаунт', role=role, accessible=accessible, history=bool(found) and not accessible,
                                         canManage=accessible and self.eligible(thread, account, directory, scope, manager=True)))
                 return dict(version=thread['version'], managerId=thread['managerId'], members=members, limit=MAX_MEMBERS)
 
