@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   classCardLines,
+  drillFilters,
   ruDate,
   runLine,
   schoolDays,
+  summaryFilters,
   weekdays,
   type ClassSummary,
+  type Query,
 } from "./journalCoverage";
 
 const card: ClassSummary = {
@@ -108,5 +111,40 @@ describe("runLine", () => {
     ).toBe(
       "21.08.2026 · Недельная сводка: уроков: 3, уведомлений: 2, учителей без учётной записи: 1",
     );
+  });
+});
+
+describe("summaryFilters and drillFilters", () => {
+  const form: Query = {
+    start: "2026-08-17",
+    end: "2026-08-23",
+    mode: "teaching",
+    classId: "c-demo-d",
+    teacherId: "t2",
+    subjectId: "sub-eng",
+    status: "complete",
+  };
+  it("counts every teacher of every class, keeping the period and the subject", () => {
+    expect(summaryFilters(form)).toEqual({
+      ...form,
+      mode: "classes",
+      classId: "",
+      teacherId: "",
+      status: "all",
+    });
+  });
+  it("lists the lessons a card counted: a teacher picked in the form is not applied", () => {
+    const drill = drillFilters(form, "c-demo-a");
+    expect(drill.teacherId).toBe("");
+    expect(drill).toEqual({
+      ...summaryFilters(form),
+      classId: "c-demo-a",
+      status: "issues",
+    });
+  });
+  it("does not change the form it is built from", () => {
+    const before = { ...form };
+    drillFilters(form, "c-demo-a");
+    expect(form).toEqual(before);
   });
 });

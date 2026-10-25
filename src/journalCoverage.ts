@@ -29,6 +29,29 @@ export function ruDate(iso: string): string {
   return y && m && d ? `${d}.${m}.${y}` : iso;
 }
 
+export type Query = {
+  start: string;
+  end: string;
+  mode: string;
+  classId: string;
+  teacherId: string;
+  subjectId: string;
+  status: string;
+};
+
+/** The filters of the class summary: it counts the lessons of every teacher in the class, whatever the form holds. */
+export function summaryFilters(q: Query): Query {
+  return { ...q, mode: "classes", classId: "", teacherId: "", status: "all" };
+}
+
+/**
+ * The filters of «Уроки класса»: the summary's own filters narrowed to one class and its issues,
+ * so the list shows the lessons the card counted and no teacher picked in the form can shorten it.
+ */
+export function drillFilters(q: Query, classId: string): Query {
+  return { ...summaryFilters(q), classId, status: "issues" };
+}
+
 export type ClassSummary = {
   classId: string;
   className: string;

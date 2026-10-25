@@ -4,9 +4,12 @@ import { download } from "./utils";
 import JournalCoverageReminders from "./JournalCoverageReminders";
 import {
   classCardLines,
+  drillFilters,
   ruDate,
   schoolDays,
+  summaryFilters,
   type ClassSummary,
+  type Query,
 } from "./journalCoverage";
 
 const labels: Record<string, string> = {
@@ -29,15 +32,6 @@ type Options = {
   today: string;
   canConfigure: boolean;
   reminders: { enabled: boolean; afterDays: number; weeklyDigest: boolean };
-};
-type Query = {
-  start: string;
-  end: string;
-  mode: string;
-  classId: string;
-  teacherId: string;
-  subjectId: string;
-  status: string;
 };
 type Lesson = {
   lessonKey: string;
@@ -204,24 +198,18 @@ export default function JournalCoveragePanel({
   const classes = async () => {
     setDetail(null);
     setSummary(
-      await api("journal/coverage/classes", workspace, "POST", {
-        ...query,
-        mode: "classes",
-        classId: "",
-        teacherId: "",
-        status: "all",
-      }),
+      await api(
+        "journal/coverage/classes",
+        workspace,
+        "POST",
+        summaryFilters(query),
+      ),
     );
   };
   const drill = (classId: string) => {
     if (!summary) return;
-    const filters: Query = {
-      ...query,
-      mode: "classes",
-      classId,
-      status: "issues",
-    };
-    change({ mode: "classes", classId, status: "issues" }, true);
+    const filters = drillFilters(query, classId);
+    change(filters, true);
     void run(() => load(0, filters, summary.asOf));
   };
   const pupils = async (lesson: Lesson, offset = 0) => {

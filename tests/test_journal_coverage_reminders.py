@@ -107,12 +107,12 @@ def test_windows_follow_since_grace_and_digest_range():
 
 
 def test_internal_fields_never_leave_the_server(client):
-    known();value=report(client).json();row=english(value)
+    api.journal_coverage.cache.clear();known();value=report(client).json();row=english(value)
     assert {'classIds','teacherIds','sourceDate'}.isdisjoint(row) and set(row)==set(journal_coverage.KEYS)
     assert set(details(client,row['lessonKey']).json()['lesson'])==set(journal_coverage.KEYS)
     text=export(client).content.decode('utf-8-sig');header=next(csv.reader(io.StringIO(text),delimiter=';'))
     assert len(header)==15 and 'classIds' not in text and 'teacherIds' not in text and 'sourceDate' not in text
-    cached=next(iter(api.journal_coverage.cache.values()))[1]['rows'][0]
+    cached=next(r for r in next(iter(api.journal_coverage.cache.values()))[1]['rows'] if r[0]==row['lessonKey'])
     assert len(cached)==len(journal_coverage.KEYS)+3 and cached[journal_coverage.CLASS_IDS]==('c-demo-a',) and cached[journal_coverage.TEACHER_IDS]==('t2',) and cached[journal_coverage.SOURCE]==DAY
 
 
@@ -345,3 +345,13 @@ def test_drill_down_uses_report_with_class(client):
     # The summary's token is not the class's: without a cached snapshot of that class it is stale.
     api.journal_coverage.cache.clear()
     assert client.post('/api/journal/coverage/report?workspace=demo',json=query(mode='classes',classId='c-demo-d',status='issues',asOf=value['asOf'],token=value['token'])).status_code==409
+
+
+def test_summary_ignores_the_teacher_filter_and_the_drill_down_lists_what_the_card_counted(client):
+    people(client);known();plain=summary(client).json();picked=summary(client,teacherId='t2').json();card=by_class(picked)['10A']
+    assert by_class(picked)==by_class(plain) and card['unfilled']==2
+    # The drill-down is the summary's own filters narrowed to the class: no teacher, the issues of that class.
+    rows=report(client,mode='classes',classId='c-demo-a',teacherId='',status='issues',asOf=picked['asOf']);assert rows.status_code==200,rows.text
+    assert rows.json()['total']==card['unfilled'] and {r['subject'] for r in rows.json()['items']}=={'Английский язык','Математика'}
+    # A teacher left in the form would cut the list below the card, which counts every teacher.
+    assert report(client,mode='classes',classId='c-demo-a',teacherId='t2',status='issues',asOf=picked['asOf']).json()['total']==1
