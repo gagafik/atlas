@@ -78,7 +78,7 @@ def stored_preview(token):
     with api.connect() as db: return json.loads(db.execute('SELECT document FROM duty_previews WHERE token=?', (token,)).fetchone()[0])
 
 
-def test_detail_column_and_allowlist(client):
+def test_title_target_and_allowlist(client):
     enable(client); create(client, 'teacher')
     teacher = signed('teacher')
     response = teacher.get('/api/duties/options?workspace=demo')
@@ -86,11 +86,11 @@ def test_detail_column_and_allowlist(client):
     assert response.json()['teachers'] == [dict(id='t2', name='Учитель английского')]
     with api.access.lock, api.connect() as db:
         user = api.access.public(db.execute("SELECT * FROM accounts WHERE login='teacher'").fetchone())
-        api.notifications.deliver(db, [user], 'demo', 1, 'duty.reminder', detail='Завтра: 08.09.2026, 12:00–12:05, Холл')
+        api.notifications.deliver(db, [user], 'demo', 1, 'duty.reminder', target=dict(module='duty', title='Завтра: 08.09.2026, 12:00–12:05, Холл'))
         api.notifications.deliver(db, [user], 'demo', 2, 'saved')
     items = {i['action']: i for i in inbox(teacher)}
-    assert items['duty.reminder']['detail'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
-    assert 'detail' not in items['saved']
+    assert items['duty.reminder']['title'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
+    assert 'title' not in items['saved']
 
 
 def test_detail_column_is_added_to_an_existing_notifications_table(tmp_path):
@@ -481,13 +481,13 @@ def test_reminders_are_sent_once(client, monkeypatch):
     tomorrow = MON.replace(day=8)
     clock(monkeypatch, MON, 12, 0)
     put_commitments(duty('d1', tomorrow, teacherIds=['t2']))
-    assert [i['detail'] for i in inbox(teacher, 'duty.changed')] == ['Назначено: 08.09.2026, 12:00–12:05, Холл.']
+    assert [i['title'] for i in inbox(teacher, 'duty.changed')] == ['Назначено: 08.09.2026, 12:00–12:05, Холл.']
     reminders = api.duties.reminders
     assert reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
     clock(monkeypatch, MON, 13, 30)
     assert reminders.process_one() is True
     sent = inbox(teacher, 'duty.reminder')
-    assert len(sent) == 1 and sent[0]['detail'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
+    assert len(sent) == 1 and sent[0]['title'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
     assert reminders.process_one() is False and len(inbox(teacher, 'duty.reminder')) == 1
     settings = dict(version=0, enabled=False, daysBefore=1, remindAt='18:00', notifyChanges=True)
     assert client.put('/api/duties/settings?workspace=demo', json=settings).json()['version'] == 1
@@ -503,7 +503,7 @@ def test_reminders_are_sent_once(client, monkeypatch):
     assert reminders.process_one() is False
     clock(monkeypatch, tomorrow, 2, 30)
     assert reminders.process_one() is True
-    assert [i['detail'] for i in inbox(teacher, 'duty.reminder')] == ['Сегодня: 08.09.2026, 16:00–16:05, Холл', 'Сегодня: 08.09.2026, 13:00–13:05, Холл', 'Завтра: 08.09.2026, 12:00–12:05, Холл']
+    assert [i['title'] for i in inbox(teacher, 'duty.reminder')] == ['Сегодня: 08.09.2026, 16:00–16:05, Холл', 'Сегодня: 08.09.2026, 13:00–13:05, Холл', 'Завтра: 08.09.2026, 12:00–12:05, Холл']
 
 
 def test_reminder_without_account_is_skipped_once(client, monkeypatch):
@@ -528,12 +528,12 @@ def test_change_notification_once_per_save_and_no_double_reminder(client, monkey
         assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=state.revision, token=shown.json()['token'])).status_code == 200
     edit(teacherIds=['t2'])
     changes = inbox(teacher, 'duty.changed')
-    assert len(changes) == 1 and 'Назначено' in changes[0]['detail']
+    assert len(changes) == 1 and 'Назначено' in changes[0]['title']
     state = api.read('demo'); state.commitments.append(Commitment(id='b', name='Встреча', onDate=day, startTime='15:00', endTime='15:30', roomIds=['r2'])); api.save('demo', state)
     assert len(inbox(teacher, 'duty.changed')) == 1
     edit(teacherIds=[])
     removed = inbox(teacher, 'duty.changed')
-    assert len(removed) == 2 and 'Снято' in removed[0]['detail']
+    assert len(removed) == 2 and 'Снято' in removed[0]['title']
     edit(startTime='12:10', endTime='12:15')
     assert len(inbox(teacher, 'duty.changed')) == 2
     # Assigned inside the reminder window: the change notice states it, so the worker stays silent.
@@ -544,7 +544,7 @@ def test_change_notification_once_per_save_and_no_double_reminder(client, monkey
     # Moving it later the same evening is stated by a new change notice; still no extra reminder.
     edit(startTime='13:00', endTime='13:05')
     moved = inbox(teacher, 'duty.changed')
-    assert len(moved) == 4 and moved[0]['detail'].startswith('Изменено: 08.09.2026, 13:00–13:05')
+    assert len(moved) == 4 and moved[0]['title'].startswith('Изменено: 08.09.2026, 13:00–13:05')
     assert api.duties.reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
 
 
@@ -569,7 +569,7 @@ def test_bulk_generation_sends_one_notice_per_teacher(client, monkeypatch):
     assert shown['counts']['created'] == 16
     apply(client, shown)
     changes = inbox(teacher, 'duty.changed')
-    assert len(changes) == 1 and changes[0]['detail'].startswith('Назначено: 07.09.2026, 17:00–17:20, Холл 1 этажа (и ещё 15)')
+    assert len(changes) == 1 and changes[0]['title'].startswith('Назначено: 07.09.2026, 17:00–17:20, Холл 1 этажа (и ещё 15)')
 
 
 def test_settings_version_conflict(client):
@@ -617,7 +617,7 @@ def test_swap_request_and_approval_rechecks_conflicts(client, monkeypatch):
     assert made.status_code == 200, made.text
     swap = made.json()
     assert swap['status'] == 'pending' and swap['fromTeacher']['name'] == 'Учитель английского' and swap['toTeacher']['name'] == 'Учитель математики' and 'note' not in swap
-    assert len(inbox(client, 'duty.swap_requested')) == 1 and 'Сотрудник' in inbox(client, 'duty.swap_requested')[0]['detail']
+    assert len(inbox(client, 'duty.swap_requested')) == 1 and 'Сотрудник' in inbox(client, 'duty.swap_requested')[0]['title']
     assert eng.post('/api/duties/swaps?workspace=demo', json=request).json() == swap
     assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body()).status_code == 409
     assert math.post('/api/duties/swaps?workspace=demo', json=swap_body()).status_code == 404
@@ -641,7 +641,7 @@ def test_swap_request_and_approval_rechecks_conflicts(client, monkeypatch):
     assert next(c for c in approved.json()['state']['commitments'] if c['id'] == 'd1')['teacherIds'] == ['t3']
     assert [c.teacherIds for c in api.read('demo').commitments] == [['t3']]
     assert 'duty.swap_decided' in [i['action'] for i in inbox(eng)]
-    assert 'Одобрено' in inbox(eng, 'duty.swap_decided')[0]['detail'] and 'Учитель истории' in inbox(eng, 'duty.swap_decided')[0]['detail']
+    assert 'Одобрено' in inbox(eng, 'duty.swap_decided')[0]['title'] and 'Учитель истории' in inbox(eng, 'duty.swap_decided')[0]['title']
     with api.connect() as db:
         assert [r[0] for r in db.execute("SELECT action FROM duty_history WHERE entity='swap' ORDER BY seq")] == ['requested', 'approved']
     again = decide(toTeacherId='t3', requestId=key)
@@ -674,7 +674,7 @@ def test_swap_reject_cancel_and_limits(client, monkeypatch):
     assert eng.post(f"/api/duties/swaps/{second['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=False)).status_code == 403
     rejected = client.post(f"/api/duties/swaps/{second['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=False, reason='Нет замены'))
     assert rejected.status_code == 200 and rejected.json()['swap']['status'] == 'rejected' and api.read('demo').revision == revision
-    assert inbox(eng, 'duty.swap_decided')[0]['detail'] == 'Отклонено: Нет замены'
+    assert inbox(eng, 'duty.swap_decided')[0]['title'] == 'Отклонено: Нет замены'
     assert eng.get('/api/duties/mine?workspace=demo').json()['items'][0]['swap'] == 'rejected'
     # The requester may ask again; if the administration changed the duty meanwhile, approval is refused.
     third = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t3')).json()
@@ -768,9 +768,9 @@ def test_notices_name_only_the_duties_of_the_account_and_go_to_this_workspace(cl
     put_commitments(duty('A', tomorrow, '10:00', '10:10', location='Холл А', teacherIds=['t1']), duty('B', tomorrow, '11:00', '11:10', location='Двор Б', teacherIds=['t2']))
     phys, eng, both = signed('phys'), signed('teacher'), signed('both')
     (mine,), (theirs,), (shared,) = inbox(phys, 'duty.changed'), inbox(eng, 'duty.changed'), inbox(both, 'duty.changed')
-    assert 'Холл А' in mine['detail'] and 'Двор Б' not in mine['detail'] and 'ещё' not in mine['detail']
-    assert 'Двор Б' in theirs['detail'] and 'Холл А' not in theirs['detail'] and 'ещё' not in theirs['detail']
-    assert 'Холл А' in shared['detail'] and 'и ещё 1' in shared['detail']
+    assert 'Холл А' in mine['title'] and 'Двор Б' not in mine['title'] and 'ещё' not in mine['title']
+    assert 'Двор Б' in theirs['title'] and 'Холл А' not in theirs['title'] and 'ещё' not in theirs['title']
+    assert 'Холл А' in shared['title'] and 'и ещё 1' in shared['title']
     assert inbox(signed('ed_demo'), 'duty.changed') == [] and inbox(signed('ed_school'), 'duty.changed') == []
     # A swap request reaches the administration of this workspace only.
     made = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(commitmentId='B', toTeacherId=None))

@@ -77,8 +77,16 @@ export default function Portal({
   controls: ReactNode;
 }) {
   const [section, setSectionValue] = useState("schedule");
+  // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
+  const [journalFocus, setJournalFocus] = useState<
+      { studentId: string; day: string } | undefined
+    >(),
+    [wantedRecord, setWantedRecord] = useState("");
   function setSection(value: string) {
-    if (canLeaveHomework()) setSectionValue(value);
+    if (canLeaveHomework()) {
+      setSectionValue(value);
+      setJournalFocus(undefined);
+    }
   }
   const [spaces, setSpaces] = useState<Space[]>([]),
     [workspace, setWorkspaceValue] = useState("");
@@ -152,6 +160,42 @@ export default function Portal({
       live = false;
     };
   }, [workspace, record, cycle, day, mode, version]);
+  useEffect(() => {
+    if (!wantedRecord || !space) return;
+    if (
+      space.records.some((r) => JSON.stringify([r.view, r.id]) === wantedRecord)
+    )
+      setRecord(wantedRecord);
+    setWantedRecord("");
+  }, [wantedRecord, space]);
+  // Opened from a notification after the server re-checked access to the record.
+  useEffect(() => {
+    const sections: Record<string, string> = {
+      "atlas-open-journal": "journal",
+      "atlas-open-quizzes": "quizzes",
+      "atlas-open-schedule": "schedule",
+      "atlas-open-duties": "duties",
+    };
+    const open = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (!canLeaveHomework()) return;
+      if (detail.workspace) setWorkspaceValue(detail.workspace);
+      setSectionValue(sections[event.type]);
+      setJournalFocus(
+        event.type === "atlas-open-journal" && detail.studentId && detail.day
+          ? { studentId: detail.studentId, day: detail.day }
+          : undefined,
+      );
+      if (event.type === "atlas-open-schedule" && detail.studentId)
+        setWantedRecord(JSON.stringify(["student", detail.studentId]));
+    };
+    for (const name of Object.keys(sections))
+      window.addEventListener(name, open);
+    return () => {
+      for (const name of Object.keys(sections))
+        window.removeEventListener(name, open);
+    };
+  }, []);
   function csv() {
     if (!result) return;
     const rows = [
@@ -386,7 +430,11 @@ export default function Portal({
             ) : section === "homework" ? (
               <HomeworkQueuePanel key={workspace} workspace={workspace} />
             ) : (
-              <JournalPanel key={workspace} workspace={workspace} />
+              <JournalPanel
+                key={workspace}
+                workspace={workspace}
+                focus={journalFocus}
+              />
             ))}
         </>
       ) : (

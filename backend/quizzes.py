@@ -109,6 +109,8 @@ class Quizzes:
             targets=self.journal.notifications.granted_users(db,ctx['workspace'],'teacher',ids,['teacher'])
         else:
             targets=self.journal.notifications.granted_users(db,ctx['workspace'],'student',students or [],['student','parent'])
+            from .quiz_notices import deliver_family
+            return deliver_family(self.journal.notifications,db,ctx,action,targets,set(students or []))
         self.journal.notifications.deliver(db,targets,ctx['workspace'],ctx['quiz']['version'],action)
 
     def log(self,db,ctx,action,document,attempt=None):

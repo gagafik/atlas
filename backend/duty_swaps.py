@@ -64,10 +64,10 @@ def register(service, app, Workspace):
 
     def tell_managers(db, workspace, revision, detail):
         users = [u for u in accounts(db, "SELECT * FROM accounts WHERE active=1 AND role IN ('admin','editor')") if u['role'] == 'admin' or workspace in u['workspaces']]
-        notifications.deliver(db, users, workspace, revision, 'duty.swap_requested', topic=f'duty-swaps:{workspace}', detail=detail)
+        notifications.deliver(db, users, workspace, revision, 'duty.swap_requested', topic=f'duty-swaps:{workspace}', target=dict(module='duty', title=detail))
 
     def tell_requester(db, workspace, swap, revision, detail):
-        notifications.deliver(db, accounts(db, 'SELECT * FROM accounts WHERE id=? AND active=1', (swap['requester_id'],)), workspace, revision, 'duty.swap_decided', detail=detail)
+        notifications.deliver(db, accounts(db, 'SELECT * FROM accounts WHERE id=? AND active=1', (swap['requester_id'],)), workspace, revision, 'duty.swap_decided', target=dict(module='duty', title=detail))
 
     @app.post('/api/duties/swaps')
     def create(body: SwapCreate, request: Request, workspace: Workspace = 'school'):

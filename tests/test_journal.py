@@ -57,7 +57,8 @@ def test_draft_publish_personal_projection_and_preserved_published_version(clien
     assert report(pupil).json()['rows'][0]['content']['topic']=='Тема урока'
     assert result.json()['version']==3 and result.json()['publishedVersion']==2
     assert api.read('demo')==original
-    assert pupil.get('/api/notifications/inbox').json()['unread']==1
+    # The publication tells the family about the grade and the homework, one entry each.
+    assert pupil.get('/api/notifications/inbox').json()['unread']==2
 
 
 def test_role_permissions_and_teacher_scope(client):
@@ -183,8 +184,9 @@ def test_weighted_points_text_grades_and_only_affected_pupil_notifications(clien
     assert result['percentage']==83.33 and result['pointsCount']==2 and result['labelCount']==1
     updated=response.json();updated['document']['content']['records'][0]['grades'][0]['score']=9
     write(client,updated,publish=True)
+    # Grade (replaced by the correction) and homework (once) for each of the two affected pupils.
     assert first.get('/api/notifications/inbox').json()['unread']==2
-    assert second.get('/api/notifications/inbox').json()['unread']==1
+    assert second.get('/api/notifications/inbox').json()['unread']==2
 
 
 def test_account_permission_race_rechecked_in_transaction(client,monkeypatch):

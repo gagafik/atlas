@@ -14,7 +14,7 @@ from .behaviour import csv_cell
 from .calendar_ops import DayContext,resolve_day
 from .cycles import pattern_on
 from .models import Model
-from .notifications import encoded,permission_key
+from .notifications import encoded,permission_key,student_ids
 from .portal_cache import PortalSnapshots
 from .resources import teacher_ids
 from .school_forms import enabled,grant_ids
@@ -371,8 +371,18 @@ class AssessmentCalendar:
         return result
 
     def notify_family(self,db,workspace,snap,row,action):
-        targets=self.notifications.granted_users(db,workspace,'student',self.members(snap,row['group_id']),['student','parent'])
-        self.notifications.deliver(db,targets,workspace,row['version'],action,topic=f"assessment:{workspace}:{row['id']}")
+        """Type, subject and date of the work; the topic and the note stay in the calendar. A move or cancellation blanks the older titles."""
+        members=self.members(snap,row['group_id'])
+        targets=self.notifications.granted_users(db,workspace,'student',members,['student','parent'])
+        booking=db.execute('SELECT day,subject_id,document FROM assessment_bookings WHERE workspace=? AND id=?',(workspace,row['id'])).fetchone()
+        data=json.loads(booking['document']);short,day=data.get('short',''),label(booking['day'])
+        subject=self.names(snap)['subject'].get(booking['subject_id'],data.get('subject',''))
+        title={'assessment.moved':f"Перенесена работа {short}: {subject}, теперь {day}",'assessment.changed':f"Изменён тип работы: {short}, {subject}, {day}",
+               'assessment.cancelled':f"Отменена работа {short}: {subject}, {day}"}.get(action,f"{short}: {subject}, {day}")
+        # A cancelled work is not open to families any more, so its entry has no link.
+        module=dict(module='assessments') if action!='assessment.cancelled' else {}
+        target=lambda user:dict(recordId=row['id'],day=booking['day'],students=[dict(id=s,name=snap.entities['student'][s].name) for s in sorted(members&student_ids(user,workspace))],title=title,**module)
+        self.notifications.deliver(db,targets,workspace,row['version'],action,topic=f"assessment:{workspace}:{row['id']}",supersede=True,target=target)
 
     def notify_teachers(self,db,workspace,snap,row,action,actor):
         """Tell the teachers of the pair when somebody else changes their work."""
