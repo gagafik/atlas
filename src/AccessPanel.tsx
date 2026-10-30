@@ -647,6 +647,12 @@ export default function AccessPanel({
                       "absence.file_uploaded": "Загружен файл объяснительной",
                       "absence.reviewers_updated":
                         "Назначены ответственные за объяснительные",
+                      "absence.recorded": "Школа внесла записку об отсутствии",
+                      "absence.notes_preview":
+                        "Подготовлены записки об отсутствии от школы",
+                      "absence.notes_applied":
+                        "Внесены записки об отсутствии от школы",
+                      "absence.codes_saved": "Изменены типы отсутствия",
                       "family.updated":
                         "Изменены семейная связь и доступ к ребёнку",
                       "family.history_read":

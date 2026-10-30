@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { uploadFile } from "./uploads";
 import { api } from "./api";
-import { defaultChild, formLocks, notesOff as closed } from "./absenceForm";
+import AbsenceCodesEditor from "./AbsenceCodesEditor";
+import AbsenceSchoolForm from "./AbsenceSchoolForm";
+import {
+  type AbsenceCode,
+  type PreviewLesson,
+  type SchoolPupil,
+  type Subject,
+  codeName,
+  defaultChild,
+  formLocks,
+  lessonEdge,
+  noticeQuery,
+  notesOff as closed,
+  sharedDecision,
+} from "./absenceForm";
 
 type FileItem = { id: string; filename: string; size: number };
 type Item = {
@@ -18,6 +32,12 @@ type Item = {
   canReview?: boolean;
   canWithdraw?: boolean;
   periodLocks?: string[];
+  origin?: string;
+  codeId?: string | null;
+  subjectId?: string | null;
+  mine?: boolean;
+  authorName?: string;
+  summary?: boolean;
 };
 type ClassSetting = {
   id: string;
@@ -31,8 +51,12 @@ type ClassSetting = {
 };
 type Options = {
   parent: boolean;
+  pupil?: boolean;
   admin: boolean;
   canReview: boolean;
+  codes: AbsenceCode[];
+  subjects: Subject[];
+  schoolPupils?: SchoolPupil[];
   students: {
     id: string;
     name: string;
@@ -75,6 +99,7 @@ const labels: Record<string, string> = {
   withdrawn: "Отозвано родителем",
   revoked: "Решение отменено школой",
   submitted: "Отправлено",
+  recorded: "Внесено школой",
 };
 
 export default function AbsencePanel({ workspace }: { workspace: string }) {
@@ -96,19 +121,18 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     [end, setEnd] = useState(""),
     [from, setFrom] = useState("00:00"),
     [to, setTo] = useState("23:59"),
-    [reason, setReason] = useState("");
+    [reason, setReason] = useState(""),
+    [codeId, setCodeId] = useState(""),
+    [subjectId, setSubjectId] = useState("");
+  // Filters of the reviewer queue; any change reloads the first page.
+  const [fClass, setFClass] = useState(""),
+    [fFrom, setFFrom] = useState(""),
+    [fTo, setFTo] = useState("");
   const [requestId, setRequestId] = useState(() => crypto.randomUUID()),
     [files, setFiles] = useState<FileItem[]>([]),
     [available, setAvailable] = useState<FileItem[]>([]);
   const [preview, setPreview] = useState<
-    | {
-        date: string;
-        start: string;
-        end: string;
-        subject: string;
-        group: string;
-      }[]
-    | null
+    (PreviewLesson & { group: string })[] | null
   >(null);
   const [decisionRequest, setDecisionRequest] = useState(() =>
     crypto.randomUUID(),
@@ -123,6 +147,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   const child = options?.students.find((s) => s.id === student);
   const notesOff = closed(child);
   const locks = formLocks(busy, child);
+  // Parents choose only types marked for them; with none the field is hidden and the note has no type.
+  const parentCodes = options?.codes.filter((c) => c.active && c.parents) ?? [];
   const clearBulkPreview = () => {
     setBulkPreview(null);
     setBulkRequest(crypto.randomUUID());
@@ -152,11 +178,16 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     setStart((old) => old || r.defaultDate);
     setEnd((old) => old || r.defaultDate);
   };
+  const query = (before?: number) =>
+    noticeQuery({
+      status: filter,
+      classId: options?.canReview ? fClass : "",
+      start: fFrom,
+      end: fTo,
+      before,
+    });
   const list = async (before?: number) => {
-    const r = await api(
-      `journal/absences?status=${filter}${before ? `&before=${before}` : ""}`,
-      workspace,
-    );
+    const r = await api(`journal/absences?${query(before)}`, workspace);
     setItems((old) => (before ? [...old, ...r.items] : r.items));
     setNext(r.nextBefore);
     if (!before) clearBulk();
@@ -186,7 +217,10 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     setError("");
     Promise.all([
       api("journal/absences/options", workspace),
-      api(`journal/absences?status=${filter}`, workspace),
+      api(
+        `journal/absences?${noticeQuery({ status: filter, classId: fClass, start: fFrom, end: fTo })}`,
+        workspace,
+      ),
     ])
       .then(([o, r]) => {
         if (!live) return;
@@ -206,7 +240,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     return () => {
       live = false;
     };
-  }, [expanded, workspace, filter]);
+  }, [expanded, workspace, filter, fClass, fFrom, fTo]);
   const payload = () => ({
     requestId,
     studentId: student,
@@ -215,6 +249,8 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     startTime: from,
     endTime: to,
     reason,
+    codeId,
+    subjectId,
     fileIds: files.map((f) => f.id),
   });
   const reset = () => {
@@ -222,6 +258,22 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
     setFiles([]);
     setAvailable([]);
     setReason("");
+    setCodeId("");
+    setSubjectId("");
+    setPreview(null);
+  };
+  // The first or the last lesson of the note is picked from the preview, no times to type.
+  const edge = (lesson: PreviewLesson, which: "start" | "end") => {
+    const { date, time } = lessonEdge(lesson, which);
+    if (which === "start") {
+      setStart(date);
+      setFrom(time);
+      if (end < date) setEnd(date);
+    } else {
+      setEnd(date);
+      setTo(time);
+      if (start > date) setStart(date);
+    }
     setPreview(null);
   };
   const upload = async (file: File) => {
@@ -300,6 +352,22 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
         : `Электронные записки класса ${c.name} выключены.`,
     );
   };
+  // Category, subject and origin of a note; none of it is private. A note filed by another guardian says so.
+  const meta = (item: Item) =>
+    [
+      `Тип: ${codeName(options?.codes ?? [], item.codeId)}`,
+      item.subjectId
+        ? `Предмет: ${options?.subjects.find((x) => x.id === item.subjectId)?.name ?? item.subjectId}`
+        : "",
+      item.origin === "school"
+        ? "Внесено школой"
+        : options?.parent &&
+            !(item.mine ?? items.find((x) => x.id === item.id)?.mine ?? true)
+          ? "Подано другим представителем"
+          : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
   const fileUrl = (id: string) =>
     `/api/journal/absence-files/${id}?workspace=${encodeURIComponent(workspace)}`;
   const bulkDone = async (count: number) => {
@@ -348,10 +416,13 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
       {expanded && (
         <>
           <p>
-            Родитель сообщает причину; школа рассматривает заявление. Текст и
-            файлы доступны автору с действующим доступом к ребёнку,
-            администратору и назначенным ответственным за класс. Другим
-            представителям и предметникам виден только результат в посещаемости.
+            Родитель сообщает причину, школа рассматривает заявление или вносит
+            записку сама. Причину, файлы и историю видят автор, законные
+            представители с подтверждённой связью в семейном реестре,
+            администратор и назначенные ответственные за класс. Ученик и
+            остальные представители видят только тип, период, предмет и статус
+            записок, внесённых школой, а ученик ещё и записок своей семьи.
+            Предметникам виден только результат в посещаемости.
           </p>
           {error && (
             <p className="error-banner" role="alert">
@@ -366,12 +437,15 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
               контроль журналов выдаются отдельно.
             </p>
           )}
-          {options && !options.parent && !options.canReview && (
-            <p>
-              Администратор пока не назначил вас ответственным за заявления
-              класса.
-            </p>
-          )}
+          {options &&
+            !options.parent &&
+            !options.canReview &&
+            !options.pupil && (
+              <p>
+                Администратор пока не назначил вас ответственным за заявления
+                класса.
+              </p>
+            )}
           {options?.parent && (
             <form
               onSubmit={(e) => {
@@ -490,7 +564,43 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                     00:00–23:59. Период непрерывный, до 31 дня; учитываются
                     только полностью включённые в него уроки. Перенос урока за
                     пределы периода отменяет применение объяснительной к нему.
+                    Чтобы указать первый и последний урок, покажите уроки в
+                    периоде и нажмите «С этого урока» и «По этот урок».
                   </p>
+                  {parentCodes.length > 0 && (
+                    <label className="field">
+                      <span>Тип отсутствия</span>
+                      <select
+                        required
+                        value={codeId}
+                        onChange={(e) => setCodeId(e.target.value)}
+                      >
+                        <option value="">Выберите тип</option>
+                        {parentCodes.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <label className="field">
+                    <span>Предмет</span>
+                    <select
+                      value={subjectId}
+                      onChange={(e) => {
+                        setSubjectId(e.target.value);
+                        setPreview(null);
+                      }}
+                    >
+                      <option value="">Все предметы</option>
+                      {options.subjects.map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label className="field">
                     <span>Причина отсутствия</span>
                     <textarea
@@ -594,7 +704,12 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   <button
                     className="primary"
                     type="submit"
-                    disabled={!student || !reason.trim() || locks.write}
+                    disabled={
+                      !student ||
+                      !reason.trim() ||
+                      locks.write ||
+                      (parentCodes.length > 0 && !codeId)
+                    }
                   >
                     Отправить объяснительную
                   </button>
@@ -616,14 +731,33 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                       позднее уроков.
                     </p>
                     {preview.map((r, i) => (
-                      <p key={i}>
+                      <p className="absence-file" key={i}>
                         {r.date} · {r.start}–{r.end} · {r.subject} · {r.group}
+                        <button type="button" onClick={() => edge(r, "start")}>
+                          С этого урока
+                        </button>
+                        <button type="button" onClick={() => edge(r, "end")}>
+                          По этот урок
+                        </button>
                       </p>
                     ))}
                   </div>
                 )}
               </fieldset>
             </form>
+          )}
+          {options?.canReview && (
+            <AbsenceSchoolForm
+              workspace={workspace}
+              classes={options.classSettings ?? []}
+              pupils={options.schoolPupils ?? []}
+              codes={options.codes}
+              subjects={options.subjects}
+              yearStart={options.yearStart}
+              yearEnd={options.yearEnd}
+              defaultDate={options.defaultDate}
+              onDone={() => void run(list)}
+            />
           )}
           <div className="dated-toolbar">
             <label className="field">
@@ -635,7 +769,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
               >
                 <option value="all">Все</option>
                 {Object.entries(labels)
-                  .filter(([id]) => id !== "submitted")
+                  .filter(([id]) => !["submitted", "recorded"].includes(id))
                   .map(([id, label]) => (
                     <option key={id} value={id}>
                       {label}
@@ -643,6 +777,44 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                   ))}
               </select>
             </label>
+            {options?.canReview && (
+              <>
+                <label className="field">
+                  <span>Класс</span>
+                  <select
+                    disabled={busy}
+                    value={fClass}
+                    onChange={(e) => setFClass(e.target.value)}
+                  >
+                    <option value="">Все мои классы</option>
+                    {options.classSettings?.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Период с</span>
+                  <input
+                    type="date"
+                    disabled={busy}
+                    value={fFrom}
+                    onChange={(e) => setFFrom(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Период по</span>
+                  <input
+                    type="date"
+                    disabled={busy}
+                    min={fFrom}
+                    value={fTo}
+                    onChange={(e) => setFTo(e.target.value)}
+                  />
+                </label>
+              </>
+            )}
             <button
               disabled={busy}
               onClick={() =>
@@ -691,6 +863,12 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
               ))}
             </section>
           ) : null}
+          {options?.admin && (
+            <AbsenceCodesEditor
+              workspace={workspace}
+              onSaved={() => void loadOptions()}
+            />
+          )}
           {options?.canReview && (
             <section
               className="absence-card"
@@ -842,6 +1020,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
               <p>
                 {item.start.replace("T", " ")} — {item.end.replace("T", " ")}
               </p>
+              <p>{meta(item)}</p>
               <button
                 disabled={busy}
                 onClick={() => void run(() => open(item.id))}
@@ -864,98 +1043,126 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
                 {selected.start.replace("T", " ")} —{" "}
                 {selected.end.replace("T", " ")}
               </p>
-              <p className="journal-text">{selected.reason}</p>
-              {selected.files?.map((f) => (
-                <p key={f.id}>
-                  <a href={fileUrl(f.id)}>{f.filename}</a> ·{" "}
-                  {Math.ceil(f.size / 1024)} КиБ
-                </p>
-              ))}
-              <p>
-                Принятие меняет учёт отметки «Отсутствует» на «Уважительная
-                причина». Оно не ставит отсутствие вместо «Не отмечено»,
-                «Присутствует» или «Опоздание» и не публикует черновики журнала.
-                Причина и файлы в журнал не передаются.
-              </p>
-              <fieldset disabled={busy} className="access-fields">
-                {(selected.canWithdraw ||
-                  (selected.canReview &&
-                    ["pending", "approved"].includes(selected.status))) && (
-                  <>
-                    <label className="field">
-                      <span>
-                        {selected.canWithdraw && !selected.canReview
-                          ? "Комментарий (необязательно)"
-                          : "Объяснение решения"}
-                      </span>
-                      <textarea
-                        maxLength={2000}
-                        value={comment}
-                        onChange={(e) => {
-                          setComment(e.target.value);
-                          setDecisionRequest(crypto.randomUUID());
-                        }}
-                      />
-                    </label>
-                    {!!selected.periodLocks?.length && selected.canReview && (
-                      <p className="info-line">
-                        Период журнала закрыт: {selected.periodLocks.join(", ")}
-                        . Принять объяснительную или отменить решение можно
-                        после того, как администратор откроет период.
-                      </p>
+              <p>{meta(selected)}</p>
+              {selected.summary ? (
+                <>
+                  <p className="info-line">
+                    Причина и файлы доступны взрослым представителям и школе.
+                  </p>
+                  <button
+                    disabled={busy}
+                    onClick={() => void run(() => open(selected.id))}
+                  >
+                    Обновить открытое заявление
+                  </button>
+                </>
+              ) : (
+                <>
+                  {selected.authorName && <p>Автор: {selected.authorName}</p>}
+                  <p className="journal-text">{selected.reason}</p>
+                  {selected.files?.map((f) => (
+                    <p key={f.id}>
+                      <a href={fileUrl(f.id)}>{f.filename}</a> ·{" "}
+                      {Math.ceil(f.size / 1024)} КиБ
+                    </p>
+                  ))}
+                  <p>
+                    Принятие меняет учёт отметки «Отсутствует» на «Уважительная
+                    причина». Оно не ставит отсутствие вместо «Не отмечено»,
+                    «Присутствует» или «Опоздание» и не публикует черновики
+                    журнала. Причина и файлы в журнал не передаются.
+                  </p>
+                  <fieldset disabled={busy} className="access-fields">
+                    {(selected.canWithdraw ||
+                      (selected.canReview &&
+                        ["pending", "approved"].includes(selected.status))) && (
+                      <>
+                        <label className="field">
+                          <span>
+                            {selected.canWithdraw && !selected.canReview
+                              ? "Комментарий (необязательно)"
+                              : "Объяснение решения"}
+                          </span>
+                          <textarea
+                            maxLength={2000}
+                            value={comment}
+                            onChange={(e) => {
+                              setComment(e.target.value);
+                              setDecisionRequest(crypto.randomUUID());
+                            }}
+                          />
+                        </label>
+                        {!!selected.periodLocks?.length &&
+                          selected.canReview && (
+                            <p className="info-line">
+                              Период журнала закрыт:{" "}
+                              {selected.periodLocks.join(", ")}. Принять
+                              объяснительную или отменить решение можно после
+                              того, как администратор откроет период.
+                            </p>
+                          )}
+                        <div className="dated-toolbar">
+                          {selected.canWithdraw && (
+                            <button
+                              onClick={() => void run(() => decide("withdraw"))}
+                            >
+                              Отозвать заявление
+                            </button>
+                          )}
+                          {selected.canReview &&
+                            selected.status === "pending" && (
+                              <>
+                                <button
+                                  disabled={
+                                    !comment.trim() ||
+                                    !!selected.periodLocks?.length
+                                  }
+                                  onClick={() =>
+                                    void run(() => decide("approve"))
+                                  }
+                                >
+                                  Принять объяснительную
+                                </button>
+                                <button
+                                  disabled={!comment.trim()}
+                                  onClick={() =>
+                                    void run(() => decide("reject"))
+                                  }
+                                >
+                                  Отклонить объяснительную
+                                </button>
+                              </>
+                            )}
+                          {selected.canReview &&
+                            selected.status === "approved" && (
+                              <button
+                                disabled={
+                                  !comment.trim() ||
+                                  !!selected.periodLocks?.length
+                                }
+                                onClick={() => void run(() => decide("revoke"))}
+                              >
+                                Отменить принятое решение
+                              </button>
+                            )}
+                        </div>
+                      </>
                     )}
-                    <div className="dated-toolbar">
-                      {selected.canWithdraw && (
-                        <button
-                          onClick={() => void run(() => decide("withdraw"))}
-                        >
-                          Отозвать заявление
-                        </button>
-                      )}
-                      {selected.canReview && selected.status === "pending" && (
-                        <>
-                          <button
-                            disabled={
-                              !comment.trim() || !!selected.periodLocks?.length
-                            }
-                            onClick={() => void run(() => decide("approve"))}
-                          >
-                            Принять объяснительную
-                          </button>
-                          <button
-                            disabled={!comment.trim()}
-                            onClick={() => void run(() => decide("reject"))}
-                          >
-                            Отклонить объяснительную
-                          </button>
-                        </>
-                      )}
-                      {selected.canReview && selected.status === "approved" && (
-                        <button
-                          disabled={
-                            !comment.trim() || !!selected.periodLocks?.length
-                          }
-                          onClick={() => void run(() => decide("revoke"))}
-                        >
-                          Отменить принятое решение
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )}
-                <button onClick={() => void run(() => open(selected.id))}>
-                  Обновить открытое заявление
-                </button>
-                <button onClick={() => void run(() => changes())}>
-                  История заявления
-                </button>
-              </fieldset>
+                    <button onClick={() => void run(() => open(selected.id))}>
+                      Обновить открытое заявление
+                    </button>
+                    <button onClick={() => void run(() => changes())}>
+                      История заявления
+                    </button>
+                  </fieldset>
+                </>
+              )}
               {history.map((h) => (
                 <div className="family-history" key={h.id}>
                   <p>
                     {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·{" "}
                     {labels[h.action] || h.action} · редакция {h.version}
-                    {h.batchId && " · общее решение"}
+                    {sharedDecision(h) && " · общее решение"}
                   </p>
                   {h.comment && <p className="journal-text">{h.comment}</p>}
                 </div>
