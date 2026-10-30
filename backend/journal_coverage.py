@@ -22,7 +22,15 @@ CACHE_ROWS=200000
 CACHE_SECONDS=600
 KEYS=('lessonKey','date','start','end','subject','group','teachers','classNames','status','due','pupils','missingPupils','unmarkedPupils','rosterUnknown','topicFilled','needsSync','version','publishedVersion','hasDraftChanges','canOpen')
 STATUS=KEYS.index('status')
+# Server-only tail of every cached row: never part of the public projection, tokens or paging.
+INTERNAL=('classIds','teacherIds','sourceDate')
+CLASS_IDS,TEACHER_IDS,SOURCE=range(len(KEYS),len(KEYS)+3)
 STALE='Журнал или доступ изменились. Повторите проверку.'
+
+
+def actionable(r):
+    """«Не заполнено»: a due lesson without a journal or publication, with an outdated one, or lacking the topic or marks. An unknown class size alone is an administrator's data issue, never a reminder for the teacher."""
+    return bool(r['due'] and (r['status'] in ('missing','draft','stale') or r['status']=='incomplete' and (not r['topicFilled'] or r['missingPupils'] or r['unmarkedPupils'])))
 
 
 class CoverageQuery(Model):
@@ -186,11 +194,13 @@ class JournalCoverage:
                 status='upcoming' if not due else 'missing' if not saved else 'draft' if not published else 'stale' if stale else 'incomplete' if missing or unmarked or not topic or roster_unknown else 'complete'
                 value=dict(lessonKey=key,date=identity['date'],start=identity['start'],end=identity['end'],subject=identity['subject'],group=identity['group'],teachers=identity['teachers'],classNames=[class_names[c] for c in sorted(classes&set(row['classIds']))],status=status,due=due,
                     pupils=len(ids),missingPupils=len(missing),unmarkedPupils=len(unmarked),rosterUnknown=roster_unknown,topicFilled=topic,needsSync=stale,
-                    version=saved['version'] if saved else 0,publishedVersion=saved['publishedVersion'] if saved else None,hasDraftChanges=bool(published and saved['version']!=saved['publishedVersion']),canOpen=staff_read(user,workspace,row))
+                    version=saved['version'] if saved else 0,publishedVersion=saved['publishedVersion'] if saved else None,hasDraftChanges=bool(published and saved['version']!=saved['publishedVersion']),canOpen=staff_read(user,workspace,row),
+                    # Current resolved teachers (a substitute wins even over a frozen publication) and the scope-limited classes.
+                    classIds=sorted(classes&set(row['classIds'])),teacherIds=list(row['teacherIds']),sourceDate=row['sourceDate'] or row['date'])
                 rows.append(value)
                 if detail and key==detail.lessonKey:
                     names=sorted([dict(id=id,name=people[id].name if id in people else 'Ученик вне текущего состава',className=class_names.get(held[id],'Вне текущего состава'),issue='missing' if id in missing else 'unmarked') for id in missing|unmarked],key=lambda s:(s['name'].casefold(),s['id']))
-                    detail_value=dict(lesson=value,pupils=names[detail.pupilOffset:detail.pupilOffset+PAGE],nextOffset=detail.pupilOffset+PAGE if len(names)>detail.pupilOffset+PAGE else None,total=len(names))
+                    detail_value=dict(lesson={k:value[k] for k in KEYS},pupils=names[detail.pupilOffset:detail.pupilOffset+PAGE],nextOffset=detail.pupilOffset+PAGE if len(names)>detail.pupilOffset+PAGE else None,total=len(names))
             if detail:continue
             for key,saved in entries.items():
                 lesson=saved['lesson']
@@ -201,7 +211,8 @@ class JournalCoverage:
                 archived=user['role']=='admin' and not body.classId and not actual_classes&classes
                 archived_match=archived and (not body.subjectId or body.subjectId==lesson['subjectId']) and (not body.teacherId or body.teacherId in lesson['teacherIds'])
                 if not archived_match and not self.selected(lesson|dict(classIds=actual_classes),user,body,classes,own):continue
-                orphans[key]=dict(lessonKey=key,date=lesson['date'],start=lesson['start'],end=lesson['end'],subject=lesson['subject'],group=lesson['group'],teachers=lesson['teachers'],classNames=['Вне текущего состава'] if archived else [class_names[c] for c in sorted(classes&actual_classes)],status='orphaned',due=False,pupils=0,missingPupils=0,unmarkedPupils=0,rosterUnknown=False,topicFilled=saved['topic'],needsSync=True,version=saved['version'],publishedVersion=saved['publishedVersion'],hasDraftChanges=saved['version']!=saved['publishedVersion'],canOpen=user['role']=='admin' or bool(own&set(saved['draftTeachers'])))
+                orphans[key]=dict(lessonKey=key,date=lesson['date'],start=lesson['start'],end=lesson['end'],subject=lesson['subject'],group=lesson['group'],teachers=lesson['teachers'],classNames=['Вне текущего состава'] if archived else [class_names[c] for c in sorted(classes&actual_classes)],status='orphaned',due=False,pupils=0,missingPupils=0,unmarkedPupils=0,rosterUnknown=False,topicFilled=saved['topic'],needsSync=True,version=saved['version'],publishedVersion=saved['publishedVersion'],hasDraftChanges=saved['version']!=saved['publishedVersion'],canOpen=user['role']=='admin' or bool(own&set(saved['draftTeachers'])),
+                    classIds=[] if archived else sorted(classes&actual_classes),teacherIds=list(lesson['teacherIds']),sourceDate=lesson['date'])
         if detail:
             if not detail_value:raise HTTPException(404,'Урок не найден в доступном расписании выбранной даты.')
             return detail_value
@@ -232,7 +243,7 @@ class JournalCoverage:
                     self.cache.move_to_end((path,candidate,filters));return self.cache[(path,candidate,filters)][1]|dict(token=candidate)
         if body.token and body.token!=token:raise HTTPException(409,STALE)
         value=self.calculate(db,user,snap,workspace,body)
-        rows=tuple(tuple(tuple(r[k]) if k=='classNames' else r[k] for k in KEYS) for r in value['rows'])
+        rows=tuple(tuple(tuple(r[k]) if isinstance(r[k],list) else r[k] for k in KEYS+INTERNAL) for r in value['rows'])
         value=dict(counts=value['counts'],rows=rows)
         if len(rows)<=CACHE_ROWS:
             with self.lock:
@@ -240,17 +251,51 @@ class JournalCoverage:
                 while len(self.cache)>CACHE_ENTRIES or sum(len(v[1]['rows']) for v in self.cache.values())>CACHE_ROWS:self.cache.popitem(last=False)
         return value|dict(token=token)
 
+    def summary(self,db,user,snap,workspace,classes,cached):
+        """One row per class from the cached snapshot; a mixed group counts in every class it covers. No pupil is named or counted."""
+        rows=[dict(zip(KEYS,r))|dict(classIds=r[CLASS_IDS],teacherIds=r[TEACHER_IDS]) for r in cached['rows']]
+        pending=[r for r in rows if actionable(r)]
+        # Read live, never cached: binding an account to a teacher clears the warning at once.
+        bound=set(self.reminders.holders(db,workspace,{t for r in pending for t in r['teacherIds']}))
+        teachers=snap.entities['teacher'];result=[];by_class={}
+        for r in rows:
+            for id in r['classIds']:by_class.setdefault(id,[]).append(r)
+        for c in sorted((c for c in snap.state.classes if c.id in classes),key=lambda c:(c.name.casefold(),c.id)):
+            mine=by_class.get(c.id,[]);due=[r for r in mine if r['due']];open_=[r for r in mine if actionable(r)]
+            result.append(dict(classId=c.id,className=c.name,classTeacher=teachers[c.classTeacherId].name if c.classTeacherId in teachers else None,expected=len(due),unfilled=len(open_),
+                **{status:sum(r['status']==status for r in due) for status in ['missing','draft','incomplete','stale','complete']},
+                upcoming=sum(r['status']=='upcoming' for r in mine),rosterUnknown=sum(r['rosterUnknown'] for r in due),
+                lastRecord=max((r['date'] for r in mine if r['publishedVersion'] is not None and r['status']!='orphaned'),default=None),
+                unfilledSince=min((r['date'] for r in open_),default=None),unbound=sum(not bound&set(r['teacherIds']) for r in open_)))
+        value=dict(classes=result,counts=cached['counts'])
+        if user['role']=='admin':
+            # Whether a colleague has an account is account administration data: administrators only.
+            groups={}
+            for r in pending:
+                if bound&set(r['teacherIds']):continue
+                for t in set(r['teacherIds']) or {None}:
+                    g=groups.setdefault(t,dict(teacherId=t,teacher=teachers[t].name if t in teachers else 'Учитель не назначен',lessons=0,since=r['date'],classNames=set()))
+                    g['lessons']+=1;g['since']=min(g['since'],r['date']);g['classNames'].update(r['classNames'])
+            value['unbound']=sorted([g|dict(classNames=sorted(g['classNames'])) for g in groups.values()],key=lambda g:(-g['lessons'],g['teacher']))
+        return value
+
     def register(self,app,Workspace):
+        # Imported here: coverage_reminders imports this module.
+        from .coverage_reminders import CoverageReminders,settings
+        self.reminders=CoverageReminders(self);self.reminders.register(app,Workspace)
+
         @app.get('/api/journal/coverage/options')
         def options(request:Request,workspace:Workspace='school'):
             user,snap=self.reports.context(request,workspace)
+            self.reminders.prepare()
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
                 modes=['classes'] if user['role']=='admin' else (['teaching'] if user['role']=='teacher' else [])+(['classes'] if self.absences.classes(db,user,snap,workspace,'journal_coverage') else [])
                 year=CoverageQuery(start=snap.state.settings.yearStart,end=min(snap.state.settings.yearEnd,snap.state.settings.yearStart+timedelta(days=365)))
                 scopes={mode:self.scope(db,user,snap,workspace,year.model_copy(update=dict(mode=mode)))[0] for mode in modes}
                 own=user_ids(user,workspace,'teacher')
-                return dict(modes=modes,classes={mode:[dict(id=c.id,name=c.name) for c in snap.state.classes if c.id in ids] for mode,ids in scopes.items()},teachers={mode:[dict(id=t.id,name=t.name) for t in snap.state.teachers if user['role']=='admin' or mode=='classes' or t.id in own] for mode in modes},yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd,today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date(),subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects])
+                return dict(modes=modes,classes={mode:[dict(id=c.id,name=c.name) for c in snap.state.classes if c.id in ids] for mode,ids in scopes.items()},teachers={mode:[dict(id=t.id,name=t.name) for t in snap.state.teachers if user['role']=='admin' or mode=='classes' or t.id in own] for mode in modes},yearStart=snap.state.settings.yearStart,yearEnd=snap.state.settings.yearEnd,today=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date(),subjects=[dict(id=s.id,name=s.name) for s in snap.state.subjects],
+                    canConfigure=user['role']=='admin',reminders={k:v for k,v in settings(db,workspace).items() if k in ['enabled','afterDays','weeklyDigest']})
 
         def read(body,request,workspace,detail=False,export=False):
             user,snap=self.reports.context(request,workspace)
@@ -275,6 +320,22 @@ class JournalCoverage:
 
         @app.post('/api/journal/coverage/report')
         def report(body:CoverageQuery,request:Request,workspace:Workspace='school'):return read(body,request,workspace)
+        @app.post('/api/journal/coverage/classes')
+        def classes_summary(body:CoverageQuery,request:Request,workspace:Workspace='school'):
+            user,snap=self.reports.context(request,workspace)
+            if body.mode!='classes':raise HTTPException(422,'Сводка по классам строится по классам.')
+            # The filters equal the plain report's, so both share one snapshot and token. A drill-down is a /report call with
+            # classId and no token: the data half of a token covers the pupils of the requested classes, so the summary's token may be stale there (409).
+            body=body.model_copy(update=dict(classId='',teacherId='',status='all',offset=0,asOf=body.asOf or now()))
+            self.reminders.prepare()
+            with self.access.read_connect() as db:
+                db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
+                token=self.token(db,user,snap,workspace,body)
+                cached=self.result(db,user,snap,workspace,body,token)
+                classes,_=self.scope(db,user,snap,workspace,body)
+                value=self.summary(db,user,snap,workspace,classes,cached)
+            self.finish(user,snap,workspace,cached['token'],body,'journal.coverage_classes_read')
+            return value|dict(token=cached['token'],asOf=body.asOf.isoformat())
         @app.post('/api/journal/coverage/details')
         def details(body:CoverageDetail,request:Request,workspace:Workspace='school'):return read(body,request,workspace,detail=True)
         @app.post('/api/journal/coverage/export')
