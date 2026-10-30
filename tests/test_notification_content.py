@@ -289,6 +289,8 @@ def test_quiz_titles(client, quiz_clock):
     assert '2 из 2' not in text and 'Результат теста' not in text
     (gone,) = items(parent, 'quiz.withdraw')
     assert gone['title'] == 'Тест «Контрольная» отозван'
+    # Nothing is left to open, so the entry offers no button (open would only answer that the record is gone).
+    assert 'link' not in gone and open_notice(parent, gone['id']).status_code == 404
 
 
 def test_behaviour_titles(client):
@@ -442,6 +444,32 @@ def test_baseline_created_on_first_save(client):
         assert db.execute("SELECT revision FROM timetable_announcements WHERE workspace='demo'").fetchone() == (revision,)
 
 
+def test_sibling_announcement_keeps_the_children_of_the_unread_one(client):
+    enable(client)
+    create(client, 'parent', login='siblings', grants=[dict(workspace='demo', view='student', entityIds=['s2', 's3'])])
+    siblings = signed('siblings')
+    saves.rebase(client)
+    # The first lesson concerns s2 (and s1), the second concerns s3 (and s1).
+    state = api.read('demo'); state.placements[0].period = 3
+    api.save('demo', state)
+    assert saves.announce(client)['notified'] == 1
+    (first,) = items(siblings, 'timetable.published')
+    assert [s['id'] for s in first['students']] == ['s2']
+    state = api.read('demo'); state.placements[1].period = 4
+    api.save('demo', state)
+    assert saves.announce(client)['notified'] == 1
+    # The unread entry is replaced by one that still names s2 beside s3.
+    (second,) = items(siblings, 'timetable.published')
+    assert second['id'] != first['id'] and [s['id'] for s in second['students']] == ['s2', 's3'] and inbox(siblings)['unread'] == 1
+    # A read entry is history: the next one names only what changed since, and the old one keeps its text.
+    read(siblings, second['id'])
+    state = api.read('demo'); state.placements[0].period = 0
+    api.save('demo', state)
+    assert saves.announce(client)['notified'] == 1
+    latest, older = sorted(items(siblings, 'timetable.published'), key=lambda i: -i['id'])
+    assert [s['id'] for s in latest['students']] == ['s2'] and [s['id'] for s in older['students']] == ['s2', 's3']
+
+
 def test_service_worker_labels_match_categories():
     # The lock screen text lives in the worker (the payload carries only an id), so the two lists must not drift apart.
     worker = (Path(__file__).resolve().parent.parent / 'src' / 'service-worker.js').read_text(encoding='utf-8')
@@ -497,6 +525,31 @@ def test_changed_attendance_replaces_the_older_mark_beside_other_news(client):
     old, new = sorted(items(parent, 'journal.updated'), key=lambda i: i['id'])
     assert old['id'] == absent['id'] and 'title' not in old and new['title'] == 'Английский язык, 17.08: отмечено присутствие'
     assert 'отсутствие' not in json.dumps(inbox(parent), ensure_ascii=False)
+
+
+def test_absence_survives_a_plain_update_of_the_lesson(client):
+    family(client)
+    parent = signed('parent')
+    key = lesson(client)['lessonKey']
+    saved = republish(client, attend(entry(client, key), 's1', 'absent'))
+    (absence,) = items(parent, 'journal.updated')
+    assert absence['title'] == 'Английский язык, 17.08: отмечено отсутствие'
+    # Only the topic changes: the lesson is told as updated, and the unread absence stays beside it.
+    saved['document']['content']['topic'] = 'Другая тема урока'
+    saved = republish(client, saved)
+    titles = {i['id']: i['title'] for i in items(parent, 'journal.updated')}
+    assert titles[absence['id']] == 'Английский язык, 17.08: отмечено отсутствие' and sorted(titles.values()) == ['Английский язык, 17.08: обновлена запись урока', 'Английский язык, 17.08: отмечено отсутствие']
+    assert items(parent, 'journal.updated')[0]['read'] is False and inbox(parent)['unread'] == 2
+    # A second plain update replaces only the plain one; a read absence keeps its text too.
+    read(parent, absence['id'])
+    saved['document']['content']['topic'] = 'И ещё одна тема'
+    saved = republish(client, saved)
+    again = {i['id']: i.get('title') for i in items(parent, 'journal.updated')}
+    assert len(again) == 2 and again[absence['id']] == 'Английский язык, 17.08: отмечено отсутствие'
+    # The teacher takes the mark back: what was told about it goes, and nothing states the absence any more.
+    republish(client, attend(saved, 's1', 'unmarked'))
+    assert 'отсутствие' not in json.dumps(inbox(parent), ensure_ascii=False)
+    assert 'title' not in next(i for i in items(parent, 'journal.updated') if i['id'] == absence['id'])
 
 
 def test_hidden_lesson_notice_goes_when_the_lesson_is_published_again(client):
@@ -700,6 +753,40 @@ def test_form_entry_needs_the_applicant(client):
     assert open_notice(parent, decision['id']).status_code == 200
     with api.access.lock, api.connect() as db: db.execute("UPDATE school_form_answers SET user_id='somebody-else' WHERE id=?", (sent['id'],))
     assert open_notice(parent, decision['id']).status_code == 404
+
+
+def test_form_entry_is_shut_once_the_child_is_lost(client):
+    enable(client); account = create(client, 'parent'); reviewer = create(client, 'staff')
+    id = forms.new(client, 'application')
+    forms.configure(client, id, questions=[dict(id='q', title='Reason', kind='text')])
+    forms.assign(client, id, reviewer, 'review'); forms.publish(client, id)
+    parent, staff = signed('parent'), signed('staff')
+    sent = forms.answer(parent, id, answers={'q': 'Личные обстоятельства'}).json()
+    review = forms.route(id, '/responses/' + sent['id'] + '/review')
+    assert staff.post(review, json=forms.request(version=sent['version'], formVersion=forms.get(staff, id)['version'], action='approved', comment='Да')).status_code == 200
+    (decision,) = items(parent, 'forms.reviewed')
+    assert decision['link'] is True
+    regrant(client, account, 's3')
+    fresh = signed('parent')
+    # The answer is still the applicant's own, but the entry is about a child the account has lost.
+    (lost,) = items(fresh, 'forms.reviewed')
+    assert lost['restricted'] is True and not {'title', 'students', 'link'} & set(lost)
+    assert open_notice(fresh, decision['id']).status_code == 404
+
+
+def test_form_of_no_child_stays_open_to_its_applicant(client):
+    admin = enable(client); applicant = create(client, 'staff')
+    id = forms.new(client, 'application')
+    forms.configure(client, id, roles=['staff'], questions=[dict(id='q', title='Reason', kind='text')])
+    forms.assign(client, id, applicant, 'review'); forms.publish(client, id)
+    staff = signed('staff')
+    sent = forms.answer(staff, id, entity='', answers={'q': 'Мой отпуск'}).json()
+    review = forms.route(id, '/responses/' + sent['id'] + '/review')
+    assert client.post(review, json=forms.request(version=sent['version'], formVersion=forms.get(client, id)['version'], action='approved', comment='')).status_code == 200
+    (decision,) = items(staff, 'forms.reviewed')
+    assert 'students' not in decision and decision['link'] is True
+    opened = open_notice(staff, decision['id'])
+    assert opened.status_code == 200 and opened.json()['formId'] == id and opened.json()['studentId'] is None
 
 
 def test_duty_notice_keeps_its_whole_text_and_has_no_link_for_managers(client):

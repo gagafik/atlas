@@ -23,7 +23,9 @@ def deliver_family(notifications, db, ctx, action, users, ids):
     base, version = f"quiz:{workspace}:{quiz['id']}:", quiz['version']
 
     def target(user, text, kids):
-        return dict(module='quizzes', recordId=quiz['id'], students=[dict(id=k, name=names.get(k, '')) for k in kids], title=text)
+        # A withdrawn quiz leads nowhere: its entry has no link.
+        module = dict(module='quizzes') if action != 'quiz.withdraw' else {}
+        return dict(recordId=quiz['id'], students=[dict(id=k, name=names.get(k, '')) for k in kids], title=text, **module)
 
     if action == 'quiz.published':
         text = f"Новый тест «{title}»: {subject}, до {local(document['definition']['closesAt'])}"

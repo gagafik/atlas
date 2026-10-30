@@ -220,7 +220,7 @@ def open_behaviour(db, user, workspace, data, kids):
 
 def open_assessments(db, user, workspace, data, kids):
     row = db.execute('SELECT status FROM assessment_bookings WHERE workspace=? AND id=?', (workspace, data.get('recordId'))).fetchone() if has_table(db, 'assessment_bookings') else None
-    return {} if row and (row[0] == 'published' or user['role'] not in FAMILY) else None
+    return {} if row and (row[0] == 'published' and kids or user['role'] not in FAMILY) else None
 
 
 def open_meetings(db, user, workspace, data, kids):
@@ -234,10 +234,12 @@ def open_forms(db, user, workspace, data, kids):
     return dict(formId=row[1]) if row and (row[0] == user['id'] or user['role'] == 'admin') else None
 
 
+def open_timetable(db, user, workspace, data, kids):
+    return {} if kids or user['role'] not in FAMILY else None
+
+
 OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
-               forms=open_forms, timetable=lambda *args: {}, duty=lambda *args: {})
-# These lead to the account's own record; every other module needs a child the family account still has.
-OWN = ('forms', 'duty')
+               forms=open_forms, timetable=open_timetable, duty=lambda *args: {})
 # Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
 NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
 
@@ -251,7 +253,8 @@ def navigation(db, user, workspace, data):
     if not linkable(user, data['module']): return None
     listed = [s['id'] for s in data.get('students') or []]
     kids = [id for id in listed if id in student_ids(user, workspace)] if user['role'] in FAMILY else listed
-    if user['role'] in FAMILY and not kids and data['module'] not in OWN: return None
+    # Whatever the module: an entry about children is shut once the family account has none of them left (a form of no child stays the owner's).
+    if user['role'] in FAMILY and listed and not kids: return None
     found = OPENERS[data['module']](db, user, workspace, data, kids)
     if found is None: return None
     return dict(module=data['module'], workspace=workspace, recordId=data.get('recordId'), studentId=kids[0] if kids else None,

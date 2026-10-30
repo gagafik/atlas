@@ -116,8 +116,15 @@ def deliver_journal(notifications, db, workspace, version, key, before, after):
             notifications.deliver(db, [user], workspace, version, 'journal.homework', topic=base + 'homework', supersede=True,
                                   target=dict(module='journal', recordId=key, day=day, students=pupils(family), title=title))
         for kid in kids:
-            # An absence, a lateness or a correction is told and replaces the older mark, also beside a grade or homework entry.
+            told = attendance_title(old[kid], new[kid], subject, day)
+            # A mark the teacher cleared is no longer true: what was told about it goes. A replaced mark is superseded below.
+            if attendance_mark(old[kid])[0] != 'unmarked' and attendance_mark(new[kid])[0] == 'unmarked':
+                notifications.retract(db, [user['id']], f'{base}{kid}:attendance')
             if kid in covered and not beside_other_news(old[kid], new[kid]): continue
-            title = attendance_title(old[kid], new[kid], subject, day) or f"{subject}, {day_label(day)}: обновлена запись урока"
-            notifications.deliver(db, [user], workspace, version, 'journal.updated', topic=f'{base}{kid}:lesson', supersede=True,
-                                  target=dict(module='journal', recordId=key, day=day, students=pupils([kid]), title=title))
+            # An absence, a lateness or a correction is told and replaces the older mark, also beside a grade or homework entry.
+            # It has a topic of its own: a later plain update of the lesson must not push the unread absence out of the inbox.
+            if told: notifications.deliver(db, [user], workspace, version, 'journal.updated', topic=f'{base}{kid}:attendance', supersede=True,
+                                           target=dict(module='journal', recordId=key, day=day, students=pupils([kid]), title=told))
+            elif kid not in covered:
+                notifications.deliver(db, [user], workspace, version, 'journal.updated', topic=f'{base}{kid}:lesson', supersede=True,
+                                      target=dict(module='journal', recordId=key, day=day, students=pupils([kid]), title=f"{subject}, {day_label(day)}: обновлена запись урока"))

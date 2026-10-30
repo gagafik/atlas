@@ -86,8 +86,12 @@ def register(app, notifications):
                 if old['calendar'] != new['calendar']: changed = {s.id for s in state.students if s.active} | changed
                 names = {s.id: s.name for s in state.students}
                 users = notifications.granted_users(db, workspace, 'student', changed, ['student', 'parent'])
-                notifications.deliver(db, users, workspace, state.revision, 'timetable.published', topic=f'timetable:{workspace}',
-                                      target=lambda u: dict(module='timetable', students=[dict(id=k, name=names.get(k, '')) for k in sorted(student_ids(u, workspace) & changed)], title='Изменилось расписание'))
+                topic = f'timetable:{workspace}'
+                # The new entry replaces the unread one of the topic, so it keeps naming the children that one told about.
+                unread = {id: {s['id'] for s in (json.loads(data) if data else {}).get('students') or []} for id, data in db.execute(
+                    'SELECT user_id,target FROM notifications WHERE user_id IN (SELECT value FROM json_each(?)) AND topic=? AND read_at IS NULL', (encoded([u['id'] for u in users]), topic))}
+                notifications.deliver(db, users, workspace, state.revision, 'timetable.published', topic=topic,
+                                      target=lambda u: dict(module='timetable', students=[dict(id=k, name=names.get(k, '')) for k in sorted(student_ids(u, workspace) & (changed | unread.get(u['id'], set())))], title='Изменилось расписание'))
             db.execute('INSERT INTO timetable_announcements VALUES (?,?,?,?,?) ON CONFLICT(workspace) DO UPDATE SET revision=excluded.revision,created=excluded.created,actor_name=excluded.actor_name,digest=excluded.digest',
                        (workspace, state.revision, now().isoformat(), user['name'], encoded(new)))
             access.record(db, 'timetable.announced', workspace, state.revision, detail=f'Уведомлено аккаунтов: {len(users)}', principal=user)
