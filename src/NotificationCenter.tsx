@@ -98,6 +98,7 @@ const titles: Record<string, string> = {
   "absence.updated": "Изменилось решение по объяснительной",
   "absence.recorded": "Школа внесла записку об отсутствии",
   "message.received": "Новое сообщение",
+  "message.feed_reply": "Ответ на ваше объявление",
   "message.reported": "Получена жалоба на сообщение",
   "message.moderated": "Изменилось решение по жалобе на сообщение",
   "family.updated": "Изменились сведения или доступ к ребёнку",

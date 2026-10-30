@@ -4,6 +4,7 @@ from fastapi import HTTPException, Query, Request
 from pydantic import Field
 
 from .models import Model
+from .message_channels import CLOSED
 from .messages import FAMILY, STAFF
 from .notifications import encoded
 
@@ -41,7 +42,7 @@ class MessageGroups:
         if not scope or not directory.enabled(user): return False
         if scope[0] == 'contacts':
             if not thread['studentId']: return user['role'] in STAFF
-            return user['role'] in FAMILY | {'admin', 'teacher'} and thread['studentId'] in directory.pupils(user)
+            return user['role'] in FAMILY | {'admin', 'teacher'} and directory.related(user, thread['studentId'])
         if not scope[1] or not scope[1] <= directory.members.keys(): return False
         if user['role'] in {'teacher', 'admin'}: return scope[1] <= directory.groups(user)
         return not manager and user['role'] in FAMILY and bool(directory.pupils(user) & self.pupils(thread, directory, scope))
@@ -95,7 +96,7 @@ class MessageGroups:
                     AND NOT EXISTS(SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id))
                     AND instr(casefold(name),?)>0'''
                 if scope[0] == 'contacts' and not thread['studentId']:
-                    clause += " AND role IN ('admin','teacher','editor','viewer')"
+                    clause += " AND role IN ('admin','teacher','editor','viewer','staff')"
                 else:
                     clause += ''' AND (role IN ('admin','teacher') OR (role IN ('parent','student') AND EXISTS (
                         SELECT 1 FROM json_each(accounts.permissions,'$.grants') grant_row JOIN json_each(grant_row.value,'$.entityIds') entity
@@ -128,7 +129,11 @@ class MessageGroups:
                 if len(current)+len(body.userIds) > MAX_MEMBERS: raise HTTPException(422, 'В обсуждении может быть не больше 200 участников. Сначала исключите ненужные аккаунты.')
                 accounts = self.messages.accounts(db, user_ids=body.userIds)
                 for uid in body.userIds:
-                    if not self.eligible(thread, accounts.get(uid), directory, scope): raise HTTPException(403, 'Один из выбранных участников больше не имеет подходящей учебной связи.')
+                    target = accounts.get(uid)
+                    if not self.eligible(thread, target, directory, scope): raise HTTPException(403, 'Один из выбранных участников больше не имеет подходящей учебной связи.')
+                    # The manager adds only people they may write to, or the other family of the same pupil, as before the channel matrix.
+                    if user['role'] != 'admin' and not directory.start_about(user, target, thread['studentId']) and not (user['role'] in FAMILY and target['role'] in FAMILY and thread['studentId'] in directory.pupils(user) & directory.pupils(target)):
+                        raise HTTPException(403, CLOSED)
                 for uid in body.userIds:
                     account = accounts[uid]
                     scopes = sorted(directory.pupils(account) & self.pupils(thread, directory, scope)) if account['role'] in FAMILY else []

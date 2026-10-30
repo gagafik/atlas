@@ -10,7 +10,10 @@ import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
+import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
+import { unreadLabel } from "./messages";
+import { startPolling } from "./polling";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
@@ -76,7 +79,7 @@ export default function Portal({
   session: AuthStatus;
   controls: ReactNode;
 }) {
-  const [section, setSectionValue] = useState("schedule");
+  const [section, setSectionValue] = useState("home");
   // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
   const [journalFocus, setJournalFocus] = useState<
       { studentId: string; day: string } | undefined
@@ -89,7 +92,8 @@ export default function Portal({
     }
   }
   const [spaces, setSpaces] = useState<Space[]>([]),
-    [workspace, setWorkspaceValue] = useState("");
+    [workspace, setWorkspaceValue] = useState(""),
+    [messageUnread, setMessageUnread] = useState({ count: 0, more: false });
   function setWorkspace(value: string) {
     if (canLeaveHomework()) setWorkspaceValue(value);
   }
@@ -121,6 +125,30 @@ export default function Portal({
     };
   }, []);
   const space = spaces.find((x) => x.id === workspace);
+  // The counter on the messages tab: one cheap read a minute, and again whenever something was read. Without messaging access it stays zero.
+  useEffect(() => {
+    if (!workspace) return;
+    let live = true;
+    const poll = startPolling(
+      async () => {
+        try {
+          const r = await api("messages/unread", workspace);
+          if (live) setMessageUnread({ count: r.count, more: r.more });
+        } catch (e: any) {
+          if (e.status !== 403) return false;
+          if (live) setMessageUnread({ count: 0, more: false });
+        }
+      },
+      { interval: 60000 },
+    );
+    const refresh = () => poll.refresh();
+    window.addEventListener("atlas-messages-read", refresh);
+    return () => {
+      live = false;
+      poll.stop();
+      window.removeEventListener("atlas-messages-read", refresh);
+    };
+  }, [workspace]);
   useEffect(() => {
     if (space) {
       const r = space.records[0];
@@ -252,7 +280,9 @@ export default function Portal({
                               ? "Учебный журнал"
                               : section === "courses"
                                 ? "Выбор курсов"
-                                : "Моё расписание"}
+                                : section === "home"
+                                  ? "Главная"
+                                  : "Моё расписание"}
           </h1>
           <p>{roleNames[session.user!.role]}</p>
         </div>
@@ -260,6 +290,12 @@ export default function Portal({
       </header>
       {
         <div className="dated-toolbar portal-tabs">
+          <button
+            aria-pressed={section === "home"}
+            onClick={() => setSection("home")}
+          >
+            Главная
+          </button>
           {session.user!.role === "teacher" && (
             <button
               aria-pressed={section === "class-staff"}
@@ -295,6 +331,9 @@ export default function Portal({
             onClick={() => setSection("messages")}
           >
             Сообщения
+            {messageUnread.count || messageUnread.more
+              ? ` · ${unreadLabel(messageUnread.count, messageUnread.more)}`
+              : ""}
           </button>
           {session.user!.role === "teacher" && (
             <button
@@ -346,7 +385,33 @@ export default function Portal({
           )}
         </div>
       }
-      {section === "class-staff" ? (
+      {section === "home" ? (
+        <>
+          <label className="field">
+            <span>Пространство</span>
+            <select
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {workspace ? (
+            <MessageFeed key={workspace} workspace={workspace} />
+          ) : (
+            !loading && (
+              <p className="info-line">
+                Для вашей учётной записи пока нет рабочих пространств.
+                Объявления появятся после настройки доступа.
+              </p>
+            )
+          )}
+        </>
+      ) : section === "class-staff" ? (
         <ClassStaffWorkspace />
       ) : section === "family" ? (
         <FamilyPortal />

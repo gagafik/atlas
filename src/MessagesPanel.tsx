@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import MessageAttachments, { messageFileUrl } from "./MessageAttachments";
+import { roleNames, type Role } from "./auth";
+import MessageAttachments, { MessageFileList } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
+import MessageChannels from "./MessageChannels";
+import { FeedReplies, noReplies, type RepliesMode } from "./MessageFeed";
 import MessageGroupManagement from "./MessageGroupManagement";
 import MessageModeration, { ReportMessage } from "./MessageModeration";
+import MessageSavedGroups, { type SavedGroup } from "./MessageSavedGroups";
+import {
+  filterStudents,
+  mergeInbox,
+  noTitle,
+  recipientKey,
+  unreadLabel,
+} from "./messages";
+import { startPolling } from "./polling";
 
 type Person = { id: string; name: string; role: string };
 type Draft = {
@@ -20,6 +32,20 @@ type Options = {
   canAnnounce: boolean;
   students: { id: string; name: string }[];
   groups: { id: string; name: string }[];
+  audiences: string[];
+  classes: { id: string; name: string }[];
+  publicReplies: boolean;
+  // Only for pupils and parents: the class teacher of each child, when this account may write to them.
+  classTeachers?: { studentId: string; id: string; name: string }[];
+};
+type Preview = {
+  count: number;
+  byRole: Record<string, number>;
+  limit: number;
+  overLimit: boolean;
+  sample: { name: string; role: string }[];
+  more: number;
+  unavailable: number;
 };
 type Thread = {
   id: string;
@@ -34,6 +60,11 @@ type Thread = {
   authorId: string;
   managerId: string;
   readOnly?: boolean;
+  sender?: string;
+  date?: string;
+  preview?: string;
+  hasFiles?: boolean;
+  children?: { id: string; name: string }[];
 };
 type Post = {
   id: number;
@@ -48,6 +79,14 @@ type Detail = Thread & {
   userId: string;
   canReply: boolean;
   canManage: boolean;
+  // Announcements only: the feed state of the announcement itself.
+  postId?: number;
+  repliesMode?: RepliesMode;
+  replyCount?: number;
+  likes?: number;
+  liked?: boolean;
+  canLike?: boolean;
+  canRespond?: boolean;
   posts: Post[];
   nextBefore: number | null;
   participants: {
@@ -57,14 +96,18 @@ type Detail = Thread & {
     acknowledged: boolean;
   }[];
 };
-const roles: Record<string, string> = {
-  admin: "Администратор",
-  teacher: "Учитель",
-  parent: "Родитель",
-  student: "Ученик",
-  editor: "Составитель",
-  viewer: "Сотрудник",
+const roleName = (role: string) => roleNames[role as Role] ?? role;
+const audienceNames: Record<string, string> = {
+  school: "Вся школа",
+  teachers: "Все учителя",
+  class_teachers: "Классные руководители",
+  staff: "Сотрудники",
+  my_classes: "Мои классы",
+  my_courses: "Мои курсы и группы",
+  saved: "Сохранённая группа",
 };
+// Audiences chosen without ticking roles: the audience itself is the list of people.
+const wholeAudience = ["teachers", "class_teachers", "staff", "saved"];
 const statuses: Record<string, string> = {
   open: "Открыто",
   closed: "Ответы закрыты",
@@ -92,7 +135,8 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
   const [threads, setThreads] = useState<Thread[]>([]),
     [next, setNext] = useState<number | null>(null),
     [query, setQuery] = useState(""),
-    [unread, setUnread] = useState(false);
+    [unread, setUnread] = useState(false),
+    [unreadTotal, setUnreadTotal] = useState({ count: 0, more: false });
   const [selected, setSelected] = useState(""),
     [detail, setDetail] = useState<Detail | null>(null),
     [composing, setComposing] = useState(false);
@@ -110,19 +154,20 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     kind === "direct" || (kind === "group" && groupMode === "contacts");
   const [contactQuery, setContactQuery] = useState(""),
     [contactNext, setContactNext] = useState<number | null>(null);
-  const [contactLoading, setContactLoading] = useState(false);
+  const [contactLoading, setContactLoading] = useState(false),
+    [studentQuery, setStudentQuery] = useState("");
   const searchQuery = useSearchDelay(query),
     contactSearch = useSearchDelay(contactQuery);
   const [title, setTitle] = useState(""),
     [text, setText] = useState(""),
     [groups, setGroups] = useState<string[]>([]),
     [audience, setAudience] = useState(["parent", "student"]);
-  const [schoolwide, setSchoolwide] = useState(false),
+  const [preset, setPreset] = useState(""),
+    [savedGroup, setSavedGroup] = useState(""),
+    [savedGroups, setSavedGroups] = useState<SavedGroup[]>([]),
+    [replies, setReplies] = useState<RepliesMode>("off"),
     [ack, setAck] = useState(false),
-    [preview, setPreview] = useState<{
-      count: number;
-      byRole: Record<string, number>;
-    } | null>(null);
+    [preview, setPreview] = useState<Preview | null>(null);
   const [reply, setReply] = useState("");
   const [drafts, setDrafts] = useState<Draft[]>([]),
     [showDrafts, setShowDrafts] = useState(false),
@@ -134,7 +179,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     restoringReply = useRef(false);
   const nonce = useRef(crypto.randomUUID()),
     replyNonce = useRef(crypto.randomUUID()),
-    alive = useRef(true);
+    alive = useRef(true),
+    inboxKey = useRef(""),
+    paged = useRef(false);
   const form = JSON.stringify({
     kind,
     title,
@@ -143,7 +190,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     student,
     groups,
     audience,
-    schoolwide,
+    preset,
+    savedGroup,
+    replies,
     ack,
     groupMode,
     selectedPeople,
@@ -172,10 +221,24 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       restoringReply.current = false;
     }
   }, [replyForm, replyDraft, replyVersion]);
+  // A changed body is a new request; only a change of recipients invalidates the checked list.
+  const recipients = recipientKey({
+    kind,
+    recipient,
+    student,
+    groups,
+    audience,
+    preset,
+    savedGroup,
+    groupMode,
+    people: selectedPeople.map((p) => p.id),
+  });
   useEffect(() => {
     nonce.current = crypto.randomUUID();
-    setPreview(null);
   }, [form]);
+  useEffect(() => {
+    setPreview(null);
+  }, [recipients]);
   useEffect(() => {
     replyNonce.current = crypto.randomUUID();
   }, [replyFiles]);
@@ -186,7 +249,12 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       .then((r) => {
         if (live) {
           setOptions(r);
-          setStudent(r.students[0]?.id || "");
+          // Only a pupil or a parent starts with a child; a member of staff may as well write about no pupil at all.
+          setStudent(
+            ["parent", "student"].includes(r.role)
+              ? r.students[0]?.id || ""
+              : "",
+          );
           void loadDrafts().catch((e) => {
             if (live) setError(e.message);
           });
@@ -200,26 +268,48 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       alive.current = false;
     };
   }, [workspace]);
+  // The inbox loads when it is shown and then refreshes by itself; while composing or reading nothing is replaced under the reader's hands.
   useEffect(() => {
-    if (!options) return;
-    let live = true;
-    api(
-      `messages/threads?${new URLSearchParams({ q: searchQuery, unreadOnly: String(unread) })}`,
-      workspace,
-    )
-      .then((r) => {
-        if (live) {
-          setThreads(r.items);
-          setNext(r.nextBefore);
+    if (!options || composing || selected || showDrafts) return;
+    const key = `${searchQuery}|${unread}`;
+    const poll = startPolling(
+      async () => {
+        try {
+          const r = await api(
+            `messages/threads?${new URLSearchParams({ q: searchQuery, unreadOnly: String(unread) })}`,
+            workspace,
+          );
+          if (!alive.current) return;
+          const same = inboxKey.current === key;
+          inboxKey.current = key;
+          if (!same) paged.current = false;
+          setThreads((old) =>
+            same ? mergeInbox(old, r.items, r.nextBefore !== null) : r.items,
+          );
+          if (!paged.current) setNext(r.nextBefore);
+          if (r.unreadCount !== null)
+            setUnreadTotal({ count: r.unreadCount, more: r.unreadMore });
+        } catch (e: any) {
+          if (alive.current && inboxKey.current === "") setError(e.message);
+          return false;
         }
-      })
-      .catch((e) => {
-        if (live) setError(e.message);
-      });
-    return () => {
-      live = false;
-    };
-  }, [options, searchQuery, unread, workspace]);
+      },
+      { interval: 60000 },
+    );
+    return () => poll.stop();
+  }, [
+    options,
+    searchQuery,
+    unread,
+    composing,
+    selected,
+    showDrafts,
+    workspace,
+  ]);
+  useEffect(() => {
+    if (!options || !composing || kind !== "announcement") return;
+    void loadSaved().catch(() => {});
+  }, [options, composing, kind]);
   useEffect(() => {
     if (!options || !composing || !usingContacts) return;
     let live = true;
@@ -275,7 +365,19 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     if (alive.current) {
       setThreads((old) => (before ? [...old, ...r.items] : r.items));
       setNext(r.nextBefore);
+      inboxKey.current = `${searchQuery}|${unread}`;
+      paged.current = !!before;
+      if (r.unreadCount !== null)
+        setUnreadTotal({ count: r.unreadCount, more: r.unreadMore });
     }
+  }
+  async function loadSaved() {
+    const r = await api("messages/saved-groups", workspace);
+    if (alive.current) setSavedGroups(r.items);
+  }
+  async function refreshOptions() {
+    const r = await api("messages/options", workspace);
+    if (alive.current) setOptions(r);
   }
   async function loadDrafts() {
     const r = await api("messages/drafts", workspace);
@@ -342,7 +444,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       setGroupMode(c.groupMode);
       setGroups(c.groupIds);
       setAudience(c.kind === "direct" ? ["parent", "student"] : c.roles);
-      setSchoolwide(c.schoolwide);
+      setPreset(c.audience ?? (c.schoolwide ? "school" : ""));
+      setSavedGroup(c.savedGroupId ?? "");
+      setReplies(c.replies ?? "off");
       setAck(c.requireAck);
       setComposeDraft(r.id);
       setComposeVersion(r.version);
@@ -376,6 +480,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       await api(`messages/threads/${id}/read`, workspace, "PUT", {
         throughId: r.latestId,
       });
+      window.dispatchEvent(new Event("atlas-messages-read"));
       await list();
     }
   }
@@ -404,6 +509,19 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
     setContactQuery("");
     return true;
   }
+  // Ready-made audiences without roles carry none; a whole-school announcement may name any role, a teacher's only the families and colleagues.
+  const announcing = kind === "announcement",
+    roleChoices = !announcing
+      ? ["parent", "student"]
+      : preset === "school"
+        ? options?.role === "admin"
+          ? Object.keys(roleNames)
+          : ["parent", "student", "teacher"]
+        : ["parent", "student"],
+    showRoles = !announcing || !wholeAudience.includes(preset),
+    roleList = !showRoles
+      ? []
+      : audience.filter((r) => roleChoices.includes(r));
   function body() {
     return {
       requestId: nonce.current,
@@ -421,13 +539,18 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               studentId: student || null,
             }
           : {
-              groupIds: kind === "announcement" && schoolwide ? [] : groups,
-              roles:
-                kind === "group"
-                  ? audience.filter((r) => ["parent", "student"].includes(r))
-                  : audience,
-              schoolwide: kind === "announcement" && schoolwide,
+              groupIds:
+                kind === "announcement" && !["", "my_courses"].includes(preset)
+                  ? []
+                  : groups,
+              roles: roleList,
+              audience: kind === "announcement" && preset ? preset : null,
+              savedGroupId:
+                kind === "announcement" && preset === "saved"
+                  ? savedGroup
+                  : null,
               requireAck: kind === "announcement" && ack,
+              replies: kind === "announcement" ? replies : "off",
             }),
     };
   }
@@ -447,6 +570,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         </p>
       </section>
     );
+  const shownStudents = filterStudents(options.students, studentQuery, student),
+    classTeacher = options.classTeachers?.find((c) => c.studentId === student),
+    titleMissing = announcing && !title.trim();
   return (
     <section className="messages-panel">
       <p className="muted">
@@ -457,6 +583,14 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         workspace={workspace}
         admin={options.role === "admin"}
       />
+      {options.role === "admin" && (
+        <MessageChannels
+          workspace={workspace}
+          onSaved={() =>
+            void refreshOptions().catch((e) => setError(e.message))
+          }
+        />
+      )}
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -476,6 +610,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
           }}
         >
           Входящие
+          {unreadTotal.count || unreadTotal.more
+            ? ` · ${unreadLabel(unreadTotal.count, unreadTotal.more)}`
+            : ""}
         </button>
         <button
           className="primary"
@@ -600,6 +737,17 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
           )}
           {usingContacts ? (
             <>
+              {options.students.length > 5 && (
+                <label className="field">
+                  <span>Найти ученика</span>
+                  <input
+                    type="search"
+                    maxLength={100}
+                    value={studentQuery}
+                    onChange={(e) => setStudentQuery(e.target.value)}
+                  />
+                </label>
+              )}
               <label className="field">
                 <span>По поводу ученика</span>
                 <select
@@ -613,13 +761,41 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   {!["parent", "student"].includes(options.role) && (
                     <option value="">Переписка сотрудников</option>
                   )}
-                  {options.students.map((s) => (
+                  {shownStudents.items.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}
                     </option>
                   ))}
                 </select>
+                {shownStudents.cut && (
+                  <small>Показаны первые 200 учеников: уточните поиск.</small>
+                )}
               </label>
+              {kind === "direct" && classTeacher && (
+                <div className="dated-toolbar">
+                  <button
+                    aria-pressed={recipient === classTeacher.id}
+                    onClick={() => {
+                      setRecipient(classTeacher.id);
+                      setContacts((old) =>
+                        old.some((p) => p.id === classTeacher.id)
+                          ? old
+                          : [
+                              ...old,
+                              {
+                                id: classTeacher.id,
+                                name: classTeacher.name,
+                                role: "teacher",
+                              },
+                            ],
+                      );
+                    }}
+                  >
+                    Классному руководителю
+                  </button>
+                  <small>{classTeacher.name}</small>
+                </div>
+              )}
               <label className="field">
                 <span>Найти собеседника</span>
                 <input
@@ -645,7 +821,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                     )}
                     {contacts.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} · {roles[p.role]}
+                        {p.name} · {roleName(p.role)}
                       </option>
                     ))}
                   </select>
@@ -666,7 +842,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                           )
                         }
                       />
-                      {p.name} · {roles[p.role]}
+                      {p.name} · {roleName(p.role)}
                     </label>
                   ))}
                   {!!selectedPeople.length && (
@@ -714,25 +890,63 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             </>
           ) : (
             <>
-              {options.role === "admin" && kind === "announcement" && (
-                <label className="check-line">
-                  <input
-                    type="checkbox"
-                    checked={schoolwide}
+              {announcing && (
+                <label className="field">
+                  <span>Кому</span>
+                  <select
+                    value={preset}
                     onChange={(e) => {
-                      setSchoolwide(e.target.checked);
-                      if (!e.target.checked)
-                        setAudience((old) =>
-                          old.filter((r) => ["parent", "student"].includes(r)),
-                        );
+                      setPreset(e.target.value);
+                      setSavedGroup("");
                     }}
-                  />
-                  Вся школа
+                  >
+                    <option value="">Выбранные группы</option>
+                    {options.audiences.map((a) => (
+                      <option key={a} value={a}>
+                        {audienceNames[a] || a}
+                      </option>
+                    ))}
+                  </select>
+                  {preset === "my_classes" && (
+                    <small>
+                      Классы:{" "}
+                      {options.classes.map((c) => c.name).join(", ") || "нет"}
+                    </small>
+                  )}
                 </label>
               )}
-              {(!schoolwide || kind === "group") && (
+              {announcing && preset === "saved" && (
                 <label className="field">
-                  <span>Классы и группы получателей</span>
+                  <span>Группа получателей</span>
+                  <select
+                    value={savedGroup}
+                    onChange={(e) => setSavedGroup(e.target.value)}
+                  >
+                    <option value="">Выберите группу</option>
+                    {savedGroups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} · доступно {g.available} из {g.total}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {announcing && options.audiences.includes("saved") && (
+                <MessageSavedGroups
+                  workspace={workspace}
+                  groups={savedGroups}
+                  reload={loadSaved}
+                  busy={busy}
+                  run={run}
+                />
+              )}
+              {(!announcing || ["", "my_courses"].includes(preset)) && (
+                <label className="field">
+                  <span>
+                    {preset === "my_courses"
+                      ? "Только эти из моих групп (если не выбрать, то все)"
+                      : "Классы и группы получателей"}
+                  </span>
                   <select
                     multiple
                     size={6}
@@ -755,42 +969,66 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   </small>
                 </label>
               )}
-              <fieldset className="dated-multi">
-                <legend>Кому из выбранной аудитории</legend>
-                {(schoolwide && kind === "announcement"
-                  ? Object.keys(roles)
-                  : ["parent", "student"]
-                ).map((role) => (
-                  <label className="check-line" key={role}>
+              {showRoles && (
+                <fieldset className="dated-multi">
+                  <legend>Кому из выбранной аудитории</legend>
+                  {roleChoices.map((role) => (
+                    <label className="check-line" key={role}>
+                      <input
+                        type="checkbox"
+                        checked={audience.includes(role)}
+                        onChange={(e) =>
+                          setAudience((old) =>
+                            e.target.checked
+                              ? [...old, role]
+                              : old.filter((r) => r !== role),
+                          )
+                        }
+                      />
+                      {roleName(role)}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+              {announcing && (
+                <>
+                  <label className="check-line">
                     <input
                       type="checkbox"
-                      checked={audience.includes(role)}
-                      onChange={(e) =>
-                        setAudience((old) =>
-                          e.target.checked
-                            ? [...old, role]
-                            : old.filter((r) => r !== role),
-                        )
-                      }
+                      checked={ack}
+                      onChange={(e) => setAck(e.target.checked)}
                     />
-                    {roles[role]}
+                    Попросить подтвердить ознакомление
                   </label>
-                ))}
-              </fieldset>
-              {kind === "announcement" && (
-                <label className="check-line">
-                  <input
-                    type="checkbox"
-                    checked={ack}
-                    onChange={(e) => setAck(e.target.checked)}
-                  />
-                  Попросить подтвердить ознакомление
-                </label>
+                  <label className="field">
+                    <span>Ответы под объявлением</span>
+                    <select
+                      value={replies}
+                      onChange={(e) =>
+                        setReplies(e.target.value as RepliesMode)
+                      }
+                    >
+                      <option value="off">Без ответов</option>
+                      <option value="author">Только автору</option>
+                      {(options.publicReplies || replies === "all") && (
+                        <option value="all" disabled={!options.publicReplies}>
+                          Всем получателям
+                        </option>
+                      )}
+                    </select>
+                    {replies === "all" && (
+                      <small>
+                        Внимание: имена и ответы получателей будут видны всем
+                        получателям этого объявления.
+                      </small>
+                    )}
+                  </label>
+                </>
               )}
             </>
           )}
           <label className="field">
-            <span>Тема</span>
+            <span>{announcing ? "Тема" : "Тема (необязательно)"}</span>
             <input
               maxLength={160}
               value={title}
@@ -816,12 +1054,33 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             run={run}
           />
           {preview && (
-            <p role="status">
-              Получателей: {preview.count}.{" "}
-              {Object.entries(preview.byRole)
-                .map(([role, count]) => `${roles[role]}: ${count}`)
-                .join(" · ")}
-            </p>
+            <div role="status" className="message-preview">
+              <p>
+                Получателей: {preview.count}.{" "}
+                {Object.entries(preview.byRole)
+                  .map(([role, count]) => `${roleName(role)}: ${count}`)
+                  .join(" · ")}
+              </p>
+              {!!preview.sample.length && (
+                <p>
+                  Среди них: {preview.sample.map((p) => p.name).join(", ")}
+                  {preview.more > 0 ? ` и ещё ${preview.more}` : ""}.
+                </p>
+              )}
+              {preview.unavailable > 0 && (
+                <p>
+                  Недоступны вам сейчас и не получат объявление:{" "}
+                  {preview.unavailable}.
+                </p>
+              )}
+              <p>Предел для этой отправки: {preview.limit}.</p>
+              {preview.overLimit && (
+                <p role="alert" className="error-banner">
+                  Получателей больше предела. Сузьте аудиторию: отправить
+                  нельзя.
+                </p>
+              )}
+            </div>
           )}
           <div className="dated-toolbar">
             <button onClick={() => void run(() => saveDraft())}>
@@ -836,9 +1095,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             </span>
             {kind !== "direct" && (
               <button
-                disabled={
-                  !title.trim() || (!text.trim() && !composeFiles.length)
-                }
+                disabled={announcing && preset === "saved" && !savedGroup}
                 onClick={() =>
                   void run(async () =>
                     setPreview(
@@ -853,9 +1110,9 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
             <button
               className="primary"
               disabled={
-                !title.trim() ||
+                titleMissing ||
                 (!text.trim() && !composeFiles.length) ||
-                (kind === "direct" ? !recipient : !preview)
+                (kind === "direct" ? !recipient : !preview || preview.overLimit)
               }
               onClick={() =>
                 void run(async () => {
@@ -872,6 +1129,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                   setComposeDraft(crypto.randomUUID());
                   setComposeVersion(0);
                   setSavedCompose("");
+                  setPreview(null);
                   nonce.current = crypto.randomUUID();
                   await loadDrafts();
                   await open(r.id);
@@ -884,7 +1142,7 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
         </fieldset>
       ) : selected && detail ? (
         <div className="message-detail">
-          <h3>{detail.title}</h3>
+          <h3>{detail.title || noTitle}</h3>
           <p>
             {kinds[detail.kind]} · {statuses[detail.status]}
           </p>
@@ -962,21 +1220,48 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                     postId={p.id}
                   />
                 )}
-                {!!p.files?.length && (
-                  <ul className="homework-files">
-                    {p.files.map((f) => (
-                      <li key={f.id}>
-                        <a href={messageFileUrl(workspace, f.id)} download>
-                          {f.filename}
-                        </a>{" "}
-                        · {Math.max(1, Math.ceil(f.size / 1024))} КБ
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                <MessageFileList workspace={workspace} files={p.files ?? []} />
               </article>
             ))}
           </div>
+          {detail.kind === "announcement" && detail.postId !== undefined && (
+            <div className="feed-actions">
+              <button
+                aria-pressed={detail.liked}
+                disabled={busy || !detail.canLike}
+                onClick={() =>
+                  void run(async () => {
+                    const r = await api(
+                      `messages/posts/${detail.postId}/like`,
+                      workspace,
+                      "PUT",
+                      { liked: !detail.liked },
+                    );
+                    setDetail((old) =>
+                      old ? { ...old, likes: r.likes, liked: r.liked } : old,
+                    );
+                  })
+                }
+              >
+                {detail.liked ? "Вам нравится" : "Нравится"} · {detail.likes}
+              </button>
+            </div>
+          )}
+          {detail.kind === "announcement" &&
+            detail.repliesMode &&
+            (detail.repliesMode !== "off" || !!detail.replyCount) && (
+              <FeedReplies
+                key={detail.id}
+                workspace={workspace}
+                threadId={detail.id}
+                mode={detail.repliesMode}
+                count={detail.replyCount ?? 0}
+                shown={noReplies}
+                canReply={!!detail.canRespond}
+                expanded
+                onChanged={() => void run(() => open(detail.id))}
+              />
+            )}
           {detail.requireAck && !detail.canManage && (
             <p>
               {detail.acknowledged ? (
@@ -1151,6 +1436,12 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
               Только непрочитанные
             </label>
           </div>
+          <h3>
+            Входящие
+            {unreadTotal.count || unreadTotal.more
+              ? ` · ${unreadLabel(unreadTotal.count, unreadTotal.more)} непрочитанных`
+              : ""}
+          </h3>
           <div className="message-inbox">
             {!threads.length && <p>Сообщений по этому запросу нет.</p>}
             {threads.map((t) => (
@@ -1160,10 +1451,32 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
                 className={t.unread ? "message-unread" : ""}
                 onClick={() => void run(() => open(t.id))}
               >
-                <strong>{t.title}</strong>
+                <span className="message-row-head">
+                  <strong>{t.sender || noTitle}</strong>
+                  {t.date && (
+                    <time dateTime={t.date}>
+                      {new Date(t.date).toLocaleString("ru-RU", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  )}
+                </span>
+                {!!t.children?.length && (
+                  <small>{t.children.map((c) => c.name).join(", ")}</small>
+                )}
+                {t.title && <strong>{t.title}</strong>}
+                {(t.preview || t.hasFiles) && (
+                  <span className="message-row-preview">
+                    {t.preview || "Вложение"}
+                  </span>
+                )}
                 <span>
                   {kinds[t.kind]} · {statuses[t.status]}
                   {t.unread ? " · Новое" : ""}
+                  {t.hasFiles && t.preview ? " · Есть вложение" : ""}
                   {t.readOnly ? " · Только чтение" : ""}
                   {t.requireAck &&
                   !t.acknowledged &&
