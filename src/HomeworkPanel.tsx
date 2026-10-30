@@ -10,6 +10,15 @@ import HomeworkGradeForm, {
   type ReviewGrade,
   type GradingEvidence,
 } from "./HomeworkGradeForm";
+import { requestId } from "./dutySchedule";
+import {
+  acceptable,
+  bulkItems,
+  bulkSummary,
+  rosterCounts,
+  type BulkResult,
+  type RosterStudent,
+} from "./homeworkBulk";
 
 interface Attachment {
   id: string;
@@ -61,13 +70,10 @@ interface Work {
   assignmentChanged: boolean;
 }
 interface Overview {
-  students: {
-    studentId: string;
-    name: string;
-    status: string;
-    late: boolean;
-    assignmentChanged: boolean;
-  }[];
+  canReview: boolean;
+  assignment: string;
+  submission: "online" | "offline";
+  students: RosterStudent[];
 }
 interface History {
   id: number;
@@ -669,6 +675,14 @@ function StudentWork({
   );
 }
 
+function rosterLine(overview: Overview) {
+  const c = rosterCounts(overview.students);
+  const line = `На проверке: ${c.submitted} · принято: ${c.accepted} · на доработке: ${c.returned}`;
+  return overview.submission === "offline"
+    ? `${line}. Задание без онлайн-сдачи: работы показывают на уроке.`
+    : `${line} · не отправлено: ${c.notSubmitted}`;
+}
+
 export default function HomeworkPanel({
   workspace,
   lessonKey,
@@ -692,6 +706,57 @@ export default function HomeworkPanel({
     [error, setError] = useState(""),
     [epoch, setEpoch] = useState(0);
   const [activity, setActivity] = useState({ dirty: false, busy: false });
+  const [picked, setPicked] = useState<Set<string>>(new Set()),
+    [bulkComment, setBulkComment] = useState(""),
+    [bulkNote, setBulkNote] = useState(""),
+    [bulkBusy, setBulkBusy] = useState(false);
+  const bulkLock = useRef(false),
+    slot = useRef({ key: "", id: "" });
+  const ready = new Set(
+    (overview?.canReview ? acceptable(overview.students) : []).map(
+      (s) => s.studentId,
+    ),
+  );
+  const items =
+    overview && ready.size ? bulkItems(overview.students, picked) : [];
+  async function acceptSelected() {
+    if (!overview || bulkLock.current || !items.length) return;
+    if (
+      !window.confirm(
+        `Принять ${items.length} работ без оценки? Оценку можно выставить позже при проверке отдельной работы или в журнале.`,
+      )
+    )
+      return;
+    const body = {
+      assignment: overview.assignment,
+      comment: bulkComment,
+      items,
+    };
+    bulkLock.current = true;
+    setBulkBusy(true);
+    setBulkNote("");
+    setError("");
+    try {
+      const r: BulkResult & { overview: Overview } = await api(
+        `journal/homework/${encodeURIComponent(lessonKey)}/review-bulk`,
+        workspace,
+        "POST",
+        { requestId: requestId(slot, body), ...body },
+      );
+      setOverview(r.overview);
+      setPicked(new Set());
+      setBulkComment("");
+      setSelected("");
+      setEpoch((e) => e + 1);
+      onChanged?.();
+      setBulkNote(bulkSummary(r));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      bulkLock.current = false;
+      setBulkBusy(false);
+    }
+  }
   useEffect(() => {
     onActivity?.(activity);
     return () => onActivity?.({ dirty: false, busy: false });
@@ -744,38 +809,85 @@ export default function HomeworkPanel({
           )}
           {!studentId && overview && (
             <div className="homework-roster">
-              <p>
-                На проверке:{" "}
-                {
-                  overview.students.filter((s) => s.status === "submitted")
-                    .length
-                }{" "}
-                · принято:{" "}
-                {
-                  overview.students.filter((s) => s.status === "accepted")
-                    .length
-                }{" "}
-                · на доработке:{" "}
-                {
-                  overview.students.filter((s) => s.status === "returned")
-                    .length
-                }
-              </p>
-              {overview.students.map((s) => (
-                <button
-                  key={s.studentId}
-                  aria-pressed={selected === s.studentId}
-                  disabled={activity.busy}
-                  onClick={() => {
-                    if (selected === s.studentId || canLeave())
-                      setSelected(s.studentId);
-                  }}
-                >
-                  {s.name} · {labels[s.status]}
-                  {s.late ? " · после срока" : ""}
-                  {s.assignmentChanged ? " · задание изменено" : ""}
-                </button>
-              ))}
+              <p>{rosterLine(overview)}</p>
+              {bulkNote && <p role="status">{bulkNote}</p>}
+              {overview.students.map((s) => {
+                const button = (
+                  <button
+                    key={s.studentId}
+                    aria-pressed={selected === s.studentId}
+                    disabled={activity.busy}
+                    onClick={() => {
+                      if (selected === s.studentId || canLeave())
+                        setSelected(s.studentId);
+                    }}
+                  >
+                    {s.name} · {labels[s.status]}
+                    {s.late ? " · после срока" : ""}
+                    {s.assignmentChanged ? " · задание изменено" : ""}
+                  </button>
+                );
+                if (!ready.size) return button;
+                return (
+                  <div className="homework-roster-row" key={s.studentId}>
+                    {ready.has(s.studentId) ? (
+                      <input
+                        type="checkbox"
+                        aria-label={`Выбрать ${s.name}`}
+                        checked={picked.has(s.studentId)}
+                        disabled={bulkBusy}
+                        onChange={(e) =>
+                          setPicked((p) => {
+                            const next = new Set(p);
+                            if (e.target.checked) next.add(s.studentId);
+                            else next.delete(s.studentId);
+                            return next;
+                          })
+                        }
+                      />
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
+                    {button}
+                  </div>
+                );
+              })}
+              {!!ready.size && (
+                <div className="access-fields homework-bulk">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={items.length === ready.size}
+                      disabled={bulkBusy}
+                      onChange={(e) =>
+                        setPicked(e.target.checked ? new Set(ready) : new Set())
+                      }
+                    />
+                    Выбрать все работы на проверке
+                  </label>
+                  <label className="field">
+                    <span>Общий комментарий (необязательно)</span>
+                    <textarea
+                      maxLength={4000}
+                      value={bulkComment}
+                      disabled={bulkBusy}
+                      onChange={(e) => setBulkComment(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={
+                      !items.length ||
+                      bulkBusy ||
+                      activity.busy ||
+                      activity.dirty
+                    }
+                    onClick={() => void acceptSelected()}
+                  >
+                    Принять выбранные ({items.length})
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {(studentId || selected) && (

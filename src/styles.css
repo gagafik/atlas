@@ -4569,6 +4569,78 @@ main {
   white-space: normal;
   text-align: left;
 }
+.homework-roster-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+.homework-roster-row button {
+  flex: 1;
+  min-width: 0;
+}
+.homework-roster-row > input,
+.homework-roster-row > span {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+.homework-bulk {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+.homework-bulk .checkbox-label,
+.homework-bulk .field {
+  margin: 0;
+}
+.homework-bulk textarea {
+  max-width: 100%;
+}
+.journal-due-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: -8px 0 17px;
+}
+.homework-parallel {
+  margin: 18px 0;
+  min-width: 0;
+}
+.homework-parallel-mode {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0;
+}
+.homework-parallel-mode .checkbox-label {
+  margin: 0;
+}
+.homework-parallel-list {
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+}
+.homework-parallel li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #d9e2dc;
+}
+.homework-parallel li > label {
+  overflow-wrap: anywhere;
+}
+.homework-parallel li > small,
+.homework-parallel input[type="date"] {
+  grid-column: 2;
+  max-width: 100%;
+}
+.homework-parallel button {
+  white-space: normal;
+}
 .homework-history details {
   padding: 10px 0;
   border-bottom: 1px solid #d9e2dc;
