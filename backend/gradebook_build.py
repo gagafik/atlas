@@ -1,4 +1,5 @@
 """Read an immutable closure into an owned staging DB, never write the school DB."""
+from collections import Counter
 from contextlib import closing
 from datetime import date,timedelta
 from fractions import Fraction
@@ -30,7 +31,7 @@ def compile_book(path,job,stage,cancel,progress):
             progress(dict(phase=phase,completed=done,total=total));last=time.monotonic()
     def target(pupil,subject_id,subject):
         key=(pupil['id'],subject_id)
-        if key not in rows:rows[key]=dict(id=uuid4().hex,student=pupil,subject=subject,expected=0,published=0,numeric=0,text=0,missing=0,zeroWeight=0,incompleteRoster=0,weightedSum=Fraction(0),weight=Fraction(0),categories={})
+        if key not in rows:rows[key]=dict(id=uuid4().hex,student=pupil,subject=subject,expected=0,published=0,numeric=0,text=0,missing=0,zeroWeight=0,incompleteRoster=0,weightedSum=Fraction(0),weight=Fraction(0),categories={},teachers=Counter())
         return rows[key]
     with closing(sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True)) as source,closing(sqlite3.connect(stage)) as out,out:
         source.execute('BEGIN')
@@ -41,7 +42,7 @@ def compile_book(path,job,stage,cancel,progress):
         cfg=config(source,job['workspace'])
         out.execute('CREATE TABLE facts(lesson_key TEXT,version INTEGER,student_id TEXT,subject_id TEXT,day TEXT,start TEXT,summary TEXT,works TEXT)')
         out.execute('CREATE TABLE projected(lesson_key TEXT,version INTEGER,format INTEGER)')
-        out.execute('CREATE TABLE rows(id TEXT,student_id TEXT,subject_id TEXT,class_id TEXT,source TEXT)')
+        out.execute('CREATE TABLE rows(id TEXT,student_id TEXT,subject_id TEXT,class_id TEXT,source TEXT,teachers TEXT)')
         start=date.fromisoformat(job['start']);end=date.fromisoformat(job['end']);total=(end-start).days+1
         for n in range(total):
             check();day=start+timedelta(days=n)
@@ -50,6 +51,8 @@ def compile_book(path,job,stage,cancel,progress):
                 for sid in lesson['studentIds']:
                     s=students[sid];row=target(dict(id=sid,name=s.name,classId=s.classId,className=classes.get(s.classId,'')),lesson['subjectId'],lesson['subject'])
                     row['expected']+=1;row['incompleteRoster']+=int(not lesson['rosterComplete'])
+                    # The course teacher, never a substitute: only the original teachers of the lesson count.
+                    for t in lesson['originalTeacherIds']:row['teachers'][t]+=1
             report('schedule',n+1,total)
         lessons=source.execute('''SELECT s.lesson_key,s.published_version,CASE WHEN p.lesson_key IS NULL THEN d.document END
             FROM journal_period_snapshots s JOIN journal_period_documents d ON d.workspace=s.workspace AND d.lesson_key=s.lesson_key AND d.published_version=s.published_version
@@ -84,10 +87,16 @@ def compile_book(path,job,stage,cancel,progress):
                 for k in ['weightedSum','weight']:row[k]+=Fraction(s[k])
                 row['categories']=merge(row['categories'],load(s.get('categories',{})))
             report('journals',n+1,closure[1])
+        # A row known only from a published document has no scheduled lessons of its own: the teachers of the same class and subject stand in.
+        by_course={}
+        for (_,subject_id),row in rows.items():by_course.setdefault((row['student']['classId'],subject_id),Counter()).update(row['teachers'])
+        names={t.id:t.name for t in state.teachers}
         for n,((student,subject),row) in enumerate(rows.items()):
             check();id=row.pop('id');row['weightedSum']=str(row['weightedSum']);row['weight']=str(row['weight'])
+            counter=row['teachers'] or by_course[(row['student']['classId'],subject)]
+            row['teachers']=[dict(id=t,name=names.get(t,''),lessons=lessons) for t,lessons in sorted(counter.items(),key=lambda x:(-x[1],x[0]))]
             row['categories']=dump(row['categories']);row['policy']=policy_for(cfg,subject,row['student']['classId'])
-            out.execute('INSERT INTO rows VALUES (?,?,?,?,?)',(id,student,subject,row['student']['classId'],encoded(row)))
+            out.execute('INSERT INTO rows VALUES (?,?,?,?,?,?)',(id,student,subject,row['student']['classId'],encoded(row),encoded([t['id'] for t in row['teachers']])))
             report('rows',n+1,len(rows))
     return dict(status='built',rows=len(rows))
 

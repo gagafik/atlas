@@ -47,6 +47,21 @@ def carried(db,workspace,book_id,chunk):
     return result
 
 
+def teacher_accounts(db,workspace):
+    """{teacher record id: [active teacher account ids]}."""
+    from .journal import user_ids
+    result={}
+    for row in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'"):
+        user=Access(None,None,None).public(row)
+        for id in user_ids(user,workspace,'teacher'):result.setdefault(id,[]).append(user['id'])
+    return result
+
+
+def pick_account(teachers,accounts):
+    """The account of the first course teacher with exactly one account. A teacher with several accounts is never guessed."""
+    return next((accounts[t][0] for t in teachers if len(accounts.get(t,[]))==1),'')
+
+
 class Queue:
     def __init__(self,path,*,clock=time.time,lease=15):
         self.path=Path(path).resolve();self.clock=clock;self.lease=lease
@@ -202,7 +217,7 @@ class Queue:
         # Keep connections open, but commit each batch separately. Reopening a
         # writer for every 250 rows repeatedly rebuilds SQLite's page cache.
         with closing(sqlite3.connect(Path(stage).resolve().as_uri()+'?mode=ro',uri=True)) as source,closing(sqlite3.connect(self.path,timeout=5)) as db:
-            total=sum(source.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ['facts','projected','rows']);done=0;previous=False
+            total=sum(source.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ['facts','projected','rows']);done=0;previous=False;assigned=unassigned=0
             for table in ['facts','projected','rows']:
                 cursor=source.execute('SELECT * FROM '+table)
                 while chunk:=cursor.fetchmany(CHUNK):
@@ -217,7 +232,10 @@ class Queue:
                             # The carry writes no grading_history entry; the earlier book stays frozen.
                             if previous is False:previous=db.execute('SELECT id FROM grading_books WHERE workspace=? AND period_id=? AND closure_version<? ORDER BY closure_version DESC LIMIT 1',(job['workspace'],job['periodId'],job['closureVersion'])).fetchone()
                             old=carried(db,job['workspace'],previous[0],chunk) if previous else {}
-                            picked=[old.get((r[1],r[2]),('',None)) for r in chunk]
+                            # A pair of the previous book keeps its decision, even an empty one; new pairs go to the course teacher when one account is unambiguous.
+                            accounts=teacher_accounts(db,job['workspace'])
+                            picked=[old.get((r[1],r[2]),(pick_account(json.loads(r[5]),accounts),None)) for r in chunk]
+                            assigned+=sum(bool(c[0]) for c in picked);unassigned+=sum(not c[0] for c in picked)
                             db.executemany('INSERT INTO grading_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',[(job['workspace'],r[0],job['bookId'],r[1],r[2],r[3],c[0],1,'draft',r[4],c[1]) for r,c in zip(chunk,picked)])
                     done+=len(chunk);progress(dict(phase='saving',completed=done,total=total))
                     # Give waiting journal writers a chance before reacquiring
@@ -229,7 +247,7 @@ class Queue:
                 latest=self.load(db,job['id']);problem=self.valid(db,job)
                 if latest['status']=='cancelling' or problem:raise Cancelled()
                 db.execute('INSERT INTO grading_books(workspace,id,period_id,closure_version,created,source_kind) VALUES (?,?,?,?,?,?)',(job['workspace'],job['bookId'],job['periodId'],job['closureVersion'],now().isoformat(),'shared'))
-                latest.update(status='succeeded',phase='done',completed=total,total=total,message='Ведомость готова.');self.write(db,latest)
+                latest.update(status='succeeded',phase='done',completed=total,total=total,assignedRows=assigned,unassignedRows=unassigned,message=f'Ведомость готова. Назначено учителям: {assigned}, без ответственного: {unassigned}.');self.write(db,latest)
                 db.execute('UPDATE grading_preparations SET token=\'\',expires=0 WHERE id=?',(job['id'],));self.audit(db,latest,'prepared')
 
 
