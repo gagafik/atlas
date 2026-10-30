@@ -136,7 +136,8 @@ class AbsenceFiles:
         def download(id:str,request:Request,workspace:Workspace='school'):
             user,snap=self.absences.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
-                tables(db);self.absences.recheck(db,user,snap,workspace)
+                from .absences import tables as notice_tables
+                tables(db);notice_tables(db);self.absences.recheck(db,user,snap,workspace)
                 row=db.execute("SELECT * FROM absence_files WHERE id=? AND workspace=? AND status='ready'",(id,workspace)).fetchone()
                 if not row:raise HTTPException(404,'Файл не найден.')
                 if row[10] is None:

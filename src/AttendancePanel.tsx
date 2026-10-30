@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { attendanceNames, defaultAttendancePeriod } from "./journal";
 import { download } from "./utils";
+import { codeBreakdown, codeName } from "./absenceForm";
 
 type Counts = {
   records: number;
   attendance: Record<string, number>;
   lateMinutes: number;
+  excusedCodes?: Record<string, number>;
 };
 type Student = Counts & {
   id: string;
@@ -35,6 +37,7 @@ type Options = {
   subjects: { id: string; name: string }[];
 };
 type Report = {
+  codes?: { id: string; name: string }[];
   token: string;
   generatedAt: string;
   totals: Counts;
@@ -62,16 +65,26 @@ type Lesson = {
   rawAttendance: string;
   lateMinutes: number;
   excusedByNotice: boolean;
+  absenceCode?: string | null;
   version: number;
   publishedAt: string;
 };
 type Detail = {
+  codes?: { id: string; name: string }[];
   student: { id: string; name: string };
   items: Lesson[];
   nextOffset: number | null;
 };
 
-function Totals({ value }: { value: Counts }) {
+function Totals({
+  value,
+  codes,
+}: {
+  value: Counts;
+  codes?: { id: string; name: string }[];
+}) {
+  // Excused lessons by the type of the note that excused them; notes without a type are "Без типа".
+  const types = codeBreakdown(value.excusedCodes, codes ?? []);
   return (
     <div className="attendance-counts">
       <span>
@@ -82,6 +95,11 @@ function Totals({ value }: { value: Counts }) {
           {label}: <strong>{value.attendance[id]}</strong>
         </span>
       ))}
+      {types && (
+        <span>
+          Уважительная по типам: <strong>{types}</strong>
+        </span>
+      )}
       <span>
         Опоздания: <strong>{value.lateMinutes} мин</strong>
       </span>
@@ -408,7 +426,7 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                     {report.withoutRecords}. Сформировано:{" "}
                     {new Date(report.generatedAt).toLocaleString("ru-RU")}.
                   </p>
-                  <Totals value={report.totals} />
+                  <Totals value={report.totals} codes={report.codes} />
                   <div className="dated-toolbar">
                     {[
                       ["students", "По ученикам"],
@@ -446,7 +464,7 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                             {s.active === false ? " · неактивен" : ""}
                           </p>
                           {s.records ? (
-                            <Totals value={s} />
+                            <Totals value={s} codes={report.codes} />
                           ) : (
                             <p>
                               Нет опубликованных записей за этот период. Это не
@@ -472,14 +490,14 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                             Учеников: {c.students}. Без записей:{" "}
                             {c.withoutRecords}.
                           </p>
-                          <Totals value={c} />
+                          <Totals value={c} codes={report.codes} />
                         </article>
                       ))}
                     {view === "subjects" &&
                       report.subjects.map((s) => (
                         <article className="absence-card" key={s.id}>
                           <h4>{s.name}</h4>
-                          <Totals value={s} />
+                          <Totals value={s} codes={report.codes} />
                         </article>
                       ))}
                   </div>
@@ -541,8 +559,9 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                               </p>
                               {l.excusedByNotice && (
                                 <p>
-                                  Объяснительная принята школой. Исходная
-                                  отметка учителя:{" "}
+                                  Объяснительная принята школой (
+                                  {codeName(detail.codes ?? [], l.absenceCode)}
+                                  ). Исходная отметка учителя:{" "}
                                   {attendanceNames[l.rawAttendance]}.
                                 </p>
                               )}

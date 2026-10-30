@@ -56,10 +56,14 @@ def test_private_evidence_author_other_guardian_student_and_teacher_scopes(clien
     id=file.json()['id'];assert teacher.get(file_url(id)).status_code==404
     notice=send(parent,payload|dict(fileIds=[id]));path=url('/'+notice['id'])
     assert parent.get(file_url(id)).content==b'Private evidence' and teacher.get(file_url(id)).content==b'Private evidence'
-    for account in [signed('other-parent'),signed('other-teacher'),signed('student')]:
+    for account in [signed('other-parent'),signed('other-teacher')]:
         assert account.get(path).status_code in [403,404]
         assert account.get(file_url(id)).status_code in [403,404]
         assert account.get(url('/'+notice['id']+'/history')).status_code in [403,404]
+    # The pupil reads the summary of the own note (status, period), never the reason, files or history.
+    pupil=signed('student');summary=pupil.get(path);assert summary.status_code==200 and summary.json()['summary'] is True
+    assert 'reason' not in summary.json() and summary.json()['files']==[] and 'Личная причина' not in summary.text
+    assert pupil.get(file_url(id)).status_code==404 and pupil.get(url('/'+notice['id']+'/history')).status_code==404
     assert signed('other-parent').get(url()).json()['items']==[]
     assert signed('other-teacher').get(url()).json()['items']==[]
     assert 'reason' not in parent.get(url()).json()['items'][0]
@@ -209,7 +213,7 @@ def test_pagination_limits_candidates_and_hides_private_reasons(client):
     with api.connect() as db:
         row=list(db.execute('SELECT * FROM absence_notices').fetchone())
         for i in range(65):
-            clone=row.copy();clone[0]=uuid4().hex;clone[9]='withdrawn';clone[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',clone)
+            clone=row.copy();clone[0]=uuid4().hex;clone[9]='withdrawn';clone[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(clone))+')',clone)
     page=teacher.get(url()).json();assert len(page['items'])==50 and page['nextBefore']
     last=teacher.get(url()+'&before='+str(page['nextBefore'])).json();assert len(last['items'])==16 and last['nextBefore'] is None
     assert not {r['id'] for r in page['items']} & {r['id'] for r in last['items']}

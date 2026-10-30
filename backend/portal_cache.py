@@ -46,7 +46,7 @@ class Snapshot:
     def student_lessons(self, day, student):
         # Notices cover lessons the pupil actually attends, excluding partial
         # class closures that the ordinary timetable also shows as changes.
-        return [{k:r[k] for k in ['date','start','end','subject','group','status','activity']}
+        return [{k:r[k] for k in ['date','start','end','subjectId','subject','group','status','activity']}
                 for r in self.lesson_rows(day) if r['activity']=='lesson' and r['status']!='cancelled' and student in r['studentIds']]
 
     def day_rows(self, day, view, entity_id):

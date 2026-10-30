@@ -332,6 +332,10 @@ class Journal:
                 result['finalGrades'] = db.execute('SELECT 1 FROM grading_rows WHERE workspace=? AND assigned=? LIMIT 1',(workspace,user['id'])).fetchone() is not None
             elif role!='teacher' and 'final_results' in tables:
                 result['finalGrades'] = db.execute('SELECT 1 FROM final_results WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) LIMIT 1',(workspace,encoded(sorted(user_ids(user,workspace,'student'))))).fetchone() is not None
+        if role=='student':
+            # A pupil reads own notes (summary only); the panel appears once the school or a parent has filed one.
+            result['absences'] = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='absence_notices'").fetchone()
+                and db.execute('SELECT 1 FROM absence_notices WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) LIMIT 1',(workspace,encoded(sorted(user_ids(user,workspace,'student'))))).fetchone())
         return result
 
     def unpack(self,row):
