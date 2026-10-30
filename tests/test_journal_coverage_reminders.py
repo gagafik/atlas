@@ -122,7 +122,7 @@ def test_reminder_after_n_school_days_once(client,monkeypatch):
     clock(monkeypatch,date(2026,8,19),10,30);assert not worker.process_one()
     clock(monkeypatch,date(2026,8,19),11,30);assert worker.process_one()
     notices=inbox(teacher,'journal.coverage_reminder');assert len(notices)==1
-    text=notices[0]['detail'];assert '17.08.2026' in text and '10A' in text and 'Английский язык' in text and 'Ученик' not in text and 'Не заполнено уроков: 1' in text
+    text=notices[0]['title'];assert '17.08.2026' in text and '10A' in text and 'Английский язык' in text and 'Ученик' not in text and 'Не заполнено уроков: 1' in text
     assert not worker.process_one()
     clock(monkeypatch,date(2026,8,20));assert not worker.process_one() and len(inbox(teacher,'journal.coverage_reminder'))==1
     assert dict(stored('SELECT teacher_id,status FROM journal_coverage_reminders'))=={'t2':'sent','t0':'skipped'}
@@ -137,7 +137,7 @@ def test_weekend_waits_and_monday_catches_up(client,monkeypatch):
     clock(monkeypatch,date(2026,8,22));assert not worker.process_one() and not inbox(teacher,'journal.coverage_reminder')
     assert stored('SELECT kind,detail FROM journal_coverage_runs')==[('lessons','{"note":"not a school day"}')]
     clock(monkeypatch,date(2026,8,24),11,30);assert worker.process_one()
-    assert '17.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['detail']
+    assert '17.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['title']
 
 
 def test_friday_lesson_is_reminded_after_the_weekend(client,monkeypatch):
@@ -145,7 +145,7 @@ def test_friday_lesson_is_reminded_after_the_weekend(client,monkeypatch):
     for day in [date(2026,8,21),date(2026,8,22),date(2026,8,23),date(2026,8,24)]:
         clock(monkeypatch,day,11,30);assert not worker.process_one() and not inbox(teacher,'journal.coverage_reminder'),day
     clock(monkeypatch,date(2026,8,25),11,30);assert worker.process_one()
-    assert '21.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['detail']
+    assert '21.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['title']
 
 
 def test_holiday_moves_the_reminder(client,monkeypatch):
@@ -153,7 +153,7 @@ def test_holiday_moves_the_reminder(client,monkeypatch):
     friday_only(Event(id='h',name='Праздник',kind='holiday',effect='note',start=date(2026,8,24),end=date(2026,8,24)));worker=api.journal_coverage.reminders
     clock(monkeypatch,date(2026,8,25),11,30);assert not worker.process_one() and not inbox(teacher,'journal.coverage_reminder')
     clock(monkeypatch,date(2026,8,26),11,30);assert worker.process_one()
-    assert '21.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['detail']
+    assert '21.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['title']
 
 
 def test_filled_cancelled_and_closed_lessons_are_not_reminded(client,monkeypatch):
@@ -253,7 +253,7 @@ def test_disabled_or_before_since(client,monkeypatch):
     clock(monkeypatch,date(2026,8,25),2,0);assert client.put(URL,json=settings_body(0)).json()['since']=='2026-08-25'
     clock(monkeypatch,date(2026,8,26),11,30);assert not worker.process_one() and not stored('SELECT 1 FROM journal_coverage_reminders')
     clock(monkeypatch,date(2026,9,2),11,30);assert worker.process_one()
-    assert '31.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['detail'] and not stored("SELECT 1 FROM journal_coverage_reminders WHERE lesson_key IN (SELECT lesson_key FROM journal_coverage_reminders WHERE day<'2026-09-02')")
+    assert '31.08.2026' in inbox(teacher,'journal.coverage_reminder')[0]['title'] and not stored("SELECT 1 FROM journal_coverage_reminders WHERE lesson_key IN (SELECT lesson_key FROM journal_coverage_reminders WHERE day<'2026-09-02')")
     # Switching off stops everything.
     assert client.put(URL,json=settings_body(1,enabled=False)).status_code==200
     clock(monkeypatch,date(2026,9,9),11,30);assert not worker.process_one()
@@ -268,11 +268,11 @@ def test_weekly_digest(client,monkeypatch):
     teacher,_=people(client);turn_on(client,monkeypatch,lessonReminders=False,weeklyDigest=True,digestWeekday=4);worker=api.journal_coverage.reminders
     clock(monkeypatch,date(2026,8,20),11,30);assert not worker.process_one() and not inbox(teacher,'journal.coverage_digest')
     clock(monkeypatch,date(2026,8,21),11,30);assert worker.process_one()
-    digest=inbox(teacher,'journal.coverage_digest');assert len(digest)==1 and 'уроков: 1' in digest[0]['detail'] and '17.08.2026' in digest[0]['detail'] and 'За 4 недели' in digest[0]['detail']
+    digest=inbox(teacher,'journal.coverage_digest');assert len(digest)==1 and 'уроков: 1' in digest[0]['title'] and '17.08.2026' in digest[0]['title'] and 'За 4 недели' in digest[0]['title']
     assert not inbox(teacher,'journal.coverage_reminder') and not stored('SELECT 1 FROM journal_coverage_reminders') and not worker.process_one()
     assert stored('SELECT kind,detail FROM journal_coverage_runs')==[('digest','{"lessons":2,"sent":1,"withoutAccount":1}')]
     clock(monkeypatch,date(2026,8,28),11,30);assert worker.process_one()
-    again=inbox(teacher,'journal.coverage_digest');assert len(again)==1 and 'уроков: 2' in again[0]['detail'] and again[0]['id']!=digest[0]['id']
+    again=inbox(teacher,'journal.coverage_digest');assert len(again)==1 and 'уроков: 2' in again[0]['title'] and again[0]['id']!=digest[0]['id']
     # The two kinds are independent: a teacher without lessons due gets no digest.
     assert not inbox(signed('other-teacher'),'journal.coverage_digest')
 

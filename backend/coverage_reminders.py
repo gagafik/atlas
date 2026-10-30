@@ -188,7 +188,7 @@ class CoverageReminders:
                 for user,items in sorted(users.values(),key=lambda x:x[0]['id']):
                     first=min(items.values(),key=lambda r:(r['date'],r['start'],r['lessonKey']))
                     text=f"Не заполнено уроков: {len(items)}. Самый ранний: {date.fromisoformat(first['date']):%d.%m.%Y}, {', '.join(first['classNames']) or first['group']}, {first['subject']}. Откройте «Контроль заполнения журналов»."
-                    self.notifications.deliver(db,[user],workspace,snap.state.revision,'journal.coverage_reminder',topic=f'journal-coverage:{workspace}',detail=text)
+                    self.notifications.deliver(db,[user],workspace,snap.state.revision,'journal.coverage_reminder',topic=f'journal-coverage:{workspace}',target=dict(title=text))
                 detail=encoded(dict(sent=len(users),skipped=skipped,lessons=len(found)))
                 db.execute('INSERT INTO journal_coverage_runs VALUES (?,?,?,?,?)',(workspace,day,'lessons',stamp,detail))
                 if found:self.access.record(db,'journal.coverage_reminders_sent',workspace,snap.state.revision,detail=detail,principal=SYSTEM)
@@ -200,7 +200,7 @@ class CoverageReminders:
                 for user,items in sorted(users.values(),key=lambda x:x[0]['id']):
                     first=min(items.values(),key=lambda r:(r['date'],r['start'],r['lessonKey']))
                     text=f"За {DIGEST_DAYS//7} недели не заполнено уроков: {len(items)}, самый ранний — {date.fromisoformat(first['date']):%d.%m.%Y}. Откройте «Контроль заполнения журналов»."
-                    self.notifications.deliver(db,[user],workspace,snap.state.revision,'journal.coverage_digest',topic=f'journal-coverage-digest:{workspace}',detail=text)
+                    self.notifications.deliver(db,[user],workspace,snap.state.revision,'journal.coverage_digest',topic=f'journal-coverage-digest:{workspace}',target=dict(title=text))
                 detail=encoded(dict(sent=len(users),withoutAccount=len({t for r in found for t in r['teacherIds'] if not held.get(t)}),lessons=len(found)))
                 db.execute('INSERT INTO journal_coverage_runs VALUES (?,?,?,?,?)',(workspace,day,'digest',stamp,detail))
                 if users:self.access.record(db,'journal.coverage_digest_sent',workspace,snap.state.revision,detail=detail,principal=SYSTEM)
