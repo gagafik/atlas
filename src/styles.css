@@ -4701,3 +4701,16 @@ main {
   .quizzes .dated-toolbar > button { white-space: normal; max-width: 100%; }
   .quiz-options, .quiz-roster { padding: 10px; }
 }
+.category-badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: .8em; margin-right: 4px; vertical-align: baseline; }
+.final-categories { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.category-row, .category-rule { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(160px, 2fr) minmax(70px, auto) minmax(140px, 1fr) auto; gap: 10px; align-items: end; padding: 10px 0; border-top: 1px solid #dce3d7; }
+.category-row button { grid-column: 1 / -1; justify-self: start; }
+.category-rule { grid-template-columns: minmax(0, 1fr); border: 1px solid #dce3d7; border-radius: 10px; padding: 12px; margin: 10px 0; }
+.category-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 10px; }
+.category-picks { max-height: 11em; overflow: auto; border: 1px solid #dce3d7; border-radius: 8px; min-width: 0; }
+.category-picks legend { font-size: .9em; }
+.journal-assessment .category-note { grid-column: 1 / -1; margin: 0; }
+.category-row input[type=color] { min-width: 48px; padding: 2px; }
+@media (max-width: 600px) {
+  .category-row { grid-template-columns: minmax(0, 1fr); }
+}

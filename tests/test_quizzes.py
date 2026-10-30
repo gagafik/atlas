@@ -327,6 +327,40 @@ def test_grade_publication_preserves_journal_draft_and_correction_history(client
     assert any(h.get('attempt',{}).get('score')==1 for h in history)
 
 
+def test_quiz_transfer_uses_quiz_category(client):
+    from test_journal import entry
+    quiz,pupil,parent,teacher,payload=ready(client,definition=dict(journalCategory='soch'))
+    assert quiz['document']['definition']['journalCategory']=='soch'
+    # A category the school does not have is refused when the quiz is saved.
+    bad=body(entry(teacher,quiz['lessonKey']),[question(teacher,'second')],definition=dict(journalCategory='nope'))
+    refused=teacher.put('/api/journal/quizzes/test-two?workspace=demo',json=bad);assert refused.status_code==422 and 'категорию журнала' in refused.text
+    begun=start(pupil,quiz).json();sent=save(pupil,begun,{'choice':dict(selected=['a'])},True).json()
+    closed=action(teacher,quiz,'close').json();action(teacher,closed,'release')
+    endpoint=f'/api/journal/quizzes/test-one/attempts/{sent["id"]}';options=teacher.get(endpoint+'/grading?workspace=demo').json()
+    assert options['defaultCategory']=='soch' and [c['id'] for c in options['categories']]==['fo','sor','soch']
+    work=dict(id='quiz',name='Тест',kind='points',maxScore=10,weight=1)
+    grading=dict(journalVersion=options['journalVersion'],revision=options['revision'],assessmentId='quiz',newAssessment=work,score=7,replaceExisting=False)
+    marked=teacher.post(endpoint+'/grade?workspace=demo',json=dict(version=sent['version'],grading=grading));assert marked.status_code==200,marked.text
+    assert {a['id']:a['category'] for a in entry(teacher,quiz['lessonKey'])['document']['content']['assessments']}=={'work':'fo','quiz':'soch'}
+
+
+def test_quiz_category_falls_back_to_school_default(client):
+    quiz,pupil,parent,teacher,_=ready(client,definition=dict(journalCategory='sor'))
+    cur=client.get('/api/journal/categories?workspace=demo').json()
+    off=[dict(c,active=False) if c['id']=='sor' else c for c in cur['categories']]
+    switched=client.put('/api/journal/categories?workspace=demo',json=dict(version=cur['version'],reason='Отключить СОР',categories=off,defaultCategory=cur['defaultCategory'],policy=cur['policy'],rules=[]))
+    assert switched.status_code==200,switched.text
+    begun=start(pupil,quiz).json();sent=save(pupil,begun,submit=True).json()
+    closed=action(teacher,quiz,'close').json();action(teacher,closed,'release')
+    endpoint=f'/api/journal/quizzes/test-one/attempts/{sent["id"]}';options=teacher.get(endpoint+'/grading?workspace=demo').json()
+    assert options['defaultCategory']=='fo'
+    work=dict(id='quiz',name='Тест',kind='points',maxScore=10,weight=1)
+    grading=dict(journalVersion=options['journalVersion'],revision=options['revision'],assessmentId='quiz',newAssessment=work,score=5,replaceExisting=False)
+    assert teacher.post(endpoint+'/grade?workspace=demo',json=dict(version=sent['version'],grading=grading)).status_code==200
+    from test_journal import entry
+    assert entry(teacher,quiz['lessonKey'])['document']['content']['assessments'][-1]['category']=='fo'
+
+
 def test_grade_failure_rolls_back_journal_result_and_notifications(client,monkeypatch):
     from fastapi import HTTPException
     from test_journal import entry

@@ -11,6 +11,7 @@ from .journal import user_ids
 from .class_staff import led
 from .natural import natural
 from .notifications import encoded
+from .assessment_categories import composite,load
 
 
 def tables(db):
@@ -87,7 +88,11 @@ class Proposal(Model):
 
 
 def recommendation(source,scale):
-    exact=Fraction(source['weightedSum'])/Fraction(source['weight']) if Fraction(source['weight']) else None
+    # Books prepared after the category rules pin the matching share policy and per-category sums in their source;
+    # older books keep the plain weighted average they were prepared with.
+    shares=composite(load(source['categories']),source['policy']) if source.get('policy') and 'categories' in source else None
+    if shares:exact,count=shares['exact'],shares['counted']
+    else:exact,count=Fraction(source['weightedSum'])/Fraction(source['weight']) if Fraction(source['weight']) else None,source['numeric']
     # Compare exact ratios at thresholds; finite display precision must not
     # move a pupil across a boundary. Half-up rounding is exact for positive scores.
     raw=Decimal(exact.numerator)/Decimal(exact.denominator) if exact is not None else None
@@ -97,9 +102,11 @@ def recommendation(source,scale):
         units=(2*exact.numerator*factor+exact.denominator)//(2*exact.denominator)
         rounded=Decimal(units).scaleb(-places);comparison=Fraction(units,factor)
     label=None
-    if rounded is not None and source['numeric']>=scale['minCount'] and scale['kind']=='thresholds':
+    if rounded is not None and count>=scale['minCount'] and scale['kind']=='thresholds':
         label=next(b['label'] for b in reversed(scale['bands']) if comparison>=Fraction(str(b['minPercent'])))
-    return dict(rawPercent=str(raw) if raw is not None else None,roundedPercent=str(rounded) if rounded is not None else None,recommended=label)
+    result=dict(rawPercent=str(raw) if raw is not None else None,roundedPercent=str(rounded) if rounded is not None else None,recommended=label)
+    if shares:result|=dict(method=source['policy']['method'],rule=source['policy']['ruleName'],categories=shares['categories'],missing=shares['missing'],excluded=shares['excluded'],blocked=shares['blocked'])
+    return result
 
 
 class FinalGrades:
@@ -114,7 +121,7 @@ class FinalGrades:
         if user['role']=='teacher' and not user_ids(user,workspace,'teacher') & {t.id for t in snap.state.teachers}:raise HTTPException(403,'Нет действующего назначения учителя.')
         # Ordinary readers use WAL snapshots and must not wait behind preparation.
         with self.access.read_connect() as db:
-            ready=db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='grading_job_recent'").fetchone()
+            ready=db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='grading_job_recent'").fetchone() and db.execute("SELECT 1 FROM pragma_table_info('grading_projected') WHERE name='format'").fetchone()
         if not ready:
             with self.access.lock,self.access.connect() as db:self.journal.tables(db);tables(db)
         return user,snap

@@ -13,6 +13,7 @@ from uuid import uuid4
 from .models import State
 from .calendar_ops import DayContext,resolve_day
 from .notifications import encoded
+from .assessment_categories import config,tally,merge,dump,load,policy_for,category_of
 
 
 class Cancelled(Exception):pass
@@ -29,15 +30,17 @@ def compile_book(path,job,stage,cancel,progress):
             progress(dict(phase=phase,completed=done,total=total));last=time.monotonic()
     def target(pupil,subject_id,subject):
         key=(pupil['id'],subject_id)
-        if key not in rows:rows[key]=dict(id=uuid4().hex,student=pupil,subject=subject,expected=0,published=0,numeric=0,text=0,missing=0,zeroWeight=0,incompleteRoster=0,weightedSum=Fraction(0),weight=Fraction(0))
+        if key not in rows:rows[key]=dict(id=uuid4().hex,student=pupil,subject=subject,expected=0,published=0,numeric=0,text=0,missing=0,zeroWeight=0,incompleteRoster=0,weightedSum=Fraction(0),weight=Fraction(0),categories={})
         return rows[key]
     with closing(sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True)) as source,closing(sqlite3.connect(stage)) as out,out:
         source.execute('BEGIN')
         closure=source.execute('SELECT state_document,published_count FROM journal_period_closures WHERE workspace=? AND period_id=? AND version=?',(job['workspace'],job['periodId'],job['closureVersion'])).fetchone()
         if not closure:raise ValueError('Missing immutable closure')
         state=State.model_validate_json(closure[0]);ctx=DayContext(state);students={s.id:s for s in state.students};classes={c.id:c.name for c in state.classes}
+        # The share policy is pinned when the book is prepared: every row stores the snapshot of the rule that matched it.
+        cfg=config(source,job['workspace'])
         out.execute('CREATE TABLE facts(lesson_key TEXT,version INTEGER,student_id TEXT,subject_id TEXT,day TEXT,start TEXT,summary TEXT,works TEXT)')
-        out.execute('CREATE TABLE projected(lesson_key TEXT,version INTEGER)')
+        out.execute('CREATE TABLE projected(lesson_key TEXT,version INTEGER,format INTEGER)')
         out.execute('CREATE TABLE rows(id TEXT,student_id TEXT,subject_id TEXT,class_id TEXT,source TEXT)')
         start=date.fromisoformat(job['start']);end=date.fromisoformat(job['end']);total=(end-start).days+1
         for n in range(total):
@@ -50,7 +53,7 @@ def compile_book(path,job,stage,cancel,progress):
             report('schedule',n+1,total)
         lessons=source.execute('''SELECT s.lesson_key,s.published_version,CASE WHEN p.lesson_key IS NULL THEN d.document END
             FROM journal_period_snapshots s JOIN journal_period_documents d ON d.workspace=s.workspace AND d.lesson_key=s.lesson_key AND d.published_version=s.published_version
-            LEFT JOIN grading_projected p ON p.workspace=s.workspace AND p.lesson_key=s.lesson_key AND p.version=s.published_version
+            LEFT JOIN grading_projected p ON p.workspace=s.workspace AND p.lesson_key=s.lesson_key AND p.version=s.published_version AND p.format>=2
             WHERE s.workspace=? AND s.period_id=? AND s.closure_version=? ORDER BY s.day,s.start,s.lesson_key''',(job['workspace'],job['periodId'],job['closureVersion']))
         for n,(key,version,raw) in enumerate(lessons):
             check()
@@ -62,6 +65,7 @@ def compile_book(path,job,stage,cancel,progress):
                     check();pupil={k:pupil[k] for k in ['id','name','classId','className']}
                     s=dict(student=pupil,subject=lesson['subject'],numeric=0,text=0,missing=0,zeroWeight=0,weightedSum=Fraction(0),weight=Fraction(0))
                     grades={g['assessmentId']:g for g in records.get(pupil['id'],{}).get('grades',[])};works=[]
+                    s['categories']=dump(tally(document['content']['assessments'],list(grades.values())))
                     for a in document['content']['assessments']:
                         grade=grades.get(a['id'],{});score=grade.get('score');label=grade.get('label','')
                         if score is not None and a['weight']>0:
@@ -69,18 +73,20 @@ def compile_book(path,job,stage,cancel,progress):
                         elif score is not None:s['zeroWeight']+=1
                         elif label:s['text']+=1
                         else:s['missing']+=1
-                        works.append(dict(assessment=a['name'],kind=a['kind'],score=score,label=label,maxScore=a['maxScore'],weight=a['weight']))
+                        works.append(dict(assessment=a['name'],kind=a['kind'],score=score,label=label,maxScore=a['maxScore'],weight=a['weight'],category=category_of(a)))
                     s['weightedSum']=str(s['weightedSum']);s['weight']=str(s['weight']);summaries.append((lesson['subjectId'],s))
                     facts.append((key,version,pupil['id'],lesson['subjectId'],lesson['date'],lesson['start'],encoded(s),encoded(works)))
                 out.executemany('INSERT INTO facts VALUES (?,?,?,?,?,?,?,?)',facts)
-                out.execute('INSERT INTO projected VALUES (?,?)',(key,version))
+                out.execute('INSERT INTO projected VALUES (?,?,?)',(key,version,2))
             for subject,s in summaries:
                 row=target(s['student'],subject,s['subject']);row['published']+=1
                 for k in ['numeric','text','missing','zeroWeight']:row[k]+=s[k]
                 for k in ['weightedSum','weight']:row[k]+=Fraction(s[k])
+                row['categories']=merge(row['categories'],load(s.get('categories',{})))
             report('journals',n+1,closure[1])
         for n,((student,subject),row) in enumerate(rows.items()):
             check();id=row.pop('id');row['weightedSum']=str(row['weightedSum']);row['weight']=str(row['weight'])
+            row['categories']=dump(row['categories']);row['policy']=policy_for(cfg,subject,row['student']['classId'])
             out.execute('INSERT INTO rows VALUES (?,?,?,?,?)',(id,student,subject,row['student']['classId'],encoded(row)))
             report('rows',n+1,len(rows))
     return dict(status='built',rows=len(rows))

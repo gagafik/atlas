@@ -14,6 +14,15 @@ import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
 import GradeFeed from "./GradeFeed";
+import CategoryBadge from "./CategoryBadge";
+import {
+  WEIGHT_PRESETS,
+  bookingDefault,
+  categoryOf,
+  presetOf,
+  useAssessmentCategories,
+  type CategoryConfig,
+} from "./assessmentCategories";
 import {
   attendanceNames,
   gradeLabel,
@@ -70,9 +79,11 @@ interface History {
 function PublishedRows({
   rows,
   workspace,
+  categories,
 }: {
   rows: JournalRow[];
   workspace?: string;
+  categories?: CategoryConfig | null;
 }) {
   return (
     <div className="journal-published-list">
@@ -110,10 +121,11 @@ function PublishedRows({
             const g = row.record.grades.find((g) => g.assessmentId === a.id);
             return (
               <p key={a.id} className="journal-text">
+                <CategoryBadge category={categoryOf(a, categories)} />
                 <strong>
                   {a.name}: {gradeLabel(g, a)}
                 </strong>
-                {a.kind === "points" && ` · вес ${a.weight}`}
+                {a.kind === "points" && ` · вес ${a.weight}x`}
                 {g?.comment && ` · ${g.comment}`}
               </p>
             );
@@ -154,6 +166,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
   const [entry, setEntry] = useState<JournalEntry | null>(null),
     [syncRoster, setSyncRoster] = useState(false),
     [dirty, setDirty] = useState(false);
+  const categories = useAssessmentCategories(workspace);
+  // Works whose weight is typed by hand even when it equals a preset.
+  const [customWeights, setCustomWeights] = useState<Set<string>>(new Set());
   const lessonMarks = useLessonMarks(
     workspace,
     entry?.lessonKey,
@@ -368,6 +383,14 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
     );
     setDirty(true);
     setMessage("");
+  }
+  function patchWork(id: string, change: Partial<Assessment>) {
+    content((c) => ({
+      ...c,
+      assessments: c.assessments.map((x) =>
+        x.id === id ? { ...x, ...change } : x,
+      ),
+    }));
   }
   function pupil(id: string, update: (p: PupilRecord) => PupilRecord) {
     content((c) => ({
@@ -893,8 +916,41 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       <p>
                         Баллы — от 0 до выбранного максимума. Текстовые оценки
                         (A*, зачёт и другие) не входят в средний процент. Вес 0
-                        исключает работу из расчёта.
+                        исключает работу из расчёта; итог периода считается по
+                        долям категорий школы.
                       </p>
+                      {!!entry.bookings?.length && (
+                        <div className="info-line">
+                          <strong>По календарю контрольных:</strong>
+                          {entry.bookings.map((b) => (
+                            <p key={b.id}>
+                              {b.short} «{b.topic}»{" "}
+                              <button
+                                type="button"
+                                disabled={
+                                  !editable ||
+                                  entry.document.content.assessments.length >=
+                                    10 ||
+                                  entry.document.content.assessments.some(
+                                    (x) => x.bookingId === b.id,
+                                  )
+                                }
+                                onClick={() =>
+                                  content((c) => ({
+                                    ...c,
+                                    assessments: [
+                                      ...c.assessments,
+                                      bookingDefault(b),
+                                    ],
+                                  }))
+                                }
+                              >
+                                Добавить работу из календаря
+                              </button>
+                            </p>
+                          ))}
+                        </div>
+                      )}
                       {entry.document.content.assessments.map((a) => (
                         <div key={a.id} className="journal-assessment">
                           <label className="field">
@@ -944,6 +1000,48 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                               <option value="label">Текстовая оценка</option>
                             </select>
                           </label>
+                          <label className="field">
+                            <span>Категория</span>
+                            <select
+                              value={categoryOf(a, categories).id}
+                              onChange={(e) =>
+                                patchWork(a.id, { category: e.target.value })
+                              }
+                            >
+                              {(categories?.categories ?? [])
+                                .filter(
+                                  (k) =>
+                                    k.active ||
+                                    k.id === categoryOf(a, categories).id,
+                                )
+                                .map((k) => (
+                                  <option key={k.id} value={k.id}>
+                                    {k.name}
+                                    {k.active ? "" : " (отключена)"}
+                                  </option>
+                                ))}
+                              {!categories?.categories.some(
+                                (k) => k.id === categoryOf(a, categories).id,
+                              ) && (
+                                <option value={categoryOf(a, categories).id}>
+                                  {categoryOf(a, categories).name}
+                                </option>
+                              )}
+                            </select>
+                          </label>
+                          {a.bookingId &&
+                            entry.bookings?.some(
+                              (b) => b.id === a.bookingId,
+                            ) && (
+                              <p className="muted category-note">
+                                Из календаря:{" "}
+                                {
+                                  entry.bookings.find(
+                                    (b) => b.id === a.bookingId,
+                                  )?.short
+                                }
+                              </p>
+                            )}
                           {a.kind === "points" && (
                             <>
                               <label className="field">
@@ -973,29 +1071,52 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                               </label>
                               <label className="field">
                                 <span>Вес работы</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.01"
-                                  value={numberValue(a.weight)}
-                                  onChange={(e) =>
-                                    content((c) => ({
-                                      ...c,
-                                      assessments: c.assessments.map((x) =>
-                                        x.id === a.id
-                                          ? {
-                                              ...x,
-                                              weight: numberField(
-                                                e.target.value,
-                                              ),
-                                            }
-                                          : x,
-                                      ),
-                                    }))
+                                <select
+                                  value={
+                                    customWeights.has(a.id)
+                                      ? "custom"
+                                      : String(presetOf(a.weight))
                                   }
-                                />
+                                  onChange={(e) => {
+                                    const custom = e.target.value === "custom";
+                                    setCustomWeights((s) => {
+                                      const next = new Set(s);
+                                      if (custom) next.add(a.id);
+                                      else next.delete(a.id);
+                                      return next;
+                                    });
+                                    if (!custom)
+                                      patchWork(a.id, {
+                                        weight: Number(e.target.value),
+                                      });
+                                  }}
+                                >
+                                  {WEIGHT_PRESETS.map((w) => (
+                                    <option key={w.value} value={w.value}>
+                                      {w.label}
+                                    </option>
+                                  ))}
+                                  <option value="custom">Свой</option>
+                                </select>
                               </label>
+                              {(customWeights.has(a.id) ||
+                                presetOf(a.weight) === "custom") && (
+                                <label className="field">
+                                  <span>Свой вес (от 0 до 100)</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    step="0.01"
+                                    value={numberValue(a.weight)}
+                                    onChange={(e) =>
+                                      patchWork(a.id, {
+                                        weight: numberField(e.target.value),
+                                      })
+                                    }
+                                  />
+                                </label>
+                              )}
                             </>
                           )}
                           <button
@@ -1050,6 +1171,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                 kind: "points",
                                 maxScore: 10,
                                 weight: 1,
+                                category: categories?.defaultCategory || "fo",
                               },
                             ],
                           }))
@@ -1179,6 +1301,9 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                                 <div className="journal-grade" key={a.id}>
                                   <label className="field">
                                     <span>
+                                      <CategoryBadge
+                                        category={categoryOf(a, categories)}
+                                      />
                                       {a.name}
                                       {a.kind === "points" &&
                                       Number.isFinite(a.maxScore)
@@ -1294,6 +1419,8 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                             entry.version,
                             entry.attendanceApprovals,
                           ),
+                          undefined,
+                          categories,
                         )
                       }
                     >
@@ -1409,6 +1536,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                           entry.lessonKey,
                           historical.version,
                         )}
+                        categories={categories}
                       />
                     </section>
                   )}
@@ -1502,7 +1630,7 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       disabled={!report.rows.length || paging}
                       onClick={() =>
                         void wholeReport((all) =>
-                          journalCsv(all.rows, "Личный журнал.csv"),
+                          journalCsv(all.rows, "Личный журнал.csv", categories),
                         )
                       }
                     >
@@ -1548,6 +1676,28 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                             Работ с баллами: {s.pointsCount} · текстовых оценок:{" "}
                             {s.labelCount}
                           </p>
+                          {s.sharePercentage != null && (
+                            <p>
+                              По долям категорий:{" "}
+                              <strong>{s.sharePercentage}%</strong>
+                              {s.rule ? ` · ${s.rule}` : ""}
+                            </p>
+                          )}
+                          {!!s.categories?.length && (
+                            <p>
+                              {s.categories.map((k) => (
+                                <span key={k.id}>
+                                  <CategoryBadge
+                                    category={categoryOf(
+                                      { category: k.id },
+                                      categories,
+                                    )}
+                                  />
+                                  {k.percentage}%{" "}
+                                </span>
+                              ))}
+                            </p>
+                          )}
                         </article>
                       ))}
                     </div>
@@ -1557,7 +1707,11 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
                       Опубликованных записей за этот период нет.
                     </p>
                   )}
-                  <PublishedRows rows={report.rows} workspace={workspace} />
+                  <PublishedRows
+                    rows={report.rows}
+                    workspace={workspace}
+                    categories={categories}
+                  />
                   {report.nextAfter && (
                     <div className="dated-toolbar journal-controls">
                       <button

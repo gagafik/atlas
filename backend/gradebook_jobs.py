@@ -23,6 +23,9 @@ def tables(db):
     db.execute('''CREATE TABLE IF NOT EXISTS grading_facts(id INTEGER PRIMARY KEY,workspace TEXT,lesson_key TEXT,version INTEGER,student_id TEXT,subject_id TEXT,day TEXT,start TEXT,summary TEXT,works TEXT,UNIQUE(workspace,lesson_key,version,student_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS grading_fact_pupil ON grading_facts(workspace,student_id,subject_id,id)')
     db.execute('''CREATE TABLE IF NOT EXISTS grading_projected(workspace TEXT,lesson_key TEXT,version INTEGER,PRIMARY KEY(workspace,lesson_key,version))''')
+    # Format 2 facts carry per-category sums and the work's category; older ones are derived again from the closure document once.
+    if 'format' not in {r[1] for r in db.execute('PRAGMA table_info(grading_projected)')}:
+        db.execute('ALTER TABLE grading_projected ADD COLUMN format INTEGER NOT NULL DEFAULT 1')
     db.execute('''CREATE TABLE IF NOT EXISTS grading_preparations(id TEXT PRIMARY KEY,workspace TEXT,created TEXT,status TEXT,token TEXT,expires REAL,document TEXT)''')
     db.execute('CREATE INDEX IF NOT EXISTS grading_job_pending ON grading_preparations(status,created)')
     # Last migration marker, read without taking the school's writer lock.
@@ -207,8 +210,8 @@ class Queue:
                     with db:
                         db.execute('BEGIN IMMEDIATE')
                         if not self.owns(db,job['id'],token) or self.load(db,job['id'])['status']=='cancelling' or self.valid(db,job):raise Cancelled()
-                        if table=='facts':db.executemany('INSERT OR IGNORE INTO grading_facts(workspace,lesson_key,version,student_id,subject_id,day,start,summary,works) VALUES (?,?,?,?,?,?,?,?,?)',[(job['workspace'],*r) for r in chunk])
-                        elif table=='projected':db.executemany('INSERT OR IGNORE INTO grading_projected VALUES (?,?,?)',[(job['workspace'],*r) for r in chunk])
+                        if table=='facts':db.executemany('INSERT INTO grading_facts(workspace,lesson_key,version,student_id,subject_id,day,start,summary,works) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,lesson_key,version,student_id) DO UPDATE SET summary=excluded.summary,works=excluded.works',[(job['workspace'],*r) for r in chunk])
+                        elif table=='projected':db.executemany('INSERT INTO grading_projected(workspace,lesson_key,version,format) VALUES (?,?,?,?) ON CONFLICT(workspace,lesson_key,version) DO UPDATE SET format=excluded.format',[(job['workspace'],*r) for r in chunk])
                         else:
                             # Re-closing keeps who is responsible and the proposed grade; evidence may differ, so rows restart as drafts.
                             # The carry writes no grading_history entry; the earlier book stays frozen.

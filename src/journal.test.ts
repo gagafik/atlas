@@ -81,8 +81,11 @@ describe("journal export", () => {
   it("retains zero scores, text labels, absence marks and CSV escaping", () => {
     journalCsv(documentRows(document, "key", 2));
     const csv = vi.mocked(download).mock.lastCall![1];
-    expect(csv).toContain('"Тест";"0";"10";"0"');
-    expect(csv).toContain('"Участие";"A*";"";""');
+    expect(csv).toContain('"Тест";"0";"10";"0";"ФО"');
+    expect(csv).toContain('"Участие";"A*";"";"";"ФО"');
+    expect(csv.split("\r\n")[0]).toContain(
+      '"Вес";"Категория";"Комментарий к оценке"',
+    );
     expect(csv).toContain('"\'=1+1"');
     expect(csv).toContain('"Опоздание";"5"');
     expect(csv).toContain('"Страница 2; упражнение 1"');
@@ -93,6 +96,27 @@ describe("journal export", () => {
         document.content.assessments[0],
       ),
     ).toBe("0 / 10");
+  });
+  it("exports the category name from the school's catalog", () => {
+    const d = structuredClone(document);
+    d.content.assessments[0].category = "sor";
+    journalCsv(documentRows(d, "key", 2), "j.csv", {
+      version: 1,
+      defaultCategory: "fo",
+      categories: [
+        {
+          id: "sor",
+          name: "СОР",
+          title: "Суммативное оценивание за раздел",
+          color: "#d97706",
+          calendar: "summative_unit",
+          active: true,
+        },
+      ],
+    });
+    const csv = vi.mocked(download).mock.lastCall![1];
+    expect(csv).toContain('"Тест";"0";"10";"0";"СОР"');
+    expect(csv).toContain('"Участие";"A*";"";"";"ФО"');
   });
   it("exports attendance and homework when no assessment exists", () => {
     const d = structuredClone(document);

@@ -261,13 +261,15 @@ def register(service,app,Workspace):
             pl=PairLessons(snap.state)
             found,aud,override=validate_slot(db,user,snap,workspace,cfg,pairs,pl,row['group_id'],row['subject_id'],body.day,body.lessonId,service.type_for(cfg,row),body.overrideReason,id)
             fields=lesson_fields(found,aud);version=row['version']+1
-            data=row['data']|dict(override=override or {},teachers=found['teachers'],journal=dict(lessonKey=fields['lesson_key'],assessmentId=row['data'].get('journal',{}).get('assessmentId')))
+            # The journal work belongs to the old lesson: a move to another lesson drops the link (the work keeps its category).
+            linked=(row['data'].get('journal') or {}).get('assessmentId');dropped=bool(linked) and fields['lesson_key']!=row['lesson_key']
+            data=row['data']|dict(override=override or {},teachers=found['teachers'],journal=dict(lessonKey=fields['lesson_key'],assessmentId=None if dropped else linked))
             try:
                 db.execute('''UPDATE assessment_bookings SET version=?,updated=?,day=?,start=?,end_time=?,lesson_id=?,lesson_key=?,class_ids=?,student_ids=?,whole_ids=?,document=? WHERE workspace=? AND id=?''',
                            (version,stamp(),body.day.isoformat(),fields['start'],fields['end_time'],fields['lesson_id'],fields['lesson_key'],fields['class_ids'],fields['student_ids'],fields['whole_ids'],encoded(data),workspace,id))
             except sqlite3.IntegrityError:raise HTTPException(409,'На этот урок уже назначена работа.')
             service.history(db,workspace,user,id,'moved',body.reason,dict(before=dict(day=row['day'],start=row['start'],lessonId=row['lesson_id']),
-                                                                             after=dict(day=body.day.isoformat(),start=fields['start'],lessonId=fields['lesson_id']),override=override or {}))
+                                                                             after=dict(day=body.day.isoformat(),start=fields['start'],lessonId=fields['lesson_id']),override=override or {},**(dict(journalUnlinked=True) if dropped else {})))
             note=dict(id=id,group_id=row['group_id'],subject_id=row['subject_id'],version=version)
             if row['status']=='published':service.notify_family(db,workspace,snap,note,'assessment.moved')
             service.notify_teachers(db,workspace,snap,note,'assessment.staff_changed',user)

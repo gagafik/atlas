@@ -220,3 +220,30 @@ def test_shutdown_requeues_and_resume_stays_with_original_database(client,tmp_pa
         assert q.get(job['id'],'demo')['status']=='succeeded'
         with closing(sqlite3.connect(other)) as db:assert db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()==[('sentinel',)]
     finally:runner.shutdown()
+
+
+def test_pre_f2_projection_is_rederived_once(client):
+    p,_=setup(client);first=prepare(client,p)
+    with api.connect() as db:
+        ids=[r[0] for r in db.execute('SELECT id FROM grading_facts ORDER BY id')];assert ids
+        db.execute('UPDATE grading_projected SET format=1')
+        for id,summary in db.execute('SELECT id,summary FROM grading_facts').fetchall():
+            value=json.loads(summary);assert 'categories' in value;value.pop('categories')
+            db.execute('UPDATE grading_facts SET summary=?,works=? WHERE id=?',(json.dumps(value),'[]',id))
+    p2=close(client,action(client,p,'reopen').json());second=prepare(client,p2)
+    with api.connect() as db:
+        assert db.execute('SELECT format FROM grading_projected').fetchall()==[(2,)]
+        assert [r[0] for r in db.execute('SELECT id FROM grading_facts ORDER BY id')]==ids
+        assert all('categories' in json.loads(r[0]) for r in db.execute('SELECT summary FROM grading_facts'))
+        assert any(json.loads(r[0]) and json.loads(r[0])[0]['category']=='fo' for r in db.execute('SELECT works FROM grading_facts'))
+    row=next(r for r in sheet(client,second).json()['items'] if r['source']['numeric'])
+    assert row['source']['categories']['fo']['numeric']==1
+    assert client.get(BASE+'/rows/'+row['id']+'/evidence?workspace=demo').json()['items'][0]['category']=='fo'
+    # A facts cache written before the format column existed is upgraded in place.
+    with api.connect() as db:
+        db.execute('ALTER TABLE grading_projected RENAME TO grading_projected_new')
+        db.execute('CREATE TABLE grading_projected(workspace TEXT,lesson_key TEXT,version INTEGER,PRIMARY KEY(workspace,lesson_key,version))')
+        db.execute('INSERT INTO grading_projected SELECT workspace,lesson_key,version FROM grading_projected_new');db.execute('DROP TABLE grading_projected_new')
+    third=prepare(client,close(client,action(client,p2,'reopen').json()))
+    with api.connect() as db:assert db.execute('SELECT format FROM grading_projected').fetchall()==[(2,)]
+    assert third['id']!=second['id']

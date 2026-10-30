@@ -3,6 +3,9 @@ import { api } from "./api";
 import { defaultDraft, needsReason } from "./finalGrades";
 import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import { csvCell } from "./utils";
+import AssessmentCategoriesEditor from "./AssessmentCategoriesEditor";
+import CategoryBadge from "./CategoryBadge";
+import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
 
 type Named = { id: string; name: string };
 type Scale = Named & {
@@ -29,6 +32,20 @@ type Calculation = {
   rawPercent: string | null;
   roundedPercent: string | null;
   recommended: string | null;
+  // Present for books prepared with category shares; older books carry only the three values above.
+  method?: "average" | "points";
+  rule?: string;
+  categories?: {
+    id: string;
+    name: string;
+    color: string;
+    share: string;
+    numeric: number;
+    percent: string | null;
+  }[];
+  missing?: string[];
+  excluded?: string[];
+  blocked?: boolean;
 };
 type Proposal = {
   scale: Scale;
@@ -77,6 +94,7 @@ type Row = {
     incompleteRoster: number;
     weight: string;
     weightedSum: string;
+    policy?: { ruleName: string; method: string };
   };
 };
 type Options = {
@@ -102,6 +120,7 @@ type Evidence = {
   date: string;
   start: string;
   assessment: string;
+  category?: string;
   score: number | null;
   label: string;
   maxScore: number;
@@ -157,6 +176,41 @@ function download(rows: unknown[][], filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const percentText = (value: string) =>
+  Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+// How a recommendation was reached: the share of every category, the method and the rule that was pinned with the book.
+function CalculationDetails({ value }: { value: Calculation }) {
+  if (!value.categories) return null;
+  const missing = (value.missing ?? []).map(
+    (id) => value.categories?.find((c) => c.id === id)?.name ?? id,
+  );
+  return (
+    <>
+      <p className="final-categories">
+        {value.categories.map((c) => (
+          <span key={c.id}>
+            <CategoryBadge category={c} />
+            {percentText(c.share)} % —{" "}
+            {c.percent === null ? "нет оценок" : `${percentText(c.percent)} %`}
+            ;{" "}
+          </span>
+        ))}
+      </p>
+      <p>
+        Метод:{" "}
+        {value.method === "points"
+          ? "сумма баллов"
+          : "среднее процентов с весом"}
+        . Правило: {value.rule}.
+        {!!missing.length && ` Нет оценок в категориях: ${missing.join(", ")}.`}
+        {value.blocked &&
+          " Правило требует оценок во всех категориях, поэтому рекомендации нет."}
+        {!!value.excluded?.length &&
+          " Оценки категорий без доли в расчёт не входят."}
+      </p>
+    </>
+  );
 }
 function Select({
   label,
@@ -214,9 +268,12 @@ function ScaleEditor({
     <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>Школьные шкалы оценивания</summary>
       <p>
-        Порог — минимальный процент для оценки. Рекомендация использует среднее
-        процентов работ с учётом их веса. Пропуски и работы с нулевым весом не
-        снижают среднее. Текстовые отметки не переводятся в баллы.
+        Порог — минимальный процент для оценки. Рекомендация считается по долям
+        категорий работ (ФО, СОР, СОЧ) школы; внутри категории — среднее
+        процентов с учётом веса работ. Категории без оценок, пропуски и работы с
+        нулевым весом не снижают результат. Текстовые отметки не переводятся в
+        баллы. Ведомости, подготовленные до введения категорий, считаются по
+        среднему всех работ.
       </p>
       <fieldset disabled={busy}>
         <Select
@@ -369,6 +426,8 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [categoryEpoch, setCategoryEpoch] = useState(0),
+    categories = useAssessmentCategories(workspace, categoryEpoch);
   const [sheet, setSheet] = useState<Sheet | null>(null),
     [bookId, setBookId] = useState(""),
     [periodId, setPeriodId] = useState(""),
@@ -577,6 +636,11 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                       setNotice("Шкала сохранена.");
                     })
                   }
+                />
+                <AssessmentCategoriesEditor
+                  workspace={workspace}
+                  config={categories}
+                  onSaved={() => setCategoryEpoch((n) => n + 1)}
                 />
                 <GradebookPreparationPanel
                   workspace={workspace}
@@ -956,6 +1020,9 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                               Минимум работ: {draftScale?.minCount}.
                             </p>
                           )}
+                          {calculation && (
+                            <CalculationDetails value={calculation} />
+                          )}
                           <label className="field">
                             Вид итога
                             <select
@@ -1072,12 +1139,21 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                               `Утвердил: ${row.proposal.approval.actor}.`}
                           </p>
                         )}
+                        {row.proposal && (
+                          <CalculationDetails
+                            value={row.proposal.calculation}
+                          />
+                        )}
                         <h4>Работы из архива закрытия</h4>
                         {!marks.length && <p>Проверочных работ нет.</p>}
                         <div className="final-evidence">
                           {marks.map((m) => (
                             <p key={m.id}>
-                              {m.date}, {m.start} · {m.assessment}:{" "}
+                              {m.date}, {m.start} ·{" "}
+                              <CategoryBadge
+                                category={categoryOf(m, categories)}
+                              />
+                              {m.assessment}:{" "}
                               {m.score !== null
                                 ? `${m.score} / ${m.maxScore}`
                                 : m.label || "Нет отметки"}{" "}

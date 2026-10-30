@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Assessment, Grade } from "./journal";
+import CategoryBadge from "./CategoryBadge";
+import { categoryOf, type Category } from "./assessmentCategories";
 
 export interface ReviewGrade {
   journalVersion: number;
@@ -34,6 +36,9 @@ interface Options {
   hasDraftChanges: boolean;
   canCreate: boolean;
   assessments: Choice[];
+  // The school's catalog and the category a new work lands in (the quiz's own, else the school default).
+  categories: Category[];
+  defaultCategory: string;
 }
 
 function display(grade: Grade | null, maxScore?: number) {
@@ -93,6 +98,7 @@ export default function HomeworkGradeForm({
     [kind, setKind] = useState<"points" | "label">("points");
   const [maxScore, setMaxScore] = useState("10"),
     [weight, setWeight] = useState("1"),
+    [category, setCategory] = useState(""),
     [score, setScore] = useState(""),
     [label, setLabel] = useState(""),
     [comment, setComment] = useState("");
@@ -107,8 +113,10 @@ export default function HomeworkGradeForm({
       `${endpoint || `journal/homework/${encodeURIComponent(lessonKey)}/grading`}?${new URLSearchParams({ studentId })}`,
       workspace,
     )
-      .then((r) => {
-        if (live) setOptions(r);
+      .then((r: Options) => {
+        if (!live) return;
+        setOptions(r);
+        setCategory(r.defaultCategory);
       })
       .catch((e) => {
         if (live) setError(e.message);
@@ -169,6 +177,7 @@ export default function HomeworkGradeForm({
                 kind,
                 maxScore: kind === "points" ? Number(maxScore) : 10,
                 weight: kind === "points" ? Number(weight) : 1,
+                category,
               },
             }
           : {}),
@@ -184,6 +193,7 @@ export default function HomeworkGradeForm({
     kind,
     maxScore,
     weight,
+    category,
     score,
     label,
     comment,
@@ -242,7 +252,7 @@ export default function HomeworkGradeForm({
               <option value="">Выберите работу</option>
               {options.assessments.map((a) => (
                 <option key={a.id} value={a.id} disabled={!a.selectable}>
-                  {a.name}
+                  {a.name} · {categoryOf(a, options).name}
                   {a.selectable ? "" : " · изменена в черновике"}
                 </option>
               ))}
@@ -273,6 +283,24 @@ export default function HomeworkGradeForm({
                     onEdited();
                   }}
                 />
+              </label>
+              <label className="field">
+                <span>Категория</span>
+                <select
+                  value={category}
+                  onChange={(e) => {
+                    setCategory(e.target.value);
+                    onEdited();
+                  }}
+                >
+                  {options.categories
+                    .filter((c) => c.active)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                </select>
               </label>
               <label className="field">
                 <span>Формат оценки</span>
@@ -323,6 +351,7 @@ export default function HomeworkGradeForm({
           )}
           {chosen && (
             <p className="muted">
+              <CategoryBadge category={categoryOf(chosen, options)} />
               Опубликовано: {display(chosen.publishedGrade, chosen.maxScore)}
               <br />
               Черновик: {display(chosen.draftGrade, chosen.maxScore)}

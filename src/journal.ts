@@ -1,4 +1,5 @@
 import { csvCell, download } from "./utils";
+import { categoryOf, type CategoryConfig } from "./assessmentCategories";
 import type { MaterialSnapshot } from "./teachingMaterials";
 import type { TopicReference } from "./curriculum";
 export interface Assessment {
@@ -7,6 +8,22 @@ export interface Assessment {
   kind: "points" | "label";
   maxScore: number;
   weight: number;
+  // The server fills an empty category with the school default; older documents carry none and read as ФО.
+  category?: string;
+  // The assessment-calendar booking this work was entered from (staff only).
+  bookingId?: string | null;
+}
+// A live assessment-calendar booking of the lesson, offered to the journal editor.
+export interface JournalBooking {
+  id: string;
+  status: string;
+  typeId: string;
+  type: string;
+  short: string;
+  topic: string;
+  calendarCategory: string;
+  journalCategory: string;
+  assessmentId: string | null;
 }
 export interface Grade {
   assessmentId: string;
@@ -80,6 +97,7 @@ export interface JournalEntry {
     version: number;
   }[];
   attendanceApprovals?: Record<string, { id: string; version: number }>;
+  bookings?: JournalBooking[];
 }
 export interface JournalRow {
   lessonKey: string;
@@ -100,6 +118,16 @@ export interface JournalSummary {
     pointsCount: number;
     labelCount: number;
     percentage: number | null;
+    // Share of every category and the composite by the school's rule; absent in reports of older servers.
+    categories?: {
+      id: string;
+      name: string;
+      color: string;
+      numeric: number;
+      percentage: number;
+    }[];
+    sharePercentage?: number | null;
+    rule?: string;
   }[];
 }
 export interface JournalReport {
@@ -267,6 +295,7 @@ export function defaultAttendancePeriod(
 export function journalCsv(
   rows: JournalRow[],
   filename = "Учебный журнал.csv",
+  categories?: CategoryConfig | null,
 ) {
   const values: unknown[][] = [
     [
@@ -284,6 +313,7 @@ export function journalCsv(
       "Оценка",
       "Максимум баллов",
       "Вес",
+      "Категория",
       "Комментарий к оценке",
       "Тема",
       "Домашнее задание",
@@ -309,6 +339,7 @@ export function journalCsv(
         a?.kind === "points" ? (g?.score ?? "") : g?.label || "",
         a?.kind === "points" ? a.maxScore : "",
         a?.kind === "points" ? a.weight : "",
+        a ? categoryOf(a, categories).name : "",
         g?.comment || "",
         content.topic,
         content.homework,

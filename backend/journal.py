@@ -11,6 +11,7 @@ from .access import LOCAL, now
 from .journal_reads import SCHEMA, read as snapshot_read
 from .calendar_ops import resolve_day, DayContext
 from .notifications import encoded
+from .assessment_categories import SHAPE, DEFAULTS, tally, merge, policy_for, composite, breakdown, config as category_config
 
 
 class Assessment(Model):
@@ -19,6 +20,14 @@ class Assessment(Model):
     kind: Literal['points', 'label'] = 'points'
     maxScore: float = Field(default=10, gt=0, le=10000, allow_inf_nan=False)
     weight: float = Field(default=1, ge=0, le=100, allow_inf_nan=False)
+    # Empty means "the school default": save_entry fills it from the catalog (assessment_categories.resolve_content).
+    category: str = Field(default='', max_length=40)
+    bookingId: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+    @field_validator('category', mode='before')
+    @classmethod
+    def category_shape(cls, value):
+        if not isinstance(value,str) or not SHAPE.fullmatch(value): raise ValueError('Категория работы указана неверно.')
+        return value
     @field_validator('maxScore', 'weight', mode='before')
     @classmethod
     def number(cls, value, info):
@@ -81,6 +90,8 @@ class Content(Model):
     def valid_grades(self):
         assessments = {a.id:a for a in self.assessments}
         if len(assessments) != len(self.assessments): raise ValueError('Проверочные работы не должны повторяться.')
+        linked = [a.bookingId for a in self.assessments if a.bookingId]
+        if len(set(linked)) != len(linked): raise ValueError('Одна работа календаря связана с несколькими работами журнала.')
         if len({r.studentId for r in self.records}) != len(self.records): raise ValueError('Ученик указан несколько раз.')
         for record in self.records:
             if record.attendance != 'late' and record.lateMinutes: raise ValueError('Минуты опоздания указываются только при опоздании.')
@@ -184,7 +195,9 @@ def pupil_projection(document, student_id):
     student = next(s for s in lesson['students'] if s['id']==student_id)
     return dict(student=dict(id=student_id,name=student['name']),
                 lesson={k:lesson[k] for k in ['date','start','end','subjectId','subject','group','teachers','rooms']},
-                content={k:document['content'][k] for k in ['topic','homework','dueDate','assessments']} | dict(
+                content={k:document['content'][k] for k in ['topic','homework','dueDate']} | dict(
+                    # Calendar ids are staff data; the category stays visible.
+                    assessments=[{k:v for k,v in a.items() if k!='bookingId'} for a in document['content']['assessments']],
                     homeworkFiles=document['content'].get('homeworkFiles',[]),
                     materials=document['content'].get('materials',[]),
                     curriculum=document['content'].get('curriculum'),
@@ -192,7 +205,10 @@ def pupil_projection(document, student_id):
                     homeworkSubmission=document['content'].get('homeworkSubmission','online')),record=record)
 
 
-def summary(rows):
+def summary(rows, cfg=None, classes=None):
+    """Attendance and per-subject marks of published rows; classes maps lessonKey to the pupil's class for the share rules."""
+    cfg = cfg or DEFAULTS
+    classes = classes or {}
     subjects = {}
     attendance = {s:0 for s in ['unmarked','present','absent','late','excused']}
     late_minutes = 0
@@ -200,7 +216,7 @@ def summary(rows):
         record,content,lesson = row['record'],row['content'],row['lesson']
         attendance[record['attendance']] += 1
         late_minutes += record['lateMinutes']
-        current = subjects.setdefault(lesson['subjectId'],dict(subjectId=lesson['subjectId'],subject=lesson['subject'],pointsCount=0,labelCount=0,weightedSum=0,weight=0))
+        current = subjects.setdefault(lesson['subjectId'],dict(subjectId=lesson['subjectId'],subject=lesson['subject'],pointsCount=0,labelCount=0,weightedSum=0,weight=0,sums={},classId=None))
         assessments = {a['id']:a for a in content['assessments']}
         for grade in record['grades']:
             a = assessments[grade['assessmentId']]
@@ -209,7 +225,15 @@ def summary(rows):
                 current['weightedSum'] += grade['score']/a['maxScore']*100*a['weight']
                 current['weight'] += a['weight']
             elif grade['label']: current['labelCount'] += 1
-    return dict(attendance=attendance,lateMinutes=late_minutes,subjects=[dict(subjectId=s['subjectId'],subject=s['subject'],pointsCount=s['pointsCount'],labelCount=s['labelCount'],percentage=round(s['weightedSum']/s['weight'],2) if s['weight'] else None) for s in subjects.values()])
+        merge(current['sums'],tally(content['assessments'],record['grades']))
+        current['classId'] = classes.get(row.get('lessonKey')) or current['classId']
+    result = []
+    for s in subjects.values():
+        policy = policy_for(cfg,s['subjectId'],s['classId'])
+        share = composite(s['sums'],policy)['exact']
+        result.append(dict(subjectId=s['subjectId'],subject=s['subject'],pointsCount=s['pointsCount'],labelCount=s['labelCount'],percentage=round(s['weightedSum']/s['weight'],2) if s['weight'] else None,
+                           categories=breakdown(s['sums'],cfg,policy['method']),sharePercentage=round(float(share),2) if share is not None else None,rule=policy['ruleName']))
+    return dict(attendance=attendance,lateMinutes=late_minutes,subjects=result)
 
 
 class Journal:
@@ -252,6 +276,8 @@ class Journal:
         deadline_tables(db)
         from .homework_queue_projection import tables as homework_queue_tables
         homework_queue_tables(db)
+        from .assessment_categories import tables as category_tables
+        category_tables(db)
         # Written last: ordinary reads treat a database without it as not yet migrated. A savepoint keeps the
         # caller free to start its own BEGIN IMMEDIATE (a plain INSERT would leave an implicit transaction open).
         if db.execute("SELECT version FROM journal_projection_versions WHERE name='journal_schema'").fetchone()!=(SCHEMA,):
@@ -375,12 +401,13 @@ class Journal:
                           document=dict(lesson=lesson,content=Content(records=[PupilRecord(studentId=s['id']) for s in lesson['students']]).model_dump(mode='json')))
         from .absences import approvals
         from .journal_periods import locks
+        from .assessment_categories import lesson_bookings
         def restrictions(db):
             excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
             closed=locks(db,workspace,lesson,result['document']['lesson'],existing['published']['lesson'] if existing and existing['published'] else None)
-            return excuses,closed
-        excuses,closed=self.reading(restrictions) if db is None else restrictions(db)
-        return result | dict(periodLocks=closed,attendanceApprovals=excuses,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
+            return excuses,closed,lesson_bookings(db,workspace,key,category_config(db,workspace))
+        excuses,closed,bookings=self.reading(restrictions) if db is None else restrictions(db)
+        return result | dict(periodLocks=closed,attendanceApprovals=excuses,bookings=bookings,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
                              rosterFrozen=fixed,futureLesson=bool(lesson and lesson['date']>today().isoformat()),
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
 
@@ -437,6 +464,8 @@ class Journal:
     def register(self, app, Workspace):
         from .grade_feed import register as grade_feed
         grade_feed(self,app,Workspace)
+        from .assessment_categories import register as categories
+        categories(self,app,Workspace)
         @app.get('/api/journal/options')
         def options(request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace)
@@ -523,6 +552,8 @@ class Journal:
                 old_public = previous['published'] if previous else None
                 from .journal_periods import require_open
                 require_open(db,workspace,document['lesson'],previous['document']['lesson'] if previous else None,old_public['lesson'] if old_public else None)
+                from .assessment_categories import resolve_content
+                document['content']=resolve_content(db,workspace,body.lessonKey,document['content'],previous,user)
                 from .assignment_files import bind
                 bind(db,body.content.homeworkFiles,workspace,body.lessonKey,user['id'])
                 self.store_revision(db,workspace,body.lessonKey,user,state.revision,version,document,previous,publish=body.publish,created=created)
@@ -588,6 +619,7 @@ class Journal:
             from .absences import approvals
             def read(db):
                 self.recheck_account(db,user)
+                cfg = category_config(db,workspace);classes = {}
                 # The attendance projection holds one row per published record, so it drives the range scan.
                 query = 'SELECT e.lesson_key,e.published_document,e.published_version,e.published_at,a.day,a.start FROM journal_attendance a JOIN journal_entries e ON e.workspace=a.workspace AND e.lesson_key=a.lesson_key WHERE a.workspace=? AND a.student_id=? AND a.day BETWEEN ? AND ? AND e.published_document IS NOT NULL'
                 params = [workspace,studentId,start.isoformat(),end.isoformat()]
@@ -609,6 +641,7 @@ class Journal:
                     projected = pupil_projection(document,studentId)
                     if projected:
                         rows.append(projected | dict(lessonKey=key,version=published_version,publishedAt=published_at));marks.append(f'{day}|{begin}|{key}')
+                        classes[key] = next((x.get('classId') for x in document['lesson']['students'] if x['id']==studentId),None)
                 def approve(chosen):
                     accepted = approvals(db,workspace,[r['lesson']|dict(students=[dict(id=studentId)]) for r in chosen])
                     for i,row in enumerate(chosen):
@@ -619,5 +652,5 @@ class Journal:
                 approve(rows)
                 # A later page continues after the last row it scanned, even if some were filtered out.
                 if after: return dict(rows=rows,summary=None,nextAfter=f'{fetched[-1][4]}|{fetched[-1][5]}|{fetched[-1][0]}' if more else None,source='published')
-                return dict(rows=rows[:limit],summary=summary(rows),nextAfter=marks[limit-1] if len(rows)>limit else None,source='published')
+                return dict(rows=rows[:limit],summary=summary(rows,cfg,classes),nextAfter=marks[limit-1] if len(rows)>limit else None,source='published')
             return self.reading(read)

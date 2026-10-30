@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import CategoryBadge from "./CategoryBadge";
+import {
+  categoryOf,
+  useAssessmentCategories,
+  type CategoryConfig,
+} from "./assessmentCategories";
 import "./GradeFeed.css";
 
 type Change = "new" | "changed" | "removed";
@@ -13,6 +19,8 @@ type FeedItem = {
   start: string;
   teachers: string | string[];
   assessment: string;
+  // Absent in events written before categories; those read as ФО.
+  category?: string;
   kind: "points" | "label";
   maxScore: number | null;
   weight: number;
@@ -25,6 +33,7 @@ type FeedItem = {
     maxScore: number;
     weight: number;
     assessment: string;
+    category?: string;
     commentChanged: boolean;
   } | null;
 };
@@ -77,7 +86,7 @@ function gradeText(item: FeedItem) {
     ? item.label || "—"
     : valueText(item.score, item.label, item.maxScore);
 }
-function changeText(item: FeedItem) {
+function changeText(item: FeedItem, categories: CategoryConfig | null) {
   const before = item.previous;
   if (item.change === "new" || !before) return "новая";
   const old = valueText(before.score, before.label, before.maxScore);
@@ -91,6 +100,10 @@ function changeText(item: FeedItem) {
     parts.push(`вес был ${number(before.weight)}`);
   if (before.assessment !== item.assessment)
     parts.push(`называлась «${before.assessment}»`);
+  if (before.category && before.category !== (item.category || "fo"))
+    parts.push(
+      `категория была ${categoryOf({ category: before.category }, categories).name}`,
+    );
   if (before.commentChanged) parts.push("изменён комментарий");
   return ["изменена", ...parts].join(", ");
 }
@@ -103,6 +116,7 @@ function FamilyFeed({
   workspace: string;
   studentId: string;
 }) {
+  const categories = useAssessmentCategories(workspace);
   const [feed, setFeed] = useState<Feed | null>(null),
     [hidden, setHidden] = useState(false),
     [busy, setBusy] = useState(false),
@@ -283,12 +297,16 @@ function FamilyFeed({
               >
                 <div className="grade-feed-line">
                   <span>
-                    {`${item.subject} · ${dayLabel(item.date)} · ${item.assessment}: `}
+                    {`${item.subject} · ${dayLabel(item.date)} · `}
+                    <CategoryBadge category={categoryOf(item, categories)} />
+                    {`${item.assessment}: `}
                     <strong className="grade-feed-value">
                       {gradeText(item)}
                     </strong>
                   </span>
-                  <span className="grade-feed-change">{changeText(item)}</span>
+                  <span className="grade-feed-change">
+                    {changeText(item, categories)}
+                  </span>
                   {!item.signed && (
                     <span className="grade-feed-badge">
                       {pupil ? "не просмотрена" : "не подписана"}
