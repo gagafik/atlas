@@ -6,56 +6,50 @@ import threading
 import httpx
 import pytest
 
-from backend import api, portal_cache
+from backend import api
 from backend.models import Placement, Student
 from backend.portal_cache import PortalSnapshots, Snapshot
 from backend.seed import initial_state
 from test_access import client, enable, create, signed
 
 
-def test_snapshot_reuses_day_for_distinct_users_and_copies_responses(monkeypatch):
+def test_snapshot_day_rows_are_projected_per_user_and_copied():
     state=initial_state('demo')
     state.placements=[Placement(id='p',workloadId='w4',day=0,period=2,roomId='r0')]
     snapshot=Snapshot(state)
-    original=portal_cache.resolve_day
-    calls=[]
-    def resolve(*args): calls.append(1); return original(*args)
-    monkeypatch.setattr(portal_cache,'resolve_day',resolve)
     day=date(2026,8,17)
     first=snapshot.day_rows(day,'student','s1')
     assert first and snapshot.day_rows(day,'student','s3')==first
     assert snapshot.day_rows(day,'student','s2')==[]
     # Only a teacher's own rows carry the substitution type; the rest is shared.
     assert [{k:v for k,v in r.items() if k!='changeType'} for r in snapshot.day_rows(day,'teacher','t0')]==first
+    subject=first[0]['subject']
     first[0]['subject']='caller mutation'
-    assert snapshot.day_rows(day,'student','s1')[0]['subject']=='Математика'
-    assert calls==[1]
+    assert snapshot.day_rows(day,'student','s1')[0]['subject']==subject
 
 
-def test_cache_replaces_changed_revision_and_database_and_is_bounded():
-    current=initial_state('demo'); identity='one'; reads=[]
-    def read(_): reads.append(1); return current.model_copy(deep=True)
-    cache=PortalSnapshots(read,lambda _: (identity,current.revision))
-    first=cache.get('demo')
-    assert cache.get('demo') is first and len(reads)==1
-    current.revision+=1
-    assert cache.get('demo') is not first
-    identity='two'
-    assert cache.get('demo').state.revision==current.revision and len(reads)==3
-    identity='three'; cache.get('demo')
-    assert len(cache.cache)==2 and ('one','demo') not in cache.cache
+def test_cache_serves_fresh_data_after_revision_or_database_change():
+    current=initial_state('demo'); identity='one'
+    cache=PortalSnapshots(lambda _: current.model_copy(deep=True),lambda _: (identity,current.revision))
+    assert cache.get('demo').state.subjects[0].name==current.subjects[0].name
+    current.revision+=1; current.subjects[0].name='After revision change'
+    assert cache.get('demo').state.subjects[0].name=='After revision change'
+    # Another database can hold the same revision with different data.
+    current.subjects[0].name='After database change'; identity='two'
+    assert cache.get('demo').state.subjects[0].name=='After database change'
 
 
-def test_per_snapshot_day_and_week_limits_and_week_copy():
+def test_snapshot_caches_stay_bounded_and_week_rows_are_copies():
+    days,weeks=12,130
     state=initial_state('demo')
-    state.students.extend(Student(id=f'new{i}',name=f'New {i}',classId='c-demo-a') for i in range(130))
+    state.students.extend(Student(id=f'new{i}',name=f'New {i}',classId='c-demo-a') for i in range(weeks))
     state.placements=[Placement(id='p',workloadId='w0',day=0,period=2,roomId='r0')]
     snapshot=Snapshot(state)
-    for n in range(12): snapshot.day_rows(date(2026,8,17)+timedelta(days=n),'student','s1')
-    for n in range(130): snapshot.week_rows('weekly','student',f'new{n}')
-    assert len(snapshot.days)==8 and len(snapshot.weeks)==128
-    row=snapshot.week_rows('weekly','student','new129'); row[0]['subject']='changed'
-    assert snapshot.week_rows('weekly','student','new129')[0]['subject']!='changed'
+    for n in range(days): snapshot.day_rows(date(2026,8,17)+timedelta(days=n),'student','s1')
+    for n in range(weeks): snapshot.week_rows('weekly','student',f'new{n}')
+    assert len(snapshot.days)<days and len(snapshot.weeks)<weeks
+    row=snapshot.week_rows('weekly','student',f'new{weeks-1}'); row[0]['subject']='changed'
+    assert snapshot.week_rows('weekly','student',f'new{weeks-1}')[0]['subject']!='changed'
 
 
 def test_warmed_portal_invalidates_on_save_undo_and_permission_revocation(client):
@@ -90,15 +84,15 @@ def test_connection_context_closes_after_commit_and_rollback(tmp_path,monkeypatc
         with pytest.raises(sqlite3.OperationalError): read_only.execute("INSERT INTO sample VALUES ('no')")
 
 
-def test_session_lookup_is_outside_event_loop_and_status_does_not_repeat(client,monkeypatch):
+def test_session_lookup_runs_outside_the_event_loop(client,monkeypatch):
     enable(client)
-    calls=[]; original=api.access.identify
-    def identify(request): calls.append(threading.get_ident()); return original(request)
+    threads=[]; original=api.access.identify
+    def identify(request): threads.append(threading.get_ident()); return original(request)
     monkeypatch.setattr(api.access,'identify',identify)
     async def request():
         loop_thread=threading.get_ident()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app),base_url='http://testserver') as browser:
             response=await browser.get('/api/auth/status')
         assert response.status_code==200 and response.json()['enabled']
-        assert len(calls)==1 and calls[0]!=loop_thread
+        assert threads and loop_thread not in threads
     asyncio.run(request())

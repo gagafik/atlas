@@ -185,21 +185,17 @@ def test_retention_and_paged_unread_history(client):
 def test_topic_keeps_one_unread_entry(client):
     def deliver(revision,topic=None):
         with api.access.lock, api.connect() as db: api.notifications.deliver(db,[LOCAL],'demo',revision,'forms.submitted',topic=topic)
-    def rows(topic):
-        with api.connect() as db:
-            clause = 'topic IS NULL AND action=?' if topic is None else 'topic=?'
-            return db.execute(f'SELECT id,revision,read_at FROM notifications WHERE user_id=? AND {clause} ORDER BY id',(LOCAL['id'],'forms.submitted' if topic is None else topic)).fetchall()
+    def entries(): return [i for i in inbox(client)['items'] if i['action'] == 'forms.submitted']  # newest first
     deliver(1,'t1'); deliver(2,'t1')
-    (first,) = rows('t1')
-    assert first[1] == 2 and first[2] is None
-    assert client.post('/api/notifications/read',json={'ids':[first[0]]}).status_code == 200
+    (first,) = entries()
+    assert first['revision'] == 2 and not first['read']
+    assert client.post('/api/notifications/read',json={'ids':[first['id']]}).status_code == 200
     deliver(3,'t1')
-    kept = rows('t1')
-    assert [r[1] for r in kept] == [2,3] and kept[0][2] and kept[1][2] is None
+    assert [(i['revision'],i['read']) for i in entries()] == [(3,False),(2,True)]
     deliver(4,'t2')
-    assert len(rows('t1')) == 2 and len(rows('t2')) == 1
+    assert [i['revision'] for i in entries()] == [4,3,2]
     deliver(5); deliver(6)
-    assert len(rows(None)) == 2
+    assert [i['revision'] for i in entries()] == [6,5,4,3,2]
     assert all('topic' not in item for item in inbox(client)['items'])
 
 

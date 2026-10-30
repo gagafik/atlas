@@ -22,13 +22,18 @@ def added(s, day=MON, **values):
         teacherIds=['t3'], roomIds=['r0'], **values))
 
 
+def affected(issues):
+    """Pupils touched by each broken rule, however the violations are split into separate issues."""
+    found={}
+    for i in issues:found.setdefault(i['ruleId'],set()).update(i.get('affectedStudentIds',[]))
+    return found
+
+
 def test_daily_class_limits_include_actual_groups_and_only_affected_pupils():
     s = fixture(); s.rules = [TimetableRule(id='max', name='Не больше 1', kind='daily_load', scope='class', targetIds=['c-demo-a'], maxLessons=1)]
     assert not day_report(s,TUE)['issues']
     changed=s.model_copy(deep=True); changed.datedLessons = [added(s,TUE)]
-    result=day_report(changed,TUE)
-    assert len(result['issues']) == 2
-    assert {id for i in result['issues'] for id in i.get('affectedStudentIds', [])} == {'s1','s2'}
+    assert affected(day_report(changed,TUE)['issues']) == {'max': {'s1','s2'}}
     assert not inspect_edit(s,changed)['canApply']
 
 
@@ -37,7 +42,7 @@ def test_empty_day_minima_respect_class_holidays_and_teacher_absence_but_not_man
     s.rules = [TimetableRule(id='min', name='Минимум', kind='daily_load', scope='class', targetIds=['c-demo-a'], minLessons=1, includeEmptyDays=True),
                TimetableRule(id='teacher', name='Учитель минимум', kind='daily_load', scope='teacher', targetIds=[teacher], minLessons=1, includeEmptyDays=True)]
     s.datedLessons = [DatedLesson(id='cancel', name='Отмена', kind='cancel', onDate=MON, sourceDate=MON, placementId='english')]
-    assert len(day_report(s,MON)['issues'])==3
+    assert affected(day_report(s,MON)['issues'])=={'min':{'s1','s2'},'teacher':set()}
     s.events = [Event(id='holiday', name='Каникулы', start=MON, end=MON, kind='holiday', effect='cancel', classIds=['c-demo-a'])]
     assert not day_report(s,MON)['issues']
     s.events=[]; s.rules=s.rules[1:]
@@ -49,10 +54,12 @@ def test_shape_uses_actual_clock_and_soft_penalties_without_blocking_preview():
     s=fixture(); s.rules=[TimetableRule(id='shape', name='Ранний конец', kind='day_shape', scope='class', targetIds=['c-demo-a'], latestEnd='14:00', maxIdleMinutes=60, mode='soft', weight=3)]
     changed=s.model_copy(deep=True); changed.datedLessons=[added(s)]
     result=day_report(changed,MON)
-    assert result['warningCount']==4 and result['qualityPenalty']>0
+    assert affected(result['warnings'])=={'shape':{'s1','s2'}} and result['qualityPenalty']>0
     assert inspect_edit(s,changed)['canApply']
     changed.rules[0].mode='hard'
-    assert any('позже' in i['message'] for i in day_report(changed,MON)['issues'])
+    for limits in [dict(latestEnd='14:00',maxIdleMinutes=None),dict(latestEnd=None,maxIdleMinutes=60)]:
+        changed.rules[0]=changed.rules[0].model_copy(update=limits)
+        assert affected(day_report(changed,MON)['issues'])=={'shape':{'s1','s2'}}
 
 
 def test_lunch_and_gap_periods_reuse_reference_bells():
@@ -67,7 +74,7 @@ def test_lunch_and_gap_periods_reuse_reference_bells():
 def test_subject_relations_and_workload_scope_survive_dated_replacement():
     s=fixture(); extra=added(s); s.datedLessons=[extra]
     s.rules=[TimetableRule(id='order', name='История раньше английского', kind='relation', scope='class', targetIds=['c-demo-a'], subjectIds=['sub3'], otherSubjectIds=['sub2'], relation='before')]
-    assert len([i for i in day_report(s,MON)['issues'] if i['type']=='dated_rule'])==2
+    assert affected([i for i in day_report(s,MON)['issues'] if i['type']=='dated_rule'])=={'order':{'s1','s2'}}
     s.rules=[TimetableRule(id='load', name='Нагрузка позже', kind='day_shape', scope='workload', targetIds=['w0'], earliestStart='10:00')]
     assert any(i['ruleId']=='load' for i in day_report(s,MON)['issues'])
 
@@ -77,7 +84,7 @@ def test_added_subject_without_weekly_workload_and_weekend_empty_minima():
     # Existing History workloads are removed to test a new subject/group pair.
     s.workloads=[w for w in s.workloads if w.subjectId!='sub3']
     s.datedLessons=[added(s)]
-    assert len([i for i in day_report(s,MON)['issues'] if i['type']=='dated_rule'])==2
+    assert affected([i for i in day_report(s,MON)['issues'] if i['type']=='dated_rule'])=={'subject':{'s1','s2'}}
     s.rules=[TimetableRule(id='minimum', name='Минимум', kind='daily_load', scope='class', minLessons=1, includeEmptyDays=True)]
     assert not day_report(s,date(2026,8,22))['issues']
 

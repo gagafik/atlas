@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date,timedelta
 from uuid import uuid4
-import base64,csv,io,json,sqlite3
+import base64,csv,io,json
 import pytest
 from backend import api,registers
 from backend.models import Room
@@ -148,12 +148,8 @@ def test_visitor_arrival_departure_and_inside_view(client,setup):
 def test_inside_list_is_not_cut_off_and_pages_cover_every_row(client,setup):
     guard=setup[0];assign(client,(guard,['visitors']));g=signed('guard')
     # 101 earlier visitors never marked as departed, then one who arrives now: the new one must not disappear.
-    stale=ok(arrive(g,name='Давний Гость 0',arrivedAt=ago(days=3)))
-    with api.connect() as db:
-        db.row_factory=sqlite3.Row;row=db.execute('SELECT * FROM registers_visitors WHERE id=?',(stale['id'],)).fetchone()
-        for i in range(1,101):
-            doc=json.loads(row['document'])|dict(name=f'Давний Гость {i}')
-            db.execute("INSERT INTO registers_visitors(id,workspace,version,status,day,arrived,departed,badge,host_id,author_id,author_name,created,updated,search,document) VALUES (?,?,1,'inside',?,?,'','','',?,?,?,?,?,?)",(uuid4().hex,'demo',row['day'],row['arrived'],row['author_id'],row['author_name'],row['created'],row['updated'],doc['name'].casefold(),json.dumps(doc,ensure_ascii=False)))
+    long_ago=ago(days=3)
+    for i in range(101):ok(arrive(g,name=f'Давний Гость {i}',arrivedAt=long_ago))
     fresh=ok(arrive(g,name='Свежий Гость',arrivedAt=ago(minutes=5)))
     everyone=get(g,'visitors?inside=true');assert everyone['inside']==102 and everyone['count']==102 and everyone['nextBefore'] is None and fresh['id'] in [x['id'] for x in everyone['items']]
     assert everyone['items'][-1]['id']==fresh['id'] and sum(x['overdue'] for x in everyone['items'])==101

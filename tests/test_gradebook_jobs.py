@@ -63,12 +63,13 @@ def test_import_is_invisible_until_complete_and_cache_reused(client,tmp_path,mon
     assert observed and q.get(job['id'],'demo')['status']=='succeeded' and api.read('demo')==before
     b=dict(id=job['bookId']);rows=sheet(client,b).json()['items'];r=next(r for r in rows if r['source']['numeric'])
     first=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json()['items'];assert first
+    cached=lambda db:[db.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ('grading_facts','grading_projected')]
+    with q.connect() as db:before_close=cached(db)
+    assert all(before_close)
     reopened=action(client,p,'reopen').json();p2=close(client,reopened);second=prepare(client,p2)
-    with q.connect() as db:
-        assert db.execute('SELECT count(*) FROM grading_facts').fetchone()[0]==2
-        assert db.execute('SELECT count(*) FROM grading_projected').fetchone()[0]==1
-        assert db.execute('SELECT count(*) FROM grading_marks').fetchone()[0]==0
+    with q.connect() as db:assert cached(db)==before_close
     r2=next(v for v in sheet(client,second).json()['items'] if v['studentId']==r['studentId'] and v['subjectId']==r['subjectId'])
+    assert r2['source']==r['source']
     assert client.get(BASE+'/rows/'+r2['id']+'/evidence?workspace=demo').json()['items']==first
 
 def test_cancel_mid_import_keeps_no_partial_book(client,tmp_path,monkeypatch):

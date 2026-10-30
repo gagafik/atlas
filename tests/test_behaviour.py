@@ -227,25 +227,28 @@ def lesson_note(c, key, students, category='discipline', **values):
     return note(c, students, category, day=LESSON_DAY, lessonKey=key, **values)
 
 
-def test_lesson_teacher_marks_pupils_of_that_lesson_and_family_sees_lesson(client):
+def test_lesson_teacher_marks_pupils_of_that_lesson_and_family_sees_lesson(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 17))
     enable(client); create(client, 'teacher'); teacher(client, 'other', 't1'); guardian(client, 'mother', 's1')
     t, other, mother = signed('teacher'), signed('other'), signed('mother')
     key = lesson_key(t)
     marks = ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))
-    assert marks['canMark'] and marks['notes'] == [] and marks['label'] == 'Английский язык, 17.08.2026, 08:20'
+    assert marks['canMark'] and marks['notes'] == [] and marks['label']
     assert {c['level'] for c in marks['categories']} == {'teacher'}
     assert ok(lesson_note(t, key, ['s1'], 'discipline', text='Разговаривал'))['status'] == 'published'
     assert lesson_note(t, key, ['s3']).status_code == 403
     assert lesson_note(t, key, ['s1'], 'class-remark').status_code == 403
     assert other.get(url('lesson', lessonKey=key, day=LESSON_DAY)).status_code == 404
     assert lesson_note(other, key, ['s1']).status_code == 404
-    assert [(n['studentId'], n['category']) for n in ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['notes']] == [('s1', 'Нарушение дисциплины')]
+    title = next(c['title'] for c in marks['categories'] if c['id'] == 'discipline')
+    assert [(n['studentId'], n['category']) for n in ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['notes']] == [('s1', title)]
     seen = ok(family(mother, 's1'))['items'][0]
-    assert seen['lesson'] == 'Английский язык, 17.08.2026, 08:20' and seen['text'] == 'Разговаривал'
+    assert seen['lesson'] == marks['label'] and seen['text'] == 'Разговаривал'
 
 
-def test_substitute_marks_lesson_and_closed_period_blocks_marks(client):
+def test_substitute_marks_lesson_and_closed_period_blocks_marks(client, monkeypatch):
     from test_journal_periods import period, close
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 17))
     enable(client); create(client, 'teacher'); teacher(client, 'substitute', 't3')
     original, substitute = signed('teacher'), signed('substitute')
     key = lesson_key(original)

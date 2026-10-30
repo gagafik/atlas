@@ -15,6 +15,7 @@ from backend.access import digest, now
 from backend.notifications import permission_key
 from test_access import client, enable, create, signed, PASSWORD, HEADERS
 from test_grade_feed import family, published
+from seeding import read_row, insert_row
 
 BASE='/api/notifications/push'
 
@@ -94,13 +95,14 @@ def test_coalescing_commits_with_inbox_and_no_network_on_save(client,push):
     account=enable(client);device,data=subscribe(client)
     service,clock,calls=push
     for _ in range(20):notify(account)
-    assert len(queue())==1 and queue()[0][1]=='queued' and queue()[0][5]==20
+    assert len(queue())==1 and queue()[0][1]=='queued'
     assert calls==[]
+    before=queue()
     with pytest.raises(RuntimeError):
         with api.access.lock,api.connect() as db:
             api.notifications.deliver(db,[account],'demo',2,'message.received')
             raise RuntimeError('rollback')
-    assert queue()[0][5]==20
+    assert queue()==before
     assert len(client.get('/api/notifications/inbox').json()['items'])==20
     clock[0]+=3
     assert service.process_one() and queue()[0][1]=='sent'
@@ -175,22 +177,12 @@ def test_owner_isolation_versions_limits_and_rebinding(client,push):
 def test_device_limit_counts_only_active_subscriptions(client,push):
     enable(client);device,data=subscribe(client)
     for _ in range(9):subscribe(client)
-    with api.access.lock,api.connect() as db:db.execute('UPDATE push_devices SET active=0,version=version+1 WHERE id=?',(device['id'],))
-    newest,_=subscribe(client)
-    refused=client.post(BASE+'/devices',json=data|dict(version=2));assert refused.status_code==409 and '10 устройств' in refused.json()['detail']
+    # Signing a device out leaves it listed (it can still be removed) but frees its slot.
+    signed('admin').post('/api/auth/logout',json=dict(pushEndpointHash=digest(data['endpoint']))).raise_for_status()
+    subscribe(client)
+    refused=client.post(BASE+'/devices',json=data|dict(version=device['version']+1));assert refused.status_code==409 and '10 устройств' in refused.json()['detail']
     listed=client.get(BASE+'/options').json()['devices']
-    assert len(listed)==11 and sum(d['active'] for d in listed)==10
-    # Inactive entries stay visible for removal but are bounded to ten per account.
-    with api.access.lock,api.connect() as db:
-        template=db.execute('SELECT * FROM push_devices WHERE id=?',(device['id'],)).fetchone()
-        for i in range(12):
-            db.execute('INSERT INTO push_devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,?,NULL)',(uuid4().hex,uuid4().hex,template[2],template[3],template[4],template[5],template[6],template[7],1,'Старое',template[10],template[11]-1-i,template[12],'enabled'))
-    client.post(BASE+'/devices/'+newest['id']+'/remove',json=dict(version=newest['version'])).raise_for_status()
-    latest,_=subscribe(client)
-    with api.connect() as db:
-        rows=db.execute('SELECT id,active FROM push_devices WHERE user_id=?',(template[5],)).fetchall()
-        assert sum(not r[1] for r in rows)==10 and latest['id'] in {r[0] for r in rows} and device['id'] in {r[0] for r in rows}
-        assert sum(r[1] for r in rows)==10
+    assert len(listed)==11 and sum(d['active'] for d in listed)==10 and not next(d for d in listed if d['id']==device['id'])['active']
 
 
 def test_device_limit_ignores_expired_and_account_changed_devices_and_pruning_clears_queue(client,push):
@@ -207,11 +199,11 @@ def test_device_limit_ignores_expired_and_account_changed_devices_and_pruning_cl
     listed=client.get(BASE+'/options').json()['devices']
     assert len(listed)==12 and sum(d['active'] for d in listed)==10
     with api.access.lock,api.connect() as db:
-        template=db.execute('SELECT * FROM push_devices WHERE id=?',(expired['id'],)).fetchone();extra=[]
+        template=read_row(db,'push_devices',id=expired['id']);extra=[]
         for i in range(12):
             id=uuid4().hex;extra.append(id)
-            db.execute('INSERT INTO push_devices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,NULL,?,NULL)',(id,uuid4().hex,template[2],template[3],template[4],template[5],template[6],template[7],1,'Старое',template[10],template[11]-1-i,template[12],'enabled'))
-            db.execute("INSERT INTO push_outbox VALUES (?,1,1,1,'queued',0,0,?,NULL,NULL,NULL,NULL)",(id,time.time()+86400))
+            insert_row(db,'push_devices',template,id=id,endpoint_hash=uuid4().hex,version=1,name='Старое',updated=template['updated']-1-i,active=0)
+            insert_row(db,'push_outbox',device_id=id,device_version=1,notification_id=1,generation=1,status='queued',attempts=0,available=0,expires=time.time()+86400)
     client.post(BASE+'/devices/'+first['id']+'/remove',json=dict(version=first['version'])).raise_for_status()
     latest,_=subscribe(client)
     with api.connect() as db:

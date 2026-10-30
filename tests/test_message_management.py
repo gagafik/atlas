@@ -10,6 +10,7 @@ from test_access import client, create, signed
 from test_messages import setup, url, detail, payload
 from test_message_files_groups import group, upload, download
 from test_message_drafts import save, get
+from seeding import read_row, insert_row
 
 
 def add(user, thread, ids, version, **changes):
@@ -171,24 +172,24 @@ def test_concurrent_add_reply_and_handoff_removal_are_versioned(client):
     value=detail(signed('next'),thread);assert value['readOnly']==(results[1].status_code==200)
 
 
-def test_candidate_pages_filter_school_scope_before_deserializing_accounts(client,monkeypatch):
+def test_candidate_pages_reach_every_eligible_account_among_many_out_of_scope_ones(client):
     people=setup(client);teacher=signed('teacher');thread=group(teacher)
     with api.connect() as db:
-        password=db.execute('SELECT password FROM accounts WHERE id=?',(people['parent']['id'],)).fetchone()[0]
+        template=read_row(db,'accounts',id=people['parent']['id'])
         for prefix,pupil,count in [('foreign','s3',4000),('late','s1',120)]:
             perms=encoded(dict(workspaces=[],grants=[dict(workspace='demo',view='student',entityIds=[pupil])]))
-            db.executemany('INSERT INTO accounts VALUES (?,?,?,?,1,1,?,?)',[(f'{prefix}{i}',f'{prefix}{i}',f'Кандидат {prefix} {i:04d}','parent',password,perms) for i in range(count)])
-        # Old excluded memberships must not cause full account decoding on every read.
-        db.executemany('INSERT INTO message_members (thread_id,user_id,role,scope_students) VALUES (?,?,?,?)',[(thread,f'foreign{i}','parent',encoded(['s3'])) for i in range(4000)])
-        db.executemany('INSERT INTO message_exclusions VALUES (?,?,?,?)',[(thread,f'foreign{i}','remove',now().isoformat()) for i in range(4000)])
-    original=api.access.public;decoded=[]
-    def count(row):decoded.append(row[0]);return original(row)
-    monkeypatch.setattr(api.access,'public',count)
-    first=candidates(teacher,thread,q='КАНДИДАТ').json();second=candidates(teacher,thread,q='КАНДИДАТ',offset=first['nextOffset']).json()
-    assert len(first['items'])==100 and len(second['items'])==20 and second['nextOffset'] is None
-    ids=[p['id'] for page in [first,second] for p in page['items']]
-    assert len(set(ids))==120 and all(id.startswith('late') for id in ids)
-    assert not any(id.startswith('foreign') for id in decoded) and len(decoded)<160
+            for i in range(count):insert_row(db,'accounts',template,id=f'{prefix}{i}',login=f'{prefix}{i}',name=f'Кандидат {prefix} {i:04d}',role='parent',permissions=perms)
+        # Old excluded memberships must not hide eligible people either.
+        for i in range(4000):
+            insert_row(db,'message_members',thread_id=thread,user_id=f'foreign{i}',role='parent',scope_students=encoded(['s3']))
+            insert_row(db,'message_exclusions',thread_id=thread,user_id=f'foreign{i}',action='remove',created=now().isoformat())
+    page=candidates(teacher,thread,q='КАНДИДАТ').json();ids=[];assert page['items']
+    for _ in range(200):
+        ids+=[p['id'] for p in page['items']]
+        if page['nextOffset'] is None:break
+        page=candidates(teacher,thread,q='КАНДИДАТ',offset=page['nextOffset']).json()
+    else:pytest.fail('candidate paging never ended')
+    assert sorted(ids)==sorted(f'late{i}' for i in range(120))
 
 
 def test_new_manager_scope_checked_after_assignment_change_and_backup(client,tmp_path,monkeypatch):
@@ -217,11 +218,6 @@ def leave_class():
     api.save('demo',state)
 
 
-def marks(thread):
-    with api.connect() as db:
-        return dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(thread,))),db.execute('SELECT latest_id FROM message_threads WHERE id=?',(thread,)).fetchone()[0]
-
-
 def test_added_member_reads_history_after_the_class_changes(client):
     people=setup(client);teacher=signed('teacher');thread=group(teacher)
     late=create(client,'parent',login='late',name='Поздний участник');late_user=signed('late')
@@ -241,16 +237,30 @@ def test_readmitted_member_keeps_what_was_said_while_removed(client):
 
 
 def test_every_post_path_advances_only_the_members_with_a_live_link(client):
-    people=setup(client);teacher=signed('teacher');student=signed('student');thread=group(teacher)
-    next_user=create(client,'teacher',login='next');assert add(teacher,thread,[next_user['id']],1).status_code==200
-    values,latest=marks(thread);assert latest==2 and set(values.values())=={2}
-    assert transfer(teacher,thread,next_user['id'],2).status_code==200
-    values,latest=marks(thread);assert latest==3 and set(values.values())=={3}
-    # The removal notice reaches the remaining members but not the person removed before it was published.
-    assert signed('next').post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove')).status_code==200
-    values,latest=marks(thread);assert latest==4 and values[people['parent']['id']]==3 and {v for k,v in values.items() if k!=people['parent']['id']}=={4}
-    assert student.post(url('threads/'+thread+'/participants'),json=dict(version=4,userId=people['student']['id'],action='leave')).status_code==200
-    values,latest=marks(thread);assert latest==5 and values[people['student']['id']]==4 and values[next_user['id']]==5
+    people=setup(client);teacher=signed('teacher')
+    extra=[create(client,'parent',login=f'extra{i}',name=f'Родитель {i}') for i in range(3)]
+    next_user=create(client,'teacher',login='next');successor=signed('next');thread=group(teacher)
+    posts=lambda user:[p['id'] for p in detail(user,thread)['posts']]
+    def sever(account):
+        # Without the link to the pupil only what was published while it existed stays readable.
+        update={k:v for k,v in account.items() if k!='id'}|dict(grants=[dict(workspace='demo',view='student',entityIds=['s3'])])
+        assert client.put('/api/access/users/'+account['id'],json=update).status_code==200
+        return signed(account['login'])
+    def change(user,account,action):
+        return user.post(url('threads/'+thread+'/participants'),json=dict(version=detail(user,thread)['version'],userId=account['id'],action=action))
+    after_add,after_transfer,after_removal,after_leave=people['parent'],people['student'],people['other'],extra[0];removed,leaver=extra[1],extra[2]
+    assert add(teacher,thread,[next_user['id']],1).status_code==200
+    first=sever(after_add)
+    assert transfer(teacher,thread,next_user['id'],detail(teacher,thread)['version']).status_code==200
+    second=sever(after_transfer)
+    assert change(successor,removed,'remove').status_code==200
+    third=sever(after_removal)
+    assert change(signed(leaver['login']),leaver,'leave').status_code==200
+    fourth=sever(after_leave)
+    everything=posts(successor);assert len(everything)==5
+    # Each member keeps every notice published while linked and nothing later; the removed and the leaver never see their own notice.
+    assert [posts(user) for user in [first,second,third,fourth]]==[everything[:2],everything[:3],everything[:4],everything[:5]]
+    assert posts(signed(removed['login']))==everything[:3] and posts(signed(leaver['login']))==everything[:4]
 
 
 def test_leaving_or_removal_in_a_pre_migration_group_keeps_its_history(client):

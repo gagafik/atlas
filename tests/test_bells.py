@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from backend.models import Placement, Profile, State
 from backend.seed import initial_state
-from backend.scheduling import indexes, times, validate_schedule, solve
+from backend.scheduling import validate_schedule, solve
 from backend.editing import EditRequest, edit, inspect_edit
 
 
@@ -21,11 +21,9 @@ def test_day_specific_bells_change_validation_and_solver_clock():
     periods = [p.model_copy() for p in s.profiles[0].periods]
     periods[1].start = '08:50'
     s.profiles[0].dayPeriods = {'0': periods}
-    assert times(s.placements[0], indexes(s))[0] == 530
     assert validate_schedule(s)['issueCount'] == 1
     assert solve(s, ['w0', 'w1'], seconds=2)['status'] == 'infeasible'
     s.placements[0].day = s.placements[1].day = 1
-    assert times(s.placements[0], indexes(s))[0] == 540
     assert validate_schedule(s)['issueCount'] == 0
     assert solve(s, ['w0', 'w1'], seconds=2)['status'] == 'success'
 

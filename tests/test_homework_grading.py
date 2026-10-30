@@ -48,6 +48,7 @@ def test_grade_publication_updates_report_history_notification_and_keeps_schedul
     record,sent,pupil,parent,teacher=ready(client);key=record['lessonKey'];before=api.read('demo')
     o=options(teacher,key);assert o['allowed'] and not o['hasDraftChanges']
     assert o['assessments'][0]['publishedGrade']['score']==8
+    seen={n['id'] for n in parent.get('/api/notifications/inbox').json()['items']}
     response=grade(teacher,key,sent,payload(o,comment='Обоснование верно'));assert response.status_code==200,response.text
     saved=entry(client,key);assert saved['version']==saved['publishedVersion']==record['version']+1
     assert current_grade(saved['document'])['score']==9
@@ -58,8 +59,8 @@ def test_grade_publication_updates_report_history_notification_and_keeps_schedul
     assert get(parent,key)['submitted']['grading']==evidence
     history=parent.get(f'/api/journal/homework/{key}/history?workspace=demo&studentId=s1').json()['items']
     assert history[0]['submitted']['grading']==evidence and 'grading' not in history[-1]['submitted']
-    notifications=[n['action'] for n in parent.get('/api/notifications/inbox').json()['items']]
-    assert 'homework.reviewed' in notifications and notifications.count('journal.grade')==1 and notifications.count('journal.updated')==0
+    fresh=[n['action'] for n in parent.get('/api/notifications/inbox').json()['items'] if n['id'] not in seen]
+    assert 'homework.reviewed' in fresh and 'journal.grade' in fresh
     assert api.read('demo')==before
 
 

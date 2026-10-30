@@ -7,6 +7,7 @@ from backend import api,absence_files,homework_files
 from backend.absences import tables as absence_tables
 from test_access import client,enable,create,signed
 from test_journal import DAY,lesson,entry,write,graded,report
+from seeding import read_row,insert_row
 
 
 def url(path=''):return '/api/journal/absences'+path+'?workspace=demo'
@@ -211,9 +212,8 @@ def test_backup_restores_evidence_history_and_effective_attendance(client,tmp_pa
 def test_pagination_limits_candidates_and_hides_private_reasons(client):
     _,_,parent,teacher=setup(client);notice=send(parent)
     with api.connect() as db:
-        row=list(db.execute('SELECT * FROM absence_notices').fetchone())
-        for i in range(65):
-            clone=row.copy();clone[0]=uuid4().hex;clone[9]='withdrawn';clone[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(clone))+')',clone)
+        template=read_row(db,'absence_notices',id=notice['id'])
+        for _ in range(65):insert_row(db,'absence_notices',template,id=uuid4().hex,status='withdrawn',request_id=str(uuid4()))
     page=teacher.get(url()).json();assert len(page['items'])==50 and page['nextBefore']
     last=teacher.get(url()+'&before='+str(page['nextBefore'])).json();assert len(last['items'])==16 and last['nextBefore'] is None
     assert not {r['id'] for r in page['items']} & {r['id'] for r in last['items']}

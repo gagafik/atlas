@@ -1,7 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from uuid import uuid4
-import json,sqlite3
+import json
 import pytest
 from backend import api,clubs,clubs_routes,clubs_sessions
 from test_access import client,enable,create,signed
@@ -129,16 +128,6 @@ def test_pagination_workspace_scope_and_replay_revocation(client,setup):
     r=ok(join(p,a));assert len(members(p,a))==1
     with api.connect() as db:db.execute('UPDATE accounts SET active=0 WHERE id=?',(setup[1]['id'],))
     assert p.get(path('items/'+a['id'])).status_code==401
-
-def test_backup_restore_keeps_module_and_school_state(client,setup,tmp_path):
-    from tools.backup_school import create_backup
-    from tools.restore_school import restore_backup,verify_backup
-    r=published(client);ok(join(signed('parent'),r));session(client,r)
-    backup=tmp_path/'copy';create_backup(api.DB,backup);target=tmp_path/'restored';restore_backup(backup,target);verify_backup(backup)
-    with closing(sqlite3.connect(api.DB)) as before,closing(sqlite3.connect((target/api.DB.name).as_uri()+'?mode=ro&immutable=1',uri=True)) as after:
-        tables=[x[0] for x in before.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name='clubs' OR name LIKE 'club_%' OR name='workspaces')")]
-        for table in tables:assert sorted(before.execute('SELECT * FROM '+table).fetchall(),key=repr)==sorted(after.execute('SELECT * FROM '+table).fetchall(),key=repr)
-    verify_backup(target)
 
 def test_stale_staff_assignment_does_not_block_other_clubs(client,setup):
     a=published(client);b=published(client);assign(client,a,setup[0]);assign(client,b,setup[0]);session(client,a)

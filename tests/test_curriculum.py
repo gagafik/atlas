@@ -207,33 +207,35 @@ def test_extra_lesson_matches_subject_and_group_without_workload_id(client):
     assert attach(other,p,record,publish=True).status_code==200
 
 
-def test_closed_period_archive_and_backup_keep_pinned_plan_version(client,tmp_path):
+def test_closed_period_archive_and_backup_keep_pinned_plan_version(client,tmp_path,monkeypatch):
     from test_journal_periods import period,close,archive
     from tools.backup_school import create_backup
-    import sqlite3
     p=new(client);record=attach(client,p,publish=True).json();key=record['lessonKey']
     closed=close(client,period(client));p2=save(client,p,title='Новая редакция').json()
     assert attach(client,p2,record).status_code==403
     assert archive(client,closed,lessonKey=key).json()['document']['content']['curriculum']['version']==1
-    target=tmp_path/'backup';create_backup(api.DB,target)
-    with sqlite3.connect(target/api.DB.name) as db:
-        assert db.execute('SELECT count(*) FROM curriculum_versions').fetchone()[0]==2
-        assert db.execute('SELECT version FROM curriculum_bindings').fetchone()[0]==1
-        assert db.execute('SELECT units FROM curriculum_publications').fetchone()[0]==1
+    source=api.DB;backup=tmp_path/'backup';create_backup(source,backup);monkeypatch.setattr(api,'DB',backup/source.name)
+    # The copy answers the same: both plan versions, the archived lesson pinned to version 1, its hours counted once.
+    assert [h['version'] for h in request(client,f"/{p['id']}/history").json()['items']]==[2,1]
+    assert request(client,'/'+p['id'],version=1).json()['content']['title']==p['content']['title']
+    assert archive(client,closed,lessonKey=key).json()['document']['content']['curriculum']['version']==1
+    assert progress(client,p)['totals']['actual']==1
 
 
-def test_progress_paginates_and_uses_plan_index_without_student_records(client):
+def test_progress_pages_list_every_lesson_once_without_student_records(client):
     import json
-    p=new(client);record=attach(client,p,publish=True).json()
+    from seeding import read_row,insert_row
+    p=new(client);record=attach(client,p,publish=True).json();keys={record['lessonKey']}
     with api.connect() as db:
-        raw=db.execute('SELECT * FROM journal_entries').fetchone()
+        template=read_row(db,'journal_entries')
         for i in range(55):
-            key=f'{i:064x}';db.execute('INSERT INTO journal_entries VALUES (?,?,?,?,?,?,?,?,?)',(raw[0],key,*raw[2:]))
-            db.execute('INSERT INTO curriculum_publications VALUES (?,?,?,?,?,?)',('demo',key,p['id'],'intro',1,'2026-08-17'))
-        query=db.execute('EXPLAIN QUERY PLAN SELECT lesson_key FROM curriculum_publications WHERE workspace=? AND plan_id=? ORDER BY day,lesson_key',('demo',p['id'])).fetchall()
-        assert 'curriculum_progress' in str(query)
-    first=progress(client,p);second=progress(client,p,lessonOffset=50)
-    assert len(first['lessons'])==50 and first['hasMore'] and first['totalLessons']==56
-    assert len(second['lessons'])==6 and not second['hasMore'] and second['totals']==first['totals']
-    assert not set(l['lessonKey'] for l in first['lessons']) & set(l['lessonKey'] for l in second['lessons'])
+            key=f'{i:064x}';keys.add(key);insert_row(db,'journal_entries',template,lesson_key=key)
+            insert_row(db,'curriculum_publications',workspace='demo',lesson_key=key,plan_id=p['id'],topic_id='intro',units=1,day='2026-08-17')
+    first=progress(client,p);pages=[first];listed=[l['lessonKey'] for l in first['lessons']]
+    assert first['hasMore']  # the seeded lessons do not fit one page
+    while pages[-1]['hasMore']:
+        assert len(pages)<100  # the offset must advance
+        pages.append(progress(client,p,lessonOffset=len(listed)));listed+=[l['lessonKey'] for l in pages[-1]['lessons']]
+    assert len(listed)==len(set(listed))==first['totalLessons']==len(keys) and set(listed)==keys
+    assert all(page['totals']==first['totals'] for page in pages)
     assert 'student' not in json.dumps(first) and 'records' not in json.dumps(first)

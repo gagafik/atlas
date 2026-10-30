@@ -100,8 +100,12 @@ def test_bell_profiles_use_time_not_period_number():
 
 def test_excess_weekly_load_is_blocked_before_search():
     s = demo()
-    s.workloads[0].hours = 11
-    assert solve(s)['status'] == 'blocked'
+    load = s.workloads[0]
+    load.maxPerDay = 1
+    load.hours = len(s.settings.days) * load.maxPerDay
+    assert solve(s, ['w0'], seconds=3)['status'] != 'blocked'
+    load.hours += 1
+    assert solve(s, ['w0'], seconds=3)['status'] == 'blocked'
 
 
 def test_missing_teacher_and_rooms_never_claim_valid_solution():

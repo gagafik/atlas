@@ -1,6 +1,7 @@
 """Recipient lookup stays synchronized through account changes and restoration."""
 from contextlib import closing
 import json
+import re
 import sqlite3
 
 import pytest
@@ -72,16 +73,17 @@ def test_triggers_cover_insert_replace_update_and_delete_in_same_transaction(db)
 @pytest.mark.parametrize('nested',[False,True])
 def test_failed_migration_rolls_back_schema_and_retries_without_committing_caller(db,nested):
     account(db,'p');db.commit()
-    if nested:db.execute('BEGIN');account(db,'pending')
+    if nested:db.execute('BEGIN')
+    # Grants that cannot be read make the first backfill fail halfway through the migration.
+    account(db,'bad');db.execute("UPDATE accounts SET permissions='{bad' WHERE id='bad'")
+    if not nested:db.commit()
     before=db.execute('SELECT * FROM accounts').fetchall()
-    class Failure:
-        def execute(self,sql,*args):
-            if 'FROM accounts a,json_each' in sql:raise sqlite3.OperationalError('injected backfill failure')
-            return db.execute(sql,*args)
-    with pytest.raises(sqlite3.OperationalError,match='injected'):account_grants.tables(Failure())
+    with pytest.raises(sqlite3.OperationalError):account_grants.tables(db)
     assert db.in_transaction==nested and db.execute('SELECT * FROM accounts').fetchall()==before
     assert not db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'account_grant_%'").fetchall()
-    assert recipients(db)==({'p','pending'} if nested else {'p'})
+    db.execute("UPDATE accounts SET permissions=? WHERE id='bad'",(permissions('s1'),))
+    if not nested:db.commit()
+    assert recipients(db)=={'p','bad'}
     assert db.in_transaction==nested
     if nested:
         db.rollback();assert recipients(db)=={'p'}
@@ -116,5 +118,4 @@ def test_candidate_query_searches_grant_keys_instead_of_scanning_account_permiss
     db.commit();assert recipients(db)=={'p1'}
     plan=' '.join(r[3] for r in db.execute('EXPLAIN QUERY PLAN '+account_grants.CANDIDATES_SQL,
         ('demo','student',json.dumps(['s1']),json.dumps(['parent']))))
-    assert 'SEARCH account_grant_candidates USING PRIMARY KEY' in plan and 'entity_id=?' in plan
-    assert 'SEARCH a USING INDEX' in plan
+    assert not re.search(r'\bSCAN (TABLE )?(a|accounts|account_grant_candidates)\b',plan),plan

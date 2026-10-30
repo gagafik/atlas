@@ -8,6 +8,7 @@ from backend.access import now
 from test_access import client, signed
 from test_messages import setup, url, payload, detail
 from test_message_files_groups import upload, download, group
+from seeding import insert_row
 
 
 def save(user, id, content, version=0, thread=None):
@@ -178,20 +179,20 @@ def test_all_message_kinds_restore_audience_and_send(client,kind):
 
 
 def test_pre_draft_release_request_hashes_still_replay(client):
-    import hashlib
-    from backend.messages import NewThread, Reply
-    from backend.notifications import encoded
-    people=setup(client);parent=signed('parent');teacher=signed('teacher');body=payload(people['teacher']['id'])
-    thread=parent.post(url(),json=body).json()['id']
-    legacy=NewThread(**body).model_dump(exclude={'draftVersion'})
-    expected=hashlib.sha256(encoded(dict(workspace='demo',body=legacy)).encode()).hexdigest()
+    import hashlib,json
+    # Rows stored before drafts existed hash these exact bodies; a retry sent after the upgrade must still match them.
+    digest=lambda value:hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    people=setup(client);parent=signed('parent');teacher=signed('teacher')
+    thread=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    created=dict(requestId='11111111-1111-4111-8111-111111111111',kind='direct',title='Вопрос до обновления',text='Отправлено раньше',recipientId=people['teacher']['id'],recipientIds=[],studentId='s1',groupIds=[],roles=[],schoolwide=False,requireAck=False,draftId=None,fileIds=[])
+    answer=dict(requestId='22222222-2222-4222-8222-222222222222',version=1,text='Ответ до обновления',draftId=None,fileIds=[])
     with api.connect() as db:
-        assert db.execute('SELECT body_hash FROM message_requests WHERE request_id=?',(body['requestId'],)).fetchone()[0]==expected
-    assert parent.post(url(),json=body).json()['id']==thread
-    response=dict(requestId=str(uuid4()),version=1,text='Ответ')
-    assert teacher.post(url('threads/'+thread+'/reply'),json=response).status_code==200
-    legacy=Reply(**response).model_dump(exclude={'draftVersion'})
-    expected=hashlib.sha256(encoded(dict(workspace='demo',id=thread,body=legacy)).encode()).hexdigest()
-    with api.connect() as db:
-        assert db.execute('SELECT body_hash FROM message_requests WHERE request_id=?',(response['requestId'],)).fetchone()[0]==expected
-    assert teacher.post(url('threads/'+thread+'/reply'),json=response).json()['id']==thread
+        insert_row(db,'message_requests',user_id=people['parent']['id'],request_id=created['requestId'],body_hash=digest(dict(workspace='demo',body=created)),thread_id=thread)
+        insert_row(db,'message_requests',user_id=people['teacher']['id'],request_id=answer['requestId'],body_hash=digest(dict(workspace='demo',id=thread,body=answer)),thread_id=thread)
+    assert parent.post(url(),json=created).json()['id']==thread
+    assert parent.post(url(),json=created|dict(text='Другой текст')).status_code==409
+    reply=url('threads/'+thread+'/reply')
+    assert teacher.post(reply,json=answer).json()['id']==thread
+    assert teacher.post(reply,json=answer|dict(text='Другой ответ')).status_code==409
+    # Replays store nothing new: one conversation with its single original message.
+    assert [t['id'] for t in parent.get(url()).json()['items']]==[thread] and len(detail(teacher,thread)['posts'])==1

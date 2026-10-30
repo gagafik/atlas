@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from uuid import uuid4
 
 from backend import api
+from backend.access import now
 from test_access import client,enable,create,signed
 
 
@@ -278,24 +280,50 @@ def test_concurrent_duplicate_creation_and_notification_failure_are_atomic(clien
         assert db.execute('SELECT count(*) FROM message_requests').fetchone()[0]==1
 
 
-def test_pagination_read_marker_and_rate_limit(client):
-    from datetime import timedelta
-    from backend.access import now
+def history(thread,author,count):
+    with api.connect() as db:
+        for i in range(count):
+            post=db.execute('INSERT INTO message_posts(thread_id,author_id,author_name,created,body) VALUES(?,?,?,?,?)',(thread,author,'Teacher',(now()-timedelta(days=1)).isoformat(),str(i))).lastrowid
+        db.execute('UPDATE message_threads SET latest_id=? WHERE id=?',(post,thread))
+
+
+def test_long_conversation_loads_in_disjoint_pages_covering_every_post(client):
+    people=setup(client);parent=signed('parent')
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    history(id,people['teacher']['id'],55)
+    seen=[];before=None
+    for _ in range(100):
+        page=detail(parent,id,**({} if before is None else dict(before=before)))
+        assert page['posts']
+        seen+=[p['id'] for p in page['posts']]
+        before=page['nextBefore']
+        if before is None:break
+    assert before is None
+    with api.connect() as db:stored=sorted(r[0] for r in db.execute('SELECT id FROM message_posts WHERE thread_id=?',(id,)))
+    assert sorted(seen)==stored
+
+
+def test_reading_an_older_post_does_not_move_the_read_marker_back(client):
+    people=setup(client);parent=signed('parent')
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
+    history(id,people['teacher']['id'],3)
+    posts=detail(parent,id)['posts']
+    assert [t['id'] for t in parent.get(url(unreadOnly=True)).json()['items']]==[id]
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=posts[-1]['id'])).status_code==200
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=posts[0]['id'])).status_code==200
+    assert parent.get(url(unreadOnly=True)).json()['items']==[]
+
+
+def test_flooding_a_conversation_is_rate_limited_per_author(client,monkeypatch):
+    fixed=now();monkeypatch.setattr('backend.messages.now',lambda:fixed)
     people=setup(client);parent=signed('parent');teacher=signed('teacher')
     id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
-    with api.connect() as db:
-        # A long historical conversation must load in disjoint pages.
-        for i in range(55):
-            post=db.execute('INSERT INTO message_posts(thread_id,author_id,author_name,created,body) VALUES(?,?,?,?,?)',(id,people['teacher']['id'],'Teacher',(now()-timedelta(days=1)).isoformat(),str(i))).lastrowid
-        db.execute('UPDATE message_threads SET latest_id=? WHERE id=?',(post,id))
-    latest=detail(parent,id);assert len(latest['posts'])==50
-    older=detail(parent,id,before=latest['nextBefore']);assert len(older['posts'])==6 and older['nextBefore'] is None
-    assert not {p['id'] for p in latest['posts']}&{p['id'] for p in older['posts']}
-    parent.put(url('threads/'+id+'/read'),json=dict(throughId=latest['latestId']))
-    parent.put(url('threads/'+id+'/read'),json=dict(throughId=older['posts'][0]['id']))
-    assert parent.get(url(unreadOnly=True)).json()['items']==[]
-    with api.connect() as db:db.execute('UPDATE message_posts SET created=? WHERE author_id=?',(now().isoformat(),people['teacher']['id']))
-    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Flood')).status_code==429
+    codes=[]
+    for i in range(300):
+        codes.append(teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text=f'Flood {i}')).status_code)
+        if codes[-1]==429:break
+    assert codes[0]==200 and codes[-1]==429 and set(codes[:-1])=={200}
+    assert parent.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Всё ещё можно')).status_code==200
 
 
 def test_full_backup_restores_conversation_and_private_access(client,tmp_path,monkeypatch):

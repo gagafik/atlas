@@ -127,16 +127,10 @@ def test_undo_redo_branch_and_named_variant(client):
     assert client.delete(f'/api/variants/{variant["id"]}?workspace=demo').status_code == 200
 
 
-def test_slot_hints_and_generation_preview_keep_state(client):
-    original = client.get('/api/state?workspace=demo').json()
-    slots = client.post('/api/editor/slots?workspace=demo', json={'revision': 1, 'placementId': 'a'}).json()
-    assert len(slots['slots']) == 55
-    assert not next(s for s in slots['slots'] if s['day'] == 1 and s['period'] == 1)['available']
-    assert next(s for s in slots['slots'] if s['day'] == 4 and s['period'] == 1)['available']
-    generated = client.post('/api/generate?workspace=demo', json={'revision': 1, 'preview': True, 'seconds': 3}).json()
-    assert generated['status'] == 'success'
-    assert 'state' not in generated and generated['preview']['canApply']
-    assert client.get('/api/state?workspace=demo').json() == original
+def test_slot_hints_mark_the_busy_slot_unavailable_and_a_free_one_available(client):
+    slots = client.post('/api/editor/slots?workspace=demo', json={'revision': 1, 'placementId': 'a'}).json()['slots']
+    slot = lambda day, period: next(s for s in slots if s['day'] == day and s['period'] == period)
+    assert not slot(1, 1)['available'] and slot(4, 1)['available']
 
 
 def test_rule_configuration_can_be_reviewed_with_violations_and_soft_rules_do_not_block(client):

@@ -71,7 +71,7 @@ def test_hide_restore_search_files_versions_and_report_history(client):
     body=dict(requestId=request,version=state['version'],postVersion=state['postVersion'],action='hide',note='Скрыто после проверки')
     for _ in range(2): assert client.post(url('reports/'+id+'/decision'),json=body).status_code==200
     after=detail(parent,thread);assert after['version']==original['version']+1
-    hidden=after['posts'][-1];assert hidden['hidden'] and hidden['text']=='Сообщение скрыто администратором.' and hidden['files']==[]
+    hidden=after['posts'][-1];assert hidden['hidden'] is True and hidden['files']==[] and 'Уникальный' not in hidden['text']
     assert parent.get(url(q='Уникальный')).json()['items']==[]
     for user in [parent,teacher]: assert download(user,file).status_code==404
     assert evidence(client,id,file).status_code==200

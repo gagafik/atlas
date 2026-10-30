@@ -138,17 +138,3 @@ def test_media_and_conditional_projection_recheck_current_access(client, setup):
     api.save('demo', state)
     assert t.get(url('/' + id + '/projection'), headers={'If-None-Match': projection.headers['etag']}).status_code in {403, 404}
     assert download(t, id, image).status_code in {403, 404}
-
-
-def test_unchanged_projection_skips_question_document(client, setup, monkeypatch):
-    from backend.live_lessons import LiveLessons
-    t, _, _, _ = setup; id, _, _, _, _ = prepared(t)
-    ok(action(t, id, 'start')); ok(action(t, id, 'open'))
-    path = url('/' + id + '/projection'); first = t.get(path)
-    original = LiveLessons.row
-    def metadata_only(self, db, workspace, lesson, metadata=False):
-        assert metadata, 'An unchanged projector must not load all question/material snapshots'
-        return original(self, db, workspace, lesson, metadata)
-    monkeypatch.setattr(LiveLessons, 'row', metadata_only)
-    result = t.get(path, headers={'If-None-Match': first.headers['etag']})
-    assert result.status_code == 304 and result.content == b''

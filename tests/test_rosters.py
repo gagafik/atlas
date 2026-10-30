@@ -1,7 +1,5 @@
 from copy import deepcopy
 from email.message import EmailMessage
-import sys
-from types import SimpleNamespace
 import pytest
 from backend.models import State, Group
 from backend.seed import base_data, initial_state
@@ -46,15 +44,21 @@ def test_snapshot_rejects_incomplete_or_inconsistent_column(tmp_path):
         read_mhtml(snapshot(tmp_path, count=2))
 
 
-def test_workbook_footer_mismatch_keeps_marked_members_but_flags_partial(monkeypatch):
-    rows = [('Имя', 'Класс', ''), ('', '', 'Economics 1A'), ('', '', 'Econ'),
-            ('', '', 'Teacher'), ('Тестовый  Ученик', '11A', 1), ('', '#', 2)]
-    sheet = SimpleNamespace(title='11', iter_rows=lambda **kwargs: iter(rows))
-    class Workbook(list):
-        def close(self):
-            pass
-    monkeypatch.setitem(sys.modules, 'openpyxl', SimpleNamespace(load_workbook=lambda *a, **kw: Workbook([sheet])))
-    data = read_xlsx('unused.xlsx')
+def workbook(tmp_path, *rows, title='11'):
+    from openpyxl import Workbook
+    book = Workbook()
+    book.active.title = title
+    for row in rows:
+        book.active.append(row)
+    path = tmp_path / 'core.xlsx'
+    book.save(path)
+    return path
+
+
+def test_workbook_footer_mismatch_keeps_marked_members_but_flags_partial(tmp_path):
+    path = workbook(tmp_path, ('Имя', 'Класс', ''), ('', '', 'Economics 1A'), ('', '', 'Econ'),
+                    ('', '', 'Teacher'), ('Тестовый  Ученик', '11A', 1), ('', '#', 2))
+    data = read_xlsx(path)
     assert len(data['courses'][0]['members']) == 1
     assert data['courses'][0]['rosterStatus'] == 'partial'
     assert data['students'][0]['name'] == 'Тестовый Ученик'
@@ -126,14 +130,12 @@ def test_partial_group_remains_unknown_and_blocks_generation():
     assert group_overlap(a, b, mapping) is True
 
 
-def test_repeated_snapshots_do_not_double_memberships_and_core_wins(tmp_path, monkeypatch):
+def test_repeated_snapshots_do_not_double_memberships_and_core_wins(tmp_path):
     path = snapshot(tmp_path)
-    core_student = dict(key='xlsx:a', externalId=None, name='Тестовый  Ученик', className='8A', active=True)
-    core_course = dict(name='Business 1', subject='B', teacher='Teacher', classNames=['8A'], members=['xlsx:a'],
-                       sources=['core.xlsx'], sourceType='xlsx', kind='core')
-    monkeypatch.setattr('tools.extract_rosters.read_xlsx', lambda p: dict(students=[core_student], courses=[deepcopy(core_course)]))
-    result = extract('core.xlsx', [path, path])
+    core = workbook(tmp_path, ('Имя', 'Класс', ''), ('', '', 'Business 1'), ('', '', 'B'),
+                    ('', '', 'Teacher'), ('Тестовый  Ученик', '8A', 1))
+    result = extract(core, [path, path])
     assert len(result['students']) == 2
     assert len(result['courses']) == 1
     assert result['courses'][0]['members'] == ['example.edupage.org:a']
-    assert result['courses'][0]['sources'] == ['core.xlsx']
+    assert result['courses'][0]['sourceType'] == 'xlsx'

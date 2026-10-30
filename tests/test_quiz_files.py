@@ -72,10 +72,13 @@ def test_bank_edits_archive_and_quiz_copy_keep_old_bytes_and_metadata(client):
     assert work['questions'][0]['attachments']==[public]
     assert file_get(pupil,public,copied,work).content==b'Question material'
     assert file_get(pupil,fresh,copied,work).status_code==404
-    with api.connect() as db:
-        db.execute('UPDATE quiz_files SET created=?',((quiz_files.now()-timedelta(days=2)).isoformat(),))
-        quiz_files.collect_unused(db)
-        assert db.execute('SELECT count(*) FROM quiz_files').fetchone()==(3,)
+    orphan=ok(upload(teacher,b'Never attached','orphan.txt'))
+    with api.connect() as db:db.execute('UPDATE quiz_files SET created=?',((quiz_files.now()-timedelta(days=2)).isoformat(),))
+    ok(upload(teacher,b'Triggers cleanup','later.txt'))
+    assert file_get(teacher,orphan).status_code==404
+    assert file_get(pupil,public,copied,work).content==b'Question material'
+    assert file_get(teacher,secret,copied,part='solutionAttachments').content==b'Secret solution'
+    assert file_get(teacher,fresh).content==b'New diagram'
 
 
 def test_copied_bank_admin_edit_and_metadata_not_trusted(client):

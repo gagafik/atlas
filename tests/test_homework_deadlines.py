@@ -295,18 +295,17 @@ def test_write_rechecks_prepared_context(client,monkeypatch,mutation):
     with api.connect() as db:assert db.execute('SELECT count(*) FROM homework_extensions').fetchone()[0]==0
 
 
-def test_history_pagination_and_full_backup_restore(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_history_pages_cover_every_event_newest_first(client):
     record,_,parent,teacher=setup(client);key=record['lessonKey']
     for day in range(21,32):
         assert change(teacher,key,get(teacher,key),due=f'2026-08-{day}').status_code==200
         assert change(teacher,key,get(teacher,key),due=None,action='revoke').status_code==200
-    first=history(parent,key).json();assert len(first['items'])==20 and first['nextBefore']
-    second=history(parent,key,before=first['nextBefore']).json()
-    assert len(second['items'])==2 and not second['nextBefore']
-    assert len({h['id'] for h in first['items']+second['items']})==22
-    assert change(teacher,key,get(teacher,key),due='2026-09-01').status_code==200
-    expected=get(parent,key);events=history(parent,key).json();source=api.DB;destination=tmp_path/'backup'
-    create_backup(source,destination);monkeypatch.setattr(api,'DB',destination/source.name)
-    assert get(parent,key)==expected and history(parent,key).json()==events
-    assert items(parent,start='2026-09-01',end='2026-09-01')[0]['extended']
+    pages=[];before=None
+    for _ in range(10):
+        page=history(parent,key,**(dict(before=before) if before else {})).json();pages.append(page);before=page['nextBefore']
+        if not before:break
+    assert len(pages)>1 and not before
+    events=[h for page in pages for h in page['items']]
+    ids=[h['id'] for h in events];assert len(events)==22 and ids==sorted(set(ids),reverse=True)
+    assert [h['action'] for h in events]==['revoke','extend']*11
+    assert [h['dueDate'] for h in events if h['action']=='extend']==[f'2026-08-{day}' for day in range(31,20,-1)]

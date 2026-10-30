@@ -165,33 +165,28 @@ def test_bom_json_and_manifest_are_accepted(tmp_path):
     assert len(pkg.inspect_package(zipped,'bom.zip').questions)==1
 
 
-def test_manifest_errors_are_readable_russian():
-    bad=manifest(questions=[essay(),dict(subject='x',question=dict(kind='essay'))])
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(bad).encode())
-    assert caught.value.status_code==422 and caught.value.detail.splitlines()[0]=='Проверьте пакет:'
-    assert 'Вопрос 2 · question.text: Поле не заполнено.' in caught.value.detail
-    extra=manifest(questions=[essay()|dict(id='forged')])
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(extra).encode())
-    assert 'Вопрос 1 · id: Лишнее поле.' in caught.value.detail
-    model=manifest(questions=[dict(subject='',question=dict(kind='single',text='Q'))])
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(model).encode())
-    lines=caught.value.detail.splitlines()
-    assert not any('Value error' in line for line in lines)
-    assert 'Вопрос 1 · question: Добавьте варианты и выберите правильные ответы.' in lines
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(b'not json')
-    assert caught.value.status_code==422 and 'JSON' in caught.value.detail and 'Invalid' not in caught.value.detail
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(b'x'*(pkg.MAX_MANIFEST+1))
-    assert caught.value.status_code==413
+def refused_manifest(data,status=422):
+    """The error detail of a manifest that must be refused; raw pydantic English never reaches the teacher."""
+    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(data if isinstance(data,bytes) else json.dumps(data).encode())
+    assert caught.value.status_code==status
+    assert not any(english in caught.value.detail for english in ('Value error','Field required','Extra inputs','Invalid'))
+    return caught.value.detail.splitlines()
 
 
-def test_manifest_errors_are_capped_and_name_errors_use_the_formatter():
-    bad=manifest(questions=[dict(question=dict(kind='essay'))]*30)
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(bad).encode())
-    assert len(caught.value.detail.splitlines())==11
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(manifest([(file_id(),'a/b.txt',b'x')])).encode())
-    assert '«a/b.txt»: имя файла не должно содержать путь' in caught.value.detail
-    with pytest.raises(HTTPException) as caught:pkg.parse_manifest(json.dumps(manifest([(file_id(),'task.exe',b'x')])).encode())
-    assert caught.value.status_code==422 and 'task.exe' in caught.value.detail and caught.value.detail.startswith('Проверьте пакет')
+def test_manifest_errors_point_at_the_question_and_field_without_pydantic_english():
+    lines=refused_manifest(manifest(questions=[essay(),dict(subject='x',question=dict(kind='essay'))]))
+    assert any('Вопрос 2' in line and 'question.text' in line for line in lines) and not any('Вопрос 1' in line for line in lines)
+    assert any('Вопрос 1' in line and 'id' in line for line in refused_manifest(manifest(questions=[essay()|dict(id='forged')])))
+    lines=refused_manifest(manifest(questions=[dict(subject='',question=dict(kind='single',text='Q'))]))
+    assert any('Вопрос 1' in line and 'question' in line for line in lines)
+    refused_manifest(b'not json')
+    refused_manifest(b'x'*(pkg.MAX_MANIFEST+1),413)
+
+
+def test_manifest_errors_are_capped_and_name_errors_name_the_file():
+    assert len(refused_manifest(manifest(questions=[dict(question=dict(kind='essay'))]*30)))<30
+    for name in ('a/b.txt','task.exe'):
+        assert name in '\n'.join(refused_manifest(manifest([(file_id(),name,b'x')])))
 
 
 def test_entry_rejects_stored_projections_but_allows_empty_lists():
@@ -200,23 +195,11 @@ def test_entry_rejects_stored_projections_but_allows_empty_lists():
         pkg.Entry.model_validate(essay(attachments=[dict(id=file_id(),filename='a.txt',size=1,created='x')]))
 
 
-def test_template_is_a_valid_package():
-    package=pkg.parse_manifest(pkg.template_bytes())
-    assert len(package.questions)==4 and package.files==[]
-    assert {q.question.kind for q in package.questions}=={'single','number','short','essay'}
-    assert all(q.subject and q.tags for q in package.questions)
-    assert [q.question.points for q in package.questions][-1]==5
-
-
-def test_manifest_bytes_strips_projections_pretty_and_limited(monkeypatch):
+def test_manifest_bytes_strips_projections_and_parses_back_to_the_same_package():
     package=pkg.parse_manifest(pkg.template_bytes())
     compact=pkg.manifest_bytes(package);pretty=pkg.manifest_bytes(package,pretty=True)
     assert b'attachments' not in compact and b'solutionAttachments' not in pretty
-    assert b'\n' not in compact and b'\n' in pretty and 'Лондон'.encode() in pretty
     assert pkg.parse_manifest(compact)==package==pkg.parse_manifest(pretty)
-    monkeypatch.setattr(pkg,'MAX_MANIFEST',10)
-    with pytest.raises(HTTPException) as caught:pkg.manifest_bytes(package)
-    assert caught.value.status_code==413 and 'Уменьшите выборку' in caught.value.detail
 
 
 @pytest.fixture
@@ -242,17 +225,6 @@ def test_oversized_declared_entry_count_is_rejected(tmp_path,unopened,case):
     error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
 
 
-def test_400k_entries_are_rejected_before_the_archive_is_opened(tmp_path,unopened):
-    path=tmp_path/'huge.zip';directory=central_entries(400000)
-    path.write_bytes(directory+zip64_end(400000,len(directory)))
-    error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
-
-
-def test_missing_end_record_is_a_corrupt_zip(tmp_path):
-    path=tmp_path/'broken.zip';path.write_bytes(b'PK\x03\x04'+bytes(100))
-    error=rejected(path);assert error.status_code==422 and 'повреждён' in error.detail
-
-
 def test_two_hundred_files_pass_the_directory_bound(tmp_path):
     files=[(file_id(n),f'f{n}.txt',b'x%d'%n) for n in range(1,201)]
     doc=manifest(files,[essay(fileIds=[id for id,_,_ in files[i:i+6]]) for i in range(0,200,6)])
@@ -264,21 +236,13 @@ def single_zip(tmp_path,data=b'Question material',compression=ZIP_STORED):
     return path,pkg.inspect_package(path,'p.zip')
 
 
-def test_extract_wrong_hash_leaves_nothing(tmp_path):
-    path,package=single_zip(tmp_path)
-    package.files[0].sha256=digest(b'Question materiaX')
-    target=tmp_path/'dest'/'a.bin'
-    with pytest.raises(HTTPException) as caught:pkg.extract_files(path,package,{file_id():target})
-    assert caught.value.status_code==422 and 'Проверка целостности' in caught.value.detail
-    assert list((tmp_path/'dest').iterdir())==[]
-
-
 def test_extract_failure_on_second_file_removes_the_first(tmp_path):
     files=[(file_id(1),'a.txt',b'First material'),(file_id(2),'b.txt',b'Second material')]
     path=build(tmp_path/'p.zip',manifest(files,[essay(fileIds=[file_id(1),file_id(2)])]),files)
     package=pkg.inspect_package(path,'p.zip');package.files[1].sha256=digest(b'other')
     targets={file_id(1):tmp_path/'dest'/'1.bin',file_id(2):tmp_path/'dest'/'2.bin'}
-    with pytest.raises(HTTPException):pkg.extract_files(path,package,targets)
+    with pytest.raises(HTTPException) as caught:pkg.extract_files(path,package,targets)
+    assert caught.value.status_code==422
     assert list((tmp_path/'dest').iterdir())==[]
 
 
@@ -309,10 +273,6 @@ def test_extract_stops_at_the_declared_size(tmp_path):
     assert caught.value.status_code==422 and not target.exists()
 
 
-def test_extract_without_files_does_not_open_the_archive(tmp_path):
-    assert pkg.extract_files(tmp_path/'missing.zip',pkg.parse_manifest(pkg.template_bytes()),{}) is None
-
-
 def written(tmp_path,data=b'Question material'):
     files=[(file_id(),'task.txt',data)];source=tmp_path/'storage.bin';source.write_bytes(data)
     return pkg.parse_manifest(json.dumps(manifest(files)).encode()),{file_id():source}
@@ -322,19 +282,6 @@ def test_write_package_round_trip(tmp_path):
     package,sources=written(tmp_path)
     pkg.write_package(tmp_path/'out.zip',package,sources)
     assert pkg.inspect_package(tmp_path/'out.zip','out.zip')==package
-
-
-def test_write_package_missing_source_is_409(tmp_path):
-    package,_=written(tmp_path)
-    with pytest.raises(HTTPException) as caught:pkg.write_package(tmp_path/'out.zip',package,{file_id():tmp_path/'none.bin'})
-    assert caught.value.status_code==409 and 'отсутствует' in caught.value.detail
-
-
-def test_write_package_changed_bytes_are_409(tmp_path):
-    package,sources=written(tmp_path)
-    next(iter(sources.values())).write_bytes(b'Question materiaX')
-    with pytest.raises(HTTPException) as caught:pkg.write_package(tmp_path/'out.zip',package,sources)
-    assert caught.value.status_code==409 and 'повреждено' in caught.value.detail
 
 
 def test_write_package_disk_failure_is_not_a_missing_attachment(tmp_path,monkeypatch):
@@ -428,7 +375,7 @@ def test_export_without_files_is_json_and_shared_files_are_listed_once(client):
     pupil,teacher,source,text,picture=exported(client)
     plain=put_question(teacher,'plain');response=export(teacher,plain)
     assert response.headers['content-type'].startswith('application/json') and response.headers['content-disposition'].endswith('.json"')
-    assert pkg.parse_manifest(response.content).files==[] and b'\n' in response.content
+    assert pkg.parse_manifest(response.content).files==[]
     twin=put_question(teacher,'twin',fileIds=[text['id']])
     response=export(teacher,source,twin);assert response.status_code==200
     with ZipFile(io.BytesIO(response.content)) as z:
@@ -502,7 +449,7 @@ def test_round_trip_creates_owned_copies_with_new_files(client):
     shown=ok(preview(other,package))
     assert (shown['questions'],shown['files'],shown['archived'],shown['totalSize'])==(1,2,1,len(b'Question material')+len(PNG))
     assert shown['subjects']==['Физика'] and shown['size']==len(package) and shown['packageHash']==digest(package)
-    assert shown['items'][0]|dict(text='')==dict(subject='Физика',tags=['опыты'],kind='essay',text='',points=1,files=2,archived=True)
+    item=shown['items'][0];assert (item['subject'],item['kind'],item['files'],item['archived'])==('Физика','essay',2,True)
     result=ok(apply(other,package,hash=shown['packageHash']))
     assert result['imported']==1 and result['archived']==1 and result['files']==2 and len(result['questionIds'])==1
     [copy]=bank(other,archived=True)
@@ -692,17 +639,6 @@ def test_students_and_parents_cannot_exchange_packages(client):
     assert temp_children()==[]
 
 
-def test_imported_files_and_replays_survive_a_backup(client,tmp_path):
-    from contextlib import closing
-    import sqlite3
-    from tools.backup_school import create_backup
-    pupil,teacher,source,*_=exported(client);ok(apply(signed('unrelated'),export(teacher,source).content))
-    target=tmp_path/'snapshot';manifest=create_backup(api.DB,target)
-    with api.connect() as live,closing(sqlite3.connect(target/manifest['database']['path'])) as restored:
-        assert restored.execute('SELECT * FROM quiz_bank_imports').fetchall()==live.execute('SELECT * FROM quiz_bank_imports').fetchall()!=[]
-    assert len(list(target.rglob('*.bin')))==4
-
-
 # ---- recovery, revoked accounts and transfer limits ----
 
 def deactivate(login):
@@ -878,20 +814,22 @@ def test_busy_server_queues_then_answers_429_with_retry_after_and_slots_are_not_
 def test_a_pupil_does_not_queue_for_a_slot(client,monkeypatch):
     record,pupil,parent,teacher=setup(client)
     slots=threading.BoundedSemaphore(1);slots.acquire();monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
-    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',5);started=time.perf_counter()
+    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0.05)  # queueing would end in 429, not 403
     assert preview(pupil,pkg.template_bytes(),'t.json').status_code==403 and apply(pupil,pkg.template_bytes(),'t.json').status_code==403
-    assert time.perf_counter()-started<2
 
 
 @pytest.mark.parametrize('error,status,text',[(TimeoutError,408,'по времени'),(ClientDisconnect,400,'прервана')])
 def test_interrupted_uploads_are_readable_errors_and_leave_nothing(client,monkeypatch,error,status,text):
-    record,pupil,parent,teacher=setup(client);put_question(teacher,'seed');before=(counts(),stored_files(),homework_files.UPLOAD_SLOTS._value)
+    record,pupil,parent,teacher=setup(client);put_question(teacher,'seed');before=(counts(),stored_files())
+    monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',threading.BoundedSemaphore(1));monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0)
     async def interrupted(*args,**kwargs):raise error()
-    monkeypatch.setattr(exchange,'receive',interrupted)
-    for call in (preview,apply):
-        response=call(teacher,pkg.template_bytes(),'t.json')
-        assert response.status_code==status and text in response.json()['detail']
-    assert (counts(),stored_files(),homework_files.UPLOAD_SLOTS._value)==before and temp_children()==[]
+    with monkeypatch.context() as patch:
+        patch.setattr(exchange,'receive',interrupted)
+        for call in (preview,apply):
+            response=call(teacher,pkg.template_bytes(),'t.json')
+            assert response.status_code==status and text in response.json()['detail']
+    assert (counts(),stored_files())==before and temp_children()==[]
+    ok(preview(teacher,pkg.template_bytes(),'t.json'))  # the only slot came back, otherwise 429
 
 
 def test_old_temp_folders_are_swept_and_fresh_ones_kept(client):

@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 import pytest
 from backend import api, duty_reminders, duty_schedule
-from backend.duty_schedule import GeneratePreview, StoredTemplate, plan_generation
+from backend.duty_schedule import DutyTemplate, GeneratePreview, StoredTemplate, plan_generation
 from backend.models import Commitment, Cycles, Event, Named, State, TeachingPeriod, TimetableRule
 from backend.seed import initial_state
 from test_access import client, enable, create, signed, HEADERS
@@ -73,24 +73,11 @@ def inbox(client, action=None):
 def commitment_json(item): return item.model_dump(mode='json')
 
 
-def stored_preview(token):
-    import json
-    with api.connect() as db: return json.loads(db.execute('SELECT document FROM duty_previews WHERE token=?', (token,)).fetchone()[0])
-
-
-def test_title_target_and_allowlist(client):
+def test_teacher_options_name_the_role_and_own_teacher_record(client):
     enable(client); create(client, 'teacher')
-    teacher = signed('teacher')
-    response = teacher.get('/api/duties/options?workspace=demo')
+    response = signed('teacher').get('/api/duties/options?workspace=demo')
     assert response.status_code == 200 and response.json()['role'] == 'teacher'
     assert response.json()['teachers'] == [dict(id='t2', name='Учитель английского')]
-    with api.access.lock, api.connect() as db:
-        user = api.access.public(db.execute("SELECT * FROM accounts WHERE login='teacher'").fetchone())
-        api.notifications.deliver(db, [user], 'demo', 1, 'duty.reminder', target=dict(module='duty', title='Завтра: 08.09.2026, 12:00–12:05, Холл'))
-        api.notifications.deliver(db, [user], 'demo', 2, 'saved')
-    items = {i['action']: i for i in inbox(teacher)}
-    assert items['duty.reminder']['title'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
-    assert 'title' not in items['saved']
 
 
 def test_detail_column_is_added_to_an_existing_notifications_table(tmp_path):
@@ -163,8 +150,7 @@ def test_listed_template_can_be_edited_with_the_fields_the_client_posts_back(cli
     listed = client.get('/api/duties/templates?workspace=demo').json()[0]
     # Exactly the template fields plus the identity, so nothing server-only is posted back by an edit.
     fields = {k: v for k, v in listed.items() if k not in ('id', 'version', 'active')}
-    assert set(fields) == {'name', 'weekday', 'profileId', 'afterPeriod', 'startTime', 'endTime', 'location', 'roomIds', 'buildingId', 'requiredTeachers',
-                           'eligibleTeacherIds', 'teacherIds', 'cycleIds', 'note'}
+    assert set(fields) == set(DutyTemplate.model_fields)
     assert 'updated' not in created
     edited = client.post('/api/duties/templates?workspace=demo', json=dict(requestId=rid(), id=listed['id'], version=listed['version'], template=fields | dict(name='Новое имя'), reason='Правка'))
     assert edited.status_code == 200, edited.text
@@ -242,20 +228,21 @@ def test_regeneration_keeps_manual_edits_and_deletions(client):
     assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=state.revision, token=shown['token'])).status_code == 200
     again = preview(client, [tid])
     assert again['counts'] == dict(created=0, updated=0, existing=3, removed=1, duplicates=0)
-    assert [r['reason'] for r in again['removed']] == ['Удалено вручную после прошлого создания']
-    kept = {c['id']: c for c in stored_preview(again['token'])['commitments']}
+    assert [(r['date'], r['templateId']) for r in again['removed']] == [('2026-09-28', tid)] and again['removed'][0]['reason']
+    kept = {c['id']: c for c in apply(client, again)['state']['commitments']}
     assert kept[first]['startTime'] == '12:01' and last not in kept
-    assert preview(client, [tid], restoreRemoved=True)['counts']['created'] == 1
+    restored = preview(client, [tid], restoreRemoved=True)
+    assert restored['counts']['created'] == 1 and [c['id'] for c in restored['created']] == [last]
     # Changing the template with updateUntouched leaves the edited duty alone.
     renamed = client.post('/api/duties/templates?workspace=demo', json=template_body(location='Холл 2') | dict(id=tid, version=1)).json()
     assert renamed['version'] == 2
-    changed = preview(client, [tid], updateUntouched=True)
-    assert changed['counts']['updated'] == 2 and changed['counts']['existing'] == 1
-    stored = {c['id']: c for c in stored_preview(changed['token'])['commitments']}
-    assert stored[first]['location'] == 'Холл 1 этажа' and stored[first]['startTime'] == '12:01'
-    assert all(c['location'] == 'Холл 2' for id, c in stored.items() if id != first)
     # Without the flag nothing is rewritten.
     assert preview(client, [tid])['counts']['updated'] == 0
+    changed = preview(client, [tid], updateUntouched=True)
+    assert changed['counts']['updated'] == 2 and changed['counts']['existing'] == 1
+    stored = {c['id']: c for c in apply(client, changed)['state']['commitments']}
+    assert stored[first]['location'] == 'Холл 1 этажа' and stored[first]['startTime'] == '12:01'
+    assert last not in stored and all(c['location'] == 'Холл 2' for id, c in stored.items() if id != first)
 
 
 def test_update_untouched_changes_only_generated_duties(client):
@@ -307,10 +294,8 @@ def test_permanent_teacher_conflict_left_unfilled(client):
     monday = save_template(client, startTime='08:30', endTime='08:50', afterPeriod=None, teacherIds=['t2'], name='Утро, понедельник')['id']
     tuesday = save_template(client, startTime='08:30', endTime='08:50', afterPeriod=None, teacherIds=['t2'], weekday=1, name='Утро, вторник')['id']
     shown = preview(client, [monday, tuesday], end='2026-09-13')
-    stored = {c['id']: c for c in stored_preview(shown['token'])['commitments']}
-    assert stored[f'duty-{monday}-20260907']['teacherIds'] == []
-    assert stored[f'duty-{tuesday}-20260908']['teacherIds'] == ['t2']
-    assert len(shown['warnings']) == 1 and 'урок' in shown['warnings'][0] and 'Учитель английского' in shown['warnings'][0]
+    assert {c['id']: c['teachers'] for c in shown['created']} == {f'duty-{monday}-20260907': [], f'duty-{tuesday}-20260908': ['Учитель английского']}
+    assert len(shown['warnings']) == 1 and 'Учитель английского' in shown['warnings'][0]
 
 
 def test_generation_validation_and_roles(client):

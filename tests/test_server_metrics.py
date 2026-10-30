@@ -94,8 +94,9 @@ def test_histogram_percentile_expiry_and_fixed_memory():
     assert result['totalRequests']==100
     for _ in range(1000):
         start=metrics.begin();clock.now+=31;metrics.finish(start,429)
-    assert len(metrics.buckets)==WINDOW
     result=metrics.snapshot()
+    # A thousand slow requests overflow the histogram, yet only those of the last WINDOW seconds are kept.
+    assert result['totalRequests']==1100 and 0<result['window']['requests']<=WINDOW//31+1
     assert result['window']['p95Overflow'] and result['window']['p95UpperMs'] is None
     assert result['window']['rateLimited']==result['window']['clientErrors']==result['window']['requests']
     json.dumps(result,allow_nan=False)
@@ -139,14 +140,15 @@ def test_exception_handler_and_unhandled_500_are_both_observed(tmp_path):
     assert result['window']['unavailable']==1 and result['window']['incomplete']==1
 
 
-def test_resource_cache_ttl_and_database_switch(tmp_path,monkeypatch):
-    clock=Clock();resources=ResourceSnapshot(clock);calls=[]
-    monkeypatch.setattr(resources,'collect',lambda path: calls.append(path) or {'disk':None,'queues':None})
+def test_resource_cache_ttl_and_database_switch(tmp_path):
+    # The age of a snapshot restarts at 0 only when resources were collected again.
+    clock=Clock();resources=ResourceSnapshot(clock)
     path=tmp_path/'one.db'
-    resources.snapshot(path);clock.now+=9;assert resources.snapshot(path)['ageSeconds']==9
-    assert len(calls)==1
-    clock.now+=1;resources.snapshot(path);assert len(calls)==2
-    resources.snapshot(tmp_path/'two.db');assert len(calls)==3
+    assert resources.snapshot(path)['ageSeconds']==0
+    clock.now+=9;assert resources.snapshot(path)['ageSeconds']==9
+    clock.now+=1;assert resources.snapshot(path)['ageSeconds']==0
+    clock.now+=3;assert resources.snapshot(path)['ageSeconds']==3
+    assert resources.snapshot(tmp_path/'two.db')['ageSeconds']==0
 
 
 def test_indexed_queue_counts_are_capped_read_only_and_private(tmp_path):

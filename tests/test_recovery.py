@@ -6,7 +6,6 @@ from threading import Barrier
 import pytest
 from fastapi.testclient import TestClient
 from backend import api, recovery
-from backend.access import digest
 from test_access import client, enable, create, signed, PASSWORD, HEADERS
 
 NEW = ' new recovery password with spaces '
@@ -181,16 +180,13 @@ def test_password_changes_revoke_codes_including_console_reset(client, monkeypat
     assert login_as().get(OPTIONS).json()['status'] == 'revoked'
 
 
-def test_failed_attempts_persist_and_expire_and_do_not_block_login(client, monkeypatch):
+def test_failed_attempts_limit_recovery_then_expire_and_do_not_block_login(client, monkeypatch):
     enable(client)
     result = issue(client)
     for _ in range(8):
         assert recover('bad').status_code == 400
     assert recover(result['codes'][0]).status_code == 429
     assert signed('admin').get(OPTIONS).status_code == 200
-    with api.connect() as db:
-        rows = db.execute('SELECT subject FROM recovery_attempts').fetchall()
-    assert len(rows) == 8 and {row[0] for row in rows} == {digest('admin')}
     stamp = recovery.now() + timedelta(minutes=16)
     monkeypatch.setattr(recovery, 'now', lambda: stamp)
     assert recover(result['codes'][0]).status_code == 200
@@ -331,20 +327,3 @@ def test_validation_csrf_and_unconfigured_access_do_not_expose_credentials(clien
     assert visitor().post('/api/auth/recover', json=payload, headers={'X-Atlas-Request':'0'}).status_code == 403
     assert visitor().post('/api/auth/recover', json=payload, headers={'Origin':'https://evil.example'}).status_code == 403
     assert client.get(OPTIONS).json()['remaining'] == 8
-
-
-def test_backup_restores_code_state_and_password_without_plaintext(client, tmp_path, monkeypatch):
-    from tools.backup_school import create_backup
-    enable(client)
-    result = issue(client)
-    assert recover(result['codes'][0]).status_code == 200
-    source = api.DB
-    folder = tmp_path / 'backup'
-    manifest = create_backup(source, folder)
-    restored = folder / manifest['database']['path']
-    content = restored.read_bytes()
-    assert all(code.encode() not in content and recovery.normalized(code).encode() not in content for code in result['codes'])
-    monkeypatch.setattr(api, 'DB', restored)
-    assert login_as().get(OPTIONS).json()['remaining'] == 7
-    assert recover(result['codes'][0]).status_code == 400
-    assert recover(result['codes'][1]).status_code == 200

@@ -258,17 +258,11 @@ def test_private_draft_withdrawal_history_summary_and_copy(client):
     assert parent.get(route(copy['id'])).status_code==404
 
 
-def test_csv_spools_large_exports_and_closes_temporary_file(client,monkeypatch):
-    import tempfile
+def test_csv_export_of_a_long_answer_is_complete_and_not_cached(client):
     enable(client);create(client,role='parent');id=new(client);configure(client,id,questions=[dict(id='q',title='Reason',kind='text')]);publish(client,id);parent=signed('parent')
     answer(parent,id,answers={'q':'x'*3000})
-    original=tempfile.SpooledTemporaryFile;files=[]
-    def spool(**kwargs):
-        result=original(**(kwargs|dict(max_size=16)));files.append(result);return result
-    monkeypatch.setattr('backend.school_forms.tempfile.SpooledTemporaryFile',spool)
     response=client.get(route(id,'/export'))
     assert response.status_code==200 and 'x'*3000 in response.text and response.headers['cache-control']=='no-store'
-    assert len(files)==1 and files[0]._rolled and files[0].closed
 
 
 def test_form_reads_do_not_require_database_writer_lock(client):

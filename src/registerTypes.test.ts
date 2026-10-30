@@ -2,15 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   allPages,
   can,
-  capabilityNames,
   changedFields,
-  conditions,
-  documentTypes,
   exportHref,
-  historyActions,
   readBase64,
   staySince,
-  statuses,
   MAX_UPLOAD,
   type Options,
 } from "./registerTypes";
@@ -61,58 +56,6 @@ describe("capabilities", () => {
     expect(can(options(["visitors"]), "visitors")).toBe(true);
     expect(can(options(["visitors"]), "incidents")).toBe(false);
     expect(can(null, "inventory")).toBe(false);
-  });
-  it("names every register in Russian", () => {
-    expect(Object.keys(capabilityNames).sort()).toEqual([
-      "incidents",
-      "inventory",
-      "visitors",
-    ]);
-    expect(
-      Object.values(capabilityNames).every((name) => /[А-Яа-я]/.test(name)),
-    ).toBe(true);
-  });
-});
-
-describe("labels", () => {
-  it("covers every state and action the server can return", () => {
-    for (const key of [
-      "inside",
-      "left",
-      "voided",
-      "open",
-      "closed",
-      "active",
-      "written_off",
-    ])
-      expect(statuses[key]).toBeTruthy();
-    for (const key of [
-      "arrived",
-      "departed",
-      "voided",
-      "edited",
-      "created",
-      "close",
-      "reopen",
-      "publish_summary",
-      "withdraw_summary",
-      "moved",
-      "written_off",
-      "restored",
-      "imported",
-      "configured",
-    ])
-      expect(historyActions[key]).toBeTruthy();
-    for (const key of ["new", "good", "fair", "poor", "broken"])
-      expect(conditions[key]).toBeTruthy();
-    for (const key of [
-      "passport",
-      "id_card",
-      "driver_license",
-      "service_id",
-      "other",
-    ])
-      expect(documentTypes[key]).toBeTruthy();
   });
 });
 

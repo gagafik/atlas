@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  downscalePhoto,
-  uploadFile,
-  uploadWithRetry,
-  type ImageTools,
-} from "./uploads";
+import { downscalePhoto, uploadFile, type ImageTools } from "./uploads";
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}) =>
   new Response(JSON.stringify(body), { status, headers });
@@ -71,20 +66,44 @@ describe("uploadFile", () => {
     );
   });
 
-  it("backs off further on repeated busy answers", async () => {
-    fetchMock.mockImplementation(async () =>
-      json({ detail: "busy" }, 429, { "Retry-After": "1" }),
+  /** Uploads to a server that is always busy; reports the pauses between requests. */
+  async function againstBusyServer(retryAfter: string, attempts: number) {
+    const arrived: number[] = [];
+    fetchMock.mockImplementation(async () => {
+      arrived.push(Date.now());
+      return json({ detail: `busy ${arrived.length}` }, 429, {
+        "Retry-After": retryAfter,
+      });
+    });
+    const onBusy = vi.fn();
+    const outcome = settle(
+      uploadFile("/u", new Blob(["a"]), { attempts, onBusy }),
     );
-    const outcome = settle(uploadFile("/u", new Blob(["a"]), { attempts: 4 }));
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(4000);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect((await outcome).message).toBe("busy");
+    await vi.runAllTimersAsync();
+    const error = await outcome;
+    const pauses = arrived.slice(1).map((time, i) => time - arrived[i]);
+    return { error, requests: arrived.length, pauses, onBusy };
+  }
+
+  it("backs off further on repeated busy answers", async () => {
+    const { error, requests, pauses, onBusy } = await againstBusyServer("3", 5);
+    expect(requests).toBe(5);
+    expect(error.message).toBe("busy 5");
+    expect(error.status).toBe(429);
+    expect(pauses).toHaveLength(4);
+    pauses.forEach((pause, i) => {
+      expect(pause).toBeGreaterThanOrEqual(3000);
+      if (i) expect(pause).toBeGreaterThanOrEqual(pauses[i - 1]);
+    });
+    expect(pauses[3]).toBeGreaterThan(pauses[0]);
+    expect(onBusy).toHaveBeenLastCalledWith(false);
+  });
+
+  it("caps the pause even when the server asks for much longer", async () => {
+    const { requests, pauses } = await againstBusyServer("3600", 2);
+    expect(requests).toBe(2);
+    expect(pauses[0]).toBeGreaterThanOrEqual(1000);
+    expect(pauses[0]).toBeLessThan(60_000);
   });
 
   it("does not retry a 429 without Retry-After", async () => {
@@ -126,24 +145,6 @@ describe("uploadFile", () => {
     expect(error.status).toBe(422);
   });
 
-  it("gives up after the allowed attempts and shows the last server answer", async () => {
-    fetchMock.mockImplementation(async () =>
-      json({ detail: "Сервер принимает другие файлы." }, 429, {
-        "Retry-After": "1",
-      }),
-    );
-    const onBusy = vi.fn();
-    const outcome = settle(
-      uploadFile("/u", new Blob(["a"]), { attempts: 3, onBusy }),
-    );
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(2000);
-    const error = await outcome;
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(error.message).toBe("Сервер принимает другие файлы.");
-    expect(onBusy).toHaveBeenLastCalledWith(false);
-  });
-
   it("stops waiting at once when aborted and sends nothing more", async () => {
     fetchMock.mockImplementation(async () =>
       json({ detail: "busy" }, 429, { "Retry-After": "5" }),
@@ -178,16 +179,6 @@ describe("uploadFile", () => {
       uploadFile("/u", new Blob(["a"]), { unreadable: "Ответ не получен." }),
     );
     expect(custom.message).toBe("Ответ не получен.");
-  });
-});
-
-describe("uploadWithRetry", () => {
-  it("returns the response untouched for the caller to interpret", async () => {
-    const response = json({ detail: "x" }, 409);
-    fetchMock.mockResolvedValue(response);
-    await expect(uploadWithRetry("/u", new Blob(["a"]))).resolves.toBe(
-      response,
-    );
   });
 });
 

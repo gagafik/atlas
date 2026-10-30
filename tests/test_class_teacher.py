@@ -15,7 +15,6 @@ from test_behaviour import url as behaviour_url, note as behaviour_note
 from test_tabular_import import mapped, csv
 
 HISTORY = '/api/access/class-staff/teachers/history?workspace=demo'
-STAFF = 'Классный руководитель'
 
 
 def lead(teacher_id, class_id=A):
@@ -55,13 +54,6 @@ def test_state_validates_class_teacher_reference():
     data['classes'][0]['classTeacherId'] = ''
     with pytest.raises(ValidationError):
         State.model_validate(data)
-
-
-def test_class_teacher_is_a_reference_column_of_the_table_import():
-    from backend.importing import metadata
-    classes = next(t for t in metadata() if t['key'] == 'classes')
-    field = next(f for f in classes['fields'] if f['key'] == 'classTeacherId')
-    assert field['label'] == STAFF and 'classTeacherId' not in classes['common']
 
 
 def table_import(c, cell):
@@ -174,12 +166,23 @@ def test_editor_cannot_delete_a_class_with_a_class_teacher_but_admin_can_and_it_
 
 def test_history_is_paged_and_filtered_by_class(client):
     enable(client)
-    for i in range(23):
+    changes = 23
+    for i in range(changes):
         lead('t2' if i % 2 == 0 else None)
-    first = client.get(HISTORY).json()
-    assert len(first['items']) == 20 and first['nextBefore']
-    second = client.get(HISTORY + '&before=' + str(first['nextBefore'])).json()
-    assert len(second['items']) == 3 and second['nextBefore'] is None
+    items, cursor = [], ''
+    for _ in range(100):
+        page = client.get(HISTORY + cursor).json()
+        items += page['items']
+        if page['nextBefore'] is None:
+            break
+        cursor = '&before=' + str(page['nextBefore'])
+    else:
+        raise AssertionError('history paging does not end')
+    # Every change is listed exactly once, newest first: nothing lost or doubled at a page boundary.
+    ids = [i['id'] for i in items]
+    assert len(ids) == changes and ids == sorted(set(ids), reverse=True)
+    assert items[0]['after'] == dict(id='t2', name='Учитель английского') and items[1]['after'] is None
+    assert {i['classId'] for i in items} == {A}
     assert client.get(HISTORY + '&classId=' + D).json()['items'] == []
     assert client.get(HISTORY + '&before=0').status_code == 422
 
@@ -360,10 +363,7 @@ def switch(c, class_id, enabled, version, rid=None, **values):
 def test_electronic_notes_are_enabled_until_somebody_switches_them(client):
     _, parent, _ = staffed(client)
     assert parent.get('/api/journal/absences/options?workspace=demo').json()['students'][0]['electronicNotes'] is True
-    send(parent)
-    with api.connect() as db:
-        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'absence_class_%'").fetchone()[0] >= 2
-        assert db.execute('SELECT count(*) FROM absence_class_settings').fetchone()[0] == 0
+    assert send(parent)['status'] == 'pending'
 
 
 def test_class_teacher_switches_electronic_notes(client):

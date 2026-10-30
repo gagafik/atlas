@@ -7,6 +7,7 @@ from backend import api,absence_bulk
 from test_access import client,create,signed
 from test_absences import setup,body,send,decide,url,mark,upload,reviewers
 from test_journal import entry,report
+from seeding import read_row,insert_row
 
 
 def batch(items,**values):
@@ -134,16 +135,13 @@ def test_timetable_save_does_not_invalidate_bulk_preview(client):
 
 def test_notification_failure_rolls_back_whole_batch_and_can_retry(client,monkeypatch):
     _,_,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
-    original=api.notifications.deliver;calls=0
-    def fail(*args,**kwargs):
-        nonlocal calls
-        calls+=1
-        result=original(*args,**kwargs)
-        if calls==2:raise RuntimeError('batch failed after private and journal notifications')
-        return result
+    original=api.notifications.deliver;written=[]
+    def fail(db,*args,**kwargs):
+        original(db,*args,**kwargs);written.append(db.execute('SELECT count(*) FROM notifications').fetchone()[0])
+        raise RuntimeError('batch failed after a notification was written')
     before=counts();monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):apply(teacher,preview)
-    assert counts()==before
+    assert written and written[0]>before['notifications'] and counts()==before
     assert all(client.get(url('/'+n['id'])).json()['version']==1 for n in notices)
     monkeypatch.setattr(api.notifications,'deliver',original)
     assert apply(teacher,preview).status_code==200
@@ -179,9 +177,8 @@ def test_bounded_selection_rate_and_blank_validation(client):
 def test_fifty_notice_bound_and_current_account_recheck(client,monkeypatch):
     _,person,parent,teacher=setup(client);notice=send(parent)
     with api.connect() as db:
-        row=list(db.execute('SELECT * FROM absence_notices WHERE id=?',(notice['id'],)).fetchone())
-        for _ in range(49):
-            row[0]=uuid4().hex;row[13]=str(uuid4());db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(row))+')',row)
+        template=read_row(db,'absence_notices',id=notice['id'])
+        for _ in range(49):insert_row(db,'absence_notices',template,id=uuid4().hex,request_id=str(uuid4()))
     notices=client.get(url()).json()['items'];assert len(notices)==50
     preview=prepare(teacher,notices)
     original=api.absences.recheck

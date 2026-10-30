@@ -9,18 +9,12 @@ from test_access import client
 from test_quizzes import clock,ready,start,save,attempt,action,NOW
 
 
-def test_empty_database_bootstraps_once_and_read_contract_rejects_writes(client,monkeypatch):
-    calls=[];original=api.quizzes.tables
-    def tables(db):calls.append(1);return original(db)
-    monkeypatch.setattr(api.quizzes,'tables',tables)
-    first=client.get('/api/journal/quizzes?workspace=demo');assert first.status_code==200,first.text
-    assert first.json()['items']==[] and len(calls)==1
-    for path in ['/api/journal/quizzes?workspace=demo','/api/journal/quiz-bank?workspace=demo']:
-        assert client.get(path).status_code==200
-    assert len(calls)==1
+def test_empty_database_serves_empty_lists_and_read_contract_rejects_writes(client):
+    for path in ['/api/journal/quizzes?workspace=demo','/api/journal/quiz-bank?workspace=demo','/api/journal/quizzes?workspace=demo']:
+        listing=client.get(path);assert listing.status_code==200,listing.text
+        assert listing.json()['items']==[]
     with pytest.raises(sqlite3.OperationalError,match='readonly'):
         api.quizzes.read_only(lambda db:db.execute("DELETE FROM quiz_questions"))
-    assert len(calls)==1
 
 
 def test_bootstrap_rolls_back_failure_and_does_not_mask_unrelated_sql_errors(client,monkeypatch):

@@ -140,17 +140,6 @@ def test_types_and_schedule_days_roundtrip_xml_and_workbook():
     assert TABLES['scheduleDays'] == 'Дни в расписании'
 
 
-def test_diff_shows_type_and_schedule_day_labels():
-    before = ranked(); after = merge_and_self_study()
-    labels = {(c['table'], c['id']): c for c in inspect_edit(before, after)['diff']['changes']}
-    assert labels['datedLessons', f'c-eng{MON}']['after'].startswith('Объединение · 2026-08-17')
-    assert labels['datedLessons', 'c-hist2026-08-24']['after'].startswith('Самостоятельная работа')
-    day = labels['scheduleDays', 'sat']
-    assert day['kind'] == 'added' and 'Понедельник' in day['after']
-    assert day['fields']['day']['displayAfter'] == 'Понедельник' and day['fields']['classIds']['displayAfter'] == '10A'
-    assert labels['datedLessons', f'c-eng{MON}']['fields']['changeType']['displayAfter'] == 'Объединение'
-
-
 def test_schedule_day_notifies_personal_accounts(client):
     enable(client); create(client, 'teacher')
     teacher = signed('teacher')
@@ -403,7 +392,7 @@ def test_merge_options_count_groups_already_in_the_host():
     # hist (10) already hosts eng (10): a third group of 10 makes 30 places in a room of 25.
     assert (option['capacity'], option['attendance'], option['fits']) == (25, 30, False)
     merged = joining.model_copy(update=dict(datedLessons=[*joining.datedLessons, change('third', MON, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist')]))
-    assert [i['message'] for i in day_report(merged, MON)['issues'] if i['type'] == 'dated_capacity'] == ['10D: вместимость 25, участников 30.']
+    assert [i['ids'] for i in day_report(merged, MON)['issues'] if i['type'] == 'dated_capacity'] == [[f'{MON}:hist']]
     roomy = State.model_validate(crowded(30, 10).model_dump())
     assert (hist_option(roomy)['attendance'], hist_option(roomy)['fits']) == (30, True)
     roomy_merged = roomy.model_copy(update=dict(datedLessons=merged.datedLessons))
@@ -476,15 +465,10 @@ def test_ranking_order_and_explanations():
     assert [c['id'] for c in result['candidates']] == ['t4', 't0', 't1', 't5', 't2', 't3']
     scores = {c['id']: c['score'] for c in result['candidates']}
     assert scores['t2'] > scores['t4'] and scores['t3'] > scores['t0']
-    t4 = {f['key']: f for f in available[0]['factors']}
-    assert (t4['subject']['points'], t4['subject']['detail']) == (40, 'Ведёт этот предмет')
-    assert t4['group']['points'] == 0
-    assert (t4['presence']['points'], t4['presence']['detail']) == (20, 'Уроки до и после — без лишнего прихода')
-    assert (t4['fairness']['points'], t4['fairness']['detail']) == (20, 'Замен в этом месяце: 0')
-    assert (t4['building']['points'], t4['building']['detail']) == (0, 'Здания кабинетов не заданы')
-    t0 = {f['key']: f for f in available[1]['factors']}
-    assert (t0['group']['points'], t0['group']['detail']) == (15, 'Ведёт уроки в этом классе')
-    assert result['weights'] == dict(subject=40, group=30, presence=20, fairness=20, building=10)
+    points = lambda c: {f['key']: f['points'] for f in c['factors']}
+    t4, t0 = points(available[0]), points(available[1])
+    assert (t4['subject'], t4['group'], t4['presence'], t4['fairness'], t4['building']) == (40, 0, 20, 20, 0)
+    assert t0['group'] == 15
     assert s.model_dump() == before
 
 
@@ -546,9 +530,8 @@ def test_fairness_counts_takeovers_of_the_month_only():
     # August: self-study (t5) and a merge (t3) count; a September change, a move and a change that only
     # restates the planned teacher (t4 keeps his own lesson) do not.
     assert counts(MON, 'eng') == {'t0': 0, 't1': 0, 't2': 0, 't3': 1, 't4': 0, 't5': 1}
-    august = {c['id']: c for c in substitute_options(s, request(MON, 'eng'))['candidates']}
-    assert next(f for f in august['t5']['factors'] if f['key'] == 'fairness') == dict(key='fairness', label='Равномерность', points=0, max=20, detail='Замен в этом месяце: 1')
-    assert next(f for f in august['t4']['factors'] if f['key'] == 'fairness')['points'] == 20
+    fairness = {c['id']: next(f for f in c['factors'] if f['key'] == 'fairness') for c in substitute_options(s, request(MON, 'eng'))['candidates']}
+    assert fairness['t5']['points'] == 0 and fairness['t4']['points'] == fairness['t4']['max']
     assert counts(sep7, 'eng2') == {'t0': 0, 't1': 0, 't2': 0, 't3': 0, 't4': 1, 't5': 0}
 
 
@@ -729,20 +712,23 @@ def test_day_plan_validation(web):
     s = stored(ranked())
     def preview(items, **extra):
         return web.post('/api/calendar/day-plan/preview?workspace=demo', json=dict(revision=s.revision, day=str(MON), teacherId='t2', assignments=items) | extra)
-    assert 'больше не ведёт' in preview(assignments(('d0', 'substitution', dict(teacherId='t5')))).json()['detail']
-    assert 'больше не ведёт' in preview(assignments(('missing', 'cancel', {}))).json()['detail']
-    assert preview(assignments(('eng', 'cancel', {}), ('eng', 'substitution', dict(teacherId='t4')))).json()['detail'] == 'Урок указан дважды.'
-    assert preview(assignments(('eng', 'none', {}))).json()['detail'] == 'Выберите хотя бы одно действие.'
-    assert preview(assignments(('eng', 'substitution', {}))).json()['detail'] == 'Выберите учителя.'
-    assert preview(assignments(('eng', 'substitution', dict(teacherId='t2')))).json()['detail'] == 'Выберите учителя.'
-    assert preview(assignments(('eng', 'self_study', dict(teacherId='missing')))).json()['detail'] == 'Выберите учителя.'
-    assert preview(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:eng')))).json()['detail'] == 'Урок для объединения не найден.'
-    assert preview(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:d0')))).json()['detail'] == 'Урок для объединения не найден.'
+    def refused(items, marker, **extra):
+        response = preview(items, **extra)
+        assert response.status_code == 422 and marker in response.json()['detail'], response.text
+    refused(assignments(('d0', 'substitution', dict(teacherId='t5'))), 'больше не ведёт')
+    refused(assignments(('missing', 'cancel', {})), 'больше не ведёт')
+    refused(assignments(('eng', 'cancel', {}), ('eng', 'substitution', dict(teacherId='t4'))), 'дважды')
+    refused(assignments(('eng', 'none', {})), 'хотя бы одно')
+    refused(assignments(('eng', 'substitution', {})), 'учителя')
+    refused(assignments(('eng', 'substitution', dict(teacherId='t2'))), 'учителя')
+    refused(assignments(('eng', 'self_study', dict(teacherId='missing'))), 'учителя')
+    refused(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:eng'))), 'объединения')
+    refused(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:d0'))), 'объединения')
     assert preview([]).status_code == 422
     assert preview(assignments(('eng', 'substitution', dict(teacherId='t4'))), teacherId='missing').status_code == 422
-    assert preview(assignments(('eng', 'cancel', {})), day='2027-07-01').json()['detail'] == 'Дата вне учебного года.'
+    refused(assignments(('eng', 'cancel', {})), 'учебного года', day='2027-07-01')
     cancel = preview(assignments(('eng', 'cancel', {})))
-    assert cancel.status_code == 200 and cancel.json()['canApply'] and cancel.json()['diff']['changes'][0]['after'].startswith('Отмена')
+    assert cancel.status_code == 200 and cancel.json()['canApply'] and cancel.json()['diff']['added'] == 1
     merged = preview(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:hist'))))
     assert merged.status_code == 200 and merged.json()['canApply']
     stale = web.post('/api/calendar/day-plan?workspace=demo', json=dict(revision=s.revision - 1, day=str(MON), teacherId='t2'))

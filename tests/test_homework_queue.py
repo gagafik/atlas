@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import hashlib
 import json
 
 import pytest
@@ -362,6 +363,24 @@ def snapshot():
                 db.execute("SELECT version FROM journal_projection_versions WHERE name='homework_queue'").fetchone(),stored(db))
 
 
+def old_token(document):
+    """Token of the previous release, frozen here on purpose: stored answers carry it, so this formula must never follow the code."""
+    content=document['content'];fields=[content['homework'],content['dueDate']]
+    if content.get('homeworkFiles') or content.get('homeworkLatePolicy','allow')!='allow':fields+=[content.get('homeworkFiles',[]),content.get('homeworkLatePolicy','allow')]
+    return hashlib.sha256(json.dumps(fields,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
+
+def test_old_token_formula_is_frozen():
+    from backend import homework
+    # Text, deadline and, only when set to something other than the defaults, the files and the late policy.
+    base=dict(homework='Параграф 5',dueDate='2026-08-19')
+    for extra,literal in [({},'["Параграф 5","2026-08-19"]'),(dict(homeworkFiles=[],homeworkLatePolicy='allow'),'["Параграф 5","2026-08-19"]'),
+                          (dict(homeworkLatePolicy='block'),'["Параграф 5","2026-08-19",[],"block"]'),(dict(homeworkFiles=['f1']),'["Параграф 5","2026-08-19",["f1"],"allow"]'),
+                          (dict(homeworkSubmission='paper'),'["Параграф 5","2026-08-19"]')]:
+        document={'content':base|extra};expected=hashlib.sha256(literal.encode()).hexdigest()
+        assert old_token(document)==expected and homework.legacy_fingerprint(document)==expected
+
+
 def legacy_database(client, monkeypatch):
     """Lesson a: accepted under the current conditions, with an individual date. Lesson b: sent under older conditions."""
     from backend import homework, homework_deadlines
@@ -378,11 +397,11 @@ def legacy_database(client, monkeypatch):
     with api.connect() as db:
         published={k:json.loads(d) for k,d in db.execute('SELECT lesson_key,published_document FROM journal_entries WHERE published_document IS NOT NULL')}
         older=json.loads(json.dumps(published[b]));older['content']['homework']='Прежний текст'
-        for lesson_key,token in [(a,homework.legacy_fingerprint(published[a])),(b,homework.legacy_fingerprint(older))]:
+        for lesson_key,token in [(a,old_token(published[a])),(b,old_token(older))]:
             document=json.loads(db.execute('SELECT document FROM homework_submissions WHERE lesson_key=?',(lesson_key,)).fetchone()[0])
             document['submitted']['assignment']=token
             db.execute('UPDATE homework_submissions SET document=? WHERE lesson_key=?',(encoded(document),lesson_key))
-        db.execute('UPDATE homework_extensions SET assignment=? WHERE lesson_key=?',(homework.legacy_fingerprint(published[a]),a))
+        db.execute('UPDATE homework_extensions SET assignment=? WHERE lesson_key=?',(old_token(published[a]),a))
         db.execute('DROP TABLE homework_queue_tasks')
         db.execute('''CREATE TABLE homework_queue_tasks (
             workspace TEXT,lesson_key TEXT,sort_date TEXT,lesson_date TEXT,due_date TEXT,

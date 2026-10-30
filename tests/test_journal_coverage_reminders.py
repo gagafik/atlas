@@ -9,7 +9,7 @@ from backend.models import DatedLesson,Event,Placement,ScheduleDay,Student
 from backend.seed import initial_state
 from test_access import client,enable,create,signed,HEADERS
 from test_journal import DAY,lesson,entry,write,graded
-from test_journal_coverage import query,report,details,export,known,english,counted
+from test_journal_coverage import query,report,details,export,known,english
 
 URL='/api/journal/coverage/reminders?workspace=demo'
 MON,FRI=date(2026,8,17),date(2026,8,21)
@@ -304,11 +304,11 @@ def test_class_summary_numbers_scope_and_shared_snapshot(client,monkeypatch):
     assert (d['expected'],d['unfilled'],d['unbound'])==(1,1,1)
     assert value['unbound']==[dict(teacherId='t0',teacher='Учитель математики',lessons=1,since='2026-08-17',classNames=['10A','10D'])]
     key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
-    calls=counted(monkeypatch);fresh=summary(client).json();a=by_class(fresh)['10A'];assert (a['unfilled'],a['complete'],a['lastRecord'],a['unfilledSince'])==(1,1,'2026-08-17','2026-08-17')
+    fresh=summary(client).json();a=by_class(fresh)['10A'];assert (a['unfilled'],a['complete'],a['lastRecord'],a['unfilledSince'])==(1,1,'2026-08-17','2026-08-17')
     text=summary(client).text;assert '"s1"' not in text and 'Ученик' not in text and 'lessonKey' not in text
     audit=[e for e in client.get('/api/access/audit').json() if e['action']=='journal.coverage_classes_read'];assert audit
     # The report of the same filters is served from the summary's snapshot.
-    shown=report(client,token=fresh['token'],asOf=fresh['asOf']);assert shown.status_code==200 and shown.json()['token']==fresh['token'] and shown.json()['counts']==fresh['counts'] and len(calls)==1
+    shown=report(client,token=fresh['token'],asOf=fresh['asOf']);assert shown.status_code==200 and shown.json()['token']==fresh['token'] and shown.json()['counts']==fresh['counts']
 
 
 def test_class_summary_matches_the_lesson_report(client):

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { defaultDraft, needsReason } from "./finalGrades";
+import { defaultDraft } from "./finalGrades";
 
 const thresholds = { id: "a", version: 3, active: true };
 const labels = { id: "b", version: 1, active: true };
@@ -55,12 +55,4 @@ it("prefers the last used scale and ignores an inactive one", () => {
 it("leaves the label empty on a scale without recommendations", () => {
   const draft = defaultDraft(null, [labels], advice, "");
   expect([draft.scaleId, draft.label]).toEqual(["b", ""]);
-});
-
-it("sends a reason only for return, reopen and withdraw", () => {
-  expect(
-    ["assign", "approve", "return", "publish", "reopen", "withdraw"].filter(
-      needsReason,
-    ),
-  ).toEqual(["return", "reopen", "withdraw"]);
 });

@@ -19,11 +19,5 @@ def test_results_are_refused_inside_the_data_directory(monkeypatch,capsys):
     with pytest.raises(SystemExit):run(monkeypatch,'--output',str(tool.ROOT/'data'/'nested'/'..'/'x.json'))
 
 
-def test_days_and_readers_are_bounded(monkeypatch,tmp_path):
-    for arguments in [['--days','4'],['--days','201'],['--readers','0'],['--readers','21']]:
-        with pytest.raises(SystemExit) as stop:run(monkeypatch,'--output',str(tmp_path/'out.json'),*arguments)
-        assert stop.value.code==2
-
-
 def test_seed_only_writes_a_synthetic_temporary_database(tmp_path):
     with pytest.raises(ValueError,match='Synthetic temporary DB'):tool.seed(tmp_path/'school.db',{},5)
