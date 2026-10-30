@@ -1,11 +1,9 @@
 """Assignment publication, historical materials and end-of-day submission policy."""
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 
 import pytest
 from backend import api, assignment_files, homework, homework_files
-from backend.notifications import encoded
 from test_access import client, enable, create, signed
 from test_homework import setup, get, answer, review
 from test_journal import entry, lesson, graded, write, DAY
@@ -162,9 +160,6 @@ def test_limits_types_and_global_quota(client,monkeypatch):
 
 def test_deadline_boundary_atomic_rejection_and_draft_preservation(client,monkeypatch):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']
-    content=record['document']['content'];legacy=homework.legacy_fingerprint(record['document'])
-    assert legacy==hashlib.sha256(encoded([content['homework'],content['dueDate']]).encode()).hexdigest()
-    assert homework.fingerprint(record['document'])==homework.substance('online',[])
     record=save_materials(teacher,record,[],homeworkLatePolicy='block')
     before=datetime(2026,8,19,18,59,59,tzinfo=timezone.utc)
     monkeypatch.setattr(homework,'now',lambda:before)

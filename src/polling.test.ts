@@ -65,20 +65,33 @@ it("preserves opted-in background notifications and does not overwrite an open i
 });
 
 it("backs off errors and returns to the normal cadence after success", async () => {
-  const task = vi
-    .fn<() => Promise<boolean>>()
-    .mockResolvedValueOnce(false)
-    .mockRejectedValueOnce(new Error("offline"))
-    .mockResolvedValue(true);
-  poll(task, { interval: 10000 });
-  await vi.advanceTimersByTimeAsync(19999);
-  expect(task).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(task).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(40000);
-  expect(task).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(10000);
-  expect(task).toHaveBeenCalledTimes(4);
+  // A refused answer (false) and a thrown error both count as a failure.
+  const outcomes: (boolean | Error)[] = [
+    true,
+    false,
+    new Error("offline"),
+    false,
+    false,
+    true,
+  ];
+  const times: number[] = [];
+  const maxDelay = 50000;
+  poll(
+    async () => {
+      times.push(Date.now());
+      const outcome = outcomes.shift() ?? true;
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    },
+    { interval: 10000, maxDelay },
+  );
+  await vi.advanceTimersByTimeAsync(10 * maxDelay);
+  // gaps[i] is how long the poller waited after the i-th poll.
+  const gaps = times.slice(1, 7).map((time, i) => time - times[i]);
+  expect(gaps[1]).toBeGreaterThan(gaps[0]);
+  expect(gaps[2]).toBeGreaterThan(gaps[1]);
+  for (const gap of gaps.slice(1, 5)) expect(gap).toBeLessThanOrEqual(maxDelay);
+  expect(gaps[5]).toBe(gaps[0]);
 });
 
 it("coalesces forced refreshes, never overlaps requests, and stops after disposal", async () => {
@@ -105,17 +118,49 @@ it("coalesces forced refreshes, never overlaps requests, and stops after disposa
   expect(task).toHaveBeenCalledTimes(2);
 });
 
-it("uses changing intervals and spreads clients with jitter", async () => {
+// Time between the first two polls: the delay a client picks for its next poll.
+async function firstGap(interval: number | (() => number)) {
+  const times: number[] = [];
+  const controller = poll(
+    async () => {
+      times.push(Date.now());
+      return true;
+    },
+    { interval },
+  );
+  await vi.advanceTimersByTimeAsync(2 * 60000);
+  controller.stop();
+  return times[1] - times[0];
+}
+
+it("reads the interval again before every poll", async () => {
   let active = false;
-  const task = vi.fn(async () => true);
-  vi.mocked(Math.random).mockReturnValue(0);
-  const controller = poll(task, { interval: () => (active ? 1500 : 30000) });
-  await vi.advanceTimersByTimeAsync(26999);
-  expect(task).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(task).toHaveBeenCalledTimes(2);
+  const times: number[] = [];
+  const controller = poll(
+    async () => {
+      times.push(Date.now());
+      return true;
+    },
+    { interval: () => (active ? 1500 : 30000) },
+  );
+  await vi.advanceTimersByTimeAsync(0);
   active = true;
   controller.refresh();
-  await vi.advanceTimersByTimeAsync(1350);
-  expect(task).toHaveBeenCalledTimes(4);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(times.length).toBeGreaterThanOrEqual(3);
+  const gap = times[2] - times[1];
+  expect(gap).toBeGreaterThan(1500 / 2);
+  expect(gap).toBeLessThan(1500 * 1.5);
+});
+
+it("spreads clients so they do not poll at the same moment", async () => {
+  vi.mocked(Math.random).mockReturnValue(0);
+  const early = await firstGap(30000);
+  vi.mocked(Math.random).mockReturnValue(0.999);
+  const late = await firstGap(30000);
+  expect(early).not.toBe(late);
+  for (const gap of [early, late]) {
+    expect(gap).toBeGreaterThan(30000 / 2);
+    expect(gap).toBeLessThan(30000 * 1.5);
+  }
 });

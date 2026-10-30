@@ -1,5 +1,4 @@
 from datetime import date, datetime, timedelta, timezone
-import pytest
 from fastapi.testclient import TestClient
 from backend import api
 from backend.models import Placement, DatedLesson, TeacherAbsence, Commitment
@@ -36,17 +35,20 @@ def test_dated_snapshot_contains_cancellations_and_bookings_without_private_note
     assert 'Private' not in document and 'Personal' not in document and meta['rows']==2
 
 
-def test_publication_selection_and_date_bounds_are_explicit():
-    for patch in [dict(entityIds=[]),dict(entityIds=['c-demo-a','c-demo-a']),dict(cycleIds=[]),dict(kind='dated'),dict(kind='dated',firstDate='2026-08-17',lastDate='2026-10-01'),dict(expiresInDays=0)]:
-        with pytest.raises(ValueError): options(**patch)
-    with pytest.raises(ValueError): public_document(fixture(),options(entityIds=['absent']))
-    with pytest.raises(ValueError): public_document(fixture(),options(kind='dated',firstDate='2026-07-01',lastDate='2026-07-02'))
-
-
 def prepare(tmp_path,monkeypatch):
     monkeypatch.setattr(api,'DB',tmp_path/'publications.db')
     client=TestClient(api.app);client.get('/api/state?workspace=demo')
     return client,api.save('demo',fixture())
+
+
+def test_publication_selection_and_date_bounds_are_explicit(tmp_path,monkeypatch):
+    client,s=prepare(tmp_path,monkeypatch)
+    valid=options(revision=s.revision).model_dump(mode='json')
+    assert client.post('/api/publications/preview?workspace=demo',json=valid).status_code==200
+    for patch in [dict(entityIds=[]),dict(entityIds=['c-demo-a','c-demo-a']),dict(cycleIds=[]),dict(kind='dated'),dict(kind='dated',firstDate='2026-08-17',lastDate='2026-10-01'),dict(expiresInDays=0),
+                  dict(entityIds=['absent']),dict(kind='dated',firstDate='2026-07-01',lastDate='2026-07-02')]:
+        response=client.post('/api/publications/preview?workspace=demo',json=valid|patch)
+        assert response.status_code==422,(patch,response.text)
 
 
 def test_preview_publish_snapshot_and_revoke_are_isolated_from_draft(tmp_path,monkeypatch):

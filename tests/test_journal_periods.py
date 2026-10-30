@@ -203,23 +203,30 @@ def test_failed_close_rolls_back_snapshots_lock_and_history(client,monkeypatch):
 def test_archive_pages_remain_stable_after_live_journal_withdrawal(client):
     from unittest.mock import patch
     # Marks for future lessons are refused in production; the school date moves past the whole term here.
+    published=set()
     with patch('backend.journal.today',return_value=date(2027,3,1)):
         for week in range(27):
             day=(date(2026,8,17)+timedelta(days=7*week)).isoformat()
             for row in client.get('/api/journal/day',params=dict(workspace='demo',day=day)).json()['lessons']:
-                record=entry(client,row['lessonKey'],day=day);write(client,graded(record),publish=True).raise_for_status()
+                record=entry(client,row['lessonKey'],day=day);write(client,graded(record),publish=True).raise_for_status();published.add(row['lessonKey'])
     p=period(client,end='2027-02-15')
     # Future dates are rejected in production; advance both clocks in this fixture.
-    from datetime import datetime,timezone
     clock=datetime(2027,3,1,tzinfo=timezone.utc)
     with patch('backend.journal_periods.now',return_value=clock),patch('backend.journal_coverage.now',return_value=clock):p=close(client,p)
-    first=archive(client,p).json();second=archive(client,p,offset=first['nextOffset']).json()
-    assert len(first['items'])==50 and len(second['items'])==4 and second['nextOffset'] is None
-    assert not {r['lessonKey'] for r in first['items']}&{r['lessonKey'] for r in second['items']}
+    def pages():
+        result,offset=[],0
+        while offset is not None:
+            page=archive(client,p,offset=offset).json();result.append([r['lessonKey'] for r in page['items']]);offset=page['nextOffset']
+            assert len(result)<=len(published),'The archive must end'
+        return result
+    walked=pages()
+    # The whole term is more than one page; no published lesson is lost or repeated between pages.
+    assert sorted(key for page in walked for key in page)==sorted(published)
     action(client,p,'reopen').raise_for_status()
-    key=first['items'][0]['lessonKey'];record=entry(client,key)
+    key=walked[0][0];record=entry(client,key)
     client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=key,version=record['version'])).raise_for_status()
     assert archive(client,p,lessonKey=key).status_code==200
+    assert pages()==walked
 
 
 def test_close_preview_is_owned_and_versioned_and_edit_audited(client):

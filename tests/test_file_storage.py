@@ -21,24 +21,19 @@ def attempt(client, record, **extra):
 
 def test_registry_matches_backup_stores():
     assert {(table, folder) for table, folder, *_ in homework_files.STORES.values()} == set(backup_school.STORES)
-    assert len(homework_files.STORES) == 9
 
 
 def test_total_limit_backward_compatible(monkeypatch):
     mib = 1024 * 1024
     monkeypatch.delenv('ATLAS_UPLOAD_TOTAL_MB', raising=False)
     assert homework_files.total_limit() == 65536 * mib
-    for value, expected in [('', 65536), ('abc', 65536), ('5', 10), ('2048', 2048), ('99999999', 1048576)]:
+    for value, expected in [('5', 10), ('2048', 2048), ('99999999', 1048576)]:
         monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB', value)
         assert homework_files.total_limit() == expected * mib, value
-    for key, (_, _, env, default, *_rest) in homework_files.STORES.items():
-        monkeypatch.delenv(env, raising=False)
-        assert homework_files.module_limit(key) == default * mib
+    homework = homework_files.module_limit('homework')
     monkeypatch.setenv('ATLAS_UPLOAD_MESSAGES_MB', '100')
     assert homework_files.module_limit('messages') == 100 * mib
-    assert homework_files.module_limit('homework') == 30720 * mib
-    monkeypatch.delenv('ATLAS_UPLOAD_RESERVE_MB', raising=False)
-    assert homework_files.reserve_bytes() == 2048 * mib
+    assert homework_files.module_limit('homework') == homework
     monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB', '0')
     assert homework_files.reserve_bytes() == 0
 

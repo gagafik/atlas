@@ -32,13 +32,13 @@ def containers():
     return {'.wav': wav_bytes(), '.mp3': mp3, '.m4a': mp4, '.mp4': mp4, '.webm': webm, '.ogg': ogg}
 
 
-@pytest.mark.parametrize('extension', list(teaching_media.MEDIA))
-def test_library_upload_recognizes_scoped_formats_and_download_types(client, extension):
+@pytest.mark.parametrize('extension,mime', [('.mp3', 'audio/mpeg'), ('.wav', 'audio/wav'), ('.m4a', 'audio/mp4'), ('.ogg', 'audio/ogg'), ('.mp4', 'video/mp4'), ('.webm', 'video/webm')])
+def test_library_upload_recognizes_scoped_formats_and_download_types(client, extension, mime):
     teacher, _, pupil, _ = setup(client); data = containers()[extension]
     file = ok(upload(teacher, data, 'sample' + extension))
     material = ok(save(teacher, fileIds=[file['id']]))
     response = download(teacher, file['id'], material)
-    assert response.content == data and response.headers['content-type'] == teaching_media.MEDIA[extension]
+    assert response.content == data and response.headers['content-type'] == mime
     assert response.headers['content-disposition'].startswith('inline;')
     assert response.headers['accept-ranges'] == 'bytes'
     assert response.headers['cache-control'] == 'no-store' and response.headers['vary'] == 'Cookie'

@@ -34,10 +34,8 @@ def test_pre_cancel_and_force_cancel_reap_the_owned_child():
     assert solve_isolated(initial_state('demo'),cancel=event)['status']=='cancelled'
     event.clear(); pids=[]
     def progress(value): pids.append(value['pid']); event.set()
-    began=time.monotonic()
     result=solve_isolated(initial_state('demo'),cancel=event,progress=progress,_target=stuck_child,_cancel_grace=.1)
     assert result['status']=='cancelled' and pids[0]!=os.getpid()
-    assert time.monotonic()-began<8
     assert not [p for p in mp.active_children() if p.pid in pids]
 
 

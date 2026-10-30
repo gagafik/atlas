@@ -188,14 +188,10 @@ def test_account_changed_during_password_check_cannot_add_access(client, monkeyp
 
 
 def test_listing_is_bounded_and_codes_never_reappear(client):
-    enable(client);first=issue(client)
-    with api.connect() as db:
-        row=db.execute('SELECT * FROM access_invitations').fetchone()
-        for i in range(51):
-            db.execute('INSERT INTO access_invitations (token_hash,recipient,role,permissions,created,expires,creator_id) VALUES (?,?,?,?,?,?,?)',
-                       (digest(f'fixture-{i}'),*row[2:8]))
-    page1=client.get('/api/access/invitations').json()
-    page2=client.get('/api/access/invitations?before='+str(page1['nextBefore'])).json()
-    assert len(page1['items']) == 50 and len(page2['items']) == 2 and page2['nextBefore'] is None
-    assert len({i['id'] for i in page1['items']+page2['items']}) == 52
-    assert first['code'] not in json.dumps(page1)+json.dumps(page2)
+    enable(client);codes=[issue(client)['code'] for _ in range(52)];pages=[];before=''
+    for _ in range(10):
+        page=client.get('/api/access/invitations'+before).json();pages.append(page);before='?before='+str(page['nextBefore'])
+        if page['nextBefore'] is None:break
+    items=[i for page in pages for i in page['items']]
+    assert len(pages)>1 and pages[-1]['nextBefore'] is None and len({i['id'] for i in items})==len(items)==52
+    assert not any(code in json.dumps(pages) for code in codes)

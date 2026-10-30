@@ -1,8 +1,5 @@
-import pytest
-from pydantic import ValidationError
 from backend.seed import initial_state
 from backend.models import Placement, TimetableRule as Rule
-from backend.optimization import Optimization
 from backend.scheduling import solve, validate_schedule
 from test_editing import client
 
@@ -49,12 +46,13 @@ def test_preference_multiplier_and_zero_weights_do_not_disable_hard_rules():
 
 
 def test_priority_bounds_and_api_preview_record_the_selected_weights(client):
+    before=client.get('/api/state?workspace=demo').json(); revision=before['revision']
     for invalid in [dict(early=-1),dict(preferences=1001),dict(stability=1.5),dict(unknown=1)]:
-        with pytest.raises(ValidationError): Optimization(**invalid)
+        generate=client.post('/api/generate?workspace=demo',json=dict(revision=revision,preview=True,seconds=2,optimization=invalid))
+        job=client.post('/api/generation-jobs?workspace=demo',json=dict(revision=revision,optimization=invalid))
+        assert generate.status_code==job.status_code==422,(invalid,generate.text,job.text)
     weights=dict(early=0,stability=80,preferences=2)
-    before=client.get('/api/state?workspace=demo').json()
-    result=client.post('/api/generate?workspace=demo',json=dict(revision=1,preview=True,seconds=2,optimization=weights))
+    result=client.post('/api/generate?workspace=demo',json=dict(revision=revision,preview=True,seconds=2,optimization=weights))
     assert result.status_code==200,result.text
     assert result.json()['optimization']['weights']==weights
     assert client.get('/api/state?workspace=demo').json()==before
-    assert client.post('/api/generation-jobs?workspace=demo',json=dict(revision=1,optimization=dict(early=-1))).status_code==422

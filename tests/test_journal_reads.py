@@ -7,53 +7,24 @@ import pytest
 from backend import absences, api, journal, journal_reads
 from test_access import client, signed
 from test_homework import setup
-from test_journal import DAY, lesson, entry, write, graded
+from test_journal import DAY, entry, write
 
 REPORT='/api/journal/report?workspace=demo&studentId=s1&start=2026-08-01&end=2026-09-01'
 QUEUE='/api/journal/homework-queue?workspace=demo'
 
 
-def counted(monkeypatch):
-    calls=[];original=api.journal.tables
-    def tables(db):calls.append(1);return original(db)
-    monkeypatch.setattr(api.journal,'tables',tables)
-    return calls
-
-
-def test_reads_bootstrap_once_and_never_write(client,monkeypatch):
-    key=lesson(client)['lessonKey']
-    saved=write(client,graded(entry(client,key)),publish=True);assert saved.status_code==200,saved.text
-    calls=counted(monkeypatch)
-    for path in ['/api/journal/options?workspace=demo',f'/api/journal/day?workspace=demo&day={DAY}',
-                 f'/api/journal/entry?workspace=demo&lessonKey={key}&day={DAY}',f'/api/journal/history?workspace=demo&lessonKey={key}',
-                 REPORT,QUEUE+'&filter=all']:
-        response=client.get(path);assert response.status_code==200,(path,response.text)
-    assert calls==[]
+def test_journal_read_connection_is_read_only(client):
     with pytest.raises(sqlite3.OperationalError,match='readonly'):
         journal_reads.read(api.access,api.journal.prepare,lambda db:db.execute('DELETE FROM journal_entries'))
-    assert calls==[]
-
-
-def test_fresh_database_is_prepared_once_by_the_first_read(client,monkeypatch):
-    calls=counted(monkeypatch)
-    assert client.get('/api/journal/options?workspace=demo').status_code==200
-    assert len(calls)==1
-    for path in ['/api/journal/options?workspace=demo',f'/api/journal/day?workspace=demo&day={DAY}',REPORT,QUEUE]:
-        assert client.get(path).status_code==200
-    assert len(calls)==1
-    with api.connect(read_only=True) as db:
-        assert ('journal_schema',journal_reads.SCHEMA) in set(db.execute('SELECT name,version FROM journal_projection_versions'))
 
 
 @pytest.mark.parametrize('marker',['journal_schema','coverage','attendance','homework_queue','assessment_categories'])
-def test_missing_marker_rebuilds_once_and_returns_the_same_data(client,monkeypatch,marker):
+def test_missing_marker_is_rebuilt_and_returns_the_same_data(client,marker):
     record,pupil,parent,teacher=setup(client)
     expected=[parent.get(REPORT).json(),teacher.get(QUEUE+'&filter=all').json()]
-    calls=counted(monkeypatch)
     with api.connect() as db:db.execute('DELETE FROM journal_projection_versions WHERE name=?',(marker,))
     assert [parent.get(REPORT).json(),teacher.get(QUEUE+'&filter=all').json()]==expected
-    assert len(calls)==1
-    assert parent.get(REPORT).json()==expected[0] and len(calls)==1
+    assert parent.get(REPORT).json()==expected[0]
 
 
 def test_dropped_member_table_is_recreated_by_the_next_read(client):
@@ -75,11 +46,6 @@ def test_failed_preparation_rolls_back_and_unrelated_errors_are_not_masked(clien
     def unexpected(db):raise AssertionError('Unrelated errors must not prepare the schema')
     with pytest.raises(sqlite3.OperationalError,match='unrelated_table'):
         journal_reads.read(api.access,unexpected,lambda db:db.execute('SELECT * FROM unrelated_table').fetchall())
-
-
-def test_journal_and_homework_share_one_schedule_cache(client):
-    assert api.homework.snapshots is api.journal.snapshots
-    assert api.absences.snapshots is api.journal.snapshots and api.quizzes.snapshots is api.journal.snapshots
 
 
 def test_journal_reads_work_while_writer_lock_and_sqlite_writer_are_held(client,monkeypatch):

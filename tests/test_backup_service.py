@@ -5,7 +5,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -100,12 +99,18 @@ def test_destination_never_adopts_source_or_unowned_directories(tmp_path,kind):
     if kind=='foreign_nonempty':assert (target/'keep.txt').read_text()=='private'
 
 
-def test_low_space_does_not_start_child_and_preserves_existing_data(tmp_path,monkeypatch):
+def test_low_space_fails_the_run_and_preserves_existing_data(tmp_path):
     c=config(tmp_path)
-    monkeypatch.setattr(service.shutil,'disk_usage',lambda _:SimpleNamespace(free=1))
-    monkeypatch.setattr(service.Worker,'run_child',lambda *_:pytest.fail('Copy must not start'))
-    assert not service.Worker(c).run(once=True)
-    assert not list(c.destination.glob('backup-*'))
+    assert service.Worker(c).run(once=True)
+    old=service.read_json(c.control/'status.json')['lastSuccess']
+    # A reserve no disk can satisfy leaves too little free space for another copy.
+    tight=service.Config(c.database,c.destination,reserve_bytes=1<<60)
+    assert not service.Worker(tight).run(once=True)
+    state=service.read_json(c.control/'status.json')
+    assert state['lastFailure']['code']=='failed' and state['lastSuccess']==old
+    assert [row['id'] for row in state['copies']]==[old['id']]
+    assert [path.name for path in c.destination.glob('backup-*')]==[old['id']]
+    assert verify_backup(c.destination/old['id'])['files']==1
 
 
 def test_crash_recovery_cleans_only_recorded_incomplete_run_and_retries(tmp_path):

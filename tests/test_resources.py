@@ -4,7 +4,6 @@ from pydantic import ValidationError
 from backend import api
 from backend.models import State, Placement, TimetableRule
 from backend.scheduling import solve, validate_schedule
-from backend.editing import edit, EditRequest, inspect_edit
 
 
 def fixture():
@@ -143,7 +142,7 @@ def test_transfers_actual_time_direction_and_partial_generation(shared):
     s.placements = [placement('w1', 0, 'a1', True), placement('w2', 1, 'b1')]
     report = validate_schedule(s)
     travel = next(i for i in report['issues'] if i['type'] == 'travel')
-    assert travel['observed'][3] == 20
+    assert {i['type'] for i in report['issues']} == {'travel'}
     assert travel['affectedStudentIds'] == (['s1'] if shared == 'pupil' else [])
     candidate = generated(s, ['w2'])
     assert candidate.placements[0] == s.placements[0]
@@ -197,16 +196,26 @@ def test_reference_validation_prevents_duplicate_teachers_rooms_and_invalid_clas
         State.model_validate(raw)
 
 
-def test_editor_blocks_new_coteacher_conflict_and_campus_preview_applies_separately(tmp_path, monkeypatch):
+def saved_school(tmp_path, monkeypatch, s):
+    monkeypatch.setattr(api, 'DB', tmp_path / 'editor.db')
+    client = TestClient(api.app)
+    s.revision = client.get('/api/state?workspace=demo').json()['revision']
+    return client, client.put('/api/state?workspace=demo', json=s.model_dump(mode='json')).json()
+
+
+def test_editor_blocks_new_coteacher_conflict(tmp_path, monkeypatch):
     s = fixture()
     s.placements = [placement('w1', 0, 'a1'), placement('w2', 0, 'b1')]
-    changed = edit(s, EditRequest(action='workloads', revision=0, ids=['w1'], patch=dict(additionalTeacherIds=['t2'])))
-    assert not inspect_edit(s, changed)['canApply']
-    monkeypatch.setattr(api, 'DB', tmp_path / 'campus.db')
-    client = TestClient(api.app)
-    current = client.get('/api/state?workspace=demo').json()
-    s.revision = current['revision']
-    saved = client.put('/api/state?workspace=demo', json=s.model_dump(mode='json')).json()
+    client, saved = saved_school(tmp_path, monkeypatch, s)
+    preview = client.post('/api/editor/preview?workspace=demo', json=dict(revision=saved['revision'], action='workloads', ids=['w1'], patch=dict(additionalTeacherIds=['t2'])))
+    assert preview.status_code == 200, preview.text
+    assert not preview.json()['canApply']
+    assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=saved['revision'], token=preview.json()['token'])).status_code == 422
+    assert next(w for w in client.get('/api/state?workspace=demo').json()['workloads'] if w['id'] == 'w1')['additionalTeacherIds'] == []
+
+
+def test_campus_preview_applies_once_and_only_on_apply(tmp_path, monkeypatch):
+    client, saved = saved_school(tmp_path, monkeypatch, fixture())
     campus = {**saved['campus'], 'defaultTravelMinutes': 35}
     preview = client.post('/api/editor/preview?workspace=demo', json=dict(revision=saved['revision'], action='campus', campus=campus)).json()
     assert preview['canApply'] and preview['diff']['total'] == 1

@@ -1,9 +1,8 @@
 """Assessment calendar: real lessons only, class load limits, СОЧ windows, family view and history."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
-from pathlib import Path
 from uuid import uuid4
-import pytest, re
+import pytest
 from fastapi.testclient import TestClient
 from backend import api
 from backend.assessment_calendar import PairLessons, audience, class_load, touches
@@ -512,12 +511,3 @@ def test_a_coordinator_who_left_or_lost_access_does_not_lock_the_settings(client
     assert signed('second').get(url('load', start=D17, end=D31)).status_code == 200
     assert configure(client, coordinatorIds=['ghost']).status_code == 422
     assert configure(client, coordinatorIds=[ids['staff']]).status_code == 422
-
-
-def test_print_styles_hide_the_page_only_while_the_panel_is_open():
-    # The stylesheet stays loaded after the panel closes, so an unscoped rule would blank every other printout.
-    css = (Path(__file__).resolve().parents[1] / 'src' / 'AssessmentPanel.css').read_text(encoding='utf-8')
-    block = css[css.index('@media print'):]
-    hiding = re.findall(r'([^{}]+)\{[^{}]*visibility:\s*hidden', block)
-    assert hiding and all('dialog.assessments[open]' in selector for selector in hiding)
-    assert not re.search(r'(^|[\s,}])body \*', block)

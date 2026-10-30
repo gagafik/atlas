@@ -82,11 +82,11 @@ def test_class_teacher_is_mapped():
     state, report = imported()
     assert {c.id: c.classTeacherId for c in state.classes} == {'asc-c-c1abcdefabcdef01': ALPHA, 'asc-c-c1abcdefabcdef02': None, 'asc-c-c1abcdefabcdef03': None}
     assert report['counts']['classTeachers'] == 1 and report['dropped']['classTeacher'] == 0
-    assert not any('классные руководители' in note or 'Классный руководитель не найден' in note for note in state.importInfo.notes)
+    assert not any('руководител' in note.lower() for note in state.importInfo.notes)
     # An id that matches no teacher is counted and the import still passes; the report has numbers only.
     lost, lost_report = variant('teacherid="7EABCDEFABCDEF01"', 'teacherid="7EFFFFFFFFFFFF99"')
     assert lost.classes[0].classTeacherId is None and lost_report['dropped']['classTeacher'] == 1 and lost_report['counts']['classTeachers'] == 0
-    assert 'Классный руководитель не найден среди учителей у 1 классов.' in lost.importInfo.notes
+    assert any('руководител' in note.lower() for note in lost.importInfo.notes)
     assert '7EFFFF' not in json.dumps(lost_report) + json.dumps(lost.importInfo.notes)
     # The first of several ids leads the class.
     several, _ = variant('teacherid="7EABCDEFABCDEF01"', 'teacherid="7EABCDEFABCDEF02,7EABCDEFABCDEF01"')

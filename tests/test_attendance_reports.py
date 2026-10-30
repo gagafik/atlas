@@ -7,7 +7,9 @@ from datetime import date,datetime,timedelta,timezone
 from uuid import uuid4
 import pytest
 from backend import api,attendance_projection
+from backend.attendance_reports import PAGE
 from backend.models import SchoolClass,Student,DatedLesson
+from seeding import read_row,insert_row
 from test_access import client,create,signed
 from test_absences import setup,mark,send,decide,body,url,reviewers
 from test_journal import DAY,lesson,entry,write,graded
@@ -133,15 +135,16 @@ def test_class_transfer_current_names_inactive_and_deleted_student_archive(clien
 
 def test_student_pagination_token_catches_changed_publication_and_reviewer_scope(client):
     _,person,parent,teacher=setup(client);state=api.read('demo')
-    state.students += [Student(id=f'extra-{i}',name=f'Ученик {i+10}',classId='c-demo-a') for i in range(65)]
+    state.students += [Student(id=f'extra-{i}',name=f'Ученик {i+10}',classId='c-demo-a') for i in range(PAGE+15)]
     api.save('demo',state)
-    first=report(teacher).json();assert len(first['students'])==50 and first['nextOffset']==50
-    second=report(teacher,offset=50,token=first['token']).json();assert len(second['students'])==17 and second['nextOffset'] is None
-    assert not {s['id'] for s in first['students']} & {s['id'] for s in second['students']}
-    assert len(list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';')))==68
+    everyone={s.id for s in state.students if s.classId=='c-demo-a'}
+    first=report(teacher).json();assert len(first['students'])==PAGE and first['nextOffset']==PAGE
+    second=report(teacher,offset=PAGE,token=first['token']).json();assert second['nextOffset'] is None
+    shown=[s['id'] for s in first['students']+second['students']];assert len(shown)==len(set(shown)) and set(shown)==everyone
+    assert len(list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';')))==len(everyone)+1
     record=entry(client,lesson(client)['lessonKey']);assert write(client,record,publish=True).status_code==200
-    again=report(teacher,offset=50,token=first['token']);assert again.status_code==200 and again.json()['students']==second['students']
-    api.attendance_reports.cache.clear();assert report(teacher,offset=50,token=first['token']).status_code==409
+    again=report(teacher,offset=PAGE,token=first['token']);assert again.status_code==200 and again.json()['students']==second['students']
+    api.attendance_reports.cache.clear();assert report(teacher,offset=PAGE,token=first['token']).status_code==409
     current=report(teacher).json()
     reviewers({})
     assert report(teacher,token=current['token']).status_code==409
@@ -179,21 +182,21 @@ def test_period_filters_and_access_change_during_report(client,monkeypatch):
 
 
 def test_lesson_pagination_and_complete_csv_use_published_date_time(client):
-    _,_,parent,teacher=setup(client);saved=mark(client)
+    _,_,parent,teacher=setup(client);saved=mark(client);copies=PAGE+12;total=copies+1
+    end=(date.fromisoformat(DAY)+timedelta(days=copies)).isoformat()
     with api.connect() as db:
-        original=list(db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',('demo',saved['lessonKey'])).fetchone())
-        for i in range(1,63):
-            row=original.copy();doc=deepcopy(saved['document']);day=(date.fromisoformat(DAY)+timedelta(days=i)).isoformat()
-            key=hashlib.sha256(day.encode()).hexdigest();doc['lesson']['date']=day
-            row[1]=key;row[5]=row[6]=json.dumps(doc,ensure_ascii=False)
-            db.execute('INSERT INTO journal_entries VALUES (?,?,?,?,?,?,?,?,?)',row)
+        template=read_row(db,'journal_entries',workspace='demo',lesson_key=saved['lessonKey'])
+        for i in range(1,copies+1):
+            doc=deepcopy(saved['document']);day=(date.fromisoformat(DAY)+timedelta(days=i)).isoformat()
+            key=hashlib.sha256(day.encode()).hexdigest();doc['lesson']['date']=day;text=json.dumps(doc,ensure_ascii=False)
+            insert_row(db,'journal_entries',template,lesson_key=key,document=text,published_document=text)
             api.journal.members(db,'demo',key,doc,'published')
-    first=details(teacher,end='2026-11-01').json();assert len(first['items'])==50 and first['nextOffset']==50
-    second=details(teacher,end='2026-11-01',offset=50,token=first['token']).json()
-    assert len(second['items'])==13 and second['nextOffset'] is None
+    first=details(teacher,end=end).json();assert len(first['items'])==PAGE and first['nextOffset']==PAGE
+    second=details(teacher,end=end,offset=PAGE,token=first['token']).json()
+    assert len(second['items'])==total-PAGE and second['nextOffset'] is None
     assert not {r['lessonKey'] for r in first['items']} & {r['lessonKey'] for r in second['items']}
-    response=export(teacher,view='lessons',studentId='s1',end='2026-11-01',token=first['token'])
-    assert len(list(csv.reader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';')))==64
+    response=export(teacher,view='lessons',studentId='s1',end=end,token=first['token'])
+    assert len(list(csv.reader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';')))==total+1
 
 
 def test_moved_and_cancelled_timetable_does_not_silently_rewrite_published_report(client):
@@ -220,7 +223,7 @@ def kept(account,token,**values):
 
 
 def test_unrelated_changes_keep_class_report_token(client):
-    _,_,parent,teacher=setup(client);first=report(teacher).json();assert len(first['token'])==64
+    _,_,parent,teacher=setup(client);first=report(teacher).json()
     state=api.read('demo');state.settings.name='Другое название школы';api.save('demo',state)
     assert kept(teacher,first['token'])==200
     other='2026-08-24'
@@ -267,14 +270,14 @@ def test_token_bound_to_account_even_with_the_same_scope(client):
         first=report(owner).json()
         for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
             rejected=call(stranger,token=first['token'],**extra);assert rejected.status_code==409 and 'students' not in rejected.json() and 'items' not in rejected.json()
-        assert report(stranger).json()['token'][:32]!=first['token'][:32]
+        assert report(stranger).json()['token']!=first['token']
 
 
 def test_other_account_token_and_scope_on_details_and_export(client):
     _,person,parent,teacher=setup(client);mark(client)
     with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
     reviewers({'c-demo-a':[person['id']],'c-demo-d':[other_id]});other=signed('other-teacher')
-    first=report(teacher).json();own=report(other).json();assert first['token'][:32]!=own['token'][:32]
+    first=report(teacher).json();own=report(other).json()
     for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
         assert call(other,token=first['token'],**extra).status_code==409
     assert details(other,token=own['token'],studentId='s1').status_code==404

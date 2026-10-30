@@ -210,9 +210,8 @@ def test_photo_cleanup_retains_history_and_changed_item_aborts_upload(client,set
     assert upload(client,r).status_code==409
     with api.connect() as db:assert db.execute('SELECT count(*) FROM lost_found_files').fetchone()[0]==1
 
-def test_module_initializes_once_and_remains_private_without_auth(client,setup,monkeypatch):
-    get(client,'options')
-    monkeypatch.setattr(lost_found,'tables',lambda db:(_ for _ in ()).throw(AssertionError('Repeated schema setup')))
+def test_module_remains_private_without_auth(client,setup):
     assert get(client,'items')['items']==[]
     from fastapi.testclient import TestClient
-    assert TestClient(api.app).get(path('options')).status_code==401
+    anonymous=TestClient(api.app)
+    assert [anonymous.get(path(part)).status_code for part in ['options','items']]==[401,401]

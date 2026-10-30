@@ -10,7 +10,7 @@ from backend import api
 from backend.seed import initial_state
 from backend.models import Teacher, TimetableRule
 from backend.tabular import parse_file
-from backend.importing import MappingRequest, mapped_state, inspect_sheet, metadata
+from backend.importing import MappingRequest, mapped_state, inspect_sheet, TABLES
 from backend.exporting import ExportRequest, workbook
 
 
@@ -139,11 +139,14 @@ def test_exported_entity_sheets_reimport_without_field_loss():
         assert r['candidate']==s, table
 
 
-def test_schema_has_human_labels_and_json_fields():
-    schema={t['key']:t for t in metadata()}
-    assert schema['students']['canMatchExternal']
+def test_import_schema_endpoint_describes_every_importable_table(tmp_path,monkeypatch):
+    monkeypatch.setattr(api,'DB',tmp_path/'import.db')
+    r=TestClient(api.app).get('/api/exchange/import-schema')
+    assert r.status_code==200,r.text
+    schema={t['key']:t for t in r.json()}
+    assert set(schema)==set(TABLES) and all(t['fields'] for t in schema.values())
+    assert schema['students']['canMatchExternal'] and not schema['teachers']['canMatchExternal']
     assert next(f for f in schema['profiles']['fields'] if f['key']=='periods')['kind']=='list'
-    assert all(f['label']!=f['key'] for t in schema.values() for f in t['fields'])
 
 
 def test_api_upload_preview_scope_and_apply_revision(tmp_path,monkeypatch):

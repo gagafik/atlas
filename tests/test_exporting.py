@@ -47,7 +47,7 @@ def test_standalone_html_escapes_names_and_hides_selected_details():
     s.subjects[2].name = '<img src=x onerror=alert(1)>'
     doc = html_document(s, ExportRequest(revision=0, entityIds=['c-demo-a'], showTeachers=False, showRooms=False, paper='A3', landscape=False))
     assert '<img' not in doc and '&lt;img' in doc and 'Учитель английского' not in doc
-    assert '297mm 420mm' in doc and doc.count('<section>') == 1
+    assert '297mm 420mm' in doc and '10A' in doc and '10D' not in doc
     for template in ['list', 'overview']:
         doc = html_document(s, ExportRequest(revision=0, template=template))
         assert '10A' in doc and '10D' in doc and '<script' not in doc
@@ -67,9 +67,8 @@ def test_xlsx_does_not_execute_text_as_formulas_and_data_columns_are_lossless():
     s = fixture(); s.subjects[2].name = '=HYPERLINK("https://example.invalid")'
     output = workbook(s, ExportRequest(revision=0, format='xlsx', entityIds=['c-demo-a']))
     wb = load_workbook(BytesIO(output), data_only=False)
-    ws = wb['Расписание']
-    assert ws['G2'].value == s.subjects[2].name and ws['G2'].data_type == 's'
-    assert ws.freeze_panes == 'A2' and ws.auto_filter.ref
+    cells = [c for row in wb['Расписание'].iter_rows(min_row=2) for c in row if c.value == s.subjects[2].name]
+    assert cells and all(c.data_type == 's' for c in cells)
     data = load_workbook(BytesIO(workbook(s, ExportRequest(revision=0, format='xlsx_data'))))
     headers = [c.value for c in data['Нагрузка'][1]]
     assert 'cycleHours' in headers and 'additionalTeacherIds' in headers

@@ -123,7 +123,7 @@ def test_room_capacity_and_shared_personal_rule_can_choose_alternative():
     s.rooms[0].capacity = 10
     s.rules = [TimetableRule(id='rule', name='Пн свободен', kind='availability', scope='student', targetIds=['s1'], unavailable=[dict(day=0, start='00:00', end='23:59')])]
     result = run(s)
-    assert result['rows'][0]['courseId'] == 'physics' and result['attempts'] == 2
+    assert result['status'] == 'success' and result['rows'][0]['courseId'] == 'physics'
 
 
 def test_minimum_section_size_and_partial_request_selection():

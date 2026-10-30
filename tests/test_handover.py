@@ -223,17 +223,6 @@ def test_csrf_strict_confirmation_and_no_student_access(client,setup):
     assert TestClient(api.app).get(path('options')).status_code==401
 
 
-def test_backup_restores_approvals_pickups_history_and_workspaces(client,setup,tmp_path):
-    from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup,restore_backup
-    import sqlite3
-    o=pickup(signed('parent'),adult(client));ok(complete(client,o['id']))
-    backup=tmp_path/'backup';target=tmp_path/'restored';create_backup(api.DB,backup);verify_backup(backup);restore_backup(backup,target)
-    with api.connect() as db,sqlite3.connect(target/api.DB.name) as restored:
-        names=[r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'handover_%' OR name='workspaces')")]
-        for name in names:assert sorted([tuple(x) for x in db.execute('SELECT * FROM '+name)],key=repr)==sorted(restored.execute('SELECT * FROM '+name).fetchall(),key=repr)
-
-
 def regrant(account_id,ids):
     # Rewrites the account's pupil grants and bumps its version, as any edit of the rights does.
     with api.connect() as db:

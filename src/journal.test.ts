@@ -296,7 +296,9 @@ describe("report period and paging", () => {
   });
 });
 describe("management panels", () => {
-  it("lists only the panels the server enabled, after the lesson list, in a fixed order", () => {
+  it("lists only the panels the server enabled", () => {
+    const names = (panels?: Parameters<typeof journalPanels>[0]["panels"]) =>
+      journalPanels({ panels }).sort();
     const all = {
       finalGrades: true,
       absences: true,
@@ -304,19 +306,20 @@ describe("management panels", () => {
       coverage: true,
       periods: true,
     };
-    expect(journalPanels({ panels: all })).toEqual([
-      "finalGrades",
+    expect(names(all)).toEqual([
       "absences",
-      "periods",
-      "coverage",
       "attendance",
+      "coverage",
+      "finalGrades",
+      "periods",
     ]);
-    expect(journalPanels({ panels: { coverage: true, periods: true } })).toEqual(
-      ["periods", "coverage"],
-    );
-    expect(journalPanels({ panels: { absences: true } })).toEqual(["absences"]);
-    expect(journalPanels({ panels: { absences: false } })).toEqual([]);
-    expect(journalPanels({})).toEqual([]);
+    expect(names({ coverage: true, periods: true })).toEqual([
+      "coverage",
+      "periods",
+    ]);
+    expect(names({ absences: true, coverage: false })).toEqual(["absences"]);
+    expect(names({ absences: false })).toEqual([]);
+    expect(names()).toEqual([]);
   });
 });
 describe("attendance opening period", () => {

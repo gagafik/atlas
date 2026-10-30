@@ -41,7 +41,8 @@ def test_demo_separate_and_generate_is_saved(client):
     result = client.post('/api/generate?workspace=demo', json={'revision': state['revision'], 'seconds': 3})
     assert result.status_code == 200
     assert result.json()['status'] == 'success'
-    assert len(client.get('/api/state?workspace=demo').json()['placements']) == 24
+    check = client.get('/api/check?workspace=demo').json()
+    assert check['placed'] == check['required'] > 0 and check['issueCount'] == 0
     assert client.get('/api/state').json() == school
 
 
@@ -65,7 +66,9 @@ def test_cycle_preview_is_atomic_and_checks_and_dates_select_a_week(client):
     saved = client.post('/api/editor/apply?workspace=demo', json=dict(revision=0, token=preview['token']))
     assert saved.status_code == 200 and saved.json()['cycles'] == cycles
     assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=0, token=preview['token'])).status_code == 409
-    assert client.get('/api/check?workspace=demo&cycleId=b').json()['required'] == 24
+    # The demo loads run in every cycle, so one chosen cycle requires exactly the hours of the loads.
+    weekly_hours = sum(w['hours'] for w in original['workloads'])
+    assert client.get('/api/check?workspace=demo&cycleId=b').json()['required'] == weekly_hours > 0
     assert client.get('/api/check?workspace=demo&cycleId=missing').status_code == 422
     day = client.get('/api/calendar-pattern?workspace=demo&day=2026-08-24').json()
     assert day['cycleId'] == 'b'

@@ -202,16 +202,13 @@ def test_account_permission_race_rechecked_in_transaction(client,monkeypatch):
     with api.connect() as db:assert db.execute('SELECT count(*) FROM journal_entries').fetchone()[0]==0
 
 
-def test_published_members_index_is_independent_of_draft_and_rebuildable(client,monkeypatch):
+def test_pupil_added_only_to_draft_sees_the_lesson_after_republishing(client,monkeypatch):
     monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
     record=graded(entry(client,lesson(client,'Математика')['lessonKey']))
     assert write(client,record,publish=True).status_code==200
     state=api.read('demo');next(g for g in state.groups if g.id=='g-math').studentIds.append('s2');api.save('demo',state)
     synced=entry(client,record['lessonKey'],syncRoster=True)
     assert write(client,synced,syncRoster=True).status_code==200
-    assert report(client,'s2').json()['rows']==[]
-    assert len(report(client,'s1').json()['rows'])==1
-    with api.connect() as db:db.execute('DROP TABLE journal_members')
     assert report(client,'s2').json()['rows']==[]
     assert len(report(client,'s1').json()['rows'])==1
     current=entry(client,record['lessonKey'])

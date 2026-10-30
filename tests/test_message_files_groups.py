@@ -225,20 +225,7 @@ def test_group_scope_changes_and_revocation_after_post_limit(client):
     for user in [teacher,parent]:assert detail(user,id)['readOnly']
 
 
-def test_published_attachments_survive_orphan_cleanup(client):
-    people=setup(client);parent=signed('parent');draft=str(uuid4())
-    file=upload(parent,draft).json()['id']
-    result=parent.post(url(),json=payload(people['teacher']['id'])|dict(draftId=draft,fileIds=[file]))
-    assert result.status_code==200,result.text
-    with api.connect() as db:
-        db.execute('UPDATE message_files SET created=?',((now()-timedelta(days=3)).isoformat(),))
-        message_files.collect_unused(db)
-        assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==1
-    assert download(signed('teacher'),file).content==b'Private attachment'
-
-
 def test_message_quota_is_rolling_and_counts_unsent_files(client,monkeypatch):
-    import json
     people=setup(client);parent=signed('parent');teacher=signed('teacher')
     monkeypatch.setattr(homework_files,'MAX_FILE',8);monkeypatch.setattr(message_files,'MAX_OWNER',12)
     first=str(uuid4());shared=upload(parent,first,body=b'abc').json()['id']
@@ -251,11 +238,9 @@ def test_message_quota_is_rolling_and_counts_unsent_files(client,monkeypatch):
     with api.connect() as db:db.execute('UPDATE message_files SET created=? WHERE post_id IS NOT NULL',(old,))
     again=upload(parent,second,body=b'abc');assert again.status_code==200,again.text  # the sent file left the window: 3 + 8 <= 12
     assert download(teacher,shared).content==b'abc'  # it is only no longer counted, never deleted
-    with api.connect() as db:
-        from backend.message_drafts import tables as draft_tables
-        draft_tables(db)
-        db.execute("INSERT INTO message_drafts VALUES (?,?,?,?,?,?,?,?)",('demo',people['parent']['id'],second,1,'active',None,json.dumps(dict(fileIds=[kept.json()['id'],again.json()['id']])),now().isoformat()))
-        db.execute('UPDATE message_files SET created=? WHERE post_id IS NULL',(old,))
+    draft=parent.put(url('drafts/'+second),json=dict(version=0,threadId=None,content=payload(people['teacher']['id'])|dict(fileIds=[kept.json()['id'],again.json()['id']])))
+    assert draft.status_code==200,draft.text
+    with api.connect() as db:db.execute('UPDATE message_files SET created=? WHERE post_id IS NULL',(old,))
     blocked=upload(parent,second,body=b'abc')  # unsent files count at any age while a draft keeps them
     assert blocked.status_code==413 and '30 дней' in blocked.json()['detail'],blocked.text
     with api.connect() as db:assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==3

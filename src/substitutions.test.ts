@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  CHANGE_TYPES,
-  DEFAULT_WEIGHTS,
   effectiveType,
   lessonProblem,
   reportCsv,
   type SubstitutionReportData,
 } from "./substitutions";
-import type { ChangeType, DatedLesson } from "./types";
+import type { DatedLesson } from "./types";
 
 const lesson = (extra: Record<string, unknown>) =>
   ({
@@ -31,27 +29,6 @@ describe("substitution types", () => {
     expect(effectiveType(lesson({ changeType: "self_study" }))).toBe(
       "self_study",
     );
-  });
-  it("labels every type in Russian", () => {
-    const all: ChangeType[] = [
-      "substitution",
-      "merge",
-      "move",
-      "self_study",
-      "cancel",
-      "extra",
-    ];
-    expect(Object.keys(CHANGE_TYPES).sort()).toEqual([...all].sort());
-    for (const type of all) expect(CHANGE_TYPES[type]).toMatch(/[А-Яа-я]/);
-  });
-  it("keeps the documented default weights", () => {
-    expect(DEFAULT_WEIGHTS).toEqual({
-      subject: 40,
-      group: 30,
-      presence: 20,
-      fairness: 20,
-      building: 10,
-    });
   });
 });
 

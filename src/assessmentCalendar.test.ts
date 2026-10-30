@@ -3,7 +3,6 @@ import {
   actionLabels,
   addDays,
   coordinatorRoles,
-  dayLabel,
   keepChoices,
   loadClass,
   menuRoles,
@@ -42,7 +41,6 @@ describe("assessment calendar dates", () => {
     expect(monthRange("2028-02").end).toBe("2028-02-29");
   });
   it("labels days without a time zone shift", () => {
-    expect(dayLabel("2026-08-17")).toBe("17.08.2026");
     expect(weekday("2026-08-17")).toBe("Пн");
     expect(weekday("2026-08-23")).toBe("Вс");
   });

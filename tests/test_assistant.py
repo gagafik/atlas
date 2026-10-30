@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 from backend import api, assistant
@@ -104,8 +105,10 @@ def test_permissions_owner_workspace_staleness_and_expiry(monkeypatch,client):
     state=api.read('demo');api.save('demo',state)
     assert client.post('/api/assistant/ask?workspace=demo',json=dict(token=p['token'])).status_code==409
     assert not calls
-    p=prepare(client,revision=2);api._assistant_requests[p['token']]['expires']=0
-    assert client.post('/api/assistant/ask?workspace=demo',json=dict(token=p['token'])).status_code==404
+    p=prepare(client,revision=2);assert client.post('/api/assistant/ask?workspace=demo',json=dict(token=p['token'])).status_code==200
+    old=prepare(client,revision=2);later=assistant.time.monotonic()+old['expiresInSeconds']+1
+    monkeypatch.setattr(assistant,'time',SimpleNamespace(monotonic=lambda:later))
+    assert client.post('/api/assistant/ask?workspace=demo',json=dict(token=old['token'])).status_code==404
 
 
 def test_malformed_reply_and_connection_failures_never_write(monkeypatch,client):

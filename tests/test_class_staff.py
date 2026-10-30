@@ -171,19 +171,28 @@ def test_current_account_and_existing_teacher_record_are_required(client):
     assert own(signed('staff'))==[]
 
 
-def test_concurrent_writers_history_and_backup_restore(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def history(client,path):
+    """Walk the history page by page through nextBefore until the last one."""
+    items=[];cursor=''
+    for _ in range(100):
+        page=client.get(path+cursor).json();items+=page['items']
+        if page['nextBefore'] is None:return items
+        cursor='&before='+str(page['nextBefore'])
+    raise AssertionError('history paging does not end')
+
+
+def test_concurrent_writers_and_paged_history(client):
     enable(client);staff=create(client,'staff');p=payload(client,{A:[item(staff,'attendance_read')]})
     with ThreadPoolExecutor(max_workers=2) as pool: results=list(pool.map(lambda _:client.put(BASE,json=p),range(2)))
     assert sorted(r.status_code for r in results)==[200,409]
-    for i in range(20):assign(client,{A:[item(staff,'attendance_read' if i%2 else 'journal_coverage')]})
-    path='/api/access/class-staff/history?workspace=demo';first=client.get(path).json();second=client.get(path+'&before='+str(first['nextBefore'])).json()
-    assert len(first['items'])==20 and len(second['items'])==1
-    assert first['items'][0]['actor']=='Администратор' and first['items'][0]['reason']=='Проверенное назначение школы'
+    rounds=20
+    for i in range(rounds):assign(client,{A:[item(staff,'attendance_read' if i%2 else 'journal_coverage')]})
+    path='/api/access/class-staff/history?workspace=demo';items=history(client,path)
+    # One write won the race, so every version from the first to the last is listed once, newest first.
+    assert settings(client)['version']==rounds+1
+    assert [i['version'] for i in items]==list(range(rounds+1,0,-1))
+    assert items[0]['actor']=='Администратор' and items[0]['reason']=='Проверенное назначение школы'
     assert signed('staff').get(path).status_code==403
-    backup=tmp_path/'backup';source=api.DB;create_backup(source,backup);monkeypatch.setattr(api,'DB',backup/source.name)
-    assert settings(client)['version']==21
-    assert own(signed('staff'))[0]['classes'][0]['capabilities']==['attendance_read']
 
 
 def test_admin_rechecked_in_transaction_and_csrf_required(client,monkeypatch):

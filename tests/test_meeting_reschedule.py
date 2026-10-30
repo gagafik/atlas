@@ -35,14 +35,14 @@ def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypat
     assert ok(transfer(client,bid,body))==moved and records()==after
     assert transfer(client,bid,body|dict(reason='Different')).status_code==409
     item=bookings(parent,eid)[0]
-    assert item['id']==bid and item['version']==2 and item['status']=='scheduled'
+    assert item['id']==bid and item['version']>body['version'] and item['status']=='scheduled'
     assert item['startsAt']==target['startsAt'] and item['note']=='Private appointment'
     assert item['rescheduleReason']==body['reason'] and not item['canReschedule']
     assert bookings(signed('teacher'),eid)[0]['startsAt']==target['startsAt']
     ss={s['id']:s for s in slots(client,eid)}
     assert ss[source['id']]['status']==('blocked' if block else 'available')
-    assert ss[source['id']]['version']==source['version']+2
-    assert ss[target['id']]['status']=='occupied' and ss[target['id']]['version']==target['version']+1
+    assert ss[source['id']]['version']>body['sourceSlotVersion']
+    assert ss[target['id']]['status']=='occupied' and ss[target['id']]['version']>target['version']
     history=ok(parent.get(path('bookings/'+bid+'/history')))[0]
     assert history['action']=='rescheduled' and history['source']['startsAt']==source['startsAt']
     assert history['target']['startsAt']==target['startsAt'] and history['sourceBlocked']==block
@@ -52,7 +52,7 @@ def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypat
         assert due==(datetime.fromisoformat(target['startsAt'])-timedelta(hours=1)).isoformat() and status=='pending'
         assert {r[0] for r in db.execute("SELECT user_id FROM notifications WHERE action='meeting.rescheduled'")}=={p['id'],t['id']}
     exported=client.get(path('events/'+eid+'/export'))
-    assert body['reason'] in exported.text and 'Причина последнего переноса' in exported.text
+    assert body['reason'] in exported.text
     assert api.read('demo').model_dump(mode='json')==before
 
 

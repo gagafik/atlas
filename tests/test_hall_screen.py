@@ -6,7 +6,6 @@ import hashlib
 import json
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 from backend import api, hall_screen
 from backend.models import DatedLesson, Event, Group, Named, Placement, SchoolClass, TeacherAbsence, Workload
 from test_access import client, enable, create, signed, HEADERS
@@ -84,33 +83,35 @@ def items(response, index=0, kind=None):
     return [i for i in found if i['kind'] == kind] if kind else found
 
 
-def test_short_name_and_models():
+def test_short_name():
     assert hall_screen.short_name('Иванов Алексей Борисович') == 'Иванов А. Б.'
     assert hall_screen.short_name('Иванов Алексей') == 'Иванов А.'
     assert hall_screen.short_name('Учитель') == 'Учитель'
-    ok = hall_screen.AnnouncementData(title='Родительское собрание', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00')
-    assert ok.startsAt.utcoffset() == timedelta(hours=5) and ok.endsAt.utcoffset() == timedelta(hours=5)
-    assert hall_screen.AnnouncementData(title='Т', startsAt='2026-11-02T09:00Z', endsAt='2026-11-02T10:00Z').startsAt.utcoffset() == timedelta(0)
-    assert hall_screen.AnnouncementData(title='Т', startsAt='2026-11-02T09:00', endsAt='2027-02-02T09:00')
-    for start, end, extra in [('2026-11-02T09:00', '2026-11-02T09:00', {}), ('2026-11-02T09:00', '2026-11-02T08:00', {}), ('2026-11-02T09:00', '2027-02-03T09:00', {}),
-                              ('2026-11-02T09:00', '2026-11-02T10:00', dict(screenIds=['a', 'a']))]:
-        with pytest.raises(ValidationError): hall_screen.AnnouncementData(title='Т', startsAt=start, endsAt=end, **extra)
-    for values in [dict(name=''), dict(pageSeconds=7), dict(pageSeconds=61), dict(tomorrowFrom=24), dict(teacherNames='other')]:
-        with pytest.raises(ValidationError): hall_screen.ScreenData(**({'name': 'Холл'} | values))
-    with pytest.raises(ValidationError): hall_screen.ScreenData(name='Холл', secret='x')
-    assert hall_screen.ScreenData(name='Холл', tomorrowFrom=None).tomorrowFrom is None
 
 
-def test_tables_are_created_once_and_public_display_never_creates_them(client):
+def test_announcement_window_is_at_most_92_days_and_screens_do_not_repeat(client, monkeypatch):
+    enable(client); s = screen(client)
+    at(monkeypatch, '2026-11-02T03:00:00+00:00')
+    def post(**values): return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Т', startsAt='2026-11-02T09:00', endsAt='2026-11-02T10:00') | values)
+    assert post(endsAt='2027-02-02T09:00').status_code == 200
+    assert post(endsAt='2027-02-03T09:00').status_code == 422
+    # The end is still in the future here, so only the window itself can be what is wrong.
+    assert post(startsAt='2026-11-02T12:00', endsAt='2026-11-02T12:00').status_code == 422
+    assert post(startsAt='2026-11-02T12:00', endsAt='2026-11-02T11:00').status_code == 422
+    # A time sent with a zone keeps it; only a time without one is school time.
+    zoned = post(startsAt='2026-11-02T09:00Z', endsAt='2026-11-02T10:00Z')
+    assert zoned.status_code == 200 and datetime.fromisoformat(zoned.json()['startsAt']) == datetime.fromisoformat('2026-11-02T09:00+00:00')
+    assert post(screenIds=[s['id'], s['id']]).status_code == 422
+    assert post(screenIds=[s['id']]).status_code == 200
+
+
+def test_public_display_never_creates_tables_and_the_admin_can_open_options_repeatedly(client):
     assert display('A' * 43).status_code == 404
     with api.connect() as db:
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name LIKE 'hall_%'").fetchone() is None
     enable(client)
     assert client.get('/api/hall/options?workspace=demo').status_code == 200
-    with api.connect() as db:
-        hall_screen.tables(db); hall_screen.tables(db)
-        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'hall_%'")}
-    assert {'hall_screens', 'hall_announcements', 'hall_history', 'hall_requests', 'hall_screens_ws', 'hall_announcements_window', 'hall_history_entity'} <= names
+    assert client.get('/api/hall/options?workspace=demo').status_code == 200
 
 
 def test_admin_only_management(client):
@@ -241,11 +242,12 @@ def test_payload_contains_only_allowed_fields(client, monkeypatch):
     response = display(token)
     data = response.json()
     assert set(data) == {'school', 'screen', 'serverTime', 'utcOffsetMinutes', 'pageSeconds', 'refreshSeconds', 'days', 'announcements'}
-    assert data['screen'] == 'Холл' and data['utcOffsetMinutes'] == 300 and data['refreshSeconds'] == 60 and data['announcements'] == []
-    assert [set(d) for d in data['days']] == [{'date', 'label', 'items', 'more'}] and data['days'][0]['label'] == 'Сегодня'
+    assert data['screen'] == 'Холл' and data['utcOffsetMinutes'] == 300 and data['announcements'] == []
+    assert [set(d) for d in data['days']] == [{'date', 'label', 'items', 'more'}] and data['days'][0]['date'] == '2026-11-02'
     found = items(response)
     assert {i['kind'] for i in found} == {'substitution', 'moved_out'}
-    for item in found: assert set(item) <= hall_screen.ITEM_KEYS
+    allowed = {'kind', 'period', 'start', 'end', 'classes', 'subject', 'previousSubject', 'absent', 'teachers', 'rooms', 'previousRooms', 'movedTo', 'movedFrom'}
+    for item in found: assert set(item) <= allowed
     for word in FORBIDDEN: assert word not in response.text, word
     sub = items(response, kind='substitution')[0]
     assert (sub['absent'], sub['teachers'], sub['rooms'], sub['previousRooms'], sub['period']) == ('Учитель английского', 'Учитель истории', '303', '301', '1')

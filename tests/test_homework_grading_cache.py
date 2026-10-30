@@ -30,20 +30,19 @@ def test_warm_grading_does_not_recompute_a_school_day(client,monkeypatch):
 
 @pytest.mark.parametrize('persisted',[False,True])
 def test_journal_entry_resolves_only_the_needed_day(client,monkeypatch,persisted):
-    record,*_=ready(client);key=record['lessonKey'];expected=DAY
+    record,*_=ready(client);key=record['lessonKey'];expected=DAY;state=api.read('demo')
     if persisted:
-        state=api.read('demo');expected='2026-08-18'
+        expected='2026-08-18'
         state.datedLessons=[DatedLesson(id='move',name='Перенос',kind='change',placementId='eng',sourceDate=DAY,onDate=expected)]
-        api.save('demo',state)
     else:
         rows=client.get('/api/journal/day',params=dict(workspace='demo',day=DAY)).json()['lessons']
         key=next(r['lessonKey'] for r in rows if r['lessonKey']!=key)
+    # Saving the school makes a new revision, so the shared schedule cache (portal_cache) starts cold and counts the days it computes.
+    api.save('demo',state)
     original=journal.resolve_day;days=[]
     def counted(state,day,*args,**kwargs):
         days.append(day.isoformat());return original(state,day,*args,**kwargs)
-    # Reads resolve through the shared schedule cache (portal_cache); start it cold to count the days it computes.
     monkeypatch.setattr(journal,'resolve_day',counted);monkeypatch.setattr(portal_cache,'resolve_day',counted)
-    api.journal.snapshots.get('demo').lesson_days.clear()
     result=entry(client,key)
     assert days==[expected] and result['currentDate']==expected
     assert bool(result['version'])==persisted

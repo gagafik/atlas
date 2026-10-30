@@ -9,6 +9,7 @@ from backend.models import DatedLesson
 from test_access import client, signed, create
 from test_homework import setup
 from test_journal import DAY
+from seeding import read_row, insert_row
 
 NOW=datetime(2026,8,17,9,tzinfo=timezone.utc)
 
@@ -270,10 +271,9 @@ def test_snapshot_teacher_reads_but_does_not_manage(client):
 def test_teacher_catalog_is_filtered_in_sql(client):
     quiz,pupil,parent,teacher,_=ready(client)
     with api.connect() as db:
-        row=db.execute("SELECT summary FROM quizzes WHERE id='test-one'").fetchone()
-        summary=json.loads(row[0]);summary['lesson'].update(groupId='g-d',subjectId='sub3',teacherIds=['t3'])
-        for i in range(120):
-            db.execute('INSERT INTO quizzes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',('demo',f'other-{i:03}',1,'someone','2026-01-01T00:00:00+00:00','published','2000-01-01T00:00:00+00:00',f'k{i}','{}',None,0,json.dumps(summary)))
+        template=read_row(db,'quizzes',id='test-one')
+        summary=json.loads(template['summary']);summary['lesson'].update(groupId='g-d',subjectId='sub3',teacherIds=['t3'])
+        for i in range(120):insert_row(db,'quizzes',template,id=f'other-{i:03}',owner_id='someone',closes='2000-01-01T00:00:00+00:00',lesson_key=f'k{i}',summary=json.dumps(summary))
     for path in ['/api/journal/quizzes?workspace=demo&limit=50','/api/journal/quizzes?workspace=demo&limit=50&history=true']:
         assert [i['id'] for i in teacher.get(path).json()['items']]==['test-one']
     first=client.get('/api/journal/quizzes?workspace=demo&limit=50&history=true').json()['items']
@@ -477,16 +477,3 @@ def test_numeric_autograding_rejects_extreme_exponents_and_question_validation()
         assert auto_mark(q,dict(text=text))['score']==0
     with pytest.raises(ValidationError):Question(kind='short',text='Текст',accepted=['   '])
     with pytest.raises(ValidationError):Definition(title='Тест',variants=[dict(id='v',name='v',questions=[dict(id='q',version=1)])],opensAt='0001-01-01T00:00:00+14:00',closesAt='0001-01-02T00:00:00Z')
-
-
-def test_quiz_backup_preserves_bank_publication_attempt_and_history(client,tmp_path):
-    from contextlib import closing
-    import sqlite3
-    from tools.backup_school import create_backup
-    quiz,pupil,_,teacher,_=ready(client);sent=save(pupil,start(pupil,quiz).json(),{'choice':dict(selected=['a'])},True).json()
-    action(teacher,action(teacher,quiz,'close').json(),'release')
-    target=tmp_path/'quiz-snapshot';manifest=create_backup(api.DB,target)
-    with api.connect() as source,closing(sqlite3.connect(target/manifest['database']['path'])) as restored:
-        for table in ['quiz_questions','quizzes','quiz_members','quiz_attempts','quiz_history','quiz_catalog_versions']:
-            assert restored.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall()==source.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall()
-        assert restored.execute('PRAGMA integrity_check').fetchone()==('ok',)

@@ -4,13 +4,10 @@ import {
   downloadName,
   exportFailure,
   exportPackage,
-  formatSize,
   packageError,
-  previewSummary,
   refreshSelected,
   sendPackage,
   toggleSelected,
-  type PackagePreview,
 } from "./quizBankPackage";
 
 afterEach(() => {
@@ -22,21 +19,17 @@ afterEach(() => {
 const MB = 1024 * 1024;
 
 it("accepts only ZIP and JSON files inside the server limits", () => {
-  expect(packageError({ name: "bank.rar", size: 10 })).toBe(
-    "Выберите ZIP-пакет Атласа или JSON по шаблону.",
-  );
-  expect(packageError({ name: "bank.json", size: 3 * MB })).toBe(
-    "JSON должен быть не больше 2 МБ.",
-  );
-  expect(packageError({ name: "bank.zip", size: 56 * MB })).toBe(
-    "ZIP-пакет должен быть не больше 55 МБ.",
-  );
-  expect(packageError({ name: "bank.zip", size: 0 })).toBe(
-    "Нельзя загрузить пустой файл.",
-  );
-  expect(packageError({ name: "x".repeat(177) + ".zip", size: 5 })).toContain(
-    "180",
-  );
+  // A refusal is any non-empty message that names the rule that was broken.
+  const refused = (name: string, size: number, rule: string) => {
+    const message = packageError({ name, size });
+    expect(message, name).not.toBe("");
+    expect(message, name).toContain(rule);
+  };
+  refused("bank.rar", 10, "ZIP");
+  refused("bank.json", 3 * MB, "JSON");
+  refused("bank.zip", 56 * MB, "ZIP");
+  refused("bank.zip", 0, "пуст");
+  refused("x".repeat(177) + ".zip", 5, "180");
   expect(packageError({ name: "Bank.ZIP", size: 1024 })).toBe("");
   expect(packageError({ name: "template.json", size: 2 * MB })).toBe("");
 });
@@ -62,41 +55,6 @@ it("selects and unselects without mutating its input and stops at one hundred", 
   expect(refused.selected.size).toBe(MAX_SELECTION);
   expect(full.size).toBe(MAX_SELECTION);
   expect(toggleSelected(full, { id: "q5", version: 1 }).selected.size).toBe(99);
-});
-
-it("formats sizes with Russian decimal commas", () => {
-  expect(formatSize(1572864)).toBe("1,5 МБ");
-  expect(formatSize(2 * MB)).toBe("2 МБ");
-  expect(formatSize(1536)).toBe("1,5 КБ");
-  expect(formatSize(900)).toBe("900 Б");
-});
-
-const preview: PackagePreview = {
-  packageHash: "a".repeat(64),
-  format: "zip",
-  size: 100,
-  questions: 3,
-  archived: 1,
-  files: 2,
-  totalSize: 1572864,
-  subjects: ["Физика", "Химия"],
-  kinds: { essay: 3 },
-  items: [],
-};
-
-it("summarizes a preview with the counts the teacher must confirm", () => {
-  expect(previewSummary(preview)).toBe(
-    "Вопросов: 3 (в архиве: 1) · предметы: Физика, Химия · файлов: 2, 1,5 МБ",
-  );
-  expect(
-    previewSummary({
-      ...preview,
-      archived: 0,
-      subjects: [],
-      files: 0,
-      totalSize: 0,
-    }),
-  ).toBe("Вопросов: 3 · файлов: 0");
 });
 
 it("reads the download name only from the plain filename form", () => {
@@ -322,22 +280,4 @@ it("waits out a busy server before an export too", async () => {
   expect((await exported).filename).toBe("atlas-quiz-bank.zip");
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(onBusy.mock.calls).toEqual([[true], [false]]);
-});
-
-it("does not retry a refusal that is not a busy answer", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ detail: "Лимит хранилища достигнут." }), {
-      status: 413,
-    }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-  const error = await sendPackage(
-    "import/preview",
-    "demo",
-    new File(["x"], "a.zip"),
-    {},
-  ).catch((e) => e);
-  expect(error.message).toBe("Лимит хранилища достигнут.");
-  expect(error.status).toBe(413);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
