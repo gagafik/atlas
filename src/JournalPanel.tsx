@@ -159,8 +159,8 @@ export default function JournalPanel({
   focus,
 }: {
   workspace: string;
-  // Set by an opened notification: show this pupil's report for that one day.
-  focus?: { studentId: string; day: string };
+  // Set by an opened notification: show this pupil's report for that one day, or the report card of a period.
+  focus?: { studentId: string; day?: string; finalsPeriodId?: string };
 }) {
   const coverageOpened = useRef(false),
     editorPanel = useRef<HTMLElement | null>(null);
@@ -237,7 +237,10 @@ export default function JournalPanel({
     };
   }, [workspace]);
   useEffect(() => {
-    if (!focus || !options?.students.some((s) => s.id === focus.studentId))
+    if (
+      !focus?.day ||
+      !options?.students.some((s) => s.id === focus.studentId)
+    )
       return;
     setMode("report");
     setStudent(focus.studentId);
@@ -529,6 +532,7 @@ export default function JournalPanel({
           <FinalGradesPanel
             key={`final-grades-${workspace}`}
             workspace={workspace}
+            focus={focus?.finalsPeriodId ? focus : undefined}
           />
         );
       case "absences":

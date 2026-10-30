@@ -14,6 +14,8 @@ type Category = {
   approval: boolean;
   quick: boolean;
   letter: boolean;
+  // Printed in the pupil's report card by default.
+  report: boolean;
 };
 type Student = { id: string; name: string; classId: string; className: string };
 type Options = {
@@ -55,6 +57,7 @@ type Note = {
   letterNumber: string;
   lesson: string;
   visible?: boolean;
+  printed?: boolean;
   approval?: boolean;
   decision?: string;
   approvedBy?: string;
@@ -127,6 +130,7 @@ const flagLabels = {
   approval: "Согласование",
   quick: "Быстрая отметка",
   letter: "Письмо-решение",
+  report: "В табель",
   active: "Действует",
 };
 const dayLabel = (day: string) =>
@@ -183,6 +187,7 @@ export default function BehaviourNotes({
     text: "",
     classId: "",
     visible: true,
+    printed: false,
     students: [] as string[],
   });
   const [letterView, setLetterView] = useState<Letter | null>(null);
@@ -260,6 +265,11 @@ export default function BehaviourNotes({
             (c) => c.active && opts.myLevels.includes(c.level),
           )?.id ||
           "",
+        printed: f.categoryId
+          ? f.printed
+          : (opts.categories.find(
+              (c) => c.active && opts.myLevels.includes(c.level),
+            )?.report ?? false),
       }));
       if (
         !opts.canWrite &&
@@ -327,6 +337,8 @@ export default function BehaviourNotes({
       day: categoryId === form.categoryId ? form.day : options!.today,
       text,
       visible: form.visible,
+      // A quick mark takes the default of its own category.
+      ...(categoryId === form.categoryId ? { printed: form.printed } : {}),
     };
     const key = JSON.stringify(body);
     if (request.current.key !== key)
@@ -708,7 +720,13 @@ export default function BehaviourNotes({
                 <select
                   value={form.categoryId}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, categoryId: e.target.value }))
+                    setForm((f) => ({
+                      ...f,
+                      categoryId: e.target.value,
+                      printed:
+                        options.categories.find((c) => c.id === e.target.value)
+                          ?.report ?? false,
+                    }))
                   }
                 >
                   {options.myLevels.map((level) => (
@@ -748,6 +766,16 @@ export default function BehaviourNotes({
                   }
                 />
                 Показать семье
+              </label>
+              <label className="bn-check">
+                <input
+                  type="checkbox"
+                  checked={form.printed}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, printed: e.target.checked }))
+                  }
+                />
+                Печатать в табель
               </label>
             </div>
             <label className="bn-wide">
@@ -856,6 +884,9 @@ export default function BehaviourNotes({
                     )}
                     {staff && n.visible === false && (
                       <span className="bn-badge">Скрыта от семьи</span>
+                    )}
+                    {staff && n.printed && (
+                      <span className="bn-badge">В табеле</span>
                     )}
                     {n.letterNumber && (
                       <span className="bn-badge">
@@ -1054,6 +1085,7 @@ export default function BehaviourNotes({
                     <th>Согласование</th>
                     <th>Быстрая</th>
                     <th>Письмо</th>
+                    <th>В табель</th>
                     <th>Действует</th>
                   </tr>
                 </thead>
@@ -1099,20 +1131,26 @@ export default function BehaviourNotes({
                           ))}
                         </select>
                       </td>
-                      {(["approval", "quick", "letter", "active"] as const).map(
-                        (field) => (
-                          <td key={field}>
-                            <input
-                              type="checkbox"
-                              aria-label={`${flagLabels[field]}: ${c.title}`}
-                              checked={c[field]}
-                              onChange={(e) =>
-                                updateCategory(i, { [field]: e.target.checked })
-                              }
-                            />
-                          </td>
-                        ),
-                      )}
+                      {(
+                        [
+                          "approval",
+                          "quick",
+                          "letter",
+                          "report",
+                          "active",
+                        ] as const
+                      ).map((field) => (
+                        <td key={field}>
+                          <input
+                            type="checkbox"
+                            aria-label={`${flagLabels[field]}: ${c.title}`}
+                            checked={c[field]}
+                            onChange={(e) =>
+                              updateCategory(i, { [field]: e.target.checked })
+                            }
+                          />
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -1122,7 +1160,9 @@ export default function BehaviourNotes({
               Меры уровня «Директор» назначает администрация. Согласование
               нужно, когда меру назначает не администратор. Мера с письмом
               получает номер при вступлении в силу и требует подтверждения
-              родителя.
+              родителя. Мера с отметкой «В табель» попадает в табель ученика за
+              период, в котором она действовала: печатаются вид, категория, дата
+              и номер письма, но не комментарий и не автор.
             </p>
             <div className="bn-controls">
               <button
@@ -1139,6 +1179,7 @@ export default function BehaviourNotes({
                       approval: false,
                       quick: false,
                       letter: false,
+                      report: false,
                     },
                   ])
                 }

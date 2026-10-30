@@ -70,6 +70,10 @@ describe("openEvent", () => {
       "atlas-open-schedule",
       { workspace: "demo", studentId: "s1" },
     ]);
+    expect(openEvent(result("finals"))).toEqual([
+      "atlas-open-journal",
+      { workspace: "demo", studentId: "s1", finalsPeriodId: "r" },
+    ]);
     const plain: [string, string][] = [
       ["quizzes", "atlas-open-quizzes"],
       ["duty", "atlas-open-duties"],

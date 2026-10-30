@@ -4841,3 +4841,26 @@ main {
 @media (max-width: 600px) {
   .category-row { grid-template-columns: minmax(0, 1fr); }
 }
+.final-table-wrap { overflow-x: auto; max-width: 100%; margin: 10px 0; }
+.final-table { border-collapse: collapse; min-width: 720px; width: 100%; }
+.final-table th, .final-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.final-table tbody th { position: sticky; left: 0; background: #fff; font-weight: 600; z-index: 1; }
+.final-table select, .final-table input:not([type=checkbox]) { min-width: 150px; width: 100%; }
+.final-grid { min-width: 0; }
+.final-grid td { min-width: 130px; }
+.final-grid td small { display: block; color: var(--muted); }
+.final-courses { list-style: none; padding: 0; margin: 8px 0; }
+.final-courses li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.final-step-list { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 10px 0; }
+.final-step-list button[aria-current=step] { font-weight: 700; border-color: var(--green); outline: 2px solid var(--green); }
+.final-subjects { list-style: none; padding: 0; }
+.final-subjects li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.final-cards { margin: 12px 0; }
+.final-card { padding: 14px; margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; break-inside: avoid; }
+.final-subject { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 4px 0; }
+.final-subject h4, .final-subject p { margin: 4px 0; }
+.final-preview { font-weight: 700; }
+.final-signatures { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 36px; }
+.final-signatures span { flex: 1; min-width: 120px; border-top: 1px solid currentColor; padding-top: 4px; }
+@media (max-width: 600px) { .final-subject { flex-direction: column; } }
+@media print { .final-card { break-after: page; border: 0; } .final-card:last-child { break-after: auto; } }
