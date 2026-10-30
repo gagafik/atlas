@@ -118,7 +118,7 @@ def test_period_validation_preview_boundaries_and_future_journal(client):
     assert report(parent).json()['summary']['attendance']['absent']==1
 
 
-@pytest.mark.parametrize('attendance',['present','late','unmarked','excused'])
+@pytest.mark.parametrize('attendance',['present','late','unmarked'])
 def test_explanation_does_not_override_teacher_observation(client,attendance):
     _,_,parent,teacher=setup(client);mark(client,attendance);notice=send(parent);assert decide(teacher,notice).status_code==200
     assert report(parent).json()['rows'][0]['record']['attendance']==attendance

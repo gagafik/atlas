@@ -29,7 +29,7 @@ def test_published_only_zero_records_unmarked_late_and_subject_class_totals(clie
     assert empty['source']=='published' and empty['missingJournals']=='not_measured'
     rows=record['document']['content']['records'];rows[0].update(attendance='late',lateMinutes=7);rows[1]['attendance']='unmarked'
     published=write(client,record,publish=True);assert published.status_code==200,published.text
-    value=report(teacher).json();assert value['totals']['attendance']==dict(unmarked=1,present=0,absent=0,late=1,excused=0)
+    value=report(teacher).json();assert value['totals']['attendance']==dict(unmarked=1,present=0,absent=0,late=1,excused=0,left=0)
     assert value['totals']['lateMinutes']==7 and value['classes'][0]['records']==2
     assert value['subjects'][0]['attendance']==value['totals']['attendance']
     assert {s['id'] for s in value['students']}=={'s1','s2'}

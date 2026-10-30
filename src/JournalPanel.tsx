@@ -10,7 +10,8 @@ import AssignmentFilesPanel, {
   SavedMaterialLinks,
 } from "./AssignmentFilesPanel";
 import AbsencePanel from "./AbsencePanel";
-import { LessonMarkBar, useLessonMarks } from "./LessonMarks";
+import { useLessonMarks } from "./LessonMarks";
+import LessonPupilCards from "./LessonPupilCards";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
@@ -26,7 +27,10 @@ import {
   type CategoryConfig,
 } from "./assessmentCategories";
 import {
+  absenceCodeNames,
   attendanceNames,
+  attendanceProblem,
+  attendanceText,
   gradeLabel,
   journalCsv,
   documentRows,
@@ -39,6 +43,9 @@ import {
   mergeReportPage,
   loadRemainingReport,
   journalPanels,
+  lessonsText,
+  noAbsentees,
+  withNoAbsentees,
   type Assessment,
   type Grade,
   type JournalContent,
@@ -82,10 +89,12 @@ function PublishedRows({
   rows,
   workspace,
   categories,
+  codeNames,
 }: {
   rows: JournalRow[];
   workspace?: string;
   categories?: CategoryConfig | null;
+  codeNames?: Record<string, string>;
 }) {
   return (
     <div className="journal-published-list">
@@ -99,8 +108,7 @@ function PublishedRows({
             {row.student.name} · {row.lesson.group} · {row.lesson.teachers}
           </p>
           <p>
-            <strong>{attendanceNames[row.record.attendance]}</strong>
-            {row.record.lateMinutes > 0 && ` · ${row.record.lateMinutes} мин`}
+            <strong>{attendanceText(row.record, row.lesson, codeNames)}</strong>
             {row.record.comment && ` · ${row.record.comment}`}
             {row.absenceApproval && " · объяснительная принята школой"}
           </p>
@@ -436,14 +444,20 @@ export default function JournalPanel({
       };
     });
   }
-  async function save(publish: boolean) {
-    const problem = entry && contentProblem(entry.document.content);
+  // override: the content to send instead of the editor's (the one-click «Отсутствующих нет»); the editor changes only if it is saved.
+  async function save(publish: boolean, override?: JournalContent) {
+    const sent = override ?? entry?.document.content;
+    const problem =
+      entry &&
+      sent &&
+      (contentProblem(sent) ||
+        attendanceProblem({ ...entry.document, content: sent }));
     if (problem) {
       setError(problem);
       setMessage("");
       return;
     }
-    if (!entry || saveLock.current) return;
+    if (!entry || !sent || saveLock.current) return;
     saveLock.current = true;
     setBusy(true);
     setError("");
@@ -454,7 +468,7 @@ export default function JournalPanel({
         day: entry.document.lesson.date,
         revision: entry.revision,
         version: entry.version,
-        content: entry.document.content,
+        content: sent,
         publish,
         syncRoster,
       });
@@ -467,7 +481,10 @@ export default function JournalPanel({
       setHistorical(null);
       setMessage(
         publish
-          ? "Запись опубликована. Ученики видят каждый свои оценки и отметки."
+          ? "Запись опубликована. Ученики видят каждый свои оценки и отметки." +
+              (sent.topic.trim()
+                ? ""
+                : " Тема урока не заполнена: контроль покажет журнал незаполненным.")
           : "Черновик сохранён. Видимая ученикам редакция не изменена.",
       );
     } catch (e: any) {
@@ -495,6 +512,18 @@ export default function JournalPanel({
     }
   }
   const editable = !!entry?.writable && !entry.needsSync && !busy;
+  // A held lesson where nobody is missing is one click: «Отсутствующих нет» marks the unmarked present and saves for the family.
+  const nobodyAbsent =
+    !!entry &&
+    entry.writable &&
+    !entry.needsSync &&
+    !!entry.lessonBegun &&
+    entry.document.lesson.students.some((s) => s.enrolled) &&
+    noAbsentees(
+      entry.document.content,
+      entry.document.lesson.students,
+      entry.attendanceApprovals,
+    );
   useEffect(() => setDueNote(""), [entry?.lessonKey]);
   // Only the date is taken from the timetable and saved; a later timetable change does not move it.
   async function dueNextLesson() {
@@ -745,9 +774,15 @@ export default function JournalPanel({
                     </span>
                   </header>
                   <p className="info-line">
-                    {entry.hasPublished
-                      ? `Ученики видят редакцию ${entry.publishedVersion}. Изменения черновика появятся после публикации.`
-                      : "Запись ещё не видна ученикам."}
+                    {entry.attendanceDefaulted
+                      ? "Все отмечены присутствующими по умолчанию. Семья увидит отметки после сохранения."
+                      : entry.hasPublished &&
+                          entry.lessonBegun &&
+                          entry.publishedVersion === entry.version
+                        ? "Семья видит эту редакцию; каждое сохранение сразу видно семье."
+                        : entry.hasPublished
+                          ? `Ученики видят редакцию ${entry.publishedVersion}. Изменения черновика появятся после публикации.`
+                          : "Запись ещё не видна ученикам."}
                     {entry.updated &&
                       ` Последнее изменение: ${entry.actor}, ${new Date(entry.updated).toLocaleString("ru-RU")}.`}
                   </p>
@@ -1243,199 +1278,91 @@ export default function JournalPanel({
                       Комментарии к ученику и оценкам будут видны этому ученику
                       и его родителю после публикации.
                     </p>
-                    <button
-                      type="button"
-                      disabled={!!entry.futureLesson}
-                      onClick={() =>
-                        content((c) => ({
-                          ...c,
-                          records: c.records.map((p) =>
-                            p.attendance === "unmarked" &&
-                            entry.document.lesson.students.find(
-                              (s) => s.id === p.studentId,
-                            )?.enrolled
-                              ? { ...p, attendance: "present" }
-                              : p,
-                          ),
-                        }))
-                      }
-                    >
-                      Неотмеченные присутствуют
-                    </button>
-                    {!entry.document.lesson.students.length && (
-                      <p className="empty-state">
-                        В составе нет учеников. Добавьте их в справочник и
-                        группу.
-                      </p>
+                    {nobodyAbsent ? (
+                      <div className="lesson-quick">
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={!editable}
+                          onClick={() =>
+                            void save(
+                              true,
+                              withNoAbsentees(
+                                entry.document.content,
+                                entry.document.lesson.students,
+                                entry.attendanceApprovals,
+                              ),
+                            )
+                          }
+                        >
+                          Отсутствующих нет
+                        </button>
+                        <small>
+                          Отметит присутствующими всех, кто не отмечен, и сразу
+                          сохранит урок для семьи.
+                        </small>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!!entry.futureLesson}
+                        onClick={() =>
+                          content((c) =>
+                            withNoAbsentees(
+                              c,
+                              entry.document.lesson.students,
+                              entry.attendanceApprovals,
+                            ),
+                          )
+                        }
+                      >
+                        Неотмеченные присутствуют
+                      </button>
                     )}
-                    <div className="journal-pupils">
-                      {entry.document.lesson.students.map((s) => {
-                        const record = entry.document.content.records.find(
-                          (p) => p.studentId === s.id,
-                        )!;
-                        return (
-                          <article className="journal-pupil" key={s.id}>
-                            {entry.attendanceApprovals?.[s.id] && (
-                              <p className="info-line">
-                                На этот урок принята объяснительная. Отметка
-                                «Отсутствует» учитывается как уважительная
-                                причина; исходная отметка сохраняется.
-                              </p>
-                            )}
-                            <h4>
-                              {s.name}{" "}
-                              <small>
-                                {s.className}
-                                {!s.enrolled ? " · прежний состав" : ""}
-                              </small>
-                            </h4>
-                            {s.enrolled && (
-                              <LessonMarkBar
-                                marks={lessonMarks}
-                                studentId={s.id}
-                              />
-                            )}
-                            <div className="journal-pupil-fields">
-                              <label className="field">
-                                <span>Посещаемость</span>
-                                <select
-                                  value={record.attendance}
-                                  onChange={(e) =>
-                                    pupil(s.id, (p) => ({
-                                      ...p,
-                                      attendance: e.target.value,
-                                      lateMinutes:
-                                        e.target.value === "late"
-                                          ? p.lateMinutes
-                                          : 0,
-                                    }))
-                                  }
-                                >
-                                  {Object.entries(attendanceNames).map(
-                                    ([id, name]) => (
-                                      <option key={id} value={id}>
-                                        {name}
-                                      </option>
-                                    ),
-                                  )}
-                                </select>
-                              </label>
-                              {record.attendance === "late" && (
-                                <label className="field">
-                                  <span>Минуты опоздания</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="600"
-                                    value={record.lateMinutes}
-                                    onChange={(e) =>
-                                      pupil(s.id, (p) => ({
-                                        ...p,
-                                        lateMinutes: Number(e.target.value),
-                                      }))
-                                    }
-                                  />
-                                </label>
-                              )}
-                              <label className="field">
-                                <span>Комментарий ученику</span>
-                                <input
-                                  maxLength={1000}
-                                  value={record.comment}
-                                  onChange={(e) =>
-                                    pupil(s.id, (p) => ({
-                                      ...p,
-                                      comment: e.target.value,
-                                    }))
-                                  }
-                                />
-                              </label>
-                            </div>
-                            {entry.document.content.assessments.map((a) => {
-                              const g = record.grades.find(
-                                (g) => g.assessmentId === a.id,
-                              );
-                              return (
-                                <div className="journal-grade" key={a.id}>
-                                  <label className="field">
-                                    <span>
-                                      <CategoryBadge
-                                        category={categoryOf(a, categories)}
-                                      />
-                                      {a.name}
-                                      {a.kind === "points" &&
-                                      Number.isFinite(a.maxScore)
-                                        ? ` (из ${a.maxScore})`
-                                        : ""}
-                                    </span>
-                                    {a.kind === "points" ? (
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max={
-                                          Number.isFinite(a.maxScore)
-                                            ? a.maxScore
-                                            : undefined
-                                        }
-                                        step="0.01"
-                                        value={g?.score ?? ""}
-                                        onChange={(e) =>
-                                          grade(s.id, a, {
-                                            score:
-                                              e.target.value === ""
-                                                ? null
-                                                : Number(e.target.value),
-                                          })
-                                        }
-                                      />
-                                    ) : (
-                                      <input
-                                        maxLength={30}
-                                        value={g?.label || ""}
-                                        onChange={(e) =>
-                                          grade(s.id, a, {
-                                            label: e.target.value,
-                                          })
-                                        }
-                                      />
-                                    )}
-                                  </label>
-                                  <label className="field">
-                                    <span>Комментарий к оценке</span>
-                                    <input
-                                      maxLength={1000}
-                                      value={g?.comment || ""}
-                                      onChange={(e) =>
-                                        grade(s.id, a, {
-                                          comment: e.target.value,
-                                        })
-                                      }
-                                    />
-                                  </label>
-                                </div>
-                              );
-                            })}
-                          </article>
-                        );
-                      })}
-                    </div>
+                    <LessonPupilCards
+                      entry={entry}
+                      categories={categories}
+                      lessonMarks={lessonMarks}
+                      onPupil={pupil}
+                      onGrade={grade}
+                    />
                   </fieldset>
                   <div className="dated-toolbar journal-savebar">
-                    <button
-                      disabled={!editable}
-                      onClick={() => void save(false)}
-                    >
-                      Сохранить черновик
-                    </button>
-                    <button
-                      className="primary"
-                      disabled={!editable}
-                      onClick={() => void save(true)}
-                    >
-                      {entry.hasPublished
-                        ? "Обновить для учеников"
-                        : "Опубликовать ученикам"}
-                    </button>
+                    {entry.lessonBegun ? (
+                      <>
+                        <button
+                          className="primary"
+                          disabled={!editable}
+                          onClick={() => void save(true)}
+                        >
+                          Сохранить
+                        </button>
+                        {!entry.hasPublished && (
+                          <button
+                            disabled={!editable}
+                            onClick={() => void save(false)}
+                          >
+                            Сохранить без показа семье
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="primary"
+                          disabled={!editable}
+                          onClick={() => void save(false)}
+                        >
+                          Сохранить черновик
+                        </button>
+                        <button
+                          disabled={!editable}
+                          onClick={() => void save(true)}
+                        >
+                          Показать семье заранее
+                        </button>
+                      </>
+                    )}
                     {entry.canWithdraw && (
                       <button
                         disabled={busy || dirty}
@@ -1479,6 +1406,7 @@ export default function JournalPanel({
                           ),
                           undefined,
                           categories,
+                          absenceCodeNames(entry.absenceCodes),
                         )
                       }
                     >
@@ -1606,6 +1534,7 @@ export default function JournalPanel({
                           historical.version,
                         )}
                         categories={categories}
+                        codeNames={absenceCodeNames(entry.absenceCodes)}
                       />
                     </section>
                   )}
@@ -1699,7 +1628,12 @@ export default function JournalPanel({
                       disabled={!report.rows.length || paging}
                       onClick={() =>
                         void wholeReport((all) =>
-                          journalCsv(all.rows, "Личный журнал.csv", categories),
+                          journalCsv(
+                            all.rows,
+                            "Личный журнал.csv",
+                            categories,
+                            all.absenceCodes,
+                          ),
                         )
                       }
                     >
@@ -1728,7 +1662,11 @@ export default function JournalPanel({
                     )}
                     <span>
                       Опоздания:{" "}
-                      <strong>{report.summary.lateMinutes} мин</strong>
+                      <strong>
+                        {report.summary.lateMinutes} мин
+                        {!!report.summary.lateShare &&
+                          ` · ${lessonsText(report.summary.lateShare)}`}
+                      </strong>
                     </span>
                   </div>
                   {!!report.summary.subjects.length && (
@@ -1780,6 +1718,7 @@ export default function JournalPanel({
                     rows={report.rows}
                     workspace={workspace}
                     categories={categories}
+                    codeNames={report.absenceCodes}
                   />
                   {report.nextAfter && (
                     <div className="dated-toolbar journal-controls">

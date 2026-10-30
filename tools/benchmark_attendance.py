@@ -42,7 +42,7 @@ def seed(path,state,days):
             SELECT l.workspace,l.lesson_key,s.id,CASE (s.n+CAST(substr(l.start,1,2) AS INTEGER)+CAST(substr(l.day,9,2) AS INTEGER))%20
                 WHEN 0 THEN 'absent' WHEN 1 THEN 'late' WHEN 2 THEN 'excused' WHEN 3 THEN 'unmarked' ELSE 'present' END,
                 CASE WHEN (s.n+CAST(substr(l.start,1,2) AS INTEGER)+CAST(substr(l.day,9,2) AS INTEGER))%20=1 THEN 7 ELSE 0 END,
-                l.day,l.start,l.end,l.subject_id
+                l.day,l.start,l.end,l.subject_id,NULL,''
             FROM journal_attendance_lessons l JOIN attendance_load_roster s ON s.class_name=l.group_name
             WHERE l.workspace='school' ''')
         db.execute("INSERT INTO journal_attendance_epoch VALUES ('school',1) ON CONFLICT(workspace) DO UPDATE SET version=version+1")
@@ -70,7 +70,7 @@ async def probe(url,identities,admin,period,days):
         started=time.perf_counter()
         whole=(await call('school_year',admin)).json()
         assert whole['totals']['records']==1100*8*days and whole['studentCount']==1100 and len(whole['students'])==50
-        assert whole['totals']['attendance']==dict(present=55*8*days*16,absent=55*8*(days-5),late=55*8*days,excused=55*8*(days+5),unmarked=55*8*days)
+        assert whole['totals']['attendance']==dict(present=55*8*days*16,absent=55*8*(days-5),late=55*8*days,excused=55*8*(days+5),unmarked=55*8*days,left=0)
         assert whole['totals']['lateMinutes']==55*8*days*7
         async def coordinator(i):
             value=(await call('class_year',identities[3300+i][0])).json()

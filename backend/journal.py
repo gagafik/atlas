@@ -9,6 +9,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from .models import Model
 from .access import LOCAL, now
 from .journal_reads import SCHEMA, read as snapshot_read
+from .attendance_projection import late_share
+from . import absence_codes
 from .calendar_ops import resolve_day, DayContext
 from .notifications import encoded
 from .assessment_categories import SHAPE, DEFAULTS, tally, merge, policy_for, composite, breakdown, config as category_config
@@ -47,8 +49,11 @@ class Grade(Model):
 
 class PupilRecord(Model):
     studentId: str
-    attendance: Literal['unmarked','present','absent','late','excused'] = 'unmarked'
+    attendance: Literal['unmarked','present','absent','late','excused','left'] = 'unmarked'
     lateMinutes: int = Field(default=0, ge=0, le=600)
+    # Early leave carries the time the pupil left; a teacher's absence type is a label on 'absent' and never excuses (only an accepted note does).
+    leftAt: str | None = Field(default=None, pattern=r'^(?:[01][0-9]|2[0-3]):[0-5][0-9]$')
+    absenceCode: str = Field(default='', max_length=40)
     comment: str = Field(default='', max_length=1000)
     grades: list[Grade] = Field(default_factory=list, max_length=10)
 
@@ -95,6 +100,8 @@ class Content(Model):
         if len({r.studentId for r in self.records}) != len(self.records): raise ValueError('Ученик указан несколько раз.')
         for record in self.records:
             if record.attendance != 'late' and record.lateMinutes: raise ValueError('Минуты опоздания указываются только при опоздании.')
+            if (record.attendance == 'left') != bool(record.leftAt): raise ValueError('Для отметки «Ушёл раньше» укажите время ухода; при других отметках время не указывается.')
+            if record.absenceCode and record.attendance != 'absent': raise ValueError('Тип отсутствия указывается только при отметке «Отсутствует».')
             if len({g.assessmentId for g in record.grades}) != len(record.grades): raise ValueError('Повтор оценки по одной работе.')
             for grade in record.grades:
                 assessment = assessments.get(grade.assessmentId)
@@ -127,11 +134,48 @@ class Withdraw(Model):
 
 
 def today():return now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()
+def minute():return now().astimezone(ZoneInfo('Asia/Qyzylorda')).strftime('%H:%M')
+
+
+def begun(lesson):
+    day = today().isoformat()
+    return lesson['date']<day or lesson['date']==day and lesson['start']<=minute()
 
 
 def has_marks(content):
     """Attendance or grades exist only after the lesson took place."""
     return any(r['attendance']!='unmarked' or r['lateMinutes'] or any(g['score'] is not None or g['label'] for g in r['grades']) for r in content['records'])
+
+
+def for_editor(record):
+    """The entry as the lesson editor opens it. Once a lesson has begun and nobody is marked, everybody shows as present
+    (absent where a school note covers the lesson). This is only shown: nothing is stored until the teacher saves, so coverage
+    and reports stay as they are. Only the two editor routes call it; stored documents never carry the default."""
+    lesson,content = record['document']['lesson'],record['document']['content']
+    started = begun(lesson)
+    result = record|dict(lessonBegun=started,attendanceDefaulted=False)
+    if not (started and record['writable'] and not record['needsSync'] and content['records'] and all(r['attendance']=='unmarked' for r in content['records'])): return result
+    enrolled = {s['id'] for s in lesson['students'] if s.get('enrolled',True)}
+    records = [r|dict(attendance='absent' if r['studentId'] in record['attendanceApprovals'] else 'present') if r['studentId'] in enrolled else r for r in content['records']]
+    return result|dict(attendanceDefaulted=True,document=dict(record['document'],content=dict(content,records=records)))
+
+
+def check_attendance(db, workspace, role, document, previous):
+    """Marks a save may newly introduce. What the pupil's earlier saved records already hold still round-trips unchanged:
+    an old raw 'excused', or a code the school has since switched off."""
+    lesson = document['lesson']
+    names = {s['id']:s['name'] for s in lesson['students']}
+    before = {}
+    for saved in [previous['published'],previous['document']] if previous else []:
+        for r in saved['content']['records'] if saved else []: before.setdefault(r['studentId'],[]).append(r)
+    for record in document['content']['records']:
+        old = before.get(record['studentId'],[])
+        if record['attendance']=='excused' and not any(o['attendance']=='excused' for o in old):
+            raise HTTPException(422,'Уважительную причину даёт принятая объяснительная. Отметьте «Отсутствует» и укажите тип; записку вносит классный руководитель или администратор.')
+        if record['attendance']=='left' and not lesson['start']<record['leftAt']<lesson['end']:
+            raise HTTPException(422,f"Время ухода ученика {names[record['studentId']]} должно быть внутри урока.")
+        code = record['absenceCode']
+        if code and not any(o.get('absenceCode')==code for o in old): absence_codes.check(db,workspace,code,role)
 
 
 def frozen(published, current, day):
@@ -202,7 +246,9 @@ def pupil_projection(document, student_id):
                     materials=document['content'].get('materials',[]),
                     curriculum=document['content'].get('curriculum'),
                     homeworkLatePolicy=document['content'].get('homeworkLatePolicy','allow'),
-                    homeworkSubmission=document['content'].get('homeworkSubmission','online')),record=record)
+                    homeworkSubmission=document['content'].get('homeworkSubmission','online')),
+                # Documents saved before early leave and teacher types lack these keys; without the defaults a republish would look like news.
+                record=dict(leftAt=None,absenceCode='')|record)
 
 
 def summary(rows, cfg=None, classes=None):
@@ -210,12 +256,14 @@ def summary(rows, cfg=None, classes=None):
     cfg = cfg or DEFAULTS
     classes = classes or {}
     subjects = {}
-    attendance = {s:0 for s in ['unmarked','present','absent','late','excused']}
+    attendance = {s:0 for s in ['unmarked','present','absent','late','excused','left']}
     late_minutes = 0
+    late_share_sum = 0.0
     for row in rows:
         record,content,lesson = row['record'],row['content'],row['lesson']
         attendance[record['attendance']] += 1
         late_minutes += record['lateMinutes']
+        late_share_sum += late_share(record['lateMinutes'],lesson['start'],lesson['end'])
         current = subjects.setdefault(lesson['subjectId'],dict(subjectId=lesson['subjectId'],subject=lesson['subject'],pointsCount=0,labelCount=0,weightedSum=0,weight=0,sums={},classId=None))
         assessments = {a['id']:a for a in content['assessments']}
         for grade in record['grades']:
@@ -233,7 +281,7 @@ def summary(rows, cfg=None, classes=None):
         share = composite(s['sums'],policy)['exact']
         result.append(dict(subjectId=s['subjectId'],subject=s['subject'],pointsCount=s['pointsCount'],labelCount=s['labelCount'],percentage=round(s['weightedSum']/s['weight'],2) if s['weight'] else None,
                            categories=breakdown(s['sums'],cfg,policy['method']),sharePercentage=round(float(share),2) if share is not None else None,rule=policy['ruleName']))
-    return dict(attendance=attendance,lateMinutes=late_minutes,subjects=result)
+    return dict(attendance=attendance,lateMinutes=late_minutes,lateShare=round(late_share_sum,2),subjects=result)
 
 
 class Journal:
@@ -409,9 +457,9 @@ class Journal:
         def restrictions(db):
             excuses=approvals(db,workspace,[result['document']['lesson']]).get(0,{})
             closed=locks(db,workspace,lesson,result['document']['lesson'],existing['published']['lesson'] if existing and existing['published'] else None)
-            return excuses,closed,lesson_bookings(db,workspace,key,category_config(db,workspace))
-        excuses,closed,bookings=self.reading(restrictions) if db is None else restrictions(db)
-        return result | dict(periodLocks=closed,attendanceApprovals=excuses,bookings=bookings,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
+            return excuses,closed,lesson_bookings(db,workspace,key,category_config(db,workspace)),[dict(id=c['id'],name=c['name'],active=c['active']) for c in absence_codes.current(db,workspace)['items']]
+        excuses,closed,bookings,codes=self.reading(restrictions) if db is None else restrictions(db)
+        return result | dict(periodLocks=closed,attendanceApprovals=excuses,bookings=bookings,absenceCodes=codes,revision=state.revision,writable=writable and not closed,needsSync=needs_sync and not sync,currentDate=lesson['date'] if lesson else None,
                              rosterFrozen=fixed,futureLesson=bool(lesson and lesson['date']>today().isoformat()),
                              canWithdraw=bool(not closed and existing and existing['published'] and staff_read(user,workspace,current or existing['document']['lesson'])))
 
@@ -528,7 +576,7 @@ class Journal:
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
                 return self.entry(snap.state,workspace,user,lessonKey,day,syncRoster,db=db,rows_for_day=snap.lesson_rows)
-            return self.reading(read)
+            return for_editor(self.reading(read))
 
         @app.put('/api/journal/entry')
         def save_entry(body: SaveEntry,request: Request,workspace: Workspace='school'):
@@ -558,12 +606,13 @@ class Journal:
                 old_public = previous['published'] if previous else None
                 from .journal_periods import require_open
                 require_open(db,workspace,document['lesson'],previous['document']['lesson'] if previous else None,old_public['lesson'] if old_public else None)
+                check_attendance(db,workspace,user['role'],document,previous)
                 from .assessment_categories import resolve_content
                 document['content']=resolve_content(db,workspace,body.lessonKey,document['content'],previous,user)
                 from .assignment_files import bind
                 bind(db,body.content.homeworkFiles,workspace,body.lessonKey,user['id'])
                 self.store_revision(db,workspace,body.lessonKey,user,state.revision,version,document,previous,publish=body.publish,created=created)
-            return self.entry(state,workspace,user,body.lessonKey,body.day,rows_for_day=snap.lesson_rows)
+            return for_editor(self.entry(state,workspace,user,body.lessonKey,body.day,rows_for_day=snap.lesson_rows))
 
         @app.post('/api/journal/withdraw')
         def withdraw(body: Withdraw,request: Request,workspace: Workspace='school'):
@@ -626,6 +675,7 @@ class Journal:
             def read(db):
                 self.recheck_account(db,user)
                 cfg = category_config(db,workspace);classes = {}
+                codes = absence_codes.names(db,workspace)
                 # The attendance projection holds one row per published record, so it drives the range scan.
                 query = 'SELECT e.lesson_key,e.published_document,e.published_version,e.published_at,a.day,a.start FROM journal_attendance a JOIN journal_entries e ON e.workspace=a.workspace AND e.lesson_key=a.lesson_key WHERE a.workspace=? AND a.student_id=? AND a.day BETWEEN ? AND ? AND e.published_document IS NOT NULL'
                 params = [workspace,studentId,start.isoformat(),end.isoformat()]
@@ -657,6 +707,6 @@ class Journal:
                             row['absenceApproval'] = excuse
                 approve(rows)
                 # A later page continues after the last row it scanned, even if some were filtered out.
-                if after: return dict(rows=rows,summary=None,nextAfter=f'{fetched[-1][4]}|{fetched[-1][5]}|{fetched[-1][0]}' if more else None,source='published')
-                return dict(rows=rows[:limit],summary=summary(rows,cfg,classes),nextAfter=marks[limit-1] if len(rows)>limit else None,source='published')
+                if after: return dict(rows=rows,summary=None,nextAfter=f'{fetched[-1][4]}|{fetched[-1][5]}|{fetched[-1][0]}' if more else None,absenceCodes=codes,source='published')
+                return dict(rows=rows[:limit],summary=summary(rows,cfg,classes),nextAfter=marks[limit-1] if len(rows)>limit else None,absenceCodes=codes,source='published')
             return self.reading(read)

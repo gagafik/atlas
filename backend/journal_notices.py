@@ -8,7 +8,7 @@ from datetime import date
 from .grade_feed import graded
 from .notifications import clip, student_ids
 
-ATTENDANCE = {'present': 'присутствие', 'absent': 'отсутствие', 'late': 'опоздание', 'excused': 'отсутствие по уважительной причине'}
+ATTENDANCE = {'present': 'присутствие', 'absent': 'отсутствие', 'late': 'опоздание', 'excused': 'отсутствие по уважительной причине', 'left': 'ранний уход'}
 HOMEWORK = {'new': 'Новое ДЗ', 'changed': 'Изменено ДЗ', 'removed': 'Снято ДЗ'}
 
 
@@ -49,7 +49,7 @@ def grade_parts(old, new):
 
 
 def attendance_mark(projection):
-    return (projection['record']['attendance'], projection['record']['lateMinutes']) if projection else ('unmarked', 0)
+    return (projection['record']['attendance'], projection['record']['lateMinutes'], projection['record']['leftAt']) if projection else ('unmarked', 0, None)
 
 
 def beside_other_news(old, new):
@@ -58,11 +58,20 @@ def beside_other_news(old, new):
     return first != last and not (first[0] == 'unmarked' and last[0] == 'present')
 
 
+def routine(old, new):
+    """A plain first 'present' (or no mark yet) with nothing else changed for this pupil: a lesson held as usual, not news for the family."""
+    first, last = attendance_mark(old), attendance_mark(new)
+    if new is None or first[0] != 'unmarked' or last[0] not in ('unmarked', 'present'): return False
+    if old is None: return True
+    without = lambda p: {k: v for k, v in p['record'].items() if k != 'attendance'}
+    return old | dict(record=None) == new | dict(record=None) and without(old) == without(new)
+
+
 def attendance_title(old, new, subject, day):
     """Text for a changed attendance mark, else None."""
     first, last = attendance_mark(old), attendance_mark(new)
     if first == last or last[0] == 'unmarked': return None
-    return f"{subject}, {day_label(day)}: отмечено {ATTENDANCE[last[0]]}" + (f" ({last[1]} мин)" if last[0] == 'late' and last[1] else '')
+    return f"{subject}, {day_label(day)}: отмечено {ATTENDANCE[last[0]]}" + (f" ({last[1]} мин)" if last[0] == 'late' and last[1] else f" (в {last[2]})" if last[0] == 'left' else '')
 
 
 def homework_state(document):
@@ -121,6 +130,8 @@ def deliver_journal(notifications, db, workspace, version, key, before, after):
             if attendance_mark(old[kid])[0] != 'unmarked' and attendance_mark(new[kid])[0] == 'unmarked':
                 notifications.retract(db, [user['id']], f'{base}{kid}:attendance')
             if kid in covered and not beside_other_news(old[kid], new[kid]): continue
+            # A lesson recorded as held, with everybody present, is not news: no entry for it, also when it is the only change.
+            if routine(old[kid], new[kid]): continue
             # An absence, a lateness or a correction is told and replaces the older mark, also beside a grade or homework entry.
             # It has a topic of its own: a later plain update of the lesson must not push the unread absence out of the inbox.
             if told: notifications.deliver(db, [user], workspace, version, 'journal.updated', topic=f'{base}{kid}:attendance', supersede=True,

@@ -3,7 +3,7 @@ import { api } from "./api";
 import CategoryBadge from "./CategoryBadge";
 import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
 import {
-  attendanceNames,
+  attendanceText,
   documentRows,
   gradeLabel,
   journalCsv,
@@ -662,12 +662,7 @@ export default function JournalPeriodsPanel({
                       ).map((r) => (
                         <article key={r.student.id}>
                           <h4>{r.student.name}</h4>
-                          <p>
-                            {attendanceNames[r.record.attendance]}
-                            {r.record.lateMinutes
-                              ? ` · ${r.record.lateMinutes} мин`
-                              : ""}
-                          </p>
+                          <p>{attendanceText(r.record, r.lesson)}</p>
                           {r.record.comment && <p>{r.record.comment}</p>}
                           {r.content.assessments.map((a) => {
                             const g = r.record.grades.find(

@@ -1,0 +1,105 @@
+/* Pupil cards of the lesson editor; the card, field and grade classes come from styles.css. */
+.journal-pupils.lesson-pupils {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.lesson-pupil {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+}
+.lesson-pupil .info-line,
+.lesson-pupil .lesson-marks {
+  margin: 0;
+}
+.journal-pupil .lesson-pupil-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.journal-pupil .lesson-pupil-head h4 {
+  margin: 0;
+  min-width: 0;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+.lesson-pupil-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #e3ede0;
+  color: var(--dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+.lesson-pupil-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lesson-pupil-status button {
+  flex: 1 1 auto;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+.lesson-pupil-status button[aria-pressed="true"] {
+  background: var(--green);
+  border-color: var(--green);
+  color: white;
+}
+.lesson-pupil-chip {
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2ec;
+  color: #566355;
+  font-size: 0.9em;
+  justify-self: start;
+}
+.lesson-pupil-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px 12px;
+}
+.lesson-pupil-extra .field {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.lesson-pupil-extra small {
+  flex: 1 1 100%;
+  color: #697966;
+}
+.lesson-pupil-grades {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.lesson-pupil-grades .field {
+  flex: 1 1 110px;
+  min-width: 0;
+}
+.lesson-pupil summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.lesson-pupil details .field {
+  margin-top: 8px;
+}
+.lesson-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0 12px;
+}
+.lesson-quick small {
+  flex: 1 1 220px;
+  color: #697966;
+}

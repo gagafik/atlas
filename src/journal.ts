@@ -35,6 +35,9 @@ export interface PupilRecord {
   studentId: string;
   attendance: string;
   lateMinutes: number;
+  // Early leave carries the time the pupil left; the absence type is a label of «Отсутствует» and never excuses by itself.
+  leftAt?: string | null;
+  absenceCode?: string;
   comment: string;
   grades: Grade[];
 }
@@ -98,6 +101,17 @@ export interface JournalEntry {
   }[];
   attendanceApprovals?: Record<string, { id: string; version: number }>;
   bookings?: JournalBooking[];
+  // The lesson has begun. A writable lesson without any mark then opens with everybody present (attendanceDefaulted):
+  // the server only shows this, nothing is stored until the teacher saves.
+  lessonBegun?: boolean;
+  attendanceDefaulted?: boolean;
+  // The school's absence types, switched-off ones included (they still name old marks).
+  absenceCodes?: AbsenceCodeOption[];
+}
+export interface AbsenceCodeOption {
+  id: string;
+  name: string;
+  active: boolean;
 }
 export interface JournalRow {
   lessonKey: string;
@@ -112,6 +126,8 @@ export interface JournalRow {
 export interface JournalSummary {
   attendance: Record<string, number>;
   lateMinutes: number;
+  // Lateness as a share of the lessons, in lessons (see LATE_SHARE_FROM); absent in reports of older servers.
+  lateShare?: number;
   subjects: {
     subjectId: string;
     subject: string;
@@ -134,12 +150,15 @@ export interface JournalReport {
   rows: JournalRow[];
   summary: JournalSummary;
   nextAfter: string | null;
+  // Names of the school's absence types, for the teacher's label on a mark.
+  absenceCodes?: Record<string, string>;
 }
 // The server sends the summary of the whole period only with the first page.
 export interface JournalReportPage {
   rows: JournalRow[];
   summary: JournalSummary | null;
   nextAfter: string | null;
+  absenceCodes?: Record<string, string>;
 }
 const DAY_MS = 86_400_000;
 function shiftDay(day: string, days: number): string {
@@ -163,8 +182,16 @@ export function defaultReportPeriod(
   };
 }
 const emptySummary = (): JournalSummary => ({
-  attendance: { unmarked: 0, present: 0, absent: 0, late: 0, excused: 0 },
+  attendance: {
+    unmarked: 0,
+    present: 0,
+    absent: 0,
+    late: 0,
+    excused: 0,
+    left: 0,
+  },
   lateMinutes: 0,
+  lateShare: 0,
   subjects: [],
 });
 const rowKey = (row: JournalRow) => `${row.lessonKey}:${row.student.id}`;
@@ -179,6 +206,7 @@ export function mergeReportPage(
       rows: page.rows,
       summary: page.summary ?? emptySummary(),
       nextAfter: page.nextAfter,
+      absenceCodes: page.absenceCodes ?? current?.absenceCodes,
     };
   const seen = new Set(current.rows.map(rowKey));
   return {
@@ -188,6 +216,7 @@ export function mergeReportPage(
     ],
     summary: current.summary,
     nextAfter: page.nextAfter,
+    absenceCodes: page.absenceCodes ?? current.absenceCodes,
   };
 }
 // CSV and print cover the whole period: fetch every remaining page, with a hard stop.
@@ -225,7 +254,135 @@ export const attendanceNames: Record<string, string> = {
   absent: "Отсутствует",
   late: "Опоздание",
   excused: "Уважительная причина",
+  left: "Ушёл раньше",
 };
+// Lateness of this many minutes or more also counts as a share of the lesson (the server uses the same threshold).
+export const LATE_SHARE_FROM = 5;
+const clockMinutes = (time: string) =>
+  Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+export const lessonLength = (lesson: { start: string; end: string }) =>
+  clockMinutes(lesson.end) - clockMinutes(lesson.start);
+// The part of the lesson missed, at most the whole lesson; short lateness counts in minutes only.
+export function lateShare(minutes: number, start: string, end: string) {
+  const length = lessonLength({ start, end });
+  return minutes >= LATE_SHARE_FROM && length > 0
+    ? Math.min(1, minutes / length)
+    : 0;
+}
+// "0,25 урока", "2 урока": a whole number of lessons declines by the number, a fraction is always "урока".
+export function lessonsText(lessons: number) {
+  const rounded = Math.round(lessons * 100) / 100;
+  const text = String(rounded).replace(".", ",");
+  if (!Number.isInteger(rounded)) return `${text} урока`;
+  const last = rounded % 10,
+    tens = rounded % 100;
+  if (last === 1 && tens !== 11) return `${text} урок`;
+  return last >= 2 && last <= 4 && (tens < 12 || tens > 14)
+    ? `${text} урока`
+    : `${text} уроков`;
+}
+export const absenceCodeNames = (
+  codes: { id: string; name: string }[] = [],
+): Record<string, string> =>
+  Object.fromEntries(codes.map((c) => [c.id, c.name]));
+// Initials for the avatar of a pupil card: the first letter of the first two words that start with a letter.
+export function initials(name: string) {
+  const words = name.split(/\s+/).filter((w) => /^\p{L}/u.test(w));
+  return words.length
+    ? words
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join("")
+        .toUpperCase()
+    : "·";
+}
+// "Опоздание · 10 мин · 25% урока", "Ушёл раньше · в 09:20", "Отсутствует · Болезнь". An absence accepted by a note
+// reads «Уважительная причина» and does not repeat the teacher's label as its reason.
+export function attendanceText(
+  record: {
+    attendance: string;
+    lateMinutes: number;
+    leftAt?: string | null;
+    absenceCode?: string | null;
+  },
+  lesson: { start: string; end: string },
+  codeNames: Record<string, string> = {},
+) {
+  const parts = [attendanceNames[record.attendance] ?? record.attendance];
+  if (record.attendance === "late" && record.lateMinutes > 0) {
+    parts.push(`${record.lateMinutes} мин`);
+    const share = lateShare(record.lateMinutes, lesson.start, lesson.end);
+    if (share > 0) parts.push(`${Math.round(share * 100)}% урока`);
+  }
+  if (record.attendance === "left" && record.leftAt)
+    parts.push(`в ${record.leftAt}`);
+  if (record.attendance === "absent" && record.absenceCode)
+    parts.push(codeNames[record.absenceCode] ?? record.absenceCode);
+  return parts.join(" · ");
+}
+// Choosing a status drops what belongs only to another one: minutes, leaving time and absence type.
+export function changeAttendance(
+  record: PupilRecord,
+  status: string,
+): PupilRecord {
+  return {
+    ...record,
+    attendance: status,
+    lateMinutes: status === "late" ? record.lateMinutes : 0,
+    leftAt: status === "left" ? (record.leftAt ?? null) : null,
+    absenceCode: status === "absent" ? (record.absenceCode ?? "") : "",
+  };
+}
+// First Russian problem the server would refuse in the marks, or "" when they may be sent.
+export function attendanceProblem(document: JournalDocument): string {
+  const { lesson, content } = document;
+  for (const record of content.records) {
+    if (record.attendance !== "left") continue;
+    const name =
+      lesson.students.find((s) => s.id === record.studentId)?.name ??
+      record.studentId;
+    if (!record.leftAt) return `${name}: укажите время ухода.`;
+    if (record.leftAt <= lesson.start || record.leftAt >= lesson.end)
+      return `${name}: время ухода должно быть внутри урока, ${lesson.start}–${lesson.end}.`;
+  }
+  return "";
+}
+type Roster = JournalLesson["students"];
+type Approvals = Record<string, unknown>;
+const enrolledIds = (students: Roster) =>
+  new Set(students.filter((s) => s.enrolled).map((s) => s.id));
+// Nobody to mark as absent: every pupil of the roster is present or not marked yet, or is absent with an accepted note.
+export function noAbsentees(
+  content: JournalContent,
+  students: Roster,
+  approvals: Approvals = {},
+) {
+  const enrolled = enrolledIds(students);
+  return content.records.every(
+    (r) =>
+      !enrolled.has(r.studentId) ||
+      r.attendance === "present" ||
+      r.attendance === "unmarked" ||
+      (r.attendance === "absent" && r.studentId in approvals),
+  );
+}
+// Pupils of the roster who are not marked become present, or absent where a school note covers the lesson.
+// Marks already made and pupils of the earlier roster stay as they are.
+export function withNoAbsentees(
+  content: JournalContent,
+  students: Roster,
+  approvals: Approvals = {},
+): JournalContent {
+  const enrolled = enrolledIds(students);
+  return {
+    ...content,
+    records: content.records.map((r) =>
+      r.attendance === "unmarked" && enrolled.has(r.studentId)
+        ? changeAttendance(r, r.studentId in approvals ? "absent" : "present")
+        : r,
+    ),
+  };
+}
 export function gradeLabel(grade: Grade | undefined, assessment: Assessment) {
   return !grade
     ? "—"
@@ -296,6 +453,7 @@ export function journalCsv(
   rows: JournalRow[],
   filename = "Учебный журнал.csv",
   categories?: CategoryConfig | null,
+  codeNames: Record<string, string> = {},
 ) {
   const values: unknown[][] = [
     [
@@ -318,6 +476,8 @@ export function journalCsv(
       "Тема",
       "Домашнее задание",
       "Срок",
+      "Время ухода",
+      "Тип отсутствия",
     ],
   ];
   for (const row of rows) {
@@ -344,6 +504,10 @@ export function journalCsv(
         content.topic,
         content.homework,
         content.dueDate || "",
+        record.leftAt || "",
+        record.absenceCode
+          ? (codeNames[record.absenceCode] ?? record.absenceCode)
+          : "",
       ]);
     }
   }
