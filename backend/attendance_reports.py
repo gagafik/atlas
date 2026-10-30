@@ -74,6 +74,7 @@ class AttendanceReports:
     def __init__(self,absences):
         self.absences,self.access,self.journal=absences,absences.access,absences.journal
         self.cache=OrderedDict();self.cache_lock=RLock()
+        self.days=None  # set by AttendanceGrid: live day confirmations and uncovered lessons, beside the cached summary
 
     def context(self,request,workspace):
         user,snap=self.absences.context(request,workspace)
@@ -283,11 +284,13 @@ class AttendanceReports:
                 else:value=self.summary(db,user,snap,workspace,body)
                 # Type names are live and outside the cached summary and its token: a rename shows at once.
                 value['codes']=absence_codes.current(db,workspace)['items']
+                # Also live and outside the token: a confirmation or a publication elsewhere never turns a page into a 409.
+                if not detail and self.days:value.update(self.days(db,user,snap,workspace,body))
             self.finish(user,snap,workspace,value['token'],body,'attendance.details_read' if detail else 'attendance.summary_read')
             if not detail:
                 all_students=value['students'];value['students']=all_students[body.offset:body.offset+PAGE]
                 value['nextOffset']=body.offset+PAGE if len(all_students)>body.offset+PAGE else None
-            return value|dict(source='published',membership='current',missingJournals='not_measured')
+            return dict(missingJournals='not_measured')|value|dict(source='published',membership='current')
 
         @app.post('/api/journal/attendance/report')
         def report(body:Period,request:Request,workspace:Workspace='school'):return read(request,workspace,body)

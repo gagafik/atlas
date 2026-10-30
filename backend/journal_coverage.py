@@ -260,13 +260,20 @@ class JournalCoverage:
         teachers=snap.entities['teacher'];result=[];by_class={}
         for r in rows:
             for id in r['classIds']:by_class.setdefault(id,[]).append(r)
+        # The daily attendance confirmation is read live like the accounts above: never cached, not in the token, no pupil data.
+        from .attendance_days import day_states,expected_days,starts,summarize
+        from .coverage_reminders import settings as reminder_settings
+        owed=expected_days(rows);days=[r['date'] for r in rows]
+        states=day_states(db,workspace,set(classes),min(days),max(days)) if days else {}
+        first=starts(db,workspace,reminder_settings(db,workspace)['confirmSince'])
         for c in sorted((c for c in snap.state.classes if c.id in classes),key=lambda c:(c.name.casefold(),c.id)):
             mine=by_class.get(c.id,[]);due=[r for r in mine if r['due']];open_=[r for r in mine if actionable(r)]
             result.append(dict(classId=c.id,className=c.name,classTeacher=teachers[c.classTeacherId].name if c.classTeacherId in teachers else None,expected=len(due),unfilled=len(open_),
                 **{status:sum(r['status']==status for r in due) for status in ['missing','draft','incomplete','stale','complete']},
                 upcoming=sum(r['status']=='upcoming' for r in mine),rosterUnknown=sum(r['rosterUnknown'] for r in due),
                 lastRecord=max((r['date'] for r in mine if r['publishedVersion'] is not None and r['status']!='orphaned'),default=None),
-                unfilledSince=min((r['date'] for r in open_),default=None),unbound=sum(not bound&set(r['teacherIds']) for r in open_)))
+                unfilledSince=min((r['date'] for r in open_),default=None),unbound=sum(not bound&set(r['teacherIds']) for r in open_),
+                **summarize(owed.get(c.id,set()),states.get(c.id,{}),first.get(c.id,first['default']))))
         value=dict(classes=result,counts=cached['counts'])
         if user['role']=='admin':
             # Whether a colleague has an account is account administration data: administrators only.

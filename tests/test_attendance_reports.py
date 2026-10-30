@@ -26,7 +26,8 @@ def test_published_only_zero_records_unmarked_late_and_subject_class_totals(clie
     _,_,parent,teacher=setup(client)
     record=mark(client,publish=False)
     empty=report(teacher).json();assert empty['totals']['records']==0 and empty['withoutRecords']==2
-    assert empty['source']=='published' and empty['missingJournals']=='not_measured'
+    # The class has two ended lessons on that day and none of them is published (English is only a draft): they are counted, not hidden.
+    assert empty['source']=='published' and empty['missingJournals']==2
     rows=record['document']['content']['records'];rows[0].update(attendance='late',lateMinutes=7);rows[1]['attendance']='unmarked'
     published=write(client,record,publish=True);assert published.status_code==200,published.text
     value=report(teacher).json();assert value['totals']['attendance']==dict(unmarked=1,present=0,absent=0,late=1,excused=0)

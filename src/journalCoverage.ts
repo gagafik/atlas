@@ -62,6 +62,12 @@ export type ClassSummary = {
   lastRecord: string | null;
   unfilledSince: string | null;
   unbound: number;
+  // Daily attendance confirmation, read live by the server; null while nothing is owed (never started, reminders off).
+  expectedDays?: number;
+  confirmedDays?: number;
+  changedDays?: number;
+  pendingDays?: number | null;
+  pendingSince?: string | null;
 };
 
 /** The lines of one class card, in reading order; empty problems are said in words, never left blank. */
@@ -81,6 +87,12 @@ export function classCardLines(c: ClassSummary): string[] {
     ...(c.rosterUnknown > 0
       ? [`Численность класса не подтверждена: ${c.rosterUnknown}`]
       : []),
+    ...(c.pendingDays
+      ? [
+          `Посещаемость ждёт подтверждения: ${c.pendingDays} дн.` +
+            (c.pendingSince ? `, с ${ruDate(c.pendingSince)}` : ""),
+        ]
+      : []),
   ];
 }
 
@@ -93,18 +105,23 @@ export type Run = {
     skipped?: number;
     lessons?: number;
     withoutAccount?: number;
+    days?: number;
   };
 };
 
 /** One line about a daily run of the reminder worker. */
 export function runLine(run: Run): string {
-  const name =
-    run.kind === "digest" ? "Недельная сводка" : "Напоминания по урокам";
+  const confirmations = run.kind === "confirmations";
+  const name = confirmations
+    ? "Напоминания о подтверждении посещаемости"
+    : run.kind === "digest"
+      ? "Недельная сводка"
+      : "Напоминания по урокам";
   const d = run.detail;
   const result = d.note
     ? "не учебный день, напоминания перенесены"
     : [
-        `уроков: ${d.lessons ?? 0}`,
+        confirmations ? `дней: ${d.days ?? 0}` : `уроков: ${d.lessons ?? 0}`,
         `уведомлений: ${d.sent ?? 0}`,
         ...(d.skipped ? [`без учётной записи: ${d.skipped}`] : []),
         ...(d.withoutAccount

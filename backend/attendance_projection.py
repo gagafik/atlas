@@ -25,6 +25,9 @@ def populate(db,workspace=None,key=None):
 
 def tables(db):
     db.execute('CREATE TABLE IF NOT EXISTS journal_projection_versions (name TEXT PRIMARY KEY,version INTEGER)')
+    # Daily confirmations are not derived from publications, so they are never rebuilt with the projection below.
+    from .attendance_days import tables as day_tables
+    day_tables(db)
     if db.execute("SELECT version FROM journal_projection_versions WHERE name='attendance'").fetchone()==(2,):
         db.execute(SUMMARY_INDEX)
         return
@@ -60,9 +63,17 @@ def tables(db):
         raise
 
 
+def marks(db,workspace,key):
+    return {r[0]:r[1:] for r in db.execute('SELECT student_id,attendance,late_minutes,day FROM journal_attendance WHERE workspace=? AND lesson_key=?',(workspace,key))}
+
+
 def replace(db,workspace,key):
+    before=marks(db,workspace,key)
     db.execute('DELETE FROM journal_attendance WHERE workspace=? AND lesson_key=?',(workspace,key))
     db.execute('DELETE FROM journal_attendance_lessons WHERE workspace=? AND lesson_key=?',(workspace,key))
     populate(db,workspace,key)
+    # A confirmed day of the class teacher stays confirmed unless a mark of one of its pupils really changed.
+    from .attendance_days import marks_changed
+    marks_changed(db,workspace,before,marks(db,workspace,key))
     db.execute('''INSERT INTO journal_attendance_epoch VALUES (?,1)
         ON CONFLICT(workspace) DO UPDATE SET version=journal_attendance_epoch.version+1''',(workspace,))

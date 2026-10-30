@@ -3,6 +3,7 @@ export const classCapabilities = {
   attendance_read: "Сводная посещаемость",
   journal_coverage: "Контроль заполнения журналов",
   behaviour_notes: "Похвалы и замечания",
+  attendance_grid: "Сетка посещаемости: правка и подтверждение дня",
 };
 export type ClassCapability = keyof typeof classCapabilities;
 export type ClassAssignment = {

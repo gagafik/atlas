@@ -325,7 +325,7 @@ class Journal:
     def panels(self, db, workspace, user):
         """Which management panels have anything for this account. Flags only decide what the page mounts: every endpoint still enforces rights."""
         role = user['role']
-        result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'])
+        result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',attendanceGrid=role in ['admin','teacher'],coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'])
         if role in ['teacher','student','parent']:
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('grading_rows','final_results')")}
             if role=='teacher' and 'grading_rows' in tables:

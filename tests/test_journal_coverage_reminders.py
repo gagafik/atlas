@@ -1,6 +1,7 @@
 from contextlib import closing
 from datetime import date,datetime,timezone
 import csv,io,sqlite3,threading
+from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from backend import api,coverage_reminders,journal_coverage
@@ -355,3 +356,77 @@ def test_summary_ignores_the_teacher_filter_and_the_drill_down_lists_what_the_ca
     assert rows.json()['total']==card['unfilled'] and {r['subject'] for r in rows.json()['items']}=={'Английский язык','Математика'}
     # A teacher left in the form would cut the list below the card, which counts every teacher.
     assert report(client,mode='classes',classId='c-demo-a',teacherId='t2',status='issues',asOf=picked['asOf']).json()['total']==1
+
+
+def lead_class(teacher_id,class_id='c-demo-a'):
+    state=api.read('demo');state.classes=[c.model_copy(update=dict(classTeacherId=teacher_id)) if c.id==class_id else c for c in state.classes];api.save('demo',state)
+def confirm_day(client,day=DAY,class_id='c-demo-a'):
+    return client.post('/api/journal/attendance/grid/days?workspace=demo',json=dict(requestId=str(uuid4()),classId=class_id,days=[dict(date=day,version=0)],action='confirm',acknowledge=True))
+def confirmations_on(client,monkeypatch,**values):return turn_on(client,monkeypatch,lessonReminders=False,confirmationReminders=True,**values)
+TITLE='journal.attendance_confirmation'
+
+
+def test_confirmation_reminder_once_and_only_when_unconfirmed(client,monkeypatch):
+    _,leader=people(client);lead_class('t1');confirmations_on(client,monkeypatch);worker=api.journal_coverage.reminders
+    # The lesson day itself never counts, and the clock of the school decides.
+    clock(monkeypatch,MON,11,30);assert not worker.process_one() and not inbox(leader,TITLE)
+    clock(monkeypatch,date(2026,8,18),10,30);assert not worker.process_one()
+    clock(monkeypatch,date(2026,8,18),11,30);assert worker.process_one()
+    notices=inbox(leader,TITLE);assert len(notices)==1
+    text=notices[0]['title'];assert '17.08.2026' in text and '10A' in text and 'дней — 1' in text and 'Ученик' not in text and 'Сетка посещаемости' in text
+    assert not worker.process_one()
+    clock(monkeypatch,date(2026,8,19),11,30);assert not worker.process_one() and len(inbox(leader,TITLE))==1
+    accounts=dict(stored("SELECT class_id,status FROM attendance_day_reminders"));assert accounts=={'c-demo-a':'sent','c-demo-d':'skipped'}
+    assert stored("SELECT detail FROM journal_coverage_runs WHERE kind='confirmations' AND on_date='2026-08-18'")==[('{"days":2,"sent":1,"skipped":1}',)]
+    audit=[e for e in client.get('/api/access/audit').json() if e['action']=='attendance.confirmation_reminders_sent'];assert len(audit)==1 and audit[0]['actorName']=='Атлас'
+
+
+def test_a_confirmed_day_is_not_reminded(client,monkeypatch):
+    _,leader=people(client);lead_class('t1');confirmations_on(client,monkeypatch);worker=api.journal_coverage.reminders
+    assert confirm_day(leader).status_code==200
+    clock(monkeypatch,date(2026,8,18),11,30);assert worker.process_one()
+    assert not inbox(leader,TITLE) and stored("SELECT class_id,status FROM attendance_day_reminders")==[('c-demo-d','skipped')]
+
+
+def test_confirmation_reminder_respects_revocation_and_missing_teacher(client,monkeypatch):
+    _,leader=people(client);lead_class('t1');confirmations_on(client,monkeypatch);worker=api.journal_coverage.reminders
+    account=next(a for a in client.get('/api/access/users').json() if a['login']=='other-teacher')
+    current=client.get('/api/access/class-staff?workspace=demo').json()
+    assert client.put('/api/access/class-staff?workspace=demo',json=dict(version=current['version'],reason='Сняли полномочие',assignments={'c-demo-a':[dict(accountId=account['id'],capabilities=[],revoked=['attendance_grid'])]})).status_code==200
+    clock(monkeypatch,date(2026,8,18),11,30);assert worker.process_one()
+    assert not inbox(leader,TITLE) and sorted(stored("SELECT class_id,teacher_id,status FROM attendance_day_reminders"))==[('c-demo-a','','skipped'),('c-demo-d','','skipped')]
+    assert stored("SELECT detail FROM journal_coverage_runs WHERE kind='confirmations' AND on_date='2026-08-18'")==[('{"days":2,"sent":0,"skipped":2}',)]
+
+
+def test_confirmation_reminders_are_off_by_default_and_start_from_switch_on(client,monkeypatch):
+    _,leader=people(client);lead_class('t1');turn_on(client,monkeypatch);worker=api.journal_coverage.reminders
+    clock(monkeypatch,date(2026,8,19),11,30);assert worker.process_one()
+    assert not inbox(leader,TITLE) and not stored("SELECT 1 FROM journal_coverage_runs WHERE kind='confirmations'") and not stored('SELECT 1 FROM attendance_day_reminders')
+    clock(monkeypatch,date(2026,8,24),2,0);assert client.put(URL,json=settings_body(1,confirmationReminders=True)).json()['confirmSince']=='2026-08-24'
+    clock(monkeypatch,date(2026,8,25),11,30);assert worker.process_one()
+    shown=inbox(leader,TITLE);assert len(shown)==1 and '24.08.2026' in shown[0]['title'] and '17.08.2026' not in shown[0]['title']
+    assert {r[0] for r in stored('SELECT day FROM attendance_day_reminders')}=={'2026-08-24'}
+
+
+def test_confirmation_reminder_weekend_waits(client,monkeypatch):
+    _,leader=people(client);lead_class('t1');friday_only();confirmations_on(client,monkeypatch);worker=api.journal_coverage.reminders
+    clock(monkeypatch,date(2026,8,22),11,30);assert not worker.process_one() and not inbox(leader,TITLE)
+    assert stored("SELECT detail FROM journal_coverage_runs WHERE kind='confirmations'")==[('{"note":"not a school day"}',)]
+    clock(monkeypatch,date(2026,8,24),11,30);assert worker.process_one()
+    assert '21.08.2026' in inbox(leader,TITLE)[0]['title'] and 'lessons' not in {r[0] for r in stored('SELECT kind FROM journal_coverage_runs')}
+
+
+def test_confirmation_settings_are_versioned_and_confirm_since_is_the_servers(client,monkeypatch):
+    enable(client);clock(monkeypatch,MON,2,0)
+    saved=client.put(URL,json=settings_body(0,confirmationReminders=True,confirmAfterDays=2,reason='Начинаем'));assert saved.status_code==200,saved.text
+    assert saved.json()['confirmSince']=='2026-08-17' and saved.json()['confirmAfterDays']==2 and saved.json()['version']==1
+    first=client.get(URL).json();assert first['confirmationReminders'] is True and first['confirmAfterDays']==2
+    assert client.put(URL,json=settings_body(1,confirmSince='2026-01-01')).status_code==422 and client.put(URL,json=settings_body(1,confirmAfterDays=0)).status_code==422
+    clock(monkeypatch,date(2026,9,1),2,0);assert client.put(URL,json=settings_body(1,confirmationReminders=True,confirmAfterDays=3)).json()['confirmSince']=='2026-08-17'
+    assert client.put(URL,json=settings_body(2,enabled=False)).json()['confirmSince']=='2026-08-17'
+    clock(monkeypatch,date(2026,9,10),2,0);assert client.put(URL,json=settings_body(3,confirmationReminders=True)).json()['confirmSince']=='2026-09-10'
+    # The confirmation reminders alone are a valid choice; none at all is not.
+    assert client.put(URL,json=settings_body(4,lessonReminders=False,weeklyDigest=False,confirmationReminders=True)).status_code==200
+    assert client.put(URL,json=settings_body(5,lessonReminders=False,weeklyDigest=False)).status_code==422
+    history=stored('SELECT version,reason,before_document,after_document FROM journal_coverage_settings_history ORDER BY version')
+    assert history[0][0]==1 and '"confirmationReminders":false' in history[0][2] and '"confirmationReminders":true' in history[0][3] and '"confirmAfterDays":2' in history[0][3]

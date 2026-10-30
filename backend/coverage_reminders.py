@@ -16,12 +16,13 @@ from .duty_schedule import closure_on
 from .journal_coverage import CoverageQuery,actionable
 from .journal_periods import range_locks
 from .notifications import encoded
-from . import account_grants
+from . import account_grants,attendance_days,class_staff
 
 ZONE=ZoneInfo('Asia/Qyzylorda')
 HHMM=r'^([01]\d|2[0-3]):[0-5]\d$'
 # Off by default: teachers still work elsewhere, so switching it on at deploy would flood them. The administrator enables it.
-DEFAULT_SETTINGS=dict(enabled=False,afterDays=2,remindAt='16:00',lessonReminders=True,weeklyDigest=False,digestWeekday=4,since=None)
+# confirmationReminders: the class teacher is told about days of the attendance grid left unconfirmed; confirmSince is the day they were switched on.
+DEFAULT_SETTINGS=dict(enabled=False,afterDays=2,remindAt='16:00',lessonReminders=True,weeklyDigest=False,digestWeekday=4,since=None,confirmationReminders=False,confirmAfterDays=1,confirmSince=None)
 SCAN_DAYS=60
 GRACE_DAYS=7
 DIGEST_DAYS=28
@@ -84,10 +85,12 @@ class ReminderSettings(Model):
     lessonReminders:bool=True
     weeklyDigest:bool=False
     digestWeekday:int=Field(default=4,ge=0,le=6)
+    confirmationReminders:bool=False
+    confirmAfterDays:int=Field(default=1,ge=1,le=10)
     reason:str=Field(default='',max_length=500)
     @model_validator(mode='after')
     def something(self):
-        if self.enabled and not (self.lessonReminders or self.weeklyDigest):raise ValueError('Выберите напоминания по урокам или недельную сводку.')
+        if self.enabled and not (self.lessonReminders or self.weeklyDigest or self.confirmationReminders):raise ValueError('Выберите напоминания по урокам, недельную сводку или напоминания о подтверждении посещаемости.')
         return self
 
 
@@ -101,7 +104,7 @@ class CoverageReminders:
         try:
             with closing(self.access.read_connect()) as db:
                 # Grant tables must exist before granted_users runs on a read-only connection: candidates() would try to write.
-                if len(db.execute("SELECT name FROM sqlite_master WHERE name IN ('journal_coverage_runs','account_grant_insert')").fetchall())==2:return
+                if len(db.execute("SELECT name FROM sqlite_master WHERE name IN ('journal_coverage_runs','account_grant_insert','attendance_day_confirmations')").fetchall())==3:return
         except sqlite3.OperationalError:pass
         with self.access.lock,self.access.connect() as db:
             tables(db);self.access.tables(db);self.coverage.journal.tables(db);self.notifications.tables(db);account_grants.tables(db)
@@ -142,8 +145,11 @@ class CoverageReminders:
             kinds=[]
             if config['lessonReminders'] and 'lessons' not in done:kinds.append('lessons')
             if config['weeklyDigest'] and today.weekday()==config['digestWeekday'] and 'digest' not in done:kinds.append('digest')
-            if not kinds:continue
+            confirm=config['confirmationReminders'] and 'confirmations' not in done
+            if not kinds and not confirm:continue
             snap=self.coverage.absences.snapshots.get(workspace)
+            if confirm:progress=self.confirmations(workspace,snap,config,today) or progress
+            if not kinds:continue
             # Lessons wait for the next school day (they stay inside the grace window); the digest goes out on the chosen weekday.
             idle='lessons' in kinds and not school_day(snap.state,today)
             if idle:kinds.remove('lessons')
@@ -160,6 +166,55 @@ class CoverageReminders:
             for t in r['teacherIds']:
                 for user in held.get(t,[]):users.setdefault(user['id'],(user,{}))[1][r['lessonKey']]=r
         return users,held
+
+    def confirmations(self,workspace,snap,config,today):
+        """Days of the attendance grid that the class teacher has not confirmed: one notice per account and run, one row per class and day, so a day is reminded once.
+        Written in one transaction like store; a changed schedule or settings send nothing and the next pass retries."""
+        idle=not school_day(snap.state,today);owed={}
+        if not idle:
+            days,_=windows(snap.state,today,config|dict(afterDays=config['confirmAfterDays'],since=config['confirmSince']))
+            if days:
+                with closing(self.access.read_connect()) as db:
+                    db.execute('BEGIN')
+                    value=self.coverage.calculate(db,SYSTEM,snap,workspace,CoverageQuery(start=min(days),end=max(days),status='all',asOf=now()))
+                    closed=range_locks(db,workspace,min(days).isoformat(),max(days).isoformat())
+                wanted={d.isoformat() for d in days}
+                for id,found in attendance_days.expected_days(value['rows']).items():
+                    owed[id]={d for d in found if d in wanted and not any(p['start']<=d<=p['end'] for p in closed)}
+        stamp=now().isoformat();day=today.isoformat()
+        with self.access.lock,self.access.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
+            if not revision or revision[0]!=snap.state.revision or settings(db,workspace)['version']!=config['version']:return False
+            if db.execute("SELECT 1 FROM journal_coverage_runs WHERE workspace=? AND on_date=? AND kind='confirmations'",(workspace,day)).fetchone():return False
+            if idle:
+                db.execute('INSERT INTO journal_coverage_runs VALUES (?,?,?,?,?)',(workspace,day,'confirmations',stamp,encoded(dict(note='not a school day'))))
+                return False
+            every=sorted({d for found in owed.values() for d in found});classes={c.id:c for c in snap.state.classes}
+            states=attendance_days.day_states(db,workspace,set(owed),every[0],every[-1]) if every else {}
+            reminded={(r[0],r[1]) for r in db.execute('SELECT class_id,day FROM attendance_day_reminders WHERE workspace=? AND day BETWEEN ? AND ?',(workspace,every[0],every[-1]))} if every else set()
+            pending={id:sorted(d for d in found if states.get(id,{}).get(d,{}).get('status')!='confirmed' and (id,d) not in reminded) for id,found in owed.items() if id in classes}
+            pending={id:found for id,found in pending.items() if found}
+            held=self.holders(db,workspace,{classes[id].classTeacherId for id in pending if classes[id].classTeacherId})
+            users={};skipped=0
+            for id in sorted(pending,key=lambda i:(classes[i].name.casefold(),i)):
+                leader=classes[id].classTeacherId
+                # An explicit revocation of the duty from this account stops its reminder.
+                accounts=[u for u in held.get(leader,[]) if id in class_staff.classes(db,u,snap,workspace,'attendance_grid')] if leader else []
+                for d in pending[id]:
+                    for u in accounts or [dict(id='')]:
+                        db.execute('INSERT OR IGNORE INTO attendance_day_reminders VALUES (?,?,?,?,?,?)',(workspace,id,d,u['id'],'sent' if accounts else 'skipped',stamp))
+                    skipped+=not accounts
+                for u in accounts:users.setdefault(u['id'],(u,[]))[1].append(id)
+            for user,ids in sorted(users.values(),key=lambda x:x[0]['id']):
+                found=[d for id in ids for d in pending[id]]
+                text=f"Посещаемость не подтверждена: дней — {len(found)}, самый ранний {date.fromisoformat(min(found)):%d.%m.%Y}, {', '.join(classes[id].name for id in ids)}. Откройте «Сетка посещаемости»."
+                self.notifications.deliver(db,[user],workspace,snap.state.revision,'journal.attendance_confirmation',topic=f'attendance-confirmation:{workspace}',target=dict(title=text))
+            detail=encoded(dict(sent=len(users),skipped=skipped,days=sum(len(found) for found in pending.values())))
+            db.execute('INSERT INTO journal_coverage_runs VALUES (?,?,?,?,?)',(workspace,day,'confirmations',stamp,detail))
+            if pending:self.access.record(db,'attendance.confirmation_reminders_sent',workspace,snap.state.revision,detail=detail,principal=SYSTEM)
+            db.execute('DELETE FROM attendance_day_reminders WHERE workspace=? AND day<?',(workspace,(today-timedelta(days=KEEP_DAYS)).isoformat()))
+        return bool(pending)
 
     def store(self,workspace,snap,config,today,kinds,idle,lesson_days,digest_days,rows):
         """Notices, reminder rows and run marks of one workspace in one transaction; a changed schedule, settings or lesson sends nothing."""
@@ -258,6 +313,7 @@ class CoverageReminders:
                 value=body.model_dump(exclude={'version','reason'})
                 # Only lessons from the day of switching on are reminded: a disabled stretch is never made up.
                 value['since']=now().astimezone(ZONE).date().isoformat() if body.enabled and not current['enabled'] else current['since']
+                value['confirmSince']=now().astimezone(ZONE).date().isoformat() if body.enabled and body.confirmationReminders and not (current['enabled'] and current['confirmationReminders']) else current['confirmSince']
                 db.execute('INSERT INTO journal_coverage_settings VALUES (?,?,?) ON CONFLICT(workspace) DO UPDATE SET version=excluded.version,document=excluded.document',(workspace,body.version+1,encoded(value)))
                 db.execute('INSERT INTO journal_coverage_settings_history (workspace,version,created,actor_id,actor_name,reason,before_document,after_document) VALUES (?,?,?,?,?,?,?,?)',
                     (workspace,body.version+1,now().isoformat(),user['id'],user['name'],body.reason,encoded({k:current[k] for k in value}),encoded(value)))
