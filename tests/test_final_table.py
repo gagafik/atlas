@@ -175,3 +175,35 @@ def test_sheet_with_scale_returns_advice_to_staff_only(client):
     assert 'advice' not in sheet(t,b).json()['items'][0]
     assert sheet(parent,b,scaleId=s['id']).status_code==403
     assert sheet(client,b,scaleId='missing').status_code==404
+
+
+def matrix(c,b):return c.get(BASE+'/books/'+b['id']+'/matrix?workspace=demo')
+
+
+def test_matrix_counts_and_scope(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher')
+    data=matrix(client,b).json();total=sheet(client,b).json()['total']
+    cell=lambda d:next(c for c in d['cells'] if (c['classId'],c['subjectId'])==(r['classId'],r['subjectId']))
+    assert sum(c['total'] for c in data['cells'])==total and sum(c['unassigned'] for c in data['cells'])==total-1
+    assert [c['name'] for c in data['classes']]==['10A','10D'] and {c['name'] for c in data['subjects']}=={'Английский язык','Математика'}
+    assert cell(data)['total']==2 and cell(data)['draft']==2 and cell(data)['submitted']==0 and cell(data)['proposed']==0
+    assert propose(t,r,s).status_code==200
+    moved=cell(matrix(client,b).json());assert (moved['draft'],moved['submitted'],moved['proposed'],moved['total'])==(1,1,1,2)
+    # A teacher sees the pairs of the own rows only.
+    own=matrix(t,b).json();assert [(c['classId'],c['subjectId'],c['total']) for c in own['cells']]==[(r['classId'],r['subjectId'],1)] and [c['name'] for c in own['classes']]==['10A']
+    assert matrix(signed('parent'),b).status_code==403
+    create(client,'teacher',login='idle',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
+    assert matrix(signed('idle'),b).status_code==404 and matrix(client,dict(b,id='missing')).status_code==404
+
+
+def test_handles_require_class_and_respect_scope(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher');url=BASE+'/books/'+b['id']+'/handles'
+    assert client.get(url,params=dict(workspace='demo')).status_code==422 and client.get(url,params=dict(workspace='demo',classId='')).status_code==422
+    mine=t.get(url,params=dict(workspace='demo',classId=r['classId'])).json()['items']
+    assert [x['id'] for x in mine]==[r['id']] and all('source' not in x and 'proposal' not in x for x in mine)
+    everyone=client.get(url,params=dict(workspace='demo',classId=r['classId'],subjectId=r['subjectId'])).json()['items']
+    assert len(everyone)==2 and set(everyone[0])=={'id','version','status','assigned','subjectId','classId'}
+    # The handles are what the mass actions need: they are accepted as they are.
+    assert batch(client,everyone,'assign',teacherId=r['assigned']).status_code==200
+    assert client.get(url,params=dict(workspace='demo',classId=r['classId'],status='submitted')).json()['items']==[]
+    assert signed('parent').get(url,params=dict(workspace='demo',classId=r['classId'])).status_code==403

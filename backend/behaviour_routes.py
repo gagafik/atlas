@@ -87,7 +87,7 @@ def register(service,app,Workspace):
             for student in body.studentIds:
                 id=new_id();ids.append(id);pupil=snap.entities['student'][student]
                 data=dict(category=category['title'],text=body.text.strip(),level=category['level'],approval=category['approval'],letter=category['letter'],
-                          requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
+                          printed=category['report'] if body.printed is None else body.printed,requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
                           approvedBy=user['name'] if category['approval'] and status=='published' else '')
                 if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'])
                 row=dict(id=id,student_id=student,kind=category['kind'],visible=int(body.visible))
@@ -230,6 +230,7 @@ def register(service,app,Workspace):
                 raise HTTPException(409,'Мера с согласованием назначается новой записью. Отзовите эту запись и создайте новую.')
             data=row['data']|dict(category=category['title'],text=body.text.strip(),level=category['level'],approval=category['approval'],letter=category['letter'],
                                   requireAck=category['letter'] or category['kind']=='remark' and service.config(db,workspace)['remarkAck'])
+            if body.printed is not None:data['printed']=body.printed
             version=row['version']+1
             if row['status']=='published' and data['letter'] and not data.get('letterNumber'):data['letterNumber']=service.letter_number(db,workspace)
             db.execute('UPDATE behaviour_notes SET version=?,updated=?,kind=?,category_id=?,document=? WHERE id=?',(version,stamp(),category['kind'],category['id'],encoded(data),id))
