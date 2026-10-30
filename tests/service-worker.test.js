@@ -107,31 +107,57 @@ describe("public offline shell", () => {
 });
 
 describe("private background notifications", () => {
-  it("shows only fixed generic text even if a payload contains personal data or a link", async () => {
+  async function shown(data) {
     const w = worker();
     let pending;
-    const json = vi.fn(() => ({
-      body: "Private pupil and grade",
-      url: "https://attacker.example",
-      title: "Secret",
-    }));
     w.handlers.push({
-      data: { json },
+      data,
       waitUntil: (value) => {
         pending = value;
       },
     });
     await pending;
     const [title, options] = w.self.registration.showNotification.mock.calls[0];
+    expect(w.fetch).not.toHaveBeenCalled();
+    expect(w.caches.open).not.toHaveBeenCalled();
+    return { title, options };
+  }
+  const generic =
+    "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.";
+  it("shows only the fixed label of a known category even if a payload contains personal data or a link", async () => {
+    const json = vi.fn(() => ({
+      category: "grades",
+      body: "Private pupil and grade",
+      url: "https://attacker.example",
+      title: "Secret",
+      studentName: "Private",
+    }));
+    const { title, options } = await shown({ json });
     expect(title).toBe("Атлас");
     expect(options).toEqual({
-      body: "В Атласе есть обновления. Откройте приложение, чтобы посмотреть.",
+      body: "Новая оценка. Откройте приложение, чтобы посмотреть.",
       icon: "/icons/atlas-192.png",
       tag: "atlas-updates",
     });
-    expect(json).not.toHaveBeenCalled();
-    expect(w.fetch).not.toHaveBeenCalled();
-    expect(w.caches.open).not.toHaveBeenCalled();
+    expect(JSON.stringify(options)).not.toContain("Private");
+  });
+  it("falls back to generic text for an unknown category, a prototype name, bad JSON or no payload", async () => {
+    for (const data of [
+      { json: () => ({ category: "constructor" }) },
+      { json: () => ({ category: "__proto__" }) },
+      { json: () => ({ category: "Secret grade" }) },
+      { json: () => ({ category: 7 }) },
+      { json: () => null },
+      {
+        json: () => {
+          throw new SyntaxError("bad payload");
+        },
+      },
+      undefined,
+    ]) {
+      const { options } = await shown(data);
+      expect(options.body).toBe(generic);
+    }
   });
   it("opens the inbox without following links in the notification", async () => {
     const w = worker();

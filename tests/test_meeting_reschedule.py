@@ -136,8 +136,8 @@ def test_race_between_transfer_and_new_booking_has_one_winner(client,monkeypatch
 def test_notification_failure_rolls_back_booking_slots_event_history_and_reminder(client,monkeypatch):
     *_,bid,target,body=prepared(client,monkeypatch);before=records()
     original=api.notifications.deliver
-    def fail(*args):
-        original(*args)
+    def fail(*args,**kwargs):
+        original(*args,**kwargs)
         raise RuntimeError('synthetic notification failure after insertion')
     monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):transfer(client,bid,body|dict(blockSource=True))
@@ -151,7 +151,8 @@ def test_sent_reminder_is_rearmed_for_new_time_and_new_version(client,monkeypatc
     ok(transfer(client,bid,body));assert api.meetings.reminders.process_one()
     assert not api.meetings.reminders.process_one()
     with api.connect() as db:
-        assert sorted(r[0] for r in db.execute("SELECT revision FROM notifications WHERE action='meeting.reminder' AND user_id=?",(p['id'],)))==[1,2]
+        # The unread reminder for the old time is replaced by the one for the new time (same topic).
+        assert sorted(r[0] for r in db.execute("SELECT revision FROM notifications WHERE action='meeting.reminder' AND user_id=?",(p['id'],)))==[2]
 
 
 def test_blocked_target_and_started_or_cancelled_source_are_rejected(client,monkeypatch):

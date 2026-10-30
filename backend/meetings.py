@@ -267,6 +267,12 @@ class Meetings:
         doc['canReschedule']=user['role']=='admin' and booking['status']=='scheduled' and event['status'] in ['open','closed'] and now()<datetime.fromisoformat(booking['starts_at'])
         return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or user['role']=='parent' and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role']!='parent' and booking['status']!='cancelled' and event['status'] not in ['cancelled','archived'] and now()>=datetime.fromisoformat(booking['starts_at']))
 
+    def notice(self,booking_id,event,document,starts_at,prefix):
+        """Notification target of a booking: event, local time, host and child. The parent's note and any reason stay in the booking."""
+        local=datetime.fromisoformat(starts_at).astimezone(ZONE)
+        return dict(module='meetings',recordId=booking_id,day=local.date().isoformat(),students=[dict(id=document['studentId'],name=document['studentName'])],
+                    title=f"{prefix}: «{event['definition']['title']}», {local:%d.%m %H:%M}, {document['hostName']}")
+
     def cancel_booking(self,db,booking,event,user,snap,workspace,reason,notify=True):
         document=json.loads(booking['document']);document.update(reason=reason,updated=utc(now()))
         db.execute("UPDATE meeting_bookings SET status='cancelled',version=version+1,document=? WHERE id=?",(encoded(document),booking['id']))
@@ -277,7 +283,7 @@ class Meetings:
             recipients=[];owner=self.booking_owner(db,booking,snap,workspace);host=self.hosts(db,event,snap,workspace).get(booking['host_id'])
             if owner:recipients.append(owner)
             if host and host['current']:recipients.append(host['user'])
-            self.notifications.deliver(db,recipients,workspace,booking['version']+1,'meeting.cancelled')
+            self.notifications.deliver(db,recipients,workspace,booking['version']+1,'meeting.cancelled',target=self.notice(booking['id'],event,document,booking['starts_at'],'Встреча отменена'))
 
     def register(self,app,Workspace):
         from .meeting_routes import register

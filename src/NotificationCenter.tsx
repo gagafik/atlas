@@ -2,15 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { startPolling } from "./polling";
 import PushSettings from "./PushSettings";
+import {
+  TIMETABLE_ACTIONS,
+  groupNotices,
+  openEvent,
+  pushLabel,
+  type Notice,
+  type OpenResult,
+} from "./notifications";
 
-interface Notice {
-  id: number;
-  workspace: string;
-  revision: number;
-  created: string;
-  action: string;
-  read: boolean;
-  detail?: string;
+interface Prefs {
+  categories: { id: string; label: string; enabled: boolean }[];
+  quietStart: string | null;
+  quietEnd: string | null;
+  zone: string;
 }
 interface Inbox {
   items: Notice[];
@@ -109,6 +114,9 @@ const titles: Record<string, string> = {
   "quiz.withdraw": "Назначение теста отозвано",
   "quiz.release": "Открыт разбор теста",
   "quiz.results_updated": "Исправлен результат теста",
+  "journal.grade": "Новая оценка",
+  "journal.homework": "Домашнее задание",
+  "timetable.published": "Изменилось расписание",
   saved: "Расписание обновлено",
   undo: "Изменение расписания отменено",
   redo: "Изменение расписания повторено",
@@ -127,6 +135,8 @@ export default function NotificationCenter({ identity }: { identity: string }) {
         : Notification.permission,
     );
   const [pushActive, setPushActive] = useState(false);
+  const [draft, setDraft] = useState<Prefs | null>(null),
+    [settingsSaved, setSettingsSaved] = useState(false);
   useEffect(() => {
     if (typeof Notification !== "undefined")
       setPermission(Notification.permission);
@@ -161,6 +171,20 @@ export default function NotificationCenter({ identity }: { identity: string }) {
     else dialog.current?.close();
   }, [open]);
   useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api("notifications/preferences", "school")
+      .then((p: Prefs) => {
+        if (live) setDraft(p);
+      })
+      .catch((e) => {
+        if (live) setError(e.message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open]);
+  useEffect(() => {
     let live = true;
     async function update() {
       const sequence = ++request.current;
@@ -172,15 +196,19 @@ export default function NotificationCenter({ identity }: { identity: string }) {
         if (!live || sequence !== request.current) return;
         setInbox(data);
         setError("");
-        const fresh =
-          latest.current !== null &&
-          data.items.some((n) => n.id > latest.current! && !n.read);
+        // The newest unread entry names the alert by its category only, never by its title.
+        const newest =
+          latest.current === null
+            ? undefined
+            : data.items.find((n) => n.id > latest.current! && !n.read);
+        const fresh = newest !== undefined;
         latest.current = Math.max(latest.current || 0, data.latestId);
         if (
           fresh &&
           browserOn &&
           !pushActive &&
           data.enabled &&
+          newest &&
           typeof Notification !== "undefined" &&
           Notification.permission === "granted"
         ) {
@@ -188,7 +216,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
           if (!live) return;
           if (registration?.active)
             await registration.showNotification("Атлас: есть изменения", {
-              body: "Откройте приложение и проверьте список уведомлений.",
+              body: `${pushLabel(newest.category)}. Откройте приложение и проверьте список уведомлений.`,
               icon: "/icons/atlas-192.png",
               tag: `atlas-${identity}`,
             });
@@ -238,6 +266,51 @@ export default function NotificationCenter({ identity }: { identity: string }) {
     setInbox(
       await api(`notifications/inbox?unreadOnly=${unreadOnly}`, "school"),
     );
+  }
+  async function savePreferences() {
+    if (!draft) return;
+    const saved: Prefs = await api(
+      "notifications/preferences",
+      "school",
+      "PUT",
+      {
+        muted: draft.categories.filter((c) => !c.enabled).map((c) => c.id),
+        quietStart: draft.quietStart,
+        quietEnd: draft.quietEnd,
+      },
+    );
+    setDraft(saved);
+    setSettingsSaved(true);
+    setInbox(
+      (current) =>
+        current && {
+          ...current,
+          enabled: saved.categories.some((c) => c.enabled),
+        },
+    );
+  }
+  // The server checks access again; a record that is gone answers 404 and the entry is marked read.
+  async function openNotice(item: Notice) {
+    let problem = "";
+    try {
+      const target = openEvent(
+        (await api(
+          `notifications/${item.id}/open`,
+          "school",
+          "POST",
+        )) as OpenResult,
+      );
+      if (target) {
+        window.dispatchEvent(new CustomEvent(target[0], { detail: target[1] }));
+        setOpen(false);
+      }
+    } catch (e: any) {
+      problem = e.message;
+    }
+    setInbox(
+      await api(`notifications/inbox?unreadOnly=${unreadOnly}`, "school"),
+    );
+    if (problem) throw new Error(problem);
   }
   async function toggleBrowser() {
     if (browserOn) {
@@ -305,23 +378,108 @@ export default function NotificationCenter({ identity }: { identity: string }) {
         {inbox && (
           <>
             <div className="notification-settings">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={inbox.enabled}
-                  disabled={busy}
-                  onChange={(e) => {
-                    const enabled = e.target.checked;
-                    void run(async () => {
-                      await api("notifications/preferences", "school", "PUT", {
-                        enabled,
-                      });
-                      setInbox((current) => current && { ...current, enabled });
-                    });
-                  }}
-                />{" "}
-                Сохранять новые уведомления
-              </label>
+              <details className="notification-prefs">
+                <summary>Настройки уведомлений</summary>
+                {draft ? (
+                  <>
+                    <fieldset>
+                      <legend>Какие уведомления сохранять</legend>
+                      {draft.categories.map((c) => (
+                        <label key={c.id}>
+                          <input
+                            type="checkbox"
+                            checked={c.enabled}
+                            disabled={busy}
+                            onChange={(e) => {
+                              setSettingsSaved(false);
+                              setDraft({
+                                ...draft,
+                                categories: draft.categories.map((x) =>
+                                  x.id === c.id
+                                    ? { ...x, enabled: e.target.checked }
+                                    : x,
+                                ),
+                              });
+                            }}
+                          />{" "}
+                          {c.label}
+                        </label>
+                      ))}
+                    </fieldset>
+                    <fieldset>
+                      <legend>
+                        Тихие часы для фоновых уведомлений (время школы)
+                      </legend>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={draft.quietStart === null}
+                          disabled={busy}
+                          onChange={(e) => {
+                            setSettingsSaved(false);
+                            setDraft({
+                              ...draft,
+                              quietStart: e.target.checked ? null : "22:00",
+                              quietEnd: e.target.checked ? null : "07:00",
+                            });
+                          }}
+                        />{" "}
+                        без тихих часов
+                      </label>
+                      {draft.quietStart !== null && (
+                        <div className="quiet-hours">
+                          <label>
+                            с{" "}
+                            <input
+                              type="time"
+                              value={draft.quietStart}
+                              disabled={busy}
+                              onChange={(e) => {
+                                setSettingsSaved(false);
+                                setDraft({
+                                  ...draft,
+                                  quietStart: e.target.value,
+                                });
+                              }}
+                            />
+                          </label>
+                          <label>
+                            до{" "}
+                            <input
+                              type="time"
+                              value={draft.quietEnd || ""}
+                              disabled={busy}
+                              onChange={(e) => {
+                                setSettingsSaved(false);
+                                setDraft({
+                                  ...draft,
+                                  quietEnd: e.target.value,
+                                });
+                              }}
+                            />
+                          </label>
+                        </div>
+                      )}
+                      <small>
+                        В тихие часы запись появляется в списке сразу, а
+                        уведомление на экран устройства приходит после их
+                        окончания.
+                      </small>
+                    </fieldset>
+                    <button
+                      disabled={busy}
+                      onClick={() => void run(savePreferences)}
+                    >
+                      Сохранить настройки
+                    </button>
+                    {settingsSaved && (
+                      <small role="status">Настройки сохранены.</small>
+                    )}
+                  </>
+                ) : (
+                  <small>Загружаю настройки…</small>
+                )}
+              </details>
               <button
                 disabled={busy || permission === "unsupported" || pushActive}
                 onClick={() => void run(toggleBrowser)}
@@ -338,8 +496,9 @@ export default function NotificationCenter({ identity }: { identity: string }) {
               )}
               <small>
                 Уведомления браузера работают, пока эта вкладка открыта.
-                Включаются отдельно для этой вкладки и учётной записи. В них нет
-                имён и содержания уроков.
+                Включаются отдельно для этой вкладки и учётной записи. В
+                системных уведомлениях только категория («Новая оценка», «Новое
+                ДЗ»): без имён, оценок и содержания уроков.
               </small>
               {permission === "denied" && (
                 <small>
@@ -386,201 +545,231 @@ export default function NotificationCenter({ identity }: { identity: string }) {
             </div>
             <div className="notification-list">
               {!inbox.items.length && <p>Уведомлений пока нет.</p>}
-              {inbox.items.map((item) => (
-                <article key={item.id} className={item.read ? "" : "unread"}>
-                  <h3>{titles[item.action] || titles.saved}</h3>
-                  {item.detail && <p>{item.detail}</p>}
-                  {item.action.startsWith("library.") && (
-                    <button
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-library", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        )
-                      }
-                    >
-                      Открыть библиотеку
-                    </button>
+              {groupNotices(inbox.items).map((group) => (
+                <section key={group.key} className="notice-group-block">
+                  {group.label && (
+                    <h3 className="notice-group">{group.label}</h3>
                   )}
-                  {item.action.startsWith("clubs.") && (
-                    <button
-                      onClick={() => {
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-clubs", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        );
-                        setOpen(false);
-                      }}
-                    >
-                      Открыть кружки
-                    </button>
-                  )}
-                  {item.action.startsWith("lost-found.") && (
-                    <button
-                      onClick={() => {
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-lost-found", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        );
-                        setOpen(false);
-                      }}
-                    >
-                      Открыть потерянные вещи
-                    </button>
-                  )}
-                  {item.action.startsWith("registers.") && (
-                    <button
-                      onClick={() => {
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-registers", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        );
-                        setOpen(false);
-                      }}
-                    >
-                      Открыть журналы
-                    </button>
-                  )}
-                  {item.action.startsWith("documents.") && (
-                    <button
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-documents", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        )
-                      }
-                    >
-                      Открыть документы
-                    </button>
-                  )}
-                  {item.action.startsWith("staff-time.") && (
-                    <button
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-staff-time", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        )
-                      }
-                    >
-                      Открыть табель
-                    </button>
-                  )}
-                  {item.action.startsWith("handover:") && (
-                    <button
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-handover", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        )
-                      }
-                    >
-                      Открыть уход детей
-                    </button>
-                  )}
-                  {item.action.startsWith("meeting.") && (
-                    <button
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-meetings", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        )
-                      }
-                    >
-                      Открыть родительские встречи
-                    </button>
-                  )}
-                  {item.action.startsWith("forms.") && (
-                    <button
-                      onClick={() => {
-                        window.dispatchEvent(
-                          new CustomEvent("atlas-open-forms", {
-                            detail: { workspace: item.workspace },
-                          }),
-                        );
-                      }}
-                    >
-                      Открыть формы и опросы
-                    </button>
-                  )}
-                  <p>
-                    {item.workspace === "school" ? "Школа" : "Демонстрация"} ·{" "}
-                    {item.action.startsWith("meeting.") ||
-                    item.action.startsWith("documents.") ||
-                    item.action.startsWith("library.") ||
-                    item.action.startsWith("clubs.") ||
-                    item.action.startsWith("lost-found.") ||
-                    item.action.startsWith("registers.") ||
-                    item.action.startsWith("staff-time.") ||
-                    item.action.startsWith("forms.") ||
-                    item.action.startsWith("journal.") ||
-                    item.action.startsWith("homework.") ||
-                    item.action.startsWith("quiz.") ||
-                    item.action.startsWith("message.")
-                      ? "редакция записи"
-                      : "версия"}{" "}
-                    {item.revision}
-                  </p>
-                  <p>
-                    {item.action.startsWith("handover:")
-                      ? "Откройте уход детей, чтобы проверить разрешение или состояние заявки."
-                      : item.action.startsWith("clubs.")
-                        ? "Откройте кружки, чтобы проверить запись и занятия."
-                        : item.action.startsWith("lost-found.")
-                          ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
-                          : item.action.startsWith("library.")
-                            ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
-                            : item.action.startsWith("documents.")
-                              ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
-                              : item.action.startsWith("staff-time.")
-                                ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
-                                : item.action.startsWith("meeting.")
-                                  ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
-                                  : item.action.startsWith("forms.")
-                                    ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
-                                    : item.action === "push.test"
-                                      ? "Это проверочное уведомление для вашего устройства."
-                                      : item.action.startsWith("absence.")
-                                        ? "Откройте «Отсутствия и объяснительные» в учебном журнале; ответственный учитель — в разделе «Работа с классами»."
-                                        : item.action === "family.updated"
-                                          ? "Откройте «Мои дети и доступ» в личном кабинете."
-                                          : item.action.startsWith("message.")
-                                            ? "Откройте раздел сообщений в личном кабинете."
-                                            : item.action.startsWith("quiz.")
-                                              ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                  {group.items.map((item) => {
+                    // Entries written before titles existed keep the module buttons below.
+                    const legacy = !item.link && !item.restricted;
+                    return (
+                      <article
+                        key={item.id}
+                        className={item.read ? "" : "unread"}
+                      >
+                        <h4>{titles[item.action] || titles.saved}</h4>
+                        {item.title && (
+                          <p className="notice-title">{item.title}</p>
+                        )}
+                        {item.students?.length ? (
+                          <p className="notice-child">
+                            {item.students.map((x) => x.name).join(", ")}
+                          </p>
+                        ) : null}
+                        {item.restricted && (
+                          <p>Доступ к этой записи изменился.</p>
+                        )}
+                        {item.link && (
+                          <button
+                            disabled={busy}
+                            onClick={() => void run(() => openNotice(item))}
+                          >
+                            Открыть
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("library.") && (
+                          <button
+                            onClick={() =>
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-library", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              )
+                            }
+                          >
+                            Открыть библиотеку
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("clubs.") && (
+                          <button
+                            onClick={() => {
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-clubs", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              );
+                              setOpen(false);
+                            }}
+                          >
+                            Открыть кружки
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("lost-found.") && (
+                          <button
+                            onClick={() => {
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-lost-found", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              );
+                              setOpen(false);
+                            }}
+                          >
+                            Открыть потерянные вещи
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("registers.") && (
+                          <button
+                            onClick={() => {
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-registers", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              );
+                              setOpen(false);
+                            }}
+                          >
+                            Открыть журналы
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("documents.") && (
+                          <button
+                            onClick={() =>
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-documents", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              )
+                            }
+                          >
+                            Открыть документы
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("staff-time.") && (
+                          <button
+                            onClick={() =>
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-staff-time", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              )
+                            }
+                          >
+                            Открыть табель
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("handover:") && (
+                          <button
+                            onClick={() =>
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-handover", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              )
+                            }
+                          >
+                            Открыть уход детей
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("meeting.") && (
+                          <button
+                            onClick={() =>
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-meetings", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              )
+                            }
+                          >
+                            Открыть родительские встречи
+                          </button>
+                        )}
+                        {legacy && item.action.startsWith("forms.") && (
+                          <button
+                            onClick={() => {
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-forms", {
+                                  detail: { workspace: item.workspace },
+                                }),
+                              );
+                            }}
+                          >
+                            Открыть формы и опросы
+                          </button>
+                        )}
+                        <p>
+                          {item.workspace === "school"
+                            ? "Школа"
+                            : "Демонстрация"}
+                          {TIMETABLE_ACTIONS.includes(item.action) &&
+                            ` · версия расписания ${item.revision}`}
+                        </p>
+                        {legacy && (
+                          <p>
+                            {item.action.startsWith("handover:")
+                              ? "Откройте уход детей, чтобы проверить разрешение или состояние заявки."
+                              : item.action.startsWith("clubs.")
+                                ? "Откройте кружки, чтобы проверить запись и занятия."
+                                : item.action.startsWith("lost-found.")
+                                  ? "Откройте потерянные вещи, чтобы проверить свои заявки или решение ответственного."
+                                  : item.action.startsWith("library.")
+                                    ? "Откройте библиотеку, чтобы проверить срок возврата и состояние выдачи."
+                                    : item.action.startsWith("documents.")
+                                      ? "Откройте документы и архив, чтобы проверить содержание и состояние документа."
+                                      : item.action.startsWith("staff-time.")
+                                        ? "Откройте табель, чтобы проверить часы или решение по отсутствию."
+                                        : item.action.startsWith("meeting.")
+                                          ? "Откройте родительские встречи, чтобы проверить время и состояние записи."
+                                          : item.action.startsWith("forms.")
+                                            ? "Откройте формы и опросы, чтобы ответить или посмотреть результат."
+                                            : item.action === "push.test"
+                                              ? "Это проверочное уведомление для вашего устройства."
                                               : item.action.startsWith(
-                                                    "homework.",
+                                                    "absence.",
                                                   )
-                                                ? "Откройте домашнюю работу в учебном журнале."
-                                                : item.action.startsWith(
-                                                      "journal.",
-                                                    )
-                                                  ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                                ? "Откройте «Отсутствия и объяснительные» в учебном журнале; ответственный учитель — в разделе «Работа с классами»."
+                                                : item.action ===
+                                                    "family.updated"
+                                                  ? "Откройте «Мои дети и доступ» в личном кабинете."
                                                   : item.action.startsWith(
-                                                        "registers.",
+                                                        "message.",
                                                       )
-                                                    ? "Откройте журналы регистрации, чтобы посмотреть запись."
-                                                    : "Проверьте доступное вам расписание, включая занятия по датам."}
-                  </p>
-                  <time dateTime={item.created}>
-                    {new Date(item.created).toLocaleString("ru-RU")}
-                  </time>
-                  {!item.read && (
-                    <button
-                      disabled={busy}
-                      onClick={() => void run(() => mark([item.id]))}
-                    >
-                      Прочитано
-                    </button>
-                  )}
-                </article>
+                                                    ? "Откройте раздел сообщений в личном кабинете."
+                                                    : item.action.startsWith(
+                                                          "quiz.",
+                                                        )
+                                                      ? "Откройте «Контрольные и тесты», чтобы посмотреть назначение и результаты."
+                                                      : item.action.startsWith(
+                                                            "homework.",
+                                                          )
+                                                        ? "Откройте домашнюю работу в учебном журнале."
+                                                        : item.action.startsWith(
+                                                              "journal.",
+                                                            )
+                                                          ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                                          : item.action.startsWith(
+                                                                "registers.",
+                                                              )
+                                                            ? "Откройте журналы регистрации, чтобы посмотреть запись."
+                                                            : "Проверьте доступное вам расписание, включая занятия по датам."}
+                          </p>
+                        )}
+                        <time dateTime={item.created}>
+                          {new Date(item.created).toLocaleString("ru-RU")}
+                        </time>
+                        {!item.read && (
+                          <button
+                            disabled={busy}
+                            onClick={() => void run(() => mark([item.id]))}
+                          >
+                            Прочитано
+                          </button>
+                        )}
+                      </article>
+                    );
+                  })}
+                </section>
               ))}
             </div>
             {inbox.nextBeforeId && (

@@ -386,7 +386,7 @@ def notify_changes(notifications, db, workspace, before, after):
         for kind, title, source in [('added', 'Назначено', 'new'), ('moved', 'Изменено', 'new'), ('removed', 'Снято', 'old')]:
             items = sorted(merged[kind].values(), key=lambda c: (c.onDate, c.startTime, c.id))
             if items: sentences.append(f'{title}: {duty_line(items[0], labels[source])}' + (f' (и ещё {len(items) - 1})' if len(items) > 1 else '') + '.')
-        notifications.deliver(db, [user], workspace, after.revision, 'duty.changed', detail=' '.join(sentences))
+        notifications.deliver(db, [user], workspace, after.revision, 'duty.changed', target=dict(module='duty', title=' '.join(sentences)))
 
 
 class DutySchedule:

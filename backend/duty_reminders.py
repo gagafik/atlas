@@ -45,7 +45,7 @@ class DutyReminders:
                         if db.execute('SELECT 1 FROM duty_reminders WHERE workspace=? AND commitment_id=? AND teacher_id=? AND on_date=?', (workspace, c.id, teacher, c.onDate.isoformat())).fetchone(): continue
                         users = service.notifications.granted_users(db, workspace, 'teacher', [teacher], ['teacher'])
                         if users:
-                            service.notifications.deliver(db, users, workspace, snap.state.revision, 'duty.reminder', topic=f'duty-reminder:{workspace}:{c.id}', detail=duty_text(snap.state, c, current, label))
+                            service.notifications.deliver(db, users, workspace, snap.state.revision, 'duty.reminder', topic=f'duty-reminder:{workspace}:{c.id}', target=dict(module='duty', title=duty_text(snap.state, c, current, label)))
                         db.execute('INSERT INTO duty_reminders VALUES (?,?,?,?,?,?)', (workspace, c.id, teacher, c.onDate.isoformat(), 'sent' if users else 'skipped', now().isoformat()))
                         sent += 1
                 db.execute('DELETE FROM duty_reminders WHERE workspace=? AND on_date<?', (workspace, (today - timedelta(days=30)).isoformat()))

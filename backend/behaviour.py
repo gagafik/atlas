@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field,model_validator
 from .access import now
 from .models import Model
-from .notifications import encoded
+from .notifications import encoded,student_ids
 from .portal_cache import PortalSnapshots
 from .school_forms import enabled,grant_ids
 
@@ -250,9 +250,18 @@ class Behaviour:
         db.execute('DELETE FROM behaviour_requests WHERE user_id=? AND seq NOT IN (SELECT seq FROM behaviour_requests WHERE user_id=? ORDER BY seq DESC LIMIT 100)',(user['id'],user['id']))
         return result
 
-    def notify_family(self,db,workspace,students,version,action):
+    def notify_family(self,db,workspace,students,version,action,note=None):
+        """note=dict(id,kind,category,name): the title names the kind and the category only, never the teacher's text or a withdrawal reason."""
         targets=self.notifications.granted_users(db,workspace,'student',students,['student','parent'])
-        self.notifications.deliver(db,targets,workspace,version,action)
+        if not note:return self.notifications.deliver(db,targets,workspace,version,action)
+        label=f"{KINDS[note['kind']]}: {note['category']}"
+        title={'behaviour.published':label,'behaviour.changed':f"Изменена запись: {KINDS[note['kind']]} — {note['category']}"}.get(action,'Запись о поведении отозвана')
+        # A withdrawn note leads nowhere: its entry has no link.
+        module=dict(module='behaviour') if action!='behaviour.withdrawn' else {}
+        def target(user):
+            kids=[s for s in students if s in student_ids(user,workspace)]
+            return dict(recordId=note['id'],students=[dict(id=s,name=note.get('name') or '') for s in kids],title=title,**module)
+        self.notifications.deliver(db,targets,workspace,version,action,topic=f"behaviour:{workspace}:{note['id']}",supersede=True,target=target)
 
     def notify_accounts(self,db,workspace,ids,version,action,skip=None):
         rows=[r for r in db.execute('SELECT * FROM accounts WHERE active=1 AND id IN (SELECT value FROM json_each(?))',(encoded(sorted(ids)),)) if r['id']!=skip]

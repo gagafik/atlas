@@ -160,7 +160,7 @@ def test_cancel_cutoff_attendance_and_event_lifecycle(client,monkeypatch):
 def test_booking_and_cancellation_roll_back_when_notification_fails(client,monkeypatch):
     id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');slot=slots(parent,id)[0]
     original=api.notifications.deliver
-    def fail(*args):raise RuntimeError('synthetic notification failure')
+    def fail(*args,**kwargs):raise RuntimeError('synthetic notification failure')
     monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):book(parent,id,slot)
     assert bookings(client,id)==[] and slots(parent,id)[0]['version']==slot['version']
@@ -175,7 +175,7 @@ def test_reminders_retry_transaction_no_duplicates_and_cancelled_skip(client,mon
     worker=api.meetings.reminders
     for module in [meetings,meeting_routes,meeting_reminders]:monkeypatch.setattr(module,'now',lambda:BASE-timedelta(minutes=30))
     original=api.notifications.deliver
-    def fail(*args):raise RuntimeError('synthetic notification failure')
+    def fail(*args,**kwargs):raise RuntimeError('synthetic notification failure')
     monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):worker.process_one()
     with api.connect() as db:assert db.execute('SELECT status FROM meeting_reminders WHERE booking_id=?',(bid,)).fetchone()[0]=='pending'

@@ -30,5 +30,5 @@ def insert(service,db,event,slot,user,student,host,snap,workspace,note):
         due=utc(datetime.fromisoformat(slot['starts_at'])-timedelta(minutes=event['definition']['reminderMinutes']))
         db.execute("INSERT INTO meeting_reminders VALUES (?,?,'pending')",(booking_id,due))
     service.history(db,event,user,'booked',dict(version=1),booking_id)
-    service.notifications.deliver(db,[user,host['user']],workspace,1,'meeting.booked')
+    service.notifications.deliver(db,[user,host['user']],workspace,1,'meeting.booked',target=service.notice(booking_id,event,document,slot['starts_at'],'Запись на встречу'))
     return dict(id=booking_id,version=1,status='scheduled')

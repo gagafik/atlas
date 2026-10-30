@@ -442,7 +442,11 @@ class SchoolForms:
                 if account:
                     recipient=self.access.public(account)
                     if enabled(recipient,snap,workspace) and any(c['entityId']==answer['entityId'] for c in self.contexts(db,form,recipient,snap,workspace)):
-                        self.notifications.deliver(db,[recipient],workspace,answer['version'],'forms.reviewed')
+                        # The reviewer's comment stays in the answer: the entry names the application and the decision only.
+                        pupil=snap.entities['student'].get(answer['entityId']) if answer['entityId'] else None
+                        decision={'approved':'одобрено','rejected':'отклонено','returned':'возвращено на исправление'}[body.action]
+                        self.notifications.deliver(db,[recipient],workspace,answer['version'],'forms.reviewed',
+                                                   target=dict(module='forms',recordId=answer_id,students=[dict(id=pupil.id,name=pupil.name)] if pupil else [],title=f"«{form['definition']['title']}»: {decision}"))
                 return self.remember(db,user,body,fingerprint,result)
 
         @app.get('/api/forms/items/{id}/responses/{answer_id}/history')

@@ -152,7 +152,14 @@ function PublishedRows({
   );
 }
 
-export default function JournalPanel({ workspace }: { workspace: string }) {
+export default function JournalPanel({
+  workspace,
+  focus,
+}: {
+  workspace: string;
+  // Set by an opened notification: show this pupil's report for that one day.
+  focus?: { studentId: string; day: string };
+}) {
   const coverageOpened = useRef(false),
     editorPanel = useRef<HTMLElement | null>(null);
   const [options, setOptions] = useState<Options | null>(null),
@@ -225,6 +232,14 @@ export default function JournalPanel({ workspace }: { workspace: string }) {
       live = false;
     };
   }, [workspace]);
+  useEffect(() => {
+    if (!focus || !options?.students.some((s) => s.id === focus.studentId))
+      return;
+    setMode("report");
+    setStudent(focus.studentId);
+    setStart(focus.day);
+    setEnd(focus.day);
+  }, [options, focus]);
   useEffect(() => {
     if (!options || !day || mode !== "day") return;
     let live = true;
