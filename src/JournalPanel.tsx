@@ -13,6 +13,7 @@ import AbsencePanel from "./AbsencePanel";
 import { LessonMarkBar, useLessonMarks } from "./LessonMarks";
 import AttendancePanel from "./AttendancePanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
+import CourseTablePanel from "./CourseTablePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
 import GradeFeed from "./GradeFeed";
@@ -524,6 +525,21 @@ export default function JournalPanel({
   }
   function adminPanel(name: JournalPanelName) {
     switch (name) {
+      case "courseTable":
+        return (
+          <CourseTablePanel
+            key={`course-table-${workspace}`}
+            workspace={workspace}
+            onOpen={(key, date) => {
+              if (!canLeave()) return;
+              coverageOpened.current = true;
+              clearEditor();
+              setMode("day");
+              setDay(date);
+              void openEntry(key, false, date);
+            }}
+          />
+        );
       case "finalGrades":
         return (
           <FinalGradesPanel

@@ -184,6 +184,11 @@
   `categories`, `defaultCategory`.
 - `GET /api/journal/report` — `categories`, `sharePercentage`, `rule` в итогах.
 - `GET /api/journal/grades/feed` — `category` и `previous.category`.
+- `GET /api/journal/course-table/courses`, `GET /api/journal/course-table` и
+  `POST /api/journal/course-table/save` — таблица курса: категории работ и
+  проценты категорий, итог по долям считаются теми же функциями, что в отчёте
+  семьи; публикация из таблицы переносит работы вместе с их категориями
+  ([COURSE_TABLE.md](COURSE_TABLE.md)).
 - `GET /api/assessment-calendar/bookings` (сотрудники) — `journalAssessmentId`.
 - `GET /api/final-grades/rows/{строка}/evidence` — `recommendations` с вкладом
   категорий и `category` у каждой работы.
@@ -215,8 +220,9 @@
 
 ## Ограничения
 
-- Нет стандартного отклонения и статистики курса (нужна таблица курса
-  «ученики × работы»).
+- Нет стандартного отклонения и статистики курса. Таблица курса «ученики ×
+  работы» есть ([COURSE_TABLE.md](COURSE_TABLE.md)), но показывает только
+  проценты категорий и итог по долям.
 - На одну работу приходится одна оценка ученика. Способы EduPage «лучшая»,
   «последняя», «сумма со средним» и «сумма с добавлением максимума» не
   реализованы; есть «среднее с весом» и «сумма баллов».

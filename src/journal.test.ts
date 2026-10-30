@@ -300,6 +300,7 @@ describe("management panels", () => {
     const names = (panels?: Parameters<typeof journalPanels>[0]["panels"]) =>
       journalPanels({ panels }).sort();
     const all = {
+      courseTable: true,
       finalGrades: true,
       absences: true,
       attendance: true,
@@ -309,6 +310,7 @@ describe("management panels", () => {
     expect(names(all)).toEqual([
       "absences",
       "attendance",
+      "courseTable",
       "coverage",
       "finalGrades",
       "periods",

@@ -205,12 +205,18 @@ export async function loadRemainingReport(
   return current;
 }
 export type JournalPanelName =
-  "finalGrades" | "absences" | "periods" | "coverage" | "attendance";
+  | "courseTable"
+  | "finalGrades"
+  | "absences"
+  | "periods"
+  | "coverage"
+  | "attendance";
 // The server says which management panels have anything for this account; they follow the lesson list.
 export function journalPanels(options: {
   panels?: Partial<Record<JournalPanelName, boolean>>;
 }): JournalPanelName[] {
   const order: JournalPanelName[] = [
+    "courseTable",
     "finalGrades",
     "absences",
     "periods",

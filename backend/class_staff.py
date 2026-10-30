@@ -1,4 +1,5 @@
 """Independent class duties. They never grant access to grades or timetable editing.
+(The one reading exception is not a registry duty: the class teacher, never a deputy, reads published marks of the own class in course_table.)
 
 A class teacher (SchoolClass.classTeacherId) holds every duty of the own class by default;
 the registry only adds deputies and explicit revocations."""

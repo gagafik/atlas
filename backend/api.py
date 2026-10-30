@@ -392,6 +392,9 @@ journal.register(app, Workspace)
 from .homework import Homework
 homework = Homework(journal, portal_stamp)
 homework.register(app, Workspace)
+from .course_table import CourseTable
+course_table = CourseTable(journal, homework)
+course_table.register(app, Workspace)
 from .teaching_materials import TeachingMaterials
 teaching_materials = TeachingMaterials(journal, homework.snapshots)
 teaching_materials.register(app, Workspace)

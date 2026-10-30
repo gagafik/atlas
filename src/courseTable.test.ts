@@ -1,0 +1,389 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  afterSave,
+  applyPaste,
+  chunks,
+  courseCsv,
+  defaultCoursePeriod,
+  editable,
+  lessonBodies,
+  nextCell,
+  parseCell,
+  parsePaste,
+  type CoursePupil,
+  type CourseTable,
+  type Edit,
+  type SaveResponse,
+} from "./courseTable";
+import { download } from "./utils";
+vi.mock("./utils", async (original) => ({
+  ...(await original<typeof import("./utils")>()),
+  download: vi.fn(),
+}));
+
+const lesson = (n: number, extra = {}) => ({
+  lessonKey: `k${n}`,
+  day: `2026-10-0${n}`,
+  start: "09:00",
+  end: "09:40",
+  version: n,
+  publishedVersion: null,
+  editable: true,
+  reason: "",
+  rosterFrozen: false,
+  hasUnpublished: false,
+  ...extra,
+});
+const pupil = (id: string, lessons: number[], extra = {}): CoursePupil => ({
+  id,
+  name: `Ученик ${id}`,
+  classId: "c",
+  className: "10A",
+  from: null,
+  to: null,
+  lessons,
+  marks: {},
+  categories: [],
+  sharePercentage: null,
+  blocked: false,
+  missing: [],
+  excluded: [],
+  rule: "",
+  ...extra,
+});
+// Two lessons: the first has two works, the second (locked) one. p3 is off the roster of the first lesson.
+const table = (): CourseTable => ({
+  revision: 1,
+  groupId: "g",
+  group: "10A",
+  subjectId: "s",
+  subject: "Физика",
+  scope: "course",
+  canEdit: true,
+  source: "draft",
+  start: "2026-10-01",
+  end: "2026-10-31",
+  categories: [
+    { id: "fo", name: "ФО", title: "", color: "#2563eb", active: true },
+    { id: "sor", name: "СОР", title: "", color: "#d97706", active: true },
+  ],
+  lessons: [lesson(1), lesson(2, { editable: false, reason: "Закрыт" })],
+  works: [
+    {
+      lesson: 0,
+      id: "a",
+      name: "Опрос",
+      kind: "points",
+      maxScore: 10,
+      weight: 1,
+      category: "fo",
+    },
+    {
+      lesson: 0,
+      id: "b",
+      name: "Вывод",
+      kind: "label",
+      maxScore: 10,
+      weight: 1,
+      category: "fo",
+    },
+    {
+      lesson: 1,
+      id: "c",
+      name: "Раздел",
+      kind: "points",
+      maxScore: 20,
+      weight: 2,
+      category: "sor",
+    },
+  ],
+  pupils: [
+    pupil("p1", [0, 1]),
+    pupil("p2", [0, 1]),
+    pupil("p3", [1]),
+    pupil("p4", [0, 1]),
+  ],
+});
+
+describe("parseCell", () => {
+  const points = { kind: "points" as const, maxScore: 10 };
+  it("accepts a comma decimal and rejects numbers the server would refuse", () => {
+    expect(parseCell("8,5", points)).toEqual({ score: 8.5, label: "" });
+    expect(parseCell(" 0 ", points)).toEqual({ score: 0, label: "" });
+    for (const bad of ["8,5,1", "-1", "11", "abc", "1e1", "8.5.1"])
+      expect(parseCell(bad, points)).toHaveProperty("error");
+  });
+  it("clears on empty input and keeps a text mark up to the limit", () => {
+    expect(parseCell("  ", points)).toEqual({ score: null, label: "" });
+    const label = { kind: "label" as const, maxScore: 10 };
+    expect(parseCell(" зачёт ", label)).toEqual({
+      score: null,
+      label: "зачёт",
+    });
+    expect(parseCell("я".repeat(30), label)).toHaveProperty("label");
+    expect(parseCell("я".repeat(31), label)).toHaveProperty("error");
+  });
+});
+
+describe("pasting", () => {
+  it("reads spreadsheet text: tabs, CRLF and the newline that ends it", () => {
+    expect(parsePaste("5\t6\r\n7\t8\r\n")).toEqual([
+      ["5", "6"],
+      ["7", "8"],
+    ]);
+    expect(parsePaste("5\n6")).toEqual([["5"], ["6"]]);
+    expect(parsePaste("")).toEqual([]);
+    expect(parsePaste("5\t\t7\n")).toEqual([["5", "", "7"]]);
+  });
+  it("fills a column from the active cell and clips at the bottom edge", () => {
+    const t = table();
+    const { edits, skipped } = applyPaste(
+      parsePaste("5\n6\n7\n8\n9\n"),
+      { row: 1, col: 0 },
+      t,
+    );
+    expect(edits.map((e) => [e.studentId, e.assessmentId, e.score])).toEqual([
+      ["p2", "a", 5],
+      ["p4", "a", 7],
+    ]);
+    // p3 is not on the roster of the first lesson, and two rows fall off the table.
+    expect(skipped).toBe(3);
+  });
+  it("fills a matrix, never clears with a blank and skips the locked lesson", () => {
+    const t = table();
+    const { edits, skipped } = applyPaste(
+      parsePaste("5\tхорошо\t12\n\t\t\n7\t\t3"),
+      { row: 0, col: 0 },
+      t,
+    );
+    expect(
+      edits.map((e) => [e.studentId, e.assessmentId, e.score, e.label]),
+    ).toEqual([
+      ["p1", "a", 5, ""],
+      ["p1", "b", null, "хорошо"],
+    ]);
+    // The locked lesson twice and p3, who is off the roster of the first lesson.
+    expect(skipped).toBe(3);
+  });
+  it("flags a pasted value over the maximum instead of dropping it", () => {
+    const { edits } = applyPaste([["11"]], { row: 0, col: 0 }, table());
+    expect(edits).toHaveLength(1);
+    expect(edits[0].error).toBeTruthy();
+  });
+});
+
+describe("moving between cells", () => {
+  const t = table();
+  it("moves down on Enter and up on Shift+Enter", () => {
+    expect(nextCell({ row: 0, col: 0 }, "Enter", t)).toEqual({
+      row: 1,
+      col: 0,
+    });
+    expect(nextCell({ row: 1, col: 0 }, "Shift+Enter", t)).toEqual({
+      row: 0,
+      col: 0,
+    });
+  });
+  it("steps over cells off the roster and in locked lessons", () => {
+    expect(nextCell({ row: 1, col: 0 }, "ArrowDown", t)).toEqual({
+      row: 3,
+      col: 0,
+    });
+    expect(nextCell({ row: 0, col: 0 }, "Tab", t)).toEqual({ row: 0, col: 1 });
+    // The third column belongs to the locked lesson, so there is nowhere to go.
+    expect(nextCell({ row: 0, col: 1 }, "Tab", t)).toEqual({ row: 0, col: 1 });
+  });
+  it("stays at the edges", () => {
+    expect(nextCell({ row: 0, col: 0 }, "ArrowUp", t)).toEqual({
+      row: 0,
+      col: 0,
+    });
+    expect(nextCell({ row: 3, col: 0 }, "Enter", t)).toEqual({
+      row: 3,
+      col: 0,
+    });
+    expect(nextCell({ row: 0, col: 0 }, "Shift+Tab", t)).toEqual({
+      row: 0,
+      col: 0,
+    });
+  });
+  it("offers nothing to a viewer", () => {
+    const viewer = { ...t, canEdit: false };
+    expect(editable(viewer.pupils[0], viewer.works[0], viewer)).toBe(false);
+    expect(nextCell({ row: 0, col: 0 }, "Enter", viewer)).toEqual({
+      row: 0,
+      col: 0,
+    });
+  });
+});
+
+describe("save requests", () => {
+  const edit = (
+    studentId: string,
+    lessonKey: string,
+    assessmentId: string,
+    extra = {},
+  ): Edit => ({
+    studentId,
+    lessonKey,
+    assessmentId,
+    raw: "5",
+    score: 5,
+    label: "",
+    ...extra,
+  });
+  it("groups valid edits by lesson with the version of the table", () => {
+    const t = table();
+    t.lessons[1].editable = true;
+    const bodies = lessonBodies(
+      t,
+      [
+        edit("p1", "k2", "c"),
+        edit("p1", "k1", "a"),
+        edit("p2", "k1", "a"),
+        edit("p4", "k1", "a", { error: "x", score: null }),
+      ],
+      false,
+    );
+    expect(
+      bodies.map((b) => [
+        b.lessonKey,
+        b.version,
+        b.cells.map((c) => c.studentId),
+      ]),
+    ).toEqual([
+      ["k1", 1, ["p1", "p2"]],
+      ["k2", 2, ["p1"]],
+    ]);
+  });
+  it("adds lessons with unpublished marks only when publishing", () => {
+    const t = table();
+    t.lessons[0].hasUnpublished = true;
+    t.lessons[1].hasUnpublished = true;
+    expect(lessonBodies(t, [], false)).toEqual([]);
+    // The locked lesson cannot be published from here.
+    expect(lessonBodies(t, [], true)).toEqual([
+      { lessonKey: "k1", day: "2026-10-01", version: 1, cells: [] },
+    ]);
+  });
+  it("splits many lessons into requests of at most ten", () => {
+    const parts = chunks(Array.from({ length: 25 }, (_, i) => i));
+    expect(parts.map((p) => p.length)).toEqual([10, 10, 5]);
+    expect(parts.flat()).toHaveLength(25);
+  });
+  it("drops the edits of saved and unchanged lessons and keeps the conflicting ones with the reason", () => {
+    const response: SaveResponse = {
+      saved: [{ lessonKey: "k1" }],
+      unchanged: ["k2"],
+      conflicts: [
+        {
+          lessonKey: "k3",
+          day: "2026-10-03",
+          status: 422,
+          message: "Проверьте отмеченные ячейки.",
+          cells: [
+            {
+              studentId: "p1",
+              assessmentId: "a",
+              message: "Баллы — от 0 до 10.",
+            },
+          ],
+        },
+        {
+          lessonKey: "k4",
+          day: "2026-10-04",
+          status: 403,
+          message: "Журнал закрыт",
+          cells: [],
+        },
+      ],
+    };
+    const result = afterSave(
+      [
+        edit("p1", "k1", "a"),
+        edit("p1", "k2", "a"),
+        edit("p1", "k3", "a"),
+        edit("p2", "k3", "a"),
+        edit("p1", "k4", "a"),
+        edit("p1", "k5", "a"),
+        edit("p2", "k1", "a", { error: "x" }),
+      ],
+      [response],
+    );
+    expect(result.saved).toBe(1);
+    expect(result.unchanged).toBe(1);
+    expect(
+      result.edits.map((e) => [e.studentId, e.lessonKey, e.message]),
+    ).toEqual([
+      ["p1", "k3", "Баллы — от 0 до 10."],
+      ["p2", "k3", "Проверьте отмеченные ячейки."],
+      ["p1", "k4", "Журнал закрыт"],
+      ["p1", "k5", undefined],
+      ["p2", "k1", undefined],
+    ]);
+    expect(result.conflicts.map((c) => c.lessonKey)).toEqual(["k3", "k4"]);
+  });
+  it("keeps the edits of requests that never ran", () => {
+    const result = afterSave(
+      [edit("p1", "k1", "a"), edit("p1", "k9", "a")],
+      [{ saved: [{ lessonKey: "k1" }], unchanged: [], conflicts: [] }],
+    );
+    expect(result.edits.map((e) => e.lessonKey)).toEqual(["k9"]);
+  });
+});
+
+describe("period", () => {
+  const periods = [
+    { id: "year", start: "2026-08-17", end: "2027-06-11" },
+    { id: "q1", start: "2026-08-17", end: "2026-10-25" },
+    { id: "q2", start: "2026-11-02", end: "2026-12-27" },
+  ];
+  it("takes the narrowest period that contains today", () => {
+    expect(
+      defaultCoursePeriod("2026-10-01", "2026-08-17", "2027-06-11", periods)
+        .periodId,
+    ).toBe("q1");
+  });
+  it("takes the latest period that has ended when today is between periods", () => {
+    expect(
+      defaultCoursePeriod(
+        "2026-10-29",
+        "2026-08-17",
+        "2027-06-11",
+        periods.slice(1),
+      ),
+    ).toEqual({ start: "2026-08-17", end: "2026-10-25", periodId: "q1" });
+  });
+  it("falls back to the year so far", () => {
+    expect(
+      defaultCoursePeriod("2026-09-10", "2026-08-17", "2027-06-11", []),
+    ).toEqual({ start: "2026-08-17", end: "2026-09-10", periodId: null });
+    expect(
+      defaultCoursePeriod("2028-01-01", "2026-08-17", "2027-06-11", []),
+    ).toEqual({ start: "2026-08-17", end: "2027-06-11", periodId: null });
+  });
+});
+
+describe("CSV", () => {
+  it("marks a column without a place for the pupil, escapes formulas and ends with the totals", () => {
+    const t = table();
+    t.pupils[0].marks = {
+      0: { score: 0, label: "", comment: "" },
+      1: { score: null, label: "=1+1", comment: "" },
+    };
+    t.pupils[0].categories = [
+      { id: "fo", name: "ФО", color: "", numeric: 1, percentage: 0 },
+    ];
+    t.pupils[0].sharePercentage = 0;
+    t.pupils[2].marks = {};
+    courseCsv(t);
+    const lines = vi.mocked(download).mock.lastCall![1].split("\r\n");
+    expect(lines[0]).toContain('"01.10.2026 ФО Опрос (макс 10, вес 1)"');
+    expect(lines[0].endsWith('"ФО %";"СОР %";"Итог по долям %"')).toBe(true);
+    expect(lines[1]).toContain('"0";"\'=1+1";""');
+    expect(lines[1].endsWith('"0";"";"0"')).toBe(true);
+    // p3 has no place in the first lesson.
+    expect(lines[3]).toContain('"—";"—";""');
+    expect(lines).toHaveLength(5);
+  });
+});

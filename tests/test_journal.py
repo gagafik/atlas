@@ -345,9 +345,9 @@ def test_options_panels_by_role(client):
         response=reader.get('/api/journal/options?workspace=demo');assert response.status_code==200,response.text
         assert response.json()['absenceNotices']==response.json()['panels']['absences']
         return response.json()['panels']
-    def flags(**on):return dict(finalGrades=False,absences=False,attendance=False,coverage=False,periods=False)|on
-    assert panels(client)==dict(finalGrades=True,absences=True,attendance=True,coverage=True,periods=True)
-    assert panels(signed('teacher'))==flags(coverage=True,periods=True)
+    def flags(**on):return dict(finalGrades=False,absences=False,attendance=False,coverage=False,periods=False,courseTable=False)|on
+    assert panels(client)==dict(finalGrades=True,absences=True,attendance=True,coverage=True,periods=True,courseTable=True)
+    assert panels(signed('teacher'))==flags(coverage=True,periods=True,courseTable=True)
     assert panels(signed('parent'))==flags(absences=True)
     assert panels(signed('student'))==flags()
     with api.connect() as db:
