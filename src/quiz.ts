@@ -45,6 +45,8 @@ export interface QuizDefinition {
   maxAttempts: number;
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
+  // The journal category a transferred result lands in; empty means the school default.
+  journalCategory?: string;
 }
 export interface QuizDocument {
   lesson: {

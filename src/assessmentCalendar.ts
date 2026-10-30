@@ -234,6 +234,8 @@ export const actionLabels: Record<string, string> = {
   edited: "Изменена",
   moved: "Перенесена",
   cancelled: "Отменена",
+  journal_linked: "Связана с работой журнала",
+  journal_unlinked: "Связь с журналом снята",
 };
 export function groupByDay<T extends { day: string }>(items: T[]) {
   const result = new Map<string, T[]>();

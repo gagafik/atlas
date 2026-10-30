@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  actionLabels,
   addDays,
   coordinatorRoles,
   dayLabel,
@@ -94,5 +95,22 @@ describe("module access in the client", () => {
   it("shows the menu to every role that can be named coordinator", () => {
     for (const role of coordinatorRoles) expect(menuRoles).toContain(role);
     expect(menuRoles).not.toContain("viewer");
+  });
+});
+
+describe("booking history labels", () => {
+  it("names every action the server writes for a booking in Russian", () => {
+    for (const action of [
+      "created",
+      "published",
+      "edited",
+      "moved",
+      "cancelled",
+      "journal_linked",
+      "journal_unlinked",
+    ])
+      expect(actionLabels[action]).toMatch(/[А-Яа-я]/);
+    expect(actionLabels.journal_linked).toBe("Связана с работой журнала");
+    expect(actionLabels.journal_unlinked).toBe("Связь с журналом снята");
   });
 });

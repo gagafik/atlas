@@ -9,6 +9,7 @@ import {
   type QuizDefinition,
 } from "./quiz";
 import type { JournalEntry } from "./journal";
+import { useAssessmentCategories } from "./assessmentCategories";
 
 const schoolInput = (value: string) =>
   new Intl.DateTimeFormat("sv-SE", {
@@ -54,8 +55,10 @@ export default function QuizBuilder({
           maxAttempts: 1,
           shuffleQuestions: true,
           shuffleOptions: true,
+          journalCategory: "",
         },
   );
+  const categories = useAssessmentCategories(workspace);
   const [opens, setOpens] = useState(() => schoolInput(definition.opensAt)),
     [closes, setCloses] = useState(() => schoolInput(definition.closesAt));
   const [day, setDay] = useState(
@@ -388,6 +391,27 @@ export default function QuizBuilder({
             Таймер начинается при открытии попытки учеником. Общий срок закрытия
             может завершить её раньше. Разбор открывает учитель после окончания
             приёма и ручной проверки.
+          </p>
+          <label className="field">
+            <span>Категория в журнале</span>
+            <select
+              value={definition.journalCategory || ""}
+              onChange={(e) => patch({ journalCategory: e.target.value })}
+            >
+              <option value="">По умолчанию школы</option>
+              {(categories?.categories ?? [])
+                .filter((c) => c.active || c.id === definition.journalCategory)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.active ? "" : " (отключена)"}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <p className="muted">
+            В эту категорию попадёт работа, созданная при переносе результатов
+            теста в журнал.
           </p>
           <label className="check-line">
             <input

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import CategoryBadge from "./CategoryBadge";
+import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
 import {
   attendanceNames,
   documentRows,
@@ -91,6 +93,7 @@ export default function JournalPeriodsPanel({
   workspace: string;
   onChanged: () => void;
 }) {
+  const categories = useAssessmentCategories(workspace);
   const [expanded, setExpanded] = useState(false),
     [options, setOptions] = useState<Options | null>(null);
   const [selected, setSelected] = useState<Period | null>(null),
@@ -646,6 +649,7 @@ export default function JournalPeriodsPanel({
                               archived.publishedVersion,
                             ),
                             `Архив-журнала-${archived.document.lesson.date}.csv`,
+                            categories,
                           )
                         }
                       >
@@ -671,6 +675,9 @@ export default function JournalPeriodsPanel({
                             );
                             return (
                               <p key={a.id}>
+                                <CategoryBadge
+                                  category={categoryOf(a, categories)}
+                                />
                                 {a.name}: {gradeLabel(g, a)}
                                 {g?.comment && ` · ${g.comment}`}
                               </p>

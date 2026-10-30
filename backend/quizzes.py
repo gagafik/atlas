@@ -250,6 +250,12 @@ class Quizzes:
                     if not source:raise HTTPException(404,'Исходный тест не найден.')
                     copy=self.resolve(user,snap,store.unpack(source));previous=copy['quiz']['document']
                 definition=self.questions(db,workspace,user,body.definition,previous)
+                wanted=definition.get('journalCategory','')
+                if wanted:
+                    from .assessment_categories import config,names
+                    found=names(config(db,workspace)).get(wanted)
+                    # A category switched off later stays on a quiz that already carried it.
+                    if (not found or not found['active']) and wanted!=(previous or {}).get('definition',{}).get('journalCategory',''):raise HTTPException(422,'Выберите действующую категорию журнала для теста.')
                 assignments=dict(body.variantsByStudent);variant_ids=[v['id'] for v in definition['variants']]
                 unassigned=[s for s in body.studentIds if s not in assignments];secrets.SystemRandom().shuffle(unassigned)
                 counts={v:sum(x==v for x in assignments.values()) for v in variant_ids}

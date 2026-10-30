@@ -266,3 +266,77 @@ def test_reclose_preserves_assignment_and_proposal(client):
     assert again.json()['proposal']['calculation']['recommended']=='Ниже' and 'carriedFrom' not in again.json()['proposal']
     # The old book and the existing publication are untouched until the new row is republished.
     assert not sheet(client,b).json()['book']['current'] and report(signed('parent'),p).json()['items'][0]['label']=='Выше'
+
+
+CATEGORIES='/api/journal/categories?workspace=demo'
+
+def shares_of(c,fo,sor,soch):
+    cur=c.get(CATEGORIES).json()
+    policy=dict(cur['policy'],shares=[dict(categoryId=i,percent=p) for i,p in [('fo',fo),('sor',sor),('soch',soch)]])
+    r=c.put(CATEGORIES,json=dict(version=cur['version'],reason='Новые доли',categories=cur['categories'],defaultCategory=cur['defaultCategory'],policy=policy,rules=cur['rules']))
+    assert r.status_code==200,r.text
+    return r.json()
+
+def category_lesson(c):
+    record=graded(entry(c,lesson(c)['lessonKey']));content=record['document']['content']
+    content['assessments']=[dict(id='fo',name='Практика',maxScore=10,weight=1,category='fo'),dict(id='sor',name='СОР 1',maxScore=20,weight=1,category='sor'),dict(id='soch',name='СОЧ',maxScore=10,weight=1,category='soch')]
+    for pupil in content['records']:pupil['grades']=[dict(assessmentId='fo',score=8),dict(assessmentId='sor',score=14),dict(assessmentId='soch',score=6)]
+    return write(c,record,publish=True).json()
+
+def pupil_row(c,b):
+    return next(r for r in sheet(c,b).json()['items'] if r['studentId']=='s1' and r['source']['published'])
+
+def calculation(c,row,s):
+    return c.get(BASE+'/rows/'+row['id']+'/evidence?workspace=demo').json()['recommendations'][s['id']+':'+str(s['version'])]
+
+def test_category_share_recommendation_and_pinned_policy(client):
+    enable(client);category_lesson(client)
+    p=close(client,period(client));b=prepare(client,p);s=scale(client);row=pupil_row(client,b);source=row['source']
+    assert {k:(v['numeric'],v['weightedSum'],v['maxPoints']) for k,v in source['categories'].items()}=={'fo':(1,'80','10'),'sor':(1,'70','20'),'soch':(1,'60','10')}
+    assert [(x['id'],x['share']) for x in source['policy']['shares']]==[('fo','25'),('sor','25'),('soch','50')] and source['policy']['ruleName']=='Правило школы по умолчанию'
+    assert source['numeric']==3 and Decimal(source['weightedSum'])/Decimal(source['weight'])==70
+    evidence=client.get(BASE+'/rows/'+row['id']+'/evidence?workspace=demo').json()
+    assert [w['category'] for w in evidence['items']]==['fo','sor','soch']
+    calc=calculation(client,row,s)
+    assert calc['rawPercent']=='67.5' and calc['recommended']=='Ниже' and calc['method']=='average' and calc['blocked'] is False and calc['missing']==[]
+    assert [(x['id'],x['percent']) for x in calc['categories']]==[('fo','80'),('sor','70'),('soch','60')]
+    shares_of(client,50,25,25)
+    assert calculation(client,row,s)['rawPercent']=='67.5'
+    b2=prepare(client,close(client,action(client,p,'reopen').json()))
+    assert b2['id']!=b['id']
+    row2=pupil_row(client,b2);assert calculation(client,row2,s)['rawPercent']=='72.5'
+    # Saved proposals keep the calculation they were made with.
+    r=propose(client,row2,s,label='Ниже').json()
+    assert r['proposal']['calculation']['rawPercent']=='72.5' and r['proposal']['calculation']['categories'][0]['share']=='50'
+
+def test_category_policy_without_a_category_and_blocking(client):
+    enable(client);record=graded(entry(client,lesson(client)['lessonKey']))
+    write(client,record,publish=True).raise_for_status()
+    p=close(client,period(client));b=prepare(client,p);s=scale(client);row=pupil_row(client,b)
+    calc=calculation(client,row,s)
+    # Only ФО has marks: the other shares are renormalized away, never counted as zero.
+    assert calc['rawPercent']=='80' and calc['recommended']=='Выше' and calc['missing']==['sor','soch']
+    cur=client.get(CATEGORIES).json()
+    client.put(CATEGORIES,json=dict(version=cur['version'],reason='Нужны все категории',categories=cur['categories'],defaultCategory='fo',policy=dict(cur['policy'],missing='block'),rules=[])).raise_for_status()
+    b2=prepare(client,close(client,action(client,p,'reopen').json()));row=pupil_row(client,b2)
+    calc=calculation(client,row,s)
+    assert calc['rawPercent'] is None and calc['recommended'] is None and calc['blocked'] is True
+    assert propose(client,row,s).status_code==422
+    assert propose(client,row,s,explanation='Нет СОР и СОЧ, решение педсовета').status_code==200
+
+def test_legacy_source_keeps_old_recommendation():
+    s=Scale(version=0,name='Шкала',rounding='0',bands=[dict(label='Ниже',minPercent=0),dict(label='Выше',minPercent=75)]).model_dump(mode='json')
+    result=recommendation(dict(weightedSum='149.99',weight='2',numeric=2),s)
+    assert set(result)=={'rawPercent','roundedPercent','recommended'} and result['recommended']=='Выше'
+    # A source with sums but no pinned policy is still a legacy source.
+    assert set(recommendation(dict(weightedSum='149.99',weight='2',numeric=2,categories={}),s))==set(result)
+
+def test_existing_final_results_survive_backfill_and_policy_change(client):
+    p,b,s,r,record=seeded(client);r=publish(client,propose(client,r,s).json());parent=signed('parent')
+    before=report(parent,p).json()['items'];assert before
+    shares_of(client,10,10,80)
+    with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='assessment_categories'")
+    assert entry(client,record['lessonKey'])['document']['content']['assessments'][0]['category']=='fo'
+    assert report(parent,p).json()['items']==before
+    kept=client.get(BASE+'/rows/'+r['id']+'/history?workspace=demo').json()['items'][0]['row']['proposal']['calculation']
+    assert kept['rawPercent']=='80' and kept['categories'][0]['share']=='25'

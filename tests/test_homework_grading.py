@@ -99,6 +99,24 @@ def test_archived_grade_is_input_to_final_gradebook_without_publishing_private_d
     finally:api.shutdown_gradebook_jobs()
 
 
+def test_new_assessment_defaults_to_school_category(client):
+    record,sent,_,_,teacher=ready(client);key=record['lessonKey'];o=options(teacher,key)
+    assert o['defaultCategory']=='fo' and [c['id'] for c in o['categories']]==['fo','sor','soch']
+    # A category the school does not have and a calendar link are refused before anything is written.
+    for extra in [dict(category='nope'),dict(bookingId='0'*32)]:
+        refused=grade(teacher,key,sent,payload(o,assessmentId='third',newAssessment=new_work('third',**extra),replaceExisting=False))
+        assert refused.status_code==422,refused.text
+    assert [a['id'] for a in entry(client,key)['document']['content']['assessments']]==['work']
+    first=grade(teacher,key,sent,payload(o,assessmentId='homework',newAssessment=new_work(),replaceExisting=False));assert first.status_code==200,first.text
+    assert {a['id']:a['category'] for a in entry(client,key)['document']['content']['assessments']}=={'work':'fo','homework':'fo'}
+    # Another active category can be chosen, and grading an existing work never changes its category.
+    sor=payload(options(teacher,key),assessmentId='second',newAssessment=new_work('second',category='sor'),replaceExisting=False)
+    second=grade(teacher,key,first.json(),sor);assert second.status_code==200,second.text
+    assert [a['category'] for a in entry(client,key)['document']['content']['assessments']]==['fo','fo','sor']
+    assert grade(teacher,key,second.json(),payload(options(teacher,key))).status_code==200
+    assert [a['category'] for a in entry(client,key)['document']['content']['assessments']]==['fo','fo','sor']
+
+
 @pytest.mark.parametrize('kind',['points','label'])
 def test_new_assessment_records_one_pupil_and_preserves_grade_format(client,kind):
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];a=new_work(kind=kind,weight=0)
