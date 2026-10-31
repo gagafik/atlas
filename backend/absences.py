@@ -10,7 +10,7 @@ from pydantic import Field, model_validator
 from .models import Model
 from .access import LOCAL, now
 from .journal import user_ids
-from .notifications import encoded, late_opener
+from .notifications import encoded, has_table, late_opener
 from . import absence_codes
 
 LEGAL = ['mother','father','guardian']  # family-registry relationships that make a verified link a legal guardian
@@ -43,6 +43,18 @@ def attendance_target(workspace,rows):
         mine={r[3]:r[5] for r in rows if r[3] in user_ids(user,workspace,'student')}
         return dict(title='Изменились отметки посещаемости',students=[dict(id=i,name=n) for i,n in mine.items()])
     return target
+
+
+def forget_titles(notifications,db,workspace,parent,student,link):
+    """The school saved a family link. If it no longer makes the parent a legal guardian, their entries about notes they may not open lose title, dates and link.
+
+    Kept: a one-pupil entry whose first note the parent wrote or the school entered, since those levels do not depend on the link.
+    The grants already shut entries of a child the account lost; this is the case where the grant stays and only the legal status goes.
+    """
+    if link['status']=='active' and link['verified'] and link['relationship'] in LEGAL:return
+    if not has_table(db,'absence_notices'):return
+    keep="json_array_length(notifications.target,'$.students')=1 AND json_extract(notifications.target,'$.recordId') IN (SELECT id FROM absence_notices WHERE workspace=? AND student_id=? AND (author_id=? OR origin='school'))"
+    notifications.redact_child(db,parent,workspace,'absences',student,keep,(workspace,student,parent))
 
 
 def tables(db):

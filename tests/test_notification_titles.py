@@ -14,6 +14,7 @@ import test_absence_school as school
 import test_meetings as meet
 import test_meeting_waitlist as waits
 import test_school_forms as forms
+import test_families as families
 import test_clubs as club_tests
 import test_homework as hw
 import test_quizzes as quiz_tests
@@ -201,6 +202,63 @@ def test_other_guardian_learns_only_attendance(client):
     text = other.get('/api/notifications/inbox').text
     assert 'Личная причина' not in text and 'заявлен' not in text.lower()
     assert items(other, 'absence.updated') == [] and open_notice(other, seen['id']).status_code == 404
+
+
+GUARDIAN = dict(relationship='father', verified=True, evidence='Свидетельство о рождении')
+
+
+def save_link(client, account, student='s1', **values):
+    response = families.save(client, account['id'], student, **values); assert response.status_code == 200, response.text
+
+
+def second_guardian(client):
+    return families.account(client, 'other-parent')
+
+
+@pytest.mark.parametrize('downgrade', [dict(relationship='representative'), dict(verified=False)])
+def test_absence_titles_close_when_guardian_status_goes(client, downgrade):
+    _, _, parent, teacher = absences.setup(client)
+    account = second_guardian(client); save_link(client, account, **GUARDIAN)
+    notice = absences.send(parent); assert absences.decide(teacher, notice, 'reject').status_code == 200
+    other = signed('other-parent')
+    [before] = items(other, 'absence.updated')
+    assert dated() in before['title'] and 'отклонено' in before['title'] and before['link'] is True
+    # The grant stays, only the legal status goes: the notice is no longer theirs to know about.
+    save_link(client, account, **GUARDIAN | downgrade)
+    other = signed('other-parent')
+    [after] = items(other, 'absence.updated')
+    assert after['id'] == before['id'] and not {'title', 'students', 'link', 'restricted'} & set(after)
+    assert 'Ученик 1' not in other.get('/api/notifications/inbox').text and open_notice(other, after['id']).status_code == 404
+    assert read(other, after['id']) is True
+
+
+def test_absence_titles_stay_for_what_the_link_does_not_decide(client):
+    person, _, parent, teacher = absences.setup(client)
+    account = second_guardian(client); save_link(client, account, **GUARDIAN)
+    notice = absences.send(parent); assert absences.decide(teacher, notice).status_code == 200
+    school.note(client, studentIds=['s1'], codeId='school', startDate='2026-08-18', endDate='2026-08-18')
+    other = signed('other-parent')
+    assert len(items(other, 'absence.updated')) == 1 and len(items(other, 'absence.recorded')) == 1
+    # The second guardian drops to an unverified link; the first one's own note keeps its entry, and so does a note of the school.
+    save_link(client, account, relationship='unspecified', verified=False, evidence='')
+    save_link(client, person, relationship='representative', verified=False, evidence='')
+    other = signed('other-parent'); parent = signed('parent')
+    [note] = items(other, 'absence.recorded')
+    assert 'Школа внесла записку' in note['title'] and note['link'] is True and open_notice(other, note['id']).status_code == 200
+    [shut] = items(other, 'absence.updated'); assert 'title' not in shut and open_notice(other, shut['id']).status_code == 404
+    [own] = [i for i in items(parent, 'absence.updated') if 'title' in i]
+    assert 'одобрено' in own['title'] and own['link'] is True and open_notice(parent, own['id']).status_code == 200
+
+
+def test_absence_titles_of_another_child_stay(client):
+    _, _, parent, teacher = absences.setup(client)
+    account = second_guardian(client); save_link(client, account, **GUARDIAN)
+    notice = absences.send(parent); assert absences.decide(teacher, notice).status_code == 200
+    # A link for a different pupil is saved, and it is not a legal one.
+    save_link(client, account, 's2', relationship='unspecified', verified=False, evidence='')
+    other = signed('other-parent')
+    [kept] = items(other, 'absence.updated')
+    assert 'одобрено' in kept['title'] and kept['link'] is True and open_notice(other, kept['id']).status_code == 200
 
 
 def test_meeting_published_title_and_access(client, monkeypatch):

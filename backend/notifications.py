@@ -399,6 +399,16 @@ class Notifications:
         self.redact(db, user_ids, topic, topic)
         db.execute('DELETE FROM notifications WHERE user_id IN (SELECT value FROM json_each(?)) AND topic=? AND read_at IS NULL', (encoded(list(user_ids)), topic))
 
+    def redact_child(self, db, user_id, workspace, module, student, spare='0', values=()):
+        """Blank title, children and module of an account's entries of one module that name this child, apart from those the SQL condition `spare` (on the entry's target) keeps.
+
+        For a right that depends on more than the child's grant: a link that was shortened must not leave titles of records the account may no longer open.
+        """
+        self.tables(db)
+        db.execute("UPDATE notifications SET target=json_remove(target,'$.title','$.students','$.module') WHERE user_id=? AND workspace=? AND json_extract(target,'$.module')=? "
+                   "AND EXISTS(SELECT 1 FROM json_each(notifications.target,'$.students') s WHERE json_extract(s.value,'$.id')=?) AND NOT ("+spare+')',
+                   (user_id, workspace, module, student, *values))
+
     def deliver(self, db, users, workspace, revision, action, topic=None, target=None, supersede=False):
         """topic: at most one unread entry per user and topic; a newer event replaces it.
 
