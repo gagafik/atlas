@@ -234,6 +234,7 @@ export async function loadRemainingReport(
   return current;
 }
 export type JournalPanelName =
+  | "courseTable"
   | "finalGrades"
   | "absences"
   | "periods"
@@ -245,6 +246,7 @@ export function journalPanels(options: {
   panels?: Partial<Record<JournalPanelName, boolean>>;
 }): JournalPanelName[] {
   const order: JournalPanelName[] = [
+    "courseTable",
     "finalGrades",
     "absences",
     "periods",

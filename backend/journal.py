@@ -306,6 +306,8 @@ class Journal:
         from .grade_feed import tables as grade_tables
         grade_tables(db)
         db.execute("CREATE INDEX IF NOT EXISTS journal_entry_day ON journal_entries(workspace,json_extract(document,'$.lesson.date'))")
+        # The course table finds the lessons of one group and subject; the key fixes both, so draft and published copies share the index.
+        db.execute("CREATE INDEX IF NOT EXISTS journal_entry_course ON journal_entries(workspace,json_extract(document,'$.lesson.groupId'),json_extract(document,'$.lesson.subjectId'))")
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_members'").fetchone()
         db.execute('CREATE TABLE IF NOT EXISTS journal_members (workspace TEXT,lesson_key TEXT,student_id TEXT,name TEXT,kind TEXT,PRIMARY KEY(workspace,lesson_key,student_id,kind))')
         db.execute('CREATE INDEX IF NOT EXISTS journal_member_lookup ON journal_members(workspace,student_id,kind)')
@@ -373,7 +375,7 @@ class Journal:
     def panels(self, db, workspace, user):
         """Which management panels have anything for this account. Flags only decide what the page mounts: every endpoint still enforces rights."""
         role = user['role']
-        result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',attendanceGrid=role in ['admin','teacher'],coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'])
+        result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',attendanceGrid=role in ['admin','teacher'],coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'],courseTable=role in ['admin','teacher'])
         if role in ['teacher','student','parent']:
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('grading_rows','final_results')")}
             if role=='teacher' and 'grading_rows' in tables:

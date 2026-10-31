@@ -1,4 +1,5 @@
 """Independent class duties. They never grant access to grades or timetable editing.
+(The class teacher, never a deputy, reads grades outside the registry: published report cards of the own class (final_grades) and, in addition, published lesson marks of own-class pupils in course_table. These are not registry duties.)
 
 A class teacher (SchoolClass.classTeacherId) holds every duty of the own class by default;
 the registry only adds deputies and explicit revocations."""
