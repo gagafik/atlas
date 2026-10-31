@@ -13,7 +13,17 @@ import {
   loadRemainingReport,
   journalPanels,
   defaultAttendancePeriod,
+  attendanceProblem,
+  attendanceText,
+  changeAttendance,
+  initials,
+  lateShare,
+  lessonsText,
+  noAbsentees,
+  withNoAbsentees,
+  type JournalContent,
   type JournalDocument,
+  type PupilRecord,
   type JournalReport,
   type JournalReportPage,
   type JournalRow,
@@ -117,6 +127,32 @@ describe("journal export", () => {
     const csv = vi.mocked(download).mock.lastCall![1];
     expect(csv).toContain('"Тест";"0";"10";"0";"СОР"');
     expect(csv).toContain('"Участие";"A*";"";"";"ФО"');
+  });
+  it("exports the leaving time and the absence type by the school's name", () => {
+    const d = structuredClone(document);
+    d.content.assessments = [];
+    d.content.records[0].grades = [];
+    const lastCells = (names?: Record<string, string>) => {
+      journalCsv(documentRows(d, "key", 1), "j.csv", null, names);
+      const [, row] = vi.mocked(download).mock.lastCall![1].split("\r\n");
+      return row.split(";").slice(-2);
+    };
+    Object.assign(d.content.records[0], {
+      attendance: "absent",
+      lateMinutes: 0,
+      absenceCode: "family",
+    });
+    expect(lastCells({ family: "Семейные обстоятельства" })).toEqual([
+      '""',
+      '"Семейные обстоятельства"',
+    ]);
+    expect(lastCells()).toEqual(['""', '"family"']);
+    Object.assign(d.content.records[0], {
+      attendance: "left",
+      leftAt: "09:20",
+      absenceCode: "",
+    });
+    expect(lastCells()).toEqual(['"09:20"', '""']);
   });
   it("exports attendance and homework when no assessment exists", () => {
     const d = structuredClone(document);
@@ -360,5 +396,217 @@ describe("attendance opening period", () => {
     expect(
       defaultAttendancePeriod("2028-02-10", "2027-08-17", "2028-06-11"),
     ).toEqual({ start: "2028-02-01", end: "2028-02-29" });
+  });
+});
+describe("marks of a held lesson", () => {
+  const record = (studentId: string, attendance: string, extra = {}) =>
+    ({
+      studentId,
+      attendance,
+      lateMinutes: 0,
+      comment: "",
+      grades: [],
+      ...extra,
+    }) as PupilRecord;
+  const students = [
+    { id: "a", name: "Первый", className: "10A", enrolled: true },
+    { id: "b", name: "Второй", className: "10A", enrolled: true },
+    { id: "old", name: "Прежний", className: "10A", enrolled: false },
+  ];
+  const content = (...records: PupilRecord[]) =>
+    ({ ...document.content, records }) as JournalContent;
+  it("sees nobody absent only while every pupil of the roster is present, unmarked or excused by a note", () => {
+    const approvals = { b: { id: "notice", version: 1 } };
+    const open = content(
+      record("a", "present"),
+      record("b", "absent"),
+      record("old", "absent"),
+    );
+    expect(noAbsentees(open, students)).toBe(false);
+    expect(noAbsentees(open, students, approvals)).toBe(true);
+    expect(
+      noAbsentees(
+        content(
+          record("a", "unmarked"),
+          record("b", "late", { lateMinutes: 3 }),
+        ),
+        students,
+      ),
+    ).toBe(false);
+    expect(
+      noAbsentees(
+        content(record("a", "unmarked"), record("b", "left")),
+        students,
+      ),
+    ).toBe(false);
+  });
+  it("marks the unmarked present, or absent where a note covers the lesson, and leaves the rest alone", () => {
+    const before = content(
+      record("a", "unmarked"),
+      record("b", "late", { lateMinutes: 7, comment: "Автобус" }),
+      record("old", "unmarked"),
+    );
+    const marked = withNoAbsentees(before, students);
+    expect(marked.records.map((r) => r.attendance)).toEqual([
+      "present",
+      "late",
+      "unmarked",
+    ]);
+    expect(marked.records[1]).toBe(before.records[1]);
+    const covered = withNoAbsentees(
+      content(record("a", "unmarked")),
+      students,
+      {
+        a: { id: "notice", version: 1 },
+      },
+    );
+    expect(covered.records[0].attendance).toBe("absent");
+    expect(before.records[0].attendance).toBe("unmarked");
+  });
+  it("drops what belongs to another status and keeps grades and comment", () => {
+    const grades = [
+      { assessmentId: "a", score: 4, label: "", comment: "Хорошо" },
+    ];
+    const late = record("a", "late", {
+      lateMinutes: 9,
+      comment: "Заметка",
+      grades,
+    });
+    const left = changeAttendance(late, "left");
+    expect(left).toMatchObject({
+      attendance: "left",
+      lateMinutes: 0,
+      leftAt: null,
+    });
+    const gone = changeAttendance({ ...left, leftAt: "09:20" }, "absent");
+    expect(gone.leftAt).toBeNull();
+    const typed = changeAttendance(
+      { ...gone, absenceCode: "illness" },
+      "present",
+    );
+    expect(typed).toMatchObject({
+      absenceCode: "",
+      lateMinutes: 0,
+      leftAt: null,
+    });
+    expect(typed.comment).toBe("Заметка");
+    expect(typed.grades).toBe(grades);
+    expect(changeAttendance(late, "late").lateMinutes).toBe(9);
+    expect(
+      changeAttendance({ ...gone, absenceCode: "illness" }, "absent")
+        .absenceCode,
+    ).toBe("illness");
+  });
+  it("counts lateness as a share of the lesson from the threshold and never more than the lesson", () => {
+    expect(lateShare(10, "09:00", "09:40")).toBe(0.25);
+    expect(lateShare(4, "09:00", "09:40")).toBe(0);
+    expect(lateShare(5, "09:00", "09:40")).toBe(0.125);
+    expect(lateShare(90, "09:00", "09:40")).toBe(1);
+    expect(lateShare(10, "09:00", "09:00")).toBe(0);
+    expect(lessonsText(0.25)).toBe("0,25 урока");
+    expect(lessonsText(1)).toBe("1 урок");
+    expect(lessonsText(3)).toBe("3 урока");
+    expect(lessonsText(12)).toBe("12 уроков");
+  });
+  it("makes initials of the first two words and does not fail on an empty name", () => {
+    expect(initials("Айдар Нурланов")).toBe("АН");
+    expect(initials("айдар")).toBe("А");
+    expect(initials("  Айдар   Нурланов Серикович")).toBe("АН");
+    expect(initials("")).not.toBe("");
+  });
+  it("asks for a leaving time inside the lesson", () => {
+    const withMark = (extra: Partial<PupilRecord>): JournalDocument => ({
+      lesson: document.lesson,
+      content: content(record("s1", "left", extra)),
+    });
+    expect(attendanceProblem(withMark({ leftAt: null }))).not.toBe("");
+    expect(attendanceProblem(withMark({ leftAt: "09:00" }))).not.toBe("");
+    expect(attendanceProblem(withMark({ leftAt: "09:40" }))).not.toBe("");
+    expect(attendanceProblem(withMark({ leftAt: "09:20" }))).toBe("");
+    expect(
+      attendanceProblem({
+        lesson: document.lesson,
+        content: content(record("s1", "present")),
+      }),
+    ).toBe("");
+  });
+  it("describes a mark with its details and does not credit the teacher's type as an excuse", () => {
+    const lesson = { start: "09:00", end: "09:40" };
+    const names = { illness: "Болезнь" };
+    const late = attendanceText(
+      record("a", "late", { lateMinutes: 10 }),
+      lesson,
+    );
+    expect(late).toContain("10");
+    expect(late).toContain("25%");
+    expect(
+      attendanceText(record("a", "late", { lateMinutes: 3 }), lesson),
+    ).not.toContain("%");
+    expect(
+      attendanceText(record("a", "left", { leftAt: "09:20" }), lesson),
+    ).toContain("09:20");
+    const typed = { absenceCode: "illness" };
+    expect(
+      attendanceText(record("a", "absent", typed), lesson, names),
+    ).toContain(names.illness);
+    expect(
+      attendanceText(record("a", "excused", typed), lesson, names),
+    ).not.toContain(names.illness);
+  });
+  it("exports the leaving time and the type of an absence", () => {
+    const d = structuredClone(document);
+    d.content.records[0] = record("s1", "absent", { absenceCode: "illness" });
+    journalCsv(documentRows(d, "key", 1), "j.csv", null, {
+      illness: "Болезнь",
+    });
+    expect(vi.mocked(download).mock.lastCall![1]).toContain('"Болезнь"');
+    d.content.records[0] = record("s1", "left", { leftAt: "09:20" });
+    journalCsv(documentRows(d, "key", 1));
+    const row = vi.mocked(download).mock.lastCall![1].split("\r\n")[1];
+    expect(row).toContain('"09:20"');
+  });
+  it("leaves the type column empty on a row a school note excused", () => {
+    const d = structuredClone(document);
+    d.content.records[0] = record("s1", "absent", { absenceCode: "family" });
+    const approvals = { s1: { id: "notice", version: 2 } };
+    journalCsv(documentRows(d, "key", 1, approvals), "j.csv", null, {
+      family: "Семейные обстоятельства",
+    });
+    const csv = vi.mocked(download).mock.lastCall![1];
+    expect(csv).toContain("Уважительная причина");
+    expect(csv).not.toContain("Семейные обстоятельства");
+    journalCsv(documentRows(d, "key", 1), "j.csv", null, {
+      family: "Семейные обстоятельства",
+    });
+    expect(vi.mocked(download).mock.lastCall![1]).toContain(
+      "Семейные обстоятельства",
+    );
+  });
+  it("keeps the absence type names across later report pages", () => {
+    const page = (extra: Partial<JournalReportPage>): JournalReportPage => ({
+      rows: [],
+      summary: null,
+      nextAfter: null,
+      ...extra,
+    });
+    const first = mergeReportPage(
+      null,
+      page({
+        summary: {
+          attendance: {},
+          lateMinutes: 0,
+          subjects: [],
+        },
+        nextAfter: "x",
+        absenceCodes: { illness: "Болезнь" },
+      }),
+    );
+    expect(mergeReportPage(first, page({})).absenceCodes).toEqual({
+      illness: "Болезнь",
+    });
+    expect(
+      mergeReportPage(first, page({ absenceCodes: { family: "Семья" } }))
+        .absenceCodes,
+    ).toEqual({ family: "Семья" });
   });
 });

@@ -3,7 +3,7 @@ import { api } from "./api";
 import CategoryBadge from "./CategoryBadge";
 import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
 import {
-  attendanceNames,
+  attendanceText,
   documentRows,
   gradeLabel,
   journalCsv,
@@ -55,6 +55,7 @@ type Archived = {
   lessonKey: string;
   publishedVersion: number;
   document: JournalDocument;
+  absenceCodes?: Record<string, string>;
 };
 type History = {
   id: number;
@@ -650,6 +651,7 @@ export default function JournalPeriodsPanel({
                             ),
                             `Архив-журнала-${archived.document.lesson.date}.csv`,
                             categories,
+                            archived.absenceCodes,
                           )
                         }
                       >
@@ -663,10 +665,11 @@ export default function JournalPeriodsPanel({
                         <article key={r.student.id}>
                           <h4>{r.student.name}</h4>
                           <p>
-                            {attendanceNames[r.record.attendance]}
-                            {r.record.lateMinutes
-                              ? ` · ${r.record.lateMinutes} мин`
-                              : ""}
+                            {attendanceText(
+                              r.record,
+                              r.lesson,
+                              archived.absenceCodes,
+                            )}
                           </p>
                           {r.record.comment && <p>{r.record.comment}</p>}
                           {r.content.assessments.map((a) => {

@@ -14,11 +14,12 @@ from fastapi import HTTPException, Request, Response
 from pydantic import Field, model_validator
 from .access import now
 from . import absence_codes
+from .attendance_projection import LATE_SHARE_SQL, late_share
 from .models import Model
 from .notifications import encoded, permission_key
 
-STATES=['unmarked','present','absent','late','excused']
-LABELS=dict(unmarked='Не отмечено',present='Присутствует',absent='Отсутствует',late='Опоздание',excused='Уважительная причина')
+STATES=['unmarked','present','absent','late','excused','left']
+LABELS=dict(unmarked='Не отмечено',present='Присутствует',absent='Отсутствует',late='Опоздание',excused='Уважительная причина',left='Ушёл раньше')
 PAGE=50
 CACHE_SECONDS=600
 CACHE_ENTRIES=16
@@ -44,21 +45,22 @@ class Period(Model):
 
 class Details(Period):
     studentId: str = Field(min_length=1,max_length=100)
-    attendance: Literal['all','unmarked','present','absent','late','excused'] = 'all'
+    attendance: Literal['all','unmarked','present','absent','late','excused','left'] = 'all'
 
 
 class Export(Period):
     view: Literal['students','classes','subjects','lessons'] = 'students'
-    attendance: Literal['all','unmarked','present','absent','late','excused'] = 'all'
+    attendance: Literal['all','unmarked','present','absent','late','excused','left'] = 'all'
 
 
-def empty():return dict(records=0,attendance={s:0 for s in STATES},lateMinutes=0,excusedCodes={})
+def empty():return dict(records=0,attendance={s:0 for s in STATES},lateMinutes=0,lateShare=0.0,excusedCodes={},absentCodes={})
 
 
 def add(target,source):
-    target['records']+=source['records'];target['lateMinutes']+=source['lateMinutes']
+    target['records']+=source['records'];target['lateMinutes']+=source['lateMinutes'];target['lateShare']+=source['lateShare']
     for status in STATES:target['attendance'][status]+=source['attendance'][status]
     for code,count in source['excusedCodes'].items():target['excusedCodes'][code]=target['excusedCodes'].get(code,0)+count
+    for code,count in source['absentCodes'].items():target['absentCodes'][code]=target['absentCodes'].get(code,0)+count
 
 
 def csv_response(rows):
@@ -173,33 +175,39 @@ class AttendanceReports:
     def calculate(self,db,user,snap,workspace,body):
         classes,pupils=self.scope(db,user,snap,workspace,body)
         query,args=self.query(user,snap,workspace,body,pupils)
-        rows=db.execute(query+'''SELECT student_id,subject_id,raw,count(*),sum(late_minutes),max(day||start||lesson_key)
-            FROM visible GROUP BY student_id,subject_id,raw''',args).fetchall()
+        # absence_code is a teacher's type label on 'absent'; late_share is the part of the lesson missed (see LATE_SHARE_FROM).
+        rows=db.execute(query+'''SELECT student_id,subject_id,raw,count(*),sum(late_minutes),max(day||start||lesson_key),absence_code,sum('''+LATE_SHARE_SQL+''')
+            FROM visible GROUP BY student_id,subject_id,raw,absence_code''',args).fetchall()
         students={id:dict(id=id,name=s.name,classId=s.classId,className=classes[s.classId],active=s.active,**empty()) for id,s in pupils.items()}
         subjects={};latest_students={};latest_subjects={}
-        for student,subject,status,count,minutes,last in rows:
+        for student,subject,status,count,minutes,last,mark,share in rows:
             value=students.setdefault(student,dict(id=student,name='Ученик вне текущего состава',classId=None,className='Вне текущего состава',active=None,**empty()))
             subject_value=subjects.setdefault(subject,dict(id=subject,name='',**empty()))
             for item in [value,subject_value]:
-                item['records']+=count;item['attendance'][status]+=count;item['lateMinutes']+=minutes
+                item['records']+=count;item['attendance'][status]+=count;item['lateMinutes']+=minutes;item['lateShare']+=share or 0
+                if mark:item['absentCodes'][mark]=item['absentCodes'].get(mark,0)+count
             latest_students[student]=max(latest_students.get(student,''),last)
             latest_subjects[subject]=max(latest_subjects.get(subject,''),last)
         adjusted,adjust_args=self.query(user,snap,workspace,body,pupils,notice=True)
         # Start with approved notices (usually a much smaller set), not an
         # EXISTS lookup for every status counter of every annual pupil record.
         # One row per excused lesson first, so overlapping notes never count a lesson twice; then the lessons per type.
-        corrections=db.execute(adjusted+'''SELECT student_id,subject_id,code,count(*) FROM (
-            SELECT v.student_id,v.subject_id,v.lesson_key,min(coalesce(n.code_id,'')) AS code
+        corrections=db.execute(adjusted+'''SELECT student_id,subject_id,code,count(*),mark FROM (
+            SELECT v.student_id,v.subject_id,v.lesson_key,min(coalesce(n.code_id,'')) AS code,v.absence_code AS mark
             FROM absence_notices n CROSS JOIN visible v ON v.workspace=n.workspace AND v.student_id=n.student_id
             AND v.day BETWEEN substr(n.start_at,1,10) AND substr(n.end_at,1,10)
             WHERE n.workspace=? AND n.status='approved' AND v.raw='absent'
             AND n.start_at<=v.day||'T'||v.start AND n.end_at>=v.day||'T'||v.end
             AND (n.subject_id IS NULL OR n.subject_id=v.subject_id)
-            GROUP BY v.student_id,v.subject_id,v.lesson_key) GROUP BY 1,2,3''',adjust_args+[workspace]).fetchall()
-        for student,subject,code,count in corrections:
+            GROUP BY v.student_id,v.subject_id,v.lesson_key) GROUP BY 1,2,3,5''',adjust_args+[workspace]).fetchall()
+        for student,subject,code,count,mark in corrections:
             for item in [students[student],subjects[subject]]:
                 item['attendance']['absent']-=count;item['attendance']['excused']+=count
                 item['excusedCodes'][code]=item['excusedCodes'].get(code,0)+count
+                # An accepted note's type wins: the teacher's label no longer counts for an excused lesson.
+                if mark:
+                    item['absentCodes'][mark]-=count
+                    if not item['absentCodes'][mark]:del item['absentCodes'][mark]
         # Unknown IDs are retained in an explicit archive bucket, never silently
         # attributed to a current class. Names come from the last saved lesson.
         missing=[dict(id=id,key=last[15:]) for id,last in latest_students.items() if id not in pupils]
@@ -220,6 +228,7 @@ class AttendanceReports:
         for id,name in db.execute('''SELECT l.subject_id,l.subject FROM json_each(?) x CROSS JOIN journal_attendance_lessons l
             ON l.workspace=? AND l.lesson_key=json_extract(x.value,'$.key')''',(encoded(historical_subjects),workspace)):subject_names[id]=name
         for id,value in subjects.items():value['name']=subject_names.get(id,'Предмет прежнего журнала')
+        for item in [*students.values(),*subjects.values(),*class_rows.values(),totals]:item['lateShare']=round(item['lateShare'],2)
         ordered=sorted(students.values(),key=lambda s:(-s['attendance']['absent'],-s['attendance']['late'],s['name'].casefold(),s['id']))
         return dict(totals=totals,classes=sorted(class_rows.values(),key=lambda c:c['name'].casefold()),subjects=sorted(subjects.values(),key=lambda s:s['name'].casefold()),students=ordered,studentCount=len(ordered),withoutRecords=sum(s['records']==0 for s in ordered))
 
@@ -232,10 +241,10 @@ class AttendanceReports:
         if where:args.append(body.attendance)
         limit=10001 if export else PAGE+1;offset=0 if export else body.offset
         rows=db.execute(query+'''SELECT v.lesson_key,v.day,v.start,v.end,v.subject_id,l.subject,l.group_name,l.teachers,
-            v.raw,v.effective,v.late_minutes,l.version,l.published_at,v.notice_code FROM visible v JOIN journal_attendance_lessons l
+            v.raw,v.effective,v.late_minutes,l.version,l.published_at,v.notice_code,v.left_at,v.absence_code FROM visible v JOIN journal_attendance_lessons l
             ON l.workspace=v.workspace AND l.lesson_key=v.lesson_key'''+where+' ORDER BY v.day,v.start,v.lesson_key LIMIT ? OFFSET ?',args+[limit,offset]).fetchall()
         if export and len(rows)>10000:raise HTTPException(422,'Более 10 000 записей: сократите период выгрузки уроков.')
-        keys=['lessonKey','date','start','end','subjectId','subject','group','teachers','rawAttendance','attendance','lateMinutes','version','publishedAt','absenceCode']
+        keys=['lessonKey','date','start','end','subjectId','subject','group','teachers','rawAttendance','attendance','lateMinutes','version','publishedAt','absenceCode','leftAt','markCode']
         items=[dict(zip(keys,r)) for r in rows[:limit if export else PAGE]]
         for item in items:
             item['excusedByNotice']=item['rawAttendance']=='absent' and item['attendance']=='excused'
@@ -305,17 +314,19 @@ class AttendanceReports:
                 if body.view=='lessons':
                     token=self.token(db,user,snap,workspace,body);used=body.token or token
                     value=self.details(db,user,snap,workspace,body,export=True)
-                    rows=[header+['Ученик','ID ученика','Дата','Начало','Конец','Предмет','Группа','Учителя','Посещаемость','Исходная отметка','Минут опоздания','Принятая объяснительная','Редакция','Опубликовано']]
+                    rows=[header+['Ученик','ID ученика','Дата','Начало','Конец','Предмет','Группа','Учителя','Посещаемость','Исходная отметка','Минут опоздания','Принятая объяснительная','Редакция','Опубликовано','Ушёл в','Тип по отметке учителя','Доля урока']]
                     codes=absence_codes.names(db,workspace)
                     rows[0].append('Тип отсутствия')
                     rows += [prefix+[value['student']['name'],body.studentId,r['date'],r['start'],r['end'],r['subject'],r['group'],r['teachers'],LABELS[r['attendance']],LABELS[r['rawAttendance']],r['lateMinutes'],'Да' if r['excusedByNotice'] else '',r['version'],r['publishedAt'],
+                        r['leftAt'] or '',codes.get(r['markCode'],r['markCode']) if r['markCode'] else '',round(late_share(r['lateMinutes'],r['start'],r['end']),2),
                         '' if not r['excusedByNotice'] else codes.get(r['absenceCode'],r['absenceCode']) if r['absenceCode'] else 'Без типа'] for r in value['items']]
                 else:
                     value=self.summary(db,user,snap,workspace,body);used=value['token'];codes=absence_codes.current(db,workspace)['items']
-                    # Appended after the existing columns: one per type of the live list, then notes without a type.
-                    rows=[header+(['Класс','Ученики','Без опубликованных записей'] if body.view=='classes' else ['Предмет','ID предмета'] if body.view=='subjects' else ['Ученик','ID ученика','Класс','Статус ученика'])+['Записей']+[LABELS[s] for s in STATES]+['Минут опоздания']+['Уважительная причина: '+c['name'] for c in codes]+['Уважительная причина: без типа']]
+                    # The old columns keep their order; early leave and the late share follow the minutes, then the teacher's types
+                    # (not excused), then one per type of the live list for accepted notes, and notes without a type last.
+                    rows=[header+(['Класс','Ученики','Без опубликованных записей'] if body.view=='classes' else ['Предмет','ID предмета'] if body.view=='subjects' else ['Ученик','ID ученика','Класс','Статус ученика'])+['Записей']+[LABELS[s] for s in STATES[:5]]+['Минут опоздания',LABELS['left'],'Опоздания в долях урока']+['Отсутствует без записки: '+c['name'] for c in codes]+['Уважительная причина: '+c['name'] for c in codes]+['Уважительная причина: без типа']]
                     for r in value[body.view]:
                         identity=[r['name'],r['students'],r['withoutRecords']] if body.view=='classes' else [r['name'],r['id']] if body.view=='subjects' else [r['name'],r['id'],r['className'],'Активен' if r['active'] else 'Неактивен' if r['active'] is False else 'Вне текущего состава']
-                        rows.append(prefix+identity+[r['records']]+[r['attendance'][s] for s in STATES]+[r['lateMinutes']]+[r['excusedCodes'].get(c['id'],0) for c in codes]+[r['excusedCodes'].get('',0)])
+                        rows.append(prefix+identity+[r['records']]+[r['attendance'][s] for s in STATES[:5]]+[r['lateMinutes'],r['attendance']['left'],r['lateShare']]+[r['absentCodes'].get(c['id'],0) for c in codes]+[r['excusedCodes'].get(c['id'],0) for c in codes]+[r['excusedCodes'].get('',0)])
             response=csv_response(rows);self.finish(user,snap,workspace,used,body,'attendance.exported')
             return response

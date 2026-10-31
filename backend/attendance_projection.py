@@ -1,7 +1,17 @@
 """Transactional attendance-only projection of published journal documents."""
 
+# absence_code follows attendance so that the summary's GROUP BY student, subject, status, type reads the index in order.
 SUMMARY_INDEX='''CREATE INDEX IF NOT EXISTS attendance_summary ON journal_attendance
-    (workspace,student_id,subject_id,attendance,day,start,end,late_minutes)'''
+    (workspace,student_id,subject_id,attendance,absence_code,day,start,end,late_minutes)'''
+# Lateness of this many minutes or more also counts as a share of the lesson; shorter lateness counts in minutes only.
+LATE_SHARE_FROM=5
+LATE_SHARE_SQL=f'''CASE WHEN late_minutes>={LATE_SHARE_FROM} THEN min(1.0,late_minutes*1.0/nullif((substr(end,1,2)*60+substr(end,4,2))-(substr(start,1,2)*60+substr(start,4,2)),0)) ELSE 0 END'''
+
+
+def late_share(minutes,start,end):
+    """The same rule as LATE_SHARE_SQL for one record: the part of the lesson missed, at most 1."""
+    length=int(end[:2])*60+int(end[3:5])-int(start[:2])*60-int(start[3:5])
+    return min(1.0,minutes/length) if minutes>=LATE_SHARE_FROM and length>0 else 0.0
 
 
 def populate(db,workspace=None,key=None):
@@ -18,14 +28,15 @@ def populate(db,workspace=None,key=None):
         SELECT e.workspace,e.lesson_key,json_extract(r.value,'$.studentId'),
             json_extract(r.value,'$.attendance'),json_extract(r.value,'$.lateMinutes'),
             json_extract(e.published_document,'$.lesson.date'),json_extract(e.published_document,'$.lesson.start'),
-            json_extract(e.published_document,'$.lesson.end'),json_extract(e.published_document,'$.lesson.subjectId')
+            json_extract(e.published_document,'$.lesson.end'),json_extract(e.published_document,'$.lesson.subjectId'),
+            json_extract(r.value,'$.leftAt'),coalesce(json_extract(r.value,'$.absenceCode'),'')
         FROM journal_entries e,json_each(e.published_document,'$.content.records') r
         WHERE e.published_document IS NOT NULL'''+clause,args)
 
 
 def tables(db):
     db.execute('CREATE TABLE IF NOT EXISTS journal_projection_versions (name TEXT PRIMARY KEY,version INTEGER)')
-    if db.execute("SELECT version FROM journal_projection_versions WHERE name='attendance'").fetchone()==(2,):
+    if db.execute("SELECT version FROM journal_projection_versions WHERE name='attendance'").fetchone()==(3,):
         db.execute(SUMMARY_INDEX)
         return
     # A failed/rolled-back migration never leaves a completed marker. This also
@@ -42,7 +53,7 @@ def tables(db):
         db.execute('DROP TABLE IF EXISTS journal_attendance')
         db.execute('''CREATE TABLE journal_attendance (
             workspace TEXT,lesson_key TEXT,student_id TEXT,attendance TEXT,late_minutes INTEGER,
-            day TEXT,start TEXT,end TEXT,subject_id TEXT,
+            day TEXT,start TEXT,end TEXT,subject_id TEXT,left_at TEXT,absence_code TEXT,
             PRIMARY KEY(workspace,lesson_key,student_id)) WITHOUT ROWID''')
         db.execute('CREATE INDEX attendance_student ON journal_attendance(workspace,student_id,day)')
         db.execute('CREATE INDEX attendance_day ON journal_attendance(workspace,day)')
@@ -53,7 +64,7 @@ def tables(db):
         db.execute('''INSERT INTO journal_attendance_epoch SELECT workspace,coalesce(sum(published_version),0)
             FROM journal_entries GROUP BY workspace
             ON CONFLICT(workspace) DO UPDATE SET version=journal_attendance_epoch.version+1''')
-        db.execute("INSERT OR REPLACE INTO journal_projection_versions VALUES ('attendance',2)")
+        db.execute("INSERT OR REPLACE INTO journal_projection_versions VALUES ('attendance',3)")
         db.execute('RELEASE attendance_migration')
     except Exception:
         db.execute('ROLLBACK TO attendance_migration');db.execute('RELEASE attendance_migration')

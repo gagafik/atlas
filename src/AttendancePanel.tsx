@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { attendanceNames, defaultAttendancePeriod } from "./journal";
+import {
+  absenceCodeNames,
+  attendanceNames,
+  attendanceText,
+  defaultAttendancePeriod,
+  lessonsText,
+} from "./journal";
 import { download } from "./utils";
 import { codeBreakdown, codeName } from "./absenceForm";
 
@@ -8,7 +14,10 @@ type Counts = {
   records: number;
   attendance: Record<string, number>;
   lateMinutes: number;
+  // Lateness in lessons; the teacher's absence types of the lessons that stay unexcused.
+  lateShare?: number;
   excusedCodes?: Record<string, number>;
+  absentCodes?: Record<string, number>;
 };
 type Student = Counts & {
   id: string;
@@ -66,6 +75,9 @@ type Lesson = {
   lateMinutes: number;
   excusedByNotice: boolean;
   absenceCode?: string | null;
+  // The time of an early leave and the type a teacher put on «Отсутствует».
+  leftAt?: string | null;
+  markCode?: string | null;
   version: number;
   publishedAt: string;
 };
@@ -85,6 +97,7 @@ function Totals({
 }) {
   // Excused lessons by the type of the note that excused them; notes without a type are "Без типа".
   const types = codeBreakdown(value.excusedCodes, codes ?? []);
+  const absent = codeBreakdown(value.absentCodes, codes ?? []);
   return (
     <div className="attendance-counts">
       <span>
@@ -100,8 +113,17 @@ function Totals({
           Уважительная по типам: <strong>{types}</strong>
         </span>
       )}
+      {absent && (
+        <span>
+          Отсутствует по типам: <strong>{absent}</strong>
+        </span>
+      )}
       <span>
-        Опоздания: <strong>{value.lateMinutes} мин</strong>
+        Опоздания:{" "}
+        <strong>
+          {value.lateMinutes} мин
+          {!!value.lateShare && ` · ${lessonsText(value.lateShare)}`}
+        </strong>
       </span>
     </div>
   );
@@ -554,15 +576,35 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                                 {l.group} · {l.teachers}
                               </p>
                               <p>
-                                <strong>{attendanceNames[l.attendance]}</strong>
-                                {l.lateMinutes > 0 && ` · ${l.lateMinutes} мин`}
+                                <strong>
+                                  {attendanceText(
+                                    {
+                                      attendance: l.attendance,
+                                      lateMinutes: l.lateMinutes,
+                                      leftAt: l.leftAt,
+                                      absenceCode: l.markCode,
+                                    },
+                                    l,
+                                    absenceCodeNames(detail.codes),
+                                  )}
+                                </strong>
                               </p>
                               {l.excusedByNotice && (
                                 <p>
                                   Объяснительная принята школой (
                                   {codeName(detail.codes ?? [], l.absenceCode)}
                                   ). Исходная отметка учителя:{" "}
-                                  {attendanceNames[l.rawAttendance]}.
+                                  {attendanceText(
+                                    {
+                                      attendance: l.rawAttendance,
+                                      lateMinutes: l.lateMinutes,
+                                      leftAt: l.leftAt,
+                                      absenceCode: l.markCode,
+                                    },
+                                    l,
+                                    absenceCodeNames(detail.codes),
+                                  )}
+                                  .
                                 </p>
                               )}
                               <p>

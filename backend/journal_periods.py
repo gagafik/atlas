@@ -10,6 +10,7 @@ from .models import Model
 from .access import now
 from .notifications import encoded
 from .journal import user_ids
+from . import absence_codes
 from .journal_coverage import CoverageQuery
 
 STALE='Проверка устарела. Проверьте период перед закрытием ещё раз.'
@@ -266,7 +267,8 @@ class JournalPeriods:
                 if lessonKey:
                     row=db.execute('SELECT s.lesson_key,s.published_version,s.published_at,d.document FROM '+source+' WHERE '+where+' AND s.lesson_key=?',params+[lessonKey]).fetchone()
                     if not row:raise HTTPException(404,'Урок не найден или недоступен в этом архиве.')
-                    value=dict(lessonKey=row[0],publishedVersion=row[1],publishedAt=row[2],document=json.loads(row[3]))
+                    # The school's type names, switched-off ones too: an archived mark keeps the type it was given.
+                    value=dict(lessonKey=row[0],publishedVersion=row[1],publishedAt=row[2],document=json.loads(row[3]),absenceCodes=absence_codes.names(db,workspace))
                 else:
                     rows=db.execute('''SELECT s.lesson_key,s.published_version,s.published_at,s.day,s.start,json_extract(d.document,'$.lesson.subject'),
                         json_extract(d.document,'$.lesson.group'),json_extract(d.document,'$.lesson.teachers') FROM '''+source+' WHERE '+where+' ORDER BY s.day,s.start,s.lesson_key LIMIT 51 OFFSET ?',params+[offset]).fetchall()
