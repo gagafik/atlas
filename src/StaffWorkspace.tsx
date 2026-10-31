@@ -3,6 +3,7 @@ import type { AuthStatus } from "./auth";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
 import MessagesPanel from "./MessagesPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 
 /** Workplace of a member of staff: the class duties assigned to them and messages with colleagues. */
 export default function StaffWorkspace({
@@ -15,7 +16,7 @@ export default function StaffWorkspace({
   const [section, setSection] = useState("class-staff"),
     spaces = session.user?.workspaces ?? [],
     [workspace, setWorkspace] = useState(spaces[0] ?? "school"),
-    [messageFocus, setMessageFocus] = useState<string | undefined>();
+    [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>();
   function go(value: string) {
     setSection(value);
     setMessageFocus(undefined);
@@ -29,7 +30,7 @@ export default function StaffWorkspace({
         setWorkspace(detail.workspace);
       const messages = event.type === "atlas-open-messages";
       setSection(messages ? "messages" : "class-staff");
-      setMessageFocus(messages ? detail.threadId : undefined);
+      setMessageFocus(focusRequest(messages ? detail.threadId : undefined));
     };
     for (const name of ["atlas-open-messages", "atlas-open-absences"])
       window.addEventListener(name, open);
@@ -81,6 +82,9 @@ export default function StaffWorkspace({
             key={workspace}
             workspace={workspace}
             focusThread={messageFocus}
+            onFocusUsed={(r) =>
+              setMessageFocus((current) => spendFocus(current, r))
+            }
           />
         </>
       ) : (

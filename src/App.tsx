@@ -20,6 +20,7 @@ import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessagesPanel from "./MessagesPanel";
 import AssistantPanel from "./AssistantPanel";
 import TimetableAnnounce from "./TimetableAnnounce";
@@ -220,7 +221,7 @@ export default function App({
   const [page, setPageValue] = useState<Page>("schedule");
   // A notification can point the journal at the absence notes and the messages at one conversation.
   const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
-    [messageFocus, setMessageFocus] = useState<string | undefined>();
+    [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>();
   function setPage(value: Page) {
     if (canLeaveHomework()) {
       setPageValue(value);
@@ -240,7 +241,9 @@ export default function App({
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setPageValue(pages[event.type]);
       setMessageFocus(
-        event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        focusRequest(
+          event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        ),
       );
       setJournalFocus(
         event.type === "atlas-open-absences"
@@ -1735,6 +1738,9 @@ export default function App({
               key={workspace}
               workspace={workspace}
               focusThread={messageFocus}
+              onFocusUsed={(r) =>
+                setMessageFocus((current) => spendFocus(current, r))
+              }
             />
           )}
           {page === "assistant" && (

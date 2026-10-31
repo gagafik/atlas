@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Role } from "./auth";
+import type { FocusRequest } from "./focusRequest";
 import MessageAttachments, { MessageFileList } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 import MessageChannels from "./MessageChannels";
@@ -131,10 +132,12 @@ function useSearchDelay(value: string) {
 export default function MessagesPanel({
   workspace,
   focusThread,
+  onFocusUsed,
 }: {
   workspace: string;
-  // Set by an opened notification: show this conversation.
-  focusThread?: string;
+  // Set by an opened notification: show this conversation. The request is reported as spent as soon as the panel takes it.
+  focusThread?: FocusRequest;
+  onFocusUsed?: (request: FocusRequest) => void;
 }) {
   const [options, setOptions] = useState<Options | null>(null),
     [error, setError] = useState(""),
@@ -277,7 +280,8 @@ export default function MessagesPanel({
   }, [workspace]);
   useEffect(() => {
     if (!focusThread) return;
-    open(focusThread).catch((e) => {
+    onFocusUsed?.(focusThread);
+    open(focusThread.id).catch((e) => {
       if (alive.current) setError(e.message);
     });
   }, [focusThread]);

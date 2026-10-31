@@ -10,6 +10,7 @@ import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
 import { unreadLabel } from "./messages";
@@ -82,7 +83,7 @@ export default function Portal({
   const [section, setSectionValue] = useState("home");
   // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
   const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
-    [messageFocus, setMessageFocus] = useState<string | undefined>(),
+    [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>(),
     [wantedRecord, setWantedRecord] = useState("");
   function setSection(value: string) {
     if (canLeaveHomework()) {
@@ -215,7 +216,9 @@ export default function Portal({
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setSectionValue(sections[event.type]);
       setMessageFocus(
-        event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        focusRequest(
+          event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        ),
       );
       setJournalFocus(
         event.type === "atlas-open-absences"
@@ -468,6 +471,9 @@ export default function Portal({
               key={workspace}
               workspace={workspace}
               focusThread={messageFocus}
+              onFocusUsed={(r) =>
+                setMessageFocus((current) => spendFocus(current, r))
+              }
             />
           )}
         </>
