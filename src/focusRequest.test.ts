@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
+import {
+  focusRequest,
+  spendFocus,
+  takeFocus,
+  type FocusRequest,
+} from "./focusRequest";
 
 describe("a notification's request to show one record", () => {
   it("is empty when the notification names no record", () => {
@@ -26,5 +31,52 @@ describe("a notification's request to show one record", () => {
     expect(held).toBeUndefined();
     held = focusRequest("t1");
     expect(held).toEqual({ id: "t1" });
+  });
+});
+
+describe("a notification's request reaching a reader with unsaved work", () => {
+  // A reader of one conversation, typing a reply; leaving asks first and wipes the typed text only when the answer is yes.
+  function reader(typed: string, agrees: boolean) {
+    const state = { typed, shown: "A", asked: 0, spent: [] as FocusRequest[] };
+    return {
+      state,
+      panel: {
+        spend: (r: FocusRequest) => void state.spent.push(r),
+        leave: () => {
+          if (state.typed) {
+            state.asked++;
+            if (!agrees) return false;
+            state.typed = "";
+          }
+          return true;
+        },
+        open: (id: string) => {
+          state.shown = id;
+          return id;
+        },
+      },
+    };
+  }
+  it("keeps the typed reply and the conversation when the reader stays", () => {
+    const { state, panel } = reader("Здравствуйте, ответ на", false);
+    const request = focusRequest("B")!;
+    expect(takeFocus(request, panel)).toBeUndefined();
+    expect(state).toMatchObject({
+      typed: "Здравствуйте, ответ на",
+      shown: "A",
+    });
+    // The request is gone all the same, so it cannot ask again when the panel is mounted afresh.
+    expect(state.spent).toEqual([request]);
+  });
+  it("opens the other conversation once the reader agrees to leave the reply", () => {
+    const { state, panel } = reader("черновик", true);
+    expect(takeFocus(focusRequest("B")!, panel)).toBe("B");
+    expect(state).toMatchObject({ typed: "", shown: "B", asked: 1 });
+  });
+  it("opens without a question when nothing is unsaved", () => {
+    const { state, panel } = reader("", false);
+    const request = focusRequest("B")!;
+    expect(takeFocus(request, panel)).toBe("B");
+    expect(state).toMatchObject({ shown: "B", asked: 0, spent: [request] });
   });
 });

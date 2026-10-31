@@ -11,3 +11,17 @@ export const spendFocus = (
   current: FocusRequest | undefined,
   spent: FocusRequest,
 ): FocusRequest | undefined => (current === spent ? undefined : current);
+
+// A panel takes a request while its reader may hold unsaved work. The request is spent in every case, so it never replays; the record opens
+// only when the reader may leave what they were doing (leave asks first and wipes the form), otherwise the panel stays as it is.
+export function takeFocus<T>(
+  request: FocusRequest,
+  panel: {
+    spend: (request: FocusRequest) => void;
+    leave: () => boolean;
+    open: (id: string) => T;
+  },
+): T | undefined {
+  panel.spend(request);
+  return panel.leave() ? panel.open(request.id) : undefined;
+}

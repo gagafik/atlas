@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Role } from "./auth";
-import type { FocusRequest } from "./focusRequest";
+import { takeFocus, type FocusRequest } from "./focusRequest";
 import MessageAttachments, { MessageFileList } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 import MessageChannels from "./MessageChannels";
@@ -280,8 +280,12 @@ export default function MessagesPanel({
   }, [workspace]);
   useEffect(() => {
     if (!focusThread) return;
-    onFocusUsed?.(focusThread);
-    open(focusThread.id).catch((e) => {
+    // An unsent reply or draft is asked about first, like every other way out of a conversation.
+    takeFocus(focusThread, {
+      spend: (r) => onFocusUsed?.(r),
+      leave,
+      open,
+    })?.catch((e) => {
       if (alive.current) setError(e.message);
     });
   }, [focusThread]);

@@ -421,6 +421,22 @@ def test_quiz_submitted_and_assessment_staff_titles(client, quiz_clock, assessme
     assert opened.status_code == 200 and opened.json() == dict(module='assessments', workspace='demo', recordId=work['id'], studentId=None, day='2026-08-24')
 
 
+def test_cancelled_work_keeps_the_teachers_link_but_not_the_familys(client, assessment_clock):
+    enable(client); create(client, 'teacher'); assessments.guardian(client, 'mother', 's1')
+    teacher, mother = signed('teacher'), signed('mother')
+    work = assessments.ok(assessments.english(teacher))
+    cancelled = client.post(assessments.url(f"bookings/{work['id']}/cancel"), json=dict(version=work['version'], reason='Секретная причина отмены'))
+    assert cancelled.status_code == 200, cancelled.text
+    [staff] = items(teacher, 'assessment.staff_changed')
+    assert staff['title'] == 'Изменена работа СОР: Английский язык, 17.08.2026' and staff['link'] is True
+    opened = open_notice(teacher, staff['id'])
+    assert opened.status_code == 200 and opened.json() == dict(module='assessments', workspace='demo', recordId=work['id'], studentId=None, day='2026-08-17')
+    [gone] = items(mother, 'assessment.cancelled')
+    assert gone['title'] == 'Отменена работа СОР: Английский язык, 17.08.2026' and 'link' not in gone
+    assert open_notice(mother, gone['id']).status_code == 404
+    assert 'Секретная причина' not in teacher.get('/api/notifications/inbox').text + mother.get('/api/notifications/inbox').text
+
+
 def test_behaviour_staff_titles(client):
     enable(client); class_teacher = behaviour.teacher(client, 'class', 't1'); behaviour.guardian(client, 'mother', 's2')
     author = signed('class'); behaviour.assign_class_teacher(client, class_teacher)
