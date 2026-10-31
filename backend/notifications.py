@@ -218,6 +218,11 @@ def open_behaviour(db, user, workspace, data, kids):
     return {} if user['role'] == 'admin' else None
 
 
+def open_finals(db, user, workspace, data, kids):
+    # The report card of the period opens for a family that still has a published result of the child in it.
+    return {} if user['role'] in FAMILY and any(exists(db, 'final_results', 'SELECT 1 FROM final_results WHERE workspace=? AND period_id=? AND student_id=?', (workspace, data.get('recordId'), kid)) for kid in kids) else None
+
+
 def open_assessments(db, user, workspace, data, kids):
     row = db.execute('SELECT status FROM assessment_bookings WHERE workspace=? AND id=?', (workspace, data.get('recordId'))).fetchone() if has_table(db, 'assessment_bookings') else None
     return {} if row and (row[0] == 'published' and kids or user['role'] not in FAMILY) else None
@@ -239,7 +244,7 @@ def open_timetable(db, user, workspace, data, kids):
 
 
 OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
-               forms=open_forms, timetable=open_timetable, duty=lambda *args: {})
+               forms=open_forms, timetable=open_timetable, finals=open_finals, duty=lambda *args: {})
 # Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
 NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
 

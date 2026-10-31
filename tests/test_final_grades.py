@@ -39,6 +39,9 @@ def seeded(c):
     enable(c);teacher=create(c,'teacher');create(c,'parent');create(c,'student')
     record=write(c,graded(entry(c,lesson(c)['lessonKey'])),publish=True).json()
     p=close(c,period(c));b=prepare(c,p);s=scale(c)
+    # Preparation assigns rows to the course teacher by itself; these tests start from an unassigned book and assign by hand.
+    taken=[x for x in sheet(c,b).json()['items'] if x['assigned']]
+    if taken:batch(c,taken,'assign',teacherId='').raise_for_status()
     rows=sheet(c,b).json()['items'];r=next(r for r in rows if r['studentId']=='s1' and r['source']['published'])
     r=batch(c,[r],'assign',teacherId=teacher['id']).json()['items'][0]
     return p,b,s,r,record

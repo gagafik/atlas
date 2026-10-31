@@ -372,14 +372,19 @@ class Journal:
             params.append(encoded(sorted(user_ids(user,workspace,'student'))))
         return [dict(id=r[0],name=r[1]) for r in db.execute(query,params)]
 
-    def panels(self, db, workspace, user):
+    def panels(self, db, workspace, user, snap):
         """Which management panels have anything for this account. Flags only decide what the page mounts: every endpoint still enforces rights."""
         role = user['role']
         result = dict(finalGrades=role=='admin',absences=role in ['admin','parent'],attendance=role=='admin',attendanceGrid=role in ['admin','teacher'],coverage=role in ['admin','teacher'],periods=role in ['admin','teacher'],courseTable=role in ['admin','teacher'])
         if role in ['teacher','student','parent']:
             tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('grading_rows','final_results')")}
-            if role=='teacher' and 'grading_rows' in tables:
-                result['finalGrades'] = db.execute('SELECT 1 FROM grading_rows WHERE workspace=? AND assigned=? LIMIT 1',(workspace,user['id'])).fetchone() is not None
+            if role=='teacher':
+                # Assigned rows, or the published reports of a class led by the teacher.
+                from .class_staff import led
+                pupils = [s.id for s in snap.state.students if s.active and s.classId in led(user,snap,workspace)]
+                assigned = 'grading_rows' in tables and db.execute('SELECT 1 FROM grading_rows WHERE workspace=? AND assigned=? LIMIT 1',(workspace,user['id'])).fetchone() is not None
+                reports = bool(pupils) and 'final_results' in tables and db.execute('SELECT 1 FROM final_results WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) LIMIT 1',(workspace,encoded(sorted(pupils)))).fetchone() is not None
+                result['finalGrades'] = assigned or reports
             elif role!='teacher' and 'final_results' in tables:
                 result['finalGrades'] = db.execute('SELECT 1 FROM final_results WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) LIMIT 1',(workspace,encoded(sorted(user_ids(user,workspace,'student'))))).fetchone() is not None
         if role=='student':
@@ -536,7 +541,7 @@ class Journal:
             students = {s.id:dict(id=s.id,name=s.name) for s in state.students if s.id in allowed_students}
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
-                return self.historical_students(db,workspace,user),self.panels(db,workspace,user)
+                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap)
             historical,panels = self.reading(read)
             for student in historical: students.setdefault(student['id'],student)
             return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))

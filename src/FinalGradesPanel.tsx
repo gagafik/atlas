@@ -1,139 +1,38 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { defaultDraft, needsReason } from "./finalGrades";
+import {
+  defaultDraft,
+  finalLabel,
+  markDirty,
+  names,
+  needsReason,
+} from "./finalGrades";
+import FinalGradesMatrix from "./FinalGradesMatrix";
 import GradebookPreparationPanel from "./GradebookPreparationPanel";
+import { PERSONAL_PRINT, printNode } from "./printReport";
+import ReportCardSteps from "./ReportCardSteps";
+import { ReportExtras } from "./ReportCards";
 import { csvCell } from "./utils";
 import AssessmentCategoriesEditor from "./AssessmentCategoriesEditor";
 import CategoryBadge from "./CategoryBadge";
 import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
+import type {
+  Book,
+  Calculation,
+  Evidence,
+  Gpa,
+  History,
+  Measure,
+  Named,
+  Options,
+  Period,
+  Proposal,
+  Published,
+  Row,
+  Scale,
+  Sheet,
+} from "./finalGradesTypes";
 
-type Named = { id: string; name: string };
-type Scale = Named & {
-  version: number;
-  kind: "thresholds" | "labels";
-  rounding: string;
-  minCount: number;
-  active: boolean;
-  bands: { label: string; minPercent: string | number }[];
-};
-type Period = Named & {
-  version: number;
-  status: string;
-  start: string;
-  end: string;
-};
-type Book = {
-  id: string;
-  period: Period;
-  closureVersion: number;
-  current: boolean;
-};
-type Calculation = {
-  rawPercent: string | null;
-  roundedPercent: string | null;
-  recommended: string | null;
-  // Present for books prepared with category shares; older books carry only the three values above.
-  method?: "average" | "points";
-  rule?: string;
-  categories?: {
-    id: string;
-    name: string;
-    color: string;
-    share: string;
-    numeric: number;
-    percent: string | null;
-  }[];
-  missing?: string[];
-  excluded?: string[];
-  blocked?: boolean;
-};
-type Proposal = {
-  scale: Scale;
-  outcome: string;
-  label: string;
-  comment: string;
-  explanation: string;
-  calculation: Calculation;
-  author: string;
-  approval?: { actor: string; created: string };
-  carriedFrom?: { bookId: string };
-};
-type Published = {
-  student: Named & { className: string };
-  subjectId: string;
-  subject: string;
-  label: string;
-  outcome: string;
-  comment: string;
-  period: string;
-  scale: Scale;
-  closureVersion: number;
-  publishedAt: string;
-  current: boolean;
-};
-type Row = {
-  id: string;
-  bookId: string;
-  studentId: string;
-  subjectId: string;
-  classId: string;
-  assigned: string;
-  version: number;
-  status: string;
-  proposal: Proposal | null;
-  published: Published | null;
-  source: {
-    student: Named & { className: string };
-    subject: string;
-    expected: number;
-    published: number;
-    numeric: number;
-    text: number;
-    missing: number;
-    zeroWeight: number;
-    incompleteRoster: number;
-    weight: string;
-    weightedSum: string;
-    policy?: { ruleName: string; method: string };
-  };
-};
-type Options = {
-  admin: boolean;
-  staff: boolean;
-  classTeacher?: boolean;
-  scales: Scale[];
-  books: Book[];
-  periods: Period[];
-  students: Named[];
-  teachers: Named[];
-};
-type Sheet = {
-  book: Book;
-  items: Row[];
-  total: number;
-  nextOffset: number | null;
-  classes: Named[];
-  subjects: Named[];
-};
-type Evidence = {
-  id: number;
-  date: string;
-  start: string;
-  assessment: string;
-  category?: string;
-  score: number | null;
-  label: string;
-  maxScore: number;
-  weight: number;
-};
-type History = {
-  id: number;
-  action: string;
-  actor: string;
-  created: string;
-  reason: string;
-  row: Row;
-};
 const actionLabels: Record<string, string> = {
   approve: "Утвердить выбранные",
   return: "Вернуть на исправление",
@@ -141,25 +40,6 @@ const actionLabels: Record<string, string> = {
   reopen: "Открыть исправление",
   withdraw: "Отозвать публикацию",
 };
-const names: Record<string, string> = {
-  draft: "Черновик",
-  submitted: "На утверждении",
-  approved: "Утверждено",
-  published: "Опубликовано",
-  graded: "Оценка",
-  not_assessed: "Не аттестован",
-  exempt: "Освобождён",
-  assign: "Назначен ответственный",
-  saved: "Черновик сохранён",
-  approve: "Утверждение",
-  return: "Возврат на исправление",
-  publish: "Публикация",
-  reopen: "Открыто исправление",
-  withdraw: "Публикация отозвана",
-};
-function finalLabel(p: { outcome: string; label: string }) {
-  return p.outcome === "graded" ? p.label : names[p.outcome];
-}
 function download(rows: unknown[][], filename: string) {
   const blob = new Blob(
     [
@@ -181,6 +61,26 @@ const percentText = (value: string) =>
   Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 // How a recommendation was reached: the share of every category, the method and the rule that was pinned with the book.
 function CalculationDetails({ value }: { value: Calculation }) {
+  if (value.basis === "periods")
+    return (
+      <>
+        <p>
+          Годовая по итогам периодов:{" "}
+          {(value.periods ?? [])
+            .map((p) => `${p.name} — ${p.label || "нет оценки"}`)
+            .join("; ")}
+          ; среднее {value.points?.replace(".", ",")}.
+          {!!value.missing?.length &&
+            ` Нет итога за: ${value.missing.join(", ")}.`}
+        </p>
+        {!!value.periods?.some((p) => !p.current) && (
+          <p className="error">
+            Итог одного из периодов опубликован по более раннему закрытию:
+            период открывали заново. Проверьте его перед утверждением.
+          </p>
+        )}
+      </>
+    );
   if (!value.categories) return null;
   const missing = (value.missing ?? []).map(
     (id) => value.categories?.find((c) => c.id === id)?.name ?? id,
@@ -324,6 +224,24 @@ function ScaleEditor({
                 }
               />
             </label>
+            <label className="field">
+              Вес для среднего балла {i + 1}
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={band.points ?? ""}
+                onChange={(e) =>
+                  setValue({
+                    ...value,
+                    bands: value.bands.map((b, n) =>
+                      n === i ? { ...b, points: e.target.value } : b,
+                    ),
+                  })
+                }
+              />
+            </label>
             {value.kind === "thresholds" && (
               <label className="field">
                 Порог {i + 1}, %
@@ -403,9 +321,19 @@ function ScaleEditor({
         <p>
           Изменение шкалы не меняет уже подготовленные и опубликованные итоги.
         </p>
+        <p>
+          Вес оценки нужен для среднего балла в табеле и для годовой оценки по
+          итогам периодов. Укажите его у всех оценок шкалы или ни у одной.
+        </p>
         <button
           onClick={() =>
-            void onSave(value).then((ok) => {
+            void onSave({
+              ...value,
+              bands: value.bands.map((b) => ({
+                ...b,
+                points: b.points === "" ? null : b.points,
+              })),
+            }).then((ok) => {
               if (ok) {
                 setValue(blank());
                 setOpen(false);
@@ -420,7 +348,14 @@ function ScaleEditor({
   );
 }
 
-export default function FinalGradesPanel({ workspace }: { workspace: string }) {
+export default function FinalGradesPanel({
+  workspace,
+  focus,
+}: {
+  workspace: string;
+  // Set by an opened notification: show the report card of this pupil for this period.
+  focus?: { studentId: string; finalsPeriodId?: string };
+}) {
   const [open, setOpen] = useState(false),
     [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
@@ -456,16 +391,31 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     }),
     [calculations, setCalculations] = useState<Record<string, Calculation>>({}),
     [dirty, setDirty] = useState(false),
+    // The tables that hold unsaved results, by table key: the matrix and the steps may have one open each.
+    [dirtyTables, setDirtyTables] = useState<readonly string[]>([]),
+    // Raised after every change, so the matrices and the steps never show numbers from before it.
+    [epoch, setEpoch] = useState(0),
     [report, setReport] = useState<{
       period: Period;
       items: Published[];
+      gpa: Gpa | null;
+      measures: Measure[];
     } | null>(null);
   const lock = useRef(false),
     lastScale = useRef(""),
+    // Raised when a notification asks for a report: the card is brought into view once it has loaded.
+    reveal = useRef(false),
     reportRef = useRef<HTMLDivElement>(null);
+  const tableDirty = dirtyTables.length > 0;
+  const markTable = (table: string, unsaved: boolean) =>
+    setDirtyTables((keys) => markDirty(keys, table, unsaved));
   const leave = () =>
-    !dirty ||
-    window.confirm("В строке есть несохранённый итог. Отменить эти изменения?");
+    (!dirty && !tableDirty) ||
+    window.confirm(
+      tableDirty
+        ? "В таблице есть несохранённые итоги. Отменить эти изменения?"
+        : "В строке есть несохранённый итог. Отменить эти изменения?",
+    );
   async function run(work: () => Promise<void>) {
     if (lock.current) return false;
     lock.current = true;
@@ -501,6 +451,8 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     setSelected([]);
     return r as Sheet;
   }
+  // Called after a change of rows: the matrices and the steps count the same rows as the list.
+  const changed = () => setEpoch((n) => n + 1);
   function clearRow() {
     setRow(null);
     setMarks([]);
@@ -526,6 +478,34 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     );
     setDirty(false);
   }
+  // The course teachers of the closure get their rows in a few short requests; nothing is assigned twice.
+  async function autoAssign() {
+    if (!sheet || !leave()) return;
+    await run(async () => {
+      let assigned = 0,
+        skipped = 0,
+        after = "";
+      const missing = new Set<string>();
+      do {
+        const r = await api(
+          `final-grades/books/${bookId}/auto-assign`,
+          workspace,
+          "POST",
+          { after },
+        );
+        assigned += r.assigned;
+        skipped += r.skipped;
+        for (const n of r.noAccount as string[]) missing.add(n);
+        after = r.nextAfter || "";
+      } while (after);
+      clearRow();
+      await loadSheet(bookId, offset);
+      changed();
+      setNotice(
+        `Назначено учителям уроков: ${assigned}; без ответственного осталось: ${skipped}.${missing.size ? ` Нет единственной учётной записи у учителей: ${[...missing].join(", ")}.` : ""}`,
+      );
+    });
+  }
   async function act(action: string) {
     if (!sheet || !selected.length || !leave()) return;
     if (
@@ -547,6 +527,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
       setReason("");
       clearRow();
       await loadSheet(bookId, offset);
+      changed();
       setNotice(
         `${names[action] || action}: выполнено для ${selected.length} строк.`,
       );
@@ -571,6 +552,32 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
     setDraft({ ...draft, ...update });
     setDirty(true);
   };
+  useEffect(() => {
+    const period = focus?.finalsPeriodId;
+    if (!focus || !period) return;
+    setOpen(true);
+    reveal.current = true;
+    void run(async () => {
+      await loadOptions();
+      setStudentId(focus.studentId);
+      setPeriodId(period);
+      setReport(
+        await api(
+          `final-grades/report?${new URLSearchParams({ studentId: focus.studentId, periodId: period })}`,
+          workspace,
+        ),
+      );
+    }).then((done) => {
+      if (!done) reveal.current = false;
+    });
+  }, [focus]);
+  // The panel sits below the journal, so a card opened from a notification would otherwise load out of sight.
+  useEffect(() => {
+    if (!report || !reveal.current) return;
+    reveal.current = false;
+    reportRef.current?.focus({ preventScroll: true });
+    reportRef.current?.scrollIntoView({ block: "start" });
+  }, [report]);
   // Families, administrators and the class teacher of the pupils read published reports.
   const readsReports =
     !!options?.classTeacher || !options?.staff || options.admin;
@@ -613,6 +620,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                     setReport(null);
                     await loadOptions();
                     if (bookId) await loadSheet(bookId, offset);
+                    changed();
                   });
               }}
             >
@@ -657,9 +665,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                         subjectId: "",
                         status: "all",
                       });
-                      setNotice(
-                        "Ведомость готова. Назначьте ответственных учителей.",
-                      );
+                      setNotice("Ведомость готова.");
                     });
                   }}
                 />
@@ -712,6 +718,23 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                         публикацию может отозвать администратор.
                       </p>
                     )}
+                    <FinalGradesMatrix
+                      key={sheet.book.id}
+                      workspace={workspace}
+                      book={sheet.book}
+                      admin={options.admin}
+                      scales={options.scales}
+                      phrases={options.phrases}
+                      teachers={options.teachers}
+                      lastScale={lastScale}
+                      refresh={epoch}
+                      leave={leave}
+                      onDirty={markTable}
+                      onChanged={() => {
+                        void loadSheet(bookId, offset);
+                        changed();
+                      }}
+                    />
                     <div className="dated-toolbar">
                       {(["classId", "subjectId"] as const).map((key) => (
                         <Select
@@ -795,6 +818,12 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                             onClick={() => void act("assign")}
                           >
                             Назначить выбранным
+                          </button>
+                          <button
+                            disabled={!sheet.book.current}
+                            onClick={() => void autoAssign()}
+                          >
+                            Назначить по учителям уроков
                           </button>
                         </div>
                         <p>
@@ -926,26 +955,12 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                       >
                         Следующая страница итогов
                       </button>
-                      <button
-                        disabled={!sheet.items.length}
-                        onClick={() =>
-                          download(
-                            [
-                              ["Ученик", "Класс", "Предмет", "Статус", "Итог"],
-                              ...sheet.items.map((r) => [
-                                r.source.student.name,
-                                r.source.student.className,
-                                r.source.subject,
-                                names[r.status],
-                                r.proposal ? finalLabel(r.proposal) : "",
-                              ]),
-                            ],
-                            "Ведомость — текущая страница.csv",
-                          )
-                        }
+                      <a
+                        href={`/api/final-grades/books/${bookId}/export?${new URLSearchParams({ workspace, classId: filter.classId, subjectId: filter.subjectId, status: filter.status })}`}
+                        download
                       >
-                        CSV текущей страницы
-                      </button>
+                        CSV всей ведомости
+                      </a>
                     </div>
                     {row && (
                       <article className="absence-card final-grade-editor">
@@ -1101,6 +1116,7 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                                     );
                                     lastScale.current = draft.scaleId;
                                     await loadSheet(bookId, offset);
+                                    changed();
                                     await openRow(r);
                                     setNotice(
                                       submit
@@ -1232,6 +1248,21 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                 )}
               </>
             )}
+            {options && (options.admin || options.classTeacher) && (
+              <ReportCardSteps
+                workspace={workspace}
+                options={options}
+                lastScale={lastScale}
+                refresh={epoch}
+                leave={leave}
+                onDirty={markTable}
+                onChanged={() => {
+                  void loadOptions();
+                  if (bookId) void loadSheet(bookId, offset);
+                  changed();
+                }}
+              />
+            )}
             {options && readsReports && (
               <>
                 <h3>
@@ -1280,7 +1311,12 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                 </p>
                 {report && (
                   <>
-                    <div className="final-report" ref={reportRef}>
+                    <div
+                      className="final-report"
+                      aria-label="Табель ученика"
+                      tabIndex={-1}
+                      ref={reportRef}
+                    >
                       <h3>Табель · {report.period.name}</h3>
                       <p>
                         {options.students.find((s) => s.id === studentId)?.name}{" "}
@@ -1308,6 +1344,10 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                           )}
                         </article>
                       ))}
+                      <ReportExtras
+                        gpa={report.gpa}
+                        measures={report.measures}
+                      />
                     </div>
                     <div className="dated-toolbar">
                       <button
@@ -1351,20 +1391,14 @@ export default function FinalGradesPanel({ workspace }: { workspace: string }) {
                       <button
                         disabled={!report.items.length}
                         onClick={() => {
-                          const win = window.open("", "_blank");
-                          if (!win) {
+                          if (
+                            !printNode(
+                              reportRef.current,
+                              "Табель",
+                              PERSONAL_PRINT,
+                            )
+                          )
                             setError("Разрешите открытие окна для печати.");
-                            return;
-                          }
-                          win.opener = null;
-                          win.document.title = "Табель";
-                          const node = reportRef.current?.cloneNode(true);
-                          if (node) win.document.body.appendChild(node);
-                          const style = win.document.createElement("style");
-                          style.textContent =
-                            "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}";
-                          win.document.head.appendChild(style);
-                          win.print();
                         }}
                       >
                         Печать табеля

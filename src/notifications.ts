@@ -91,6 +91,8 @@ const EVENTS: Record<string, string> = {
   assessments: "atlas-open-assessments",
   meetings: "atlas-open-meetings",
   forms: "atlas-open-forms",
+  // The report card opens in the journal section, where the final-grades panel lives.
+  finals: "atlas-open-journal",
 };
 // Which screen to open for the server's answer: [event name, event detail], or null for an unknown module.
 export function openEvent(
@@ -103,6 +105,9 @@ export function openEvent(
   if (result.module === "journal") {
     detail.studentId = result.studentId;
     detail.day = result.day;
+  } else if (result.module === "finals") {
+    detail.studentId = result.studentId;
+    detail.finalsPeriodId = result.recordId;
   } else if (result.module === "timetable") detail.studentId = result.studentId;
   return [EVENTS[result.module], detail];
 }
