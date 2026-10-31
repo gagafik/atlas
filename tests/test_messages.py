@@ -398,3 +398,25 @@ def test_announcement_requires_subject_but_dialog_does_not(client):
     assert parent.post(url(),json=payload(people['teacher']['id'])|dict(title='')).status_code==200
     group=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='',text='Вопрос.',groupIds=['g-a'],roles=['parent','student']))
     assert group.status_code==200,group.text
+
+
+def test_unread_never_counts_a_thread_the_account_cannot_read(client):
+    from test_message_files_groups import group
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
+    notice=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='announcement',title='Тема',text='Текст',groupIds=['g-a'],roles=['parent'])).json()['id']
+    assert parent.get(url('unread')).json()=={'count':1,'more':False}
+    assert teacher.post(url('threads/'+notice+'/change'),json=dict(version=1,action='withdraw')).status_code==200
+    assert parent.get(url('threads/'+notice)).status_code==404
+    assert parent.get(url('unread')).json()=={'count':0,'more':False} and parent.get(url()).json()['unreadCount']==0
+    # Whoever was removed from a discussion is not told about what was said after that.
+    id=group(teacher)
+    removed=teacher.post(url('threads/'+id+'/participants'),json=dict(version=detail(teacher,id)['version'],userId=people['other']['id'],action='remove'));assert removed.status_code==200,removed.text
+    assert other.get(url('unread')).json()['count']==1
+    assert other.put(url('threads/'+id+'/read'),json=dict(throughId=detail(other,id)['latestId'])).status_code==200
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='После ухода.')).status_code==200
+    assert other.get(url('unread')).json()['count']==0 and other.get(url()).json()['unreadCount']==0
+
+
+def test_unread_answers_before_any_message_was_ever_sent(client):
+    setup(client)
+    assert signed('parent').get(url('unread')).json()=={'count':0,'more':False}

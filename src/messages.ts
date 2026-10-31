@@ -65,4 +65,19 @@ export function unreadLabel(count: number, more: boolean) {
   return count > 99 ? "99+" : more ? `${count}+` : String(count);
 }
 
+/** A failed load of the home feed: a 403 closes it for this account; any other failure shows its message while nothing is on screen yet. */
+export function feedFailure(
+  status: number | undefined,
+  message: string,
+  loaded: boolean,
+) {
+  return {
+    closed: status === 403,
+    error:
+      status === 403 || loaded
+        ? ""
+        : message || "Не удалось загрузить объявления.",
+  };
+}
+
 export const noTitle = "Без темы";

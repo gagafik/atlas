@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  feedFailure,
   filterStudents,
   inlineImage,
   mergeInbox,
@@ -106,4 +107,18 @@ it("labels a long backlog of unread threads", () => {
   expect(unreadLabel(3, false)).toBe("3");
   expect(unreadLabel(40, true)).toBe("40+");
   expect(unreadLabel(120, true)).toBe("99+");
+});
+
+it("tells why the home feed is empty when its first load fails", () => {
+  expect(feedFailure(500, "Сервер ответил ошибкой.", false)).toEqual({
+    closed: false,
+    error: "Сервер ответил ошибкой.",
+  });
+  expect(feedFailure(undefined, "", false).error).not.toBe("");
+  // Once announcements are on screen a failed refresh keeps them and stays quiet; a 403 closes the feed.
+  expect(feedFailure(500, "Сервер ответил ошибкой.", true).error).toBe("");
+  expect(feedFailure(403, "Нет доступа.", false)).toEqual({
+    closed: true,
+    error: "",
+  });
 });

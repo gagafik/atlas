@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { MessageFileList, type MessageFile } from "./MessageAttachments";
 import { ReportMessage } from "./MessageModeration";
-import { mergeInbox, noTitle } from "./messages";
+import { feedFailure, mergeInbox, noTitle } from "./messages";
 import { startPolling } from "./polling";
 
 type Reply = {
@@ -206,9 +206,11 @@ export default function MessageFeed({ workspace }: { workspace: string }) {
     [next, setNext] = useState<number | null>(null),
     [loaded, setLoaded] = useState(false),
     [error, setError] = useState(""),
+    [loadError, setLoadError] = useState(""),
     [closed, setClosed] = useState(false),
     [busy, setBusy] = useState("");
   const alive = useRef(true),
+    shown = useRef(false),
     pending = useRef(new Set<string>()),
     marked = useRef(new Set<string>()),
     paged = useRef(false);
@@ -224,7 +226,16 @@ export default function MessageFeed({ workspace }: { workspace: string }) {
     if (!alive.current) return;
     setItems((old) => mergeInbox(old, r.items, r.nextBefore !== null));
     if (!paged.current) setNext(r.nextBefore);
+    shown.current = true;
     setLoaded(true);
+    setLoadError("");
+  }
+  // While nothing is on screen the reader sees why, and may try again; a refresh that fails later keeps what is shown.
+  function failed(e: any) {
+    if (!alive.current) return;
+    const f = feedFailure(e.status, e.message, shown.current);
+    if (f.closed) setClosed(true);
+    setLoadError(f.error);
   }
   useEffect(() => {
     const poll = startPolling(
@@ -234,8 +245,8 @@ export default function MessageFeed({ workspace }: { workspace: string }) {
           await first();
         } catch (e: any) {
           if (!alive.current) return;
-          if (e.status === 403) setClosed(true);
-          else return false;
+          failed(e);
+          if (e.status !== 403) return false;
         }
       },
       { interval: 60000 },
@@ -305,7 +316,15 @@ export default function MessageFeed({ workspace }: { workspace: string }) {
       {loaded && !items.length && (
         <p className="info-line">Объявлений пока нет.</p>
       )}
-      {!loaded && !error && <p role="status">Загружаю объявления…</p>}
+      {!loaded && !loadError && <p role="status">Загружаю объявления…</p>}
+      {!loaded && loadError && (
+        <>
+          <p role="alert" className="error-banner">
+            {loadError}
+          </p>
+          <button onClick={() => void first().catch(failed)}>Повторить</button>
+        </>
+      )}
       <div className="message-posts">
         {items.map((i) => (
           <article key={i.id} className={i.unread ? "message-unread" : ""}>

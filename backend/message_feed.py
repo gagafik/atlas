@@ -45,9 +45,15 @@ class MessageFeed:
     def hidden(self, db, ids):
         return {r[0] for r in db.execute('SELECT post_id FROM message_moderation WHERE hidden=1 AND post_id IN (SELECT value FROM json_each(?))', (encoded(list(ids)),))}
 
-    def scope(self, thread, user, live, mode):
-        """'all': every reply is visible. 'own': only the replies the account wrote itself (a recipient in author mode, or a former one)."""
-        return 'all' if thread['authorId'] == user['id'] or live and mode == 'all' else 'own'
+    @staticmethod
+    def scope(thread, user, live, mode):
+        """'every': the author reads all replies. 'public': a recipient in the open mode reads the replies written while it was open, and their own.
+        'own': only the replies the account wrote itself (a recipient in author mode, or a former one)."""
+        return 'every' if thread['authorId'] == user['id'] else 'public' if live and mode == 'all' else 'own'
+
+    @staticmethod
+    def readable(scope, user_id, author_id, public):
+        return scope == 'every' or author_id == user_id or scope == 'public' and bool(public)
 
     def states(self, db, entries, user, directory):
         """Per thread id: the reply mode, counts and what the account may do. entries: [(thread, live link?)] of announcements."""
@@ -58,16 +64,16 @@ class MessageFeed:
         roots = {}
         for thread_id, id in db.execute('SELECT thread_id,id FROM message_posts WHERE thread_id IN (SELECT value FROM json_each(?)) AND reply_to IS NULL ORDER BY id DESC', (encoded_ids,)): roots[thread_id] = id
         posts = encoded(list(roots.values()))
-        counts = {r[0]: (r[1], r[2] or 0) for r in db.execute('SELECT reply_to,count(*),sum(author_id=?) FROM message_posts WHERE reply_to IN (SELECT value FROM json_each(?)) GROUP BY reply_to', (user['id'], posts))}
+        counts = {r[0]: r[1:] for r in db.execute('SELECT reply_to,count(*),sum(author_id=?),sum(coalesce(reply_public,0)=1 OR author_id=?) FROM message_posts WHERE reply_to IN (SELECT value FROM json_each(?)) GROUP BY reply_to', (user['id'], user['id'], posts))}
         likes = {r[0]: r[1] for r in db.execute('SELECT post_id,count(*) FROM message_likes WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id', (posts,))}
         liked = {r[0] for r in db.execute('SELECT post_id FROM message_likes WHERE user_id=? AND post_id IN (SELECT value FROM json_each(?))', (user['id'], posts))}
         hidden = self.hidden(db, roots.values())
         result = {}
         for thread, live in entries:
             root = roots.get(thread['id']); mode = self.effective(modes.get(thread['id'], 'off'), directory)
-            total, own = counts.get(root, (0, 0))
+            total, own, public = (n or 0 for n in counts.get(root, (0, 0, 0)))
             open_ = live and thread['status'] == 'open' and root not in hidden
-            result[thread['id']] = dict(postId=root, repliesMode=mode, replyCount=total if self.scope(thread, user, live, mode) == 'all' else own,
+            result[thread['id']] = dict(postId=root, repliesMode=mode, replyCount=dict(every=total, public=public, own=own)[self.scope(thread, user, live, mode)],
                                         likes=likes.get(root, 0), liked=root in liked, canLike=open_,
                                         canRespond=open_ and mode != 'off' and not (mode == 'author' and thread['authorId'] == user['id']))
         return result
@@ -79,8 +85,8 @@ class MessageFeed:
 
     def replies(self, db, thread, root, user, scope, *, before=None, limit=50):
         """Visible replies, oldest first within the page, with hidden ones masked. (items, next cursor)"""
-        rows = db.execute('SELECT id,author_id,author_name,created,body FROM message_posts WHERE reply_to=? AND (? IS NULL OR id<?) AND (?=1 OR author_id=?) ORDER BY id DESC LIMIT ?',
-                          (root, before, before, int(scope == 'all'), user['id'], limit + 1)).fetchall()
+        rows = db.execute('SELECT id,author_id,author_name,created,body FROM message_posts WHERE reply_to=? AND (? IS NULL OR id<?) AND (?=1 OR author_id=? OR (?=1 AND coalesce(reply_public,0)=1)) ORDER BY id DESC LIMIT ?',
+                          (root, before, before, int(scope == 'every'), user['id'], int(scope == 'public'), limit + 1)).fetchall()
         hidden = self.hidden(db, [r[0] for r in rows[:limit]])
         items = [dict(id=r[0], authorId=r[1], author=r[2], created=r[3], hidden=r[0] in hidden, own=r[1] == user['id'],
                       text='Сообщение скрыто администратором.' if r[0] in hidden else r[4]) for r in reversed(rows[:limit])]
@@ -151,7 +157,8 @@ class MessageFeed:
                 if mode == 'off': raise HTTPException(409, 'Автор не открыл ответы под этим объявлением.')
                 if mode == 'author' and thread['authorId'] == user['id']: raise HTTPException(422, 'Автору объявления ответы приходят в личные сообщения: ответьте отправителю в личной переписке.')
                 self.messages.rate(db, user)
-                post = db.execute('INSERT INTO message_posts (thread_id,author_id,author_name,created,body,reply_to) VALUES (?,?,?,?,?,?)', (id, user['id'], user['name'], now().isoformat(), body.text, root)).lastrowid
+                # Whether everybody may read the reply is fixed now: switching the channel later neither hides nor publishes it.
+                post = db.execute('INSERT INTO message_posts (thread_id,author_id,author_name,created,body,reply_to,reply_public) VALUES (?,?,?,?,?,?,?)', (id, user['id'], user['name'], now().isoformat(), body.text, root, int(mode == 'all'))).lastrowid
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)', (user['id'], body.requestId, signature, f'{id}:{post}'))
                 author = self.messages.accounts(db, user_ids=[thread['authorId']]).get(thread['authorId'])
                 if author and author['id'] != user['id'] and directory.enabled(author):

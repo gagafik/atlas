@@ -1,7 +1,9 @@
 from uuid import uuid4
 
 from backend import api
+from backend.message_channels import DEFAULT_CHANNELS
 from test_access import client,create,signed
+from test_message_management import add,candidates
 from test_messages import setup,url,detail,payload
 
 
@@ -88,6 +90,10 @@ def test_classmates_and_class_parents_channels(client):
     sent=parent.post(url(),json=payload(people['other']['id']));assert sent.status_code==200,sent.text
     dialog=sent.json()['id'];seen=detail(other,dialog);assert not seen['readOnly'] and seen['canReply']
     assert reply(other,dialog).status_code==200
+    # The other family reads the dialog but learns no name of a child who is not theirs.
+    child=next(s.name for s in api.read('demo').students if s.id=='s1')
+    row=lambda user:next(t for t in user.get(url()).json()['items'] if t['id']==dialog)
+    assert row(parent)['children']==[dict(id='s1',name=child)] and row(other)['children']==[]
     made=parent.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='Класс',text='Вопрос всем.',studentId='s1',recipientIds=[people['other']['id'],people['teacher']['id']]))
     assert made.status_code==200,made.text
     group=made.json()['id']
@@ -131,12 +137,17 @@ def test_one_way_channel_enforced_on_create_and_reply(client):
     assert detail(teacher,mine)['canReply'] and not detail(teacher,mine)['readOnly']
 
 
-def test_matrix_change_seen_inside_write(client):
-    people=setup(client);parent=signed('parent')
-    assert people['teacher']['id'] in {u['id'] for u in parent.get(url('contacts',studentId='s1')).json()['items']}
+def test_matrix_change_seen_inside_write(client,monkeypatch):
+    people=setup(client);parent=signed('parent');teacher_id=people['teacher']['id']
+    assert teacher_id in {u['id'] for u in parent.get(url('contacts',studentId='s1')).json()['items']}
+    started=parent.post(url(),json=payload(teacher_id)).json()['id']
     matrix(client,remove=['parent_teachers'])
-    assert parent.post(url(),json=payload(people['teacher']['id'])).status_code==403
-    assert people['teacher']['id'] not in {u['id'] for u in parent.get(url('contacts',studentId='s1')).json()['items']}
+    assert parent.post(url(),json=payload(teacher_id)).status_code==403
+    assert teacher_id not in {u['id'] for u in parent.get(url('contacts',studentId='s1')).json()['items']}
+    # A switch made after the request began (it still holds the old matrix) is seen by the write itself.
+    monkeypatch.setattr(type(api.messages.channels),'current',lambda self,workspace:DEFAULT_CHANNELS)
+    assert parent.post(url(),json=payload(teacher_id)|dict(requestId=str(uuid4()))).status_code==403
+    assert reply(parent,started).status_code==403
 
 
 def test_class_teacher_channel_follows_class_teacher_id(client):
@@ -169,3 +180,101 @@ def test_class_teacher_families_channel_widens_teacher_reach(client):
     assert 's1' in {s['id'] for s in t1.get(url('options')).json()['students']}
     sent=t1.post(url(),json=direct(parent_id,'s1'));assert sent.status_code==200,sent.text
     assert reply(signed('parent'),sent.json()['id']).status_code==200
+
+
+def family_group(teacher,recipients,student='s1'):
+    made=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='Семья',text='Приватно.',studentId=student,recipientIds=recipients))
+    assert made.status_code==200,made.text
+    return made.json()['id']
+
+
+def offered(user,id):return {p['id'] for p in candidates(user,id).json()['items']}
+
+
+def join(user,id,target):return add(user,id,[target],detail(user,id)['version'])
+
+
+def test_teacher_without_a_link_joins_a_family_group_only_through_the_channels_of_its_family_roles(client):
+    people=setup(client);t2=signed('teacher');parent=signed('parent');t1=signed('staff');t1_id=people['staff']['id']
+    parent_id,pupil_id=people['parent']['id'],people['student']['id']
+    # t1 does not teach s1, so on defaults nothing links this teacher to the family.
+    led=family_group(t2,[parent_id,pupil_id]);mine=family_group(parent,[people['teacher']['id'],admin_id(client)])
+    assert t1_id not in offered(parent,mine) and join(parent,mine,t1_id).status_code==403
+    # A channel for pupils does not open a conversation with a parent.
+    matrix(client,add=['student_any_teacher'])
+    assert t1_id not in offered(parent,mine) and join(parent,mine,t1_id).status_code==403
+    # The families' channels let a family bring any teacher in; a teacher who runs a conversation never pulls in a colleague who does not teach the pupil.
+    matrix(client,add=['parent_any_teacher','student_any_teacher'])
+    assert t1_id not in offered(t2,led) and join(t2,led,t1_id).status_code==403
+    matrix(client,remove=['student_any_teacher'])
+    assert t1_id in offered(parent,mine) and join(parent,mine,t1_id).status_code==200
+    seen=detail(t1,mine);assert not seen['readOnly'] and seen['canReply'] and seen['posts'][0]['text']=='Приватно.'
+    # The colleague stays only while the channel of every family role in the conversation stays open.
+    assert join(parent,mine,pupil_id).status_code==200 and detail(t1,mine)['readOnly']
+    matrix(client,add=['student_any_teacher'])
+    assert not detail(t1,mine)['readOnly']
+    matrix(client,remove=['parent_any_teacher'])
+    assert detail(t1,mine)['readOnly']
+
+
+def test_group_candidates_leave_out_whom_a_closed_channel_forbids(client):
+    people=setup(client);t2=signed('teacher')
+    mum=create(client,'parent',login='mum',name='Мама')
+    group=family_group(t2,[people['parent']['id'],people['student']['id']])
+    assert mum['id'] in offered(t2,group)
+    matrix(client,remove=['teacher_parents'])
+    assert mum['id'] not in offered(t2,group) and join(t2,group,mum['id']).status_code==403
+
+
+def test_group_candidates_offer_class_parents_while_their_channel_is_open(client):
+    people=setup(client);parent=signed('parent');other_id=people['other']['id']
+    far=create(client,'parent',login='far',grants=[dict(workspace='demo',view='student',entityIds=['s3'])])
+    group=family_group(parent,[people['teacher']['id'],admin_id(client)])
+    assert other_id not in offered(parent,group) and join(parent,group,other_id).status_code==403
+    matrix(client,add=['parent_class_parents'])
+    assert other_id in offered(parent,group) and far['id'] not in offered(parent,group)
+    assert join(parent,group,far['id']).status_code==403
+    assert join(parent,group,other_id).status_code==200 and detail(signed('other'),group)['canReply']
+
+
+def test_colleague_in_a_family_group_does_not_reopen_a_closed_channel(client):
+    people=setup(client);t2=signed('teacher');parent=signed('parent')
+    colleague=create(client,'teacher',login='colleague',grants=[dict(workspace='demo',view='teacher',entityIds=['t0'])]);other=signed('colleague')
+    recipients=[people['parent']['id'],people['student']['id']]
+    crowded=family_group(t2,recipients);alone=family_group(t2,recipients)
+    assert join(t2,crowded,colleague['id']).status_code==200
+    matrix(client,remove=['teacher_parents','teacher_students'])
+    # Neither teacher may write to the family any more, however many colleagues share the conversation.
+    for user in [t2,other]:
+        assert not detail(user,crowded)['canReply'] and reply(user,crowded).status_code==403
+    assert detail(parent,crowded)['canReply'] and reply(parent,crowded).status_code==200
+    # Nor does adding a colleague afterwards bring the channel back.
+    assert join(t2,alone,colleague['id']).status_code==200
+    assert not detail(t2,alone)['canReply'] and reply(t2,alone).status_code==403
+
+
+def test_parent_manager_adds_the_other_family_of_the_pupil_whatever_the_class_channel_says(client):
+    people=setup(client);parent=signed('parent');mum=create(client,'parent',login='mum',name='Мама')
+    group=family_group(parent,[people['teacher']['id'],admin_id(client)])
+    assert mum['id'] in offered(parent,group) and join(parent,group,mum['id']).status_code==200
+    assert not detail(signed('mum'),group)['readOnly']
+
+
+def test_staff_to_staff_channel_can_be_switched_off(client):
+    people=setup(client);teacher=signed('teacher');colleague=people['staff']['id']
+    assert colleague in {u['id'] for u in teacher.get(url('contacts')).json()['items']}
+    matrix(client,remove=['staff_staff'])
+    assert colleague not in {u['id'] for u in teacher.get(url('contacts')).json()['items']}
+    assert teacher.post(url(),json=direct(colleague)).status_code==403
+    # The administrator needs no channel; a colleague only reaches the administrator.
+    assert client.post(url(),json=direct(colleague)).status_code==200
+    assert signed('staff').post(url(),json=direct(people['teacher']['id'])).status_code==403
+
+
+def test_staff_accounts_are_offered_for_a_staff_group(client):
+    people=setup(client);teacher=signed('teacher')
+    clerk=create(client,'staff',login='clerk',name='Секретарь');second=create(client,'staff',login='clerk2',name='Помощник')
+    made=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='Совещание',text='Обсудим.',recipientIds=[clerk['id'],people['staff']['id']]));assert made.status_code==200,made.text
+    group=made.json()['id']
+    assert second['id'] in offered(teacher,group)
+    assert join(teacher,group,second['id']).status_code==200 and not detail(signed('clerk2'),group)['readOnly']

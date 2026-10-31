@@ -82,7 +82,7 @@ class MessageModeration:
                 if prior:
                     if prior[1] != signature: raise HTTPException(409, 'Повторная жалоба отличается от отправленной.')
                     return dict(id=prior[0])
-                post = db.execute('SELECT thread_id,author_id,author_name,created,body,reply_to FROM message_posts WHERE id=?', (post_id,)).fetchone()
+                post = db.execute('SELECT thread_id,author_id,author_name,created,body,reply_to,reply_public FROM message_posts WHERE id=?', (post_id,)).fetchone()
                 if not post: raise HTTPException(404, 'Сообщение недоступно.')
                 thread, _, through = self.messages.readable(db,post[0],user,directory,self.messages.thread_accounts(db,post[0],user))
                 # A former participant may report only what they could read.
@@ -90,7 +90,8 @@ class MessageModeration:
                 # A reply under an announcement is readable only as far as the reply mode lets this account see other people's replies.
                 if post[5] is not None:
                     state = self.messages.feed.states(db, [(thread, through is None)], user, directory)[thread['id']]
-                    if self.messages.feed.scope(thread, user, through is None, state['repliesMode']) != 'all': raise HTTPException(404, 'Сообщение недоступно.')
+                    feed = self.messages.feed
+                    if not feed.readable(feed.scope(thread, user, through is None, state['repliesMode']), user['id'], post[1], post[6]): raise HTTPException(404, 'Сообщение недоступно.')
                 if post[1] == user['id']: raise HTTPException(422, 'Нельзя пожаловаться на своё сообщение.')
                 if self.state(db,post_id)['hidden']: raise HTTPException(409, 'Сообщение уже скрыто администратором.')
                 if db.execute('SELECT 1 FROM message_reports WHERE reporter_id=? AND post_id=?',(user['id'],post_id)).fetchone(): raise HTTPException(409, 'Вы уже отправили жалобу на это сообщение. Проверьте её состояние в разделе жалоб.')

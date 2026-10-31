@@ -17,8 +17,9 @@ class MessageRecovery:
     def __init__(self, messages):
         self.messages, self.access = messages, messages.access
 
-    def eligible(self, db, thread, account, directory):
-        if not self.messages.groups.eligible(thread,account,directory,self.messages.groups.scope(db,thread),manager=True): return False
+    def eligible(self, db, thread, account, directory, accounts):
+        groups = self.messages.groups
+        if not groups.eligible(thread,account,directory,groups.scope(db,thread),manager=True,family=lambda: groups.family_roles(db,thread,accounts)): return False
         row = db.execute('''SELECT role,scope_students FROM message_members m WHERE thread_id=? AND user_id=?
             AND NOT EXISTS(SELECT 1 FROM message_exclusions x WHERE x.thread_id=m.thread_id AND x.user_id=m.user_id)''',(thread['id'],account['id'])).fetchone()
         if not row or row[0]!=account['role']: return False
@@ -28,9 +29,9 @@ class MessageRecovery:
         return bool(set(json.loads(row[1])) & directory.pupils(account) & self.messages.groups.pupils(thread,directory,scope)) or bool(scope and scope[0]=='contacts' and directory.peer(account,thread['studentId']))
 
     def candidates(self, db, thread, directory, accounts):
-        if self.eligible(db,thread,accounts.get(thread['managerId']),directory): return None
+        if self.eligible(db,thread,accounts.get(thread['managerId']),directory,accounts): return None
         ids = {r[0] for r in db.execute('SELECT user_id FROM message_members WHERE thread_id=?',(thread['id'],))}
-        return [dict(id=u['id'],name=u['name'],role=u['role']) for uid in ids if (u:=accounts.get(uid)) and self.eligible(db,thread,u,directory)]
+        return [dict(id=u['id'],name=u['name'],role=u['role']) for uid in ids if (u:=accounts.get(uid)) and self.eligible(db,thread,u,directory,accounts)]
 
     def register(self, app, Workspace):
         @app.get('/api/messages/recovery')

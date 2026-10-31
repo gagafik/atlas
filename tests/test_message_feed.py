@@ -94,6 +94,34 @@ def test_replies_all_mode_gated_by_matrix(client):
     assert len(replies(teacher,id))==2
 
 
+def test_reply_visibility_is_fixed_when_written(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
+    matrix(client,add=['feed_public_replies'])
+    id=announce(teacher,replies='all')
+    assert respond(parent,id,'Открыто.').status_code==200
+    # Without the channel replies go to the author alone, and switching it on again does not publish what was written meanwhile.
+    matrix(client,remove=['feed_public_replies'])
+    assert respond(parent,id,'Личное.').status_code==200
+    assert replies(other,id)==[]
+    matrix(client,add=['feed_public_replies'])
+    assert [r['text'] for r in replies(other,id)]==['Открыто.'] and item(other,id)['replyCount']==1
+    assert [r['text'] for r in replies(teacher,id)]==['Открыто.','Личное.'] and item(teacher,id)['replyCount']==2
+    assert [r['text'] for r in replies(parent,id)]==['Открыто.','Личное.']
+    # What the other family may not read it cannot report either.
+    report=lambda post:other.post(url('posts/'+str(post)+'/report'),json=dict(requestId=str(uuid4()),reason='Нарушение',shareEvidence=True))
+    secret,open_=(next(r for r in replies(teacher,id) if r['text']==text)['id'] for text in ['Личное.','Открыто.'])
+    assert report(secret).status_code==404 and report(open_).status_code==200
+
+
+def test_a_reply_is_never_a_read_marker(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
+    id=announce(teacher,replies='author')
+    assert respond(other,id,'Ответ.').status_code==200
+    reply_id=replies(other,id)[0]['id'];root=item(parent,id)['postId']
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=reply_id)).status_code==422
+    assert item(parent,id)['unread'] and parent.put(url('threads/'+id+'/read'),json=dict(throughId=root)).status_code==200
+
+
 def test_reply_keeps_read_state_ack_and_history(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
     id=announce(teacher,replies='author',requireAck=True)
@@ -161,8 +189,8 @@ def test_reply_idempotency_and_old_database(client,tmp_path):
         db.execute('CREATE TABLE message_posts (id INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT,author_id TEXT,author_name TEXT,created TEXT,body TEXT)')
         db.execute("INSERT INTO message_posts (thread_id,author_id,author_name,created,body) VALUES ('t','u','Имя','2026-01-01','Старое')")
         api.messages.tables(db);api.messages.tables(db)
-        assert 'reply_to' in {r[1] for r in db.execute('PRAGMA table_info(message_posts)')}
-        assert db.execute('SELECT thread_id,body,reply_to FROM message_posts').fetchall()==[('t','Старое',None)]
+        assert {'reply_to','reply_public'}<={r[1] for r in db.execute('PRAGMA table_info(message_posts)')}
+        assert db.execute('SELECT thread_id,body,reply_to,reply_public FROM message_posts').fetchall()==[('t','Старое',None,None)]
 
 
 def test_replies_are_rate_limited_like_posts(client):

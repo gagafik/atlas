@@ -153,9 +153,13 @@ class Directory:
         if user['role'] not in FAMILY or PEER[user['role']] not in self.channels or student not in self.students: return False
         return any(self.students[p].classId==self.students[student].classId for p in self.pupils(user))
 
-    def related(self,user,student):
+    def related(self,user,student,family=None):
+        """Is the pupil within the account's reach? family() gives the roles of the family accounts of the conversation; it is called only when needed."""
         if student in self.reachable_students(user) or self.peer(user,student): return True
-        return user['role']=='teacher' and student in self.students and bool({'student_any_teacher','parent_any_teacher'}&self.channels)
+        if user['role']!='teacher' or student not in self.students or not family or not {'student_any_teacher','parent_any_teacher'}&self.channels: return False
+        # A teacher who does not teach the pupil joins only while the channel to every family role of the conversation is open.
+        roles=family()
+        return bool(roles) and all(r+'_any_teacher' in self.channels for r in roles)
 
     def reach(self,user,c):
         """Pupils through which the user may write to account c (empty for staff); None when c is out of reach."""
@@ -214,8 +218,10 @@ class Messages:
         db.execute('''CREATE TABLE IF NOT EXISTS message_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT,author_id TEXT,author_name TEXT,created TEXT,body TEXT)''')
         # A feed reply under an announcement points at its root post. It never moves latest_id, so history, search and read markers ignore it.
-        if 'reply_to' not in {r[1] for r in db.execute('PRAGMA table_info(message_posts)')}:
-            db.execute('ALTER TABLE message_posts ADD COLUMN reply_to INTEGER')
+        # reply_public records whether the reply was written while everybody could read replies: later changes of the channel do not publish it.
+        columns={r[1] for r in db.execute('PRAGMA table_info(message_posts)')}
+        if 'reply_to' not in columns: db.execute('ALTER TABLE message_posts ADD COLUMN reply_to INTEGER')
+        if 'reply_public' not in columns: db.execute('ALTER TABLE message_posts ADD COLUMN reply_public INTEGER')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_thread ON message_posts(thread_id,id)')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_replies ON message_posts(reply_to,id) WHERE reply_to IS NOT NULL')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_rate ON message_posts(author_id,created)')
@@ -295,10 +301,11 @@ class Messages:
         elif thread['kind']=='group':
             scope=self.groups.scope(db,thread)
             manager=accounts.get(thread['managerId'])
-            if not self.groups.eligible(thread,manager,directory,scope,manager=True):return None
+            family=lambda:self.groups.family_roles(db,thread,accounts)
+            if not self.groups.eligible(thread,manager,directory,scope,manager=True,family=family):return None
             manager_row=db.execute('SELECT role FROM message_members WHERE thread_id=? AND user_id=?',(thread['id'],thread['managerId'])).fetchone()
             if not manager_row or manager_row[0]!=manager['role']:return None
-            if not self.groups.eligible(thread,user,directory,scope):return None
+            if not self.groups.eligible(thread,user,directory,scope,family=family):return None
             # A parent of the same class may be in a family's own group: the pupil of the thread is not theirs.
             if user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user) & self.groups.pupils(thread,directory,scope) and not (scope[0]=='contacts' and directory.peer(user,thread['studentId'])):return None
         elif thread['status']=='withdrawn' and user['id']!=thread['authorId']: return None
@@ -417,7 +424,11 @@ class Messages:
         peers=[u for u in live if u['id']!=user['id']]
         if not peers: return True
         author=accounts.get(thread['authorId'])
-        return any(directory.start_about(user,p,thread['studentId']) for p in peers) or bool(author and author['id']!=user['id'] and directory.start_about(author,user,thread['studentId']))
+        # A staff reply reaches the families of the conversation: a colleague's channel does not stand for theirs.
+        colleagues=user['role'] in STAFF and any(p['role'] in FAMILY for p in peers)
+        audience=[p for p in peers if p['role'] in FAMILY] if colleagues else peers
+        if any(directory.start_about(user,p,thread['studentId']) for p in audience): return True
+        return bool(author and author['id']!=user['id'] and not (colleagues and author['role'] in STAFF) and directory.start_about(author,user,thread['studentId']))
 
     def unread(self,db,user,directory):
         """(threads with something new that the account may read, whether the count stopped at its limit of threads to examine)."""

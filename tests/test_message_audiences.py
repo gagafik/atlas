@@ -78,6 +78,17 @@ def test_teacher_presets_are_gated_by_matrix(client,school):
     assert preview(t2,groupIds=['g-a'],roles=['student']).status_code==200
 
 
+def test_class_teacher_reaches_the_led_class_only_through_the_channel(client,school):
+    t0=signed('teach0')
+    # t0 leads 10A but teaches only its mathematics group: on defaults the class is not one to announce to.
+    assert t0.get(url('options')).json()['classes']==[] and preview(t0,audience='my_classes',roles=['parent']).status_code==422
+    matrix(client,add=['class_teacher_families'])
+    assert [c['id'] for c in t0.get(url('options')).json()['classes']]==['c-demo-a']
+    assert names(preview(t0,audience='my_classes',roles=['parent']))=={'Родитель 1','Родитель 2'}
+    matrix(client,remove=['class_teacher_families'])
+    assert t0.get(url('options')).json()['classes']==[] and preview(t0,audience='my_classes',roles=['parent']).status_code==422
+
+
 def test_audience_uses_current_dated_links(client,school,monkeypatch):
     monkeypatch.setattr(timetable_history,'today',lambda:date(2026,9,1));monkeypatch.setattr(journal,'today',lambda:date(2026,9,1))
     state=api.read('demo')
