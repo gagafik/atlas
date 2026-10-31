@@ -213,6 +213,78 @@ export function makeEdit(
       : parsed),
   };
 }
+export type Edits = Record<string, Edit>;
+/** A cell opened for typing and the table it was opened on: its row and column, and the text drawn from it, mean something only there. */
+export interface OpenCell extends Position {
+  table: CourseTable;
+}
+/** The open cell while the table on screen is still the one it was opened on. Fresh data replaces the table object: the input then
+ *  holds a value of the old data, and the same row and column may be another pupil or work, so the cell is closed. */
+export function openCell(
+  open: OpenCell | null,
+  table: CourseTable | null,
+): Position | null {
+  return open && open.table === table ? { row: open.row, col: open.col } : null;
+}
+/** What the cell shows: the typed edit, else the saved mark. */
+export function cellText(
+  table: CourseTable,
+  pos: Position,
+  edits: Edits,
+): string {
+  const pupil = table.pupils[pos.row],
+    work = table.works[pos.col];
+  const e =
+    edits[
+      editKey({
+        studentId: pupil.id,
+        lessonKey: table.lessons[work.lesson].lessonKey,
+        assessmentId: work.id,
+      })
+    ];
+  return e ? e.raw : markText(pupil.marks[pos.col], work);
+}
+/** Text equal to the saved value is no edit at all. */
+export const sameAsSaved = (e: Edit, mark: CourseMark | undefined) =>
+  !e.error &&
+  e.score === (mark?.score ?? null) &&
+  e.label === (mark?.label ?? "");
+/** The edits with the typed text of one cell; typing the saved value back removes the edit. */
+export function putEdit(
+  table: CourseTable,
+  edits: Edits,
+  pos: Position,
+  raw: string,
+): Edits {
+  const edit = makeEdit(
+    raw,
+    table.pupils[pos.row],
+    table.works[pos.col],
+    table,
+  );
+  const next = { ...edits };
+  if (sameAsSaved(edit, table.pupils[pos.row].marks[pos.col]))
+    delete next[editKey(edit)];
+  else next[editKey(edit)] = edit;
+  return next;
+}
+/** The edits after the text of the open cell is committed; the same object when nothing changes. Text of a cell that was opened on a
+ *  table since replaced is not an edit: it was never typed against the data that is on screen now. */
+export function commitCell(
+  open: OpenCell | null,
+  table: CourseTable | null,
+  raw: string,
+  edits: Edits,
+): Edits {
+  const pos = openCell(open, table);
+  if (!pos || !table) return edits;
+  const pupil = table.pupils[pos.row],
+    work = table.works[pos.col];
+  if (!pupil || !work || !editable(pupil, work, table)) return edits;
+  return raw === cellText(table, pos, edits)
+    ? edits
+    : putEdit(table, edits, pos, raw);
+}
 /** Rows of tab-separated cells, as spreadsheets copy them; the newline that ends the last row is not another row. */
 export function parsePaste(text: string): string[][] {
   const rows = text.split(/\r\n|\n/);

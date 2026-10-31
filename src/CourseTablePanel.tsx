@@ -6,27 +6,31 @@ import CategoryBadge from "./CategoryBadge";
 import {
   afterSave,
   applyPaste,
+  cellText,
   chunks,
+  commitCell,
   courseCsv,
   defaultCoursePeriod,
   editKey,
   editable,
   lessonBodies,
-  makeEdit,
   markText,
   nextCell,
+  openCell,
   parsePaste,
+  putEdit,
+  sameAsSaved,
   type CourseList,
-  type CourseMark,
   type CourseTable,
   type Edit,
+  type Edits,
+  type OpenCell,
   type Position,
   type SaveResponse,
 } from "./courseTable";
 import { ruDate } from "./journalCoverage";
 import "./CourseTable.css";
 
-type Edits = Record<string, Edit>;
 const LEAVE = "В таблице есть несохранённые оценки. Перейти без сохранения?";
 const HIDDEN =
   "Урок скрыт от учеников и родителей. «Опубликовать» не вернёт его, пока в нём нет правки из таблицы.";
@@ -55,10 +59,11 @@ export default function CourseTablePanel({
     [loading, setLoading] = useState(false),
     [busy, setBusy] = useState(false);
   const [edits, setEditsState] = useState<Edits>({}),
-    [active, setActive] = useState<Position | null>(null),
+    [active, setActive] = useState<OpenCell | null>(null),
     [text, setText] = useState("");
+  // `error` is a failed load; the outcome of a save, a failed one included, is the note under the buttons.
   const [error, setError] = useState(""),
-    [note, setNote] = useState(""),
+    [note, setNote] = useState<{ text: string; alert?: boolean } | null>(null),
     [problems, setProblems] = useState<{ day: string; message: string }[]>([]);
   const [reload, setReload] = useState(0);
   const editsRef = useRef<Edits>({});
@@ -67,6 +72,10 @@ export default function CourseTablePanel({
   // A request id per request body: a retry after a lost answer replays the stored result instead of saving twice.
   const requestIds = useRef(new Map<string, string>());
   const dirty = Object.keys(edits).length > 0;
+  // Nothing is typed while a save is on its way or the table is being replaced by fresh data.
+  const frozen = busy || loading;
+  // The cell being typed in; closed once the table on screen is no longer the one it was opened on.
+  const cursor = openCell(active, table);
 
   function setEdits(next: Edits) {
     editsRef.current = next;
@@ -98,6 +107,7 @@ export default function CourseTablePanel({
       .then((value: CourseList) => {
         if (!live) return;
         setList(value);
+        setError("");
         const range = defaultCoursePeriod(
           value.today,
           value.yearStart,
@@ -133,6 +143,9 @@ export default function CourseTablePanel({
       .then((value: CourseTable) => {
         if (loadSeq.current !== made) return;
         setTable(value);
+        setError("");
+        // The open cell belongs to the old table: its input shows a value of data that is gone, and rows or columns may have moved.
+        setActive(null);
         // Typed values that the fresh data already holds are done; the rest stay on top of it.
         const kept: Edits = {};
         for (const [key, e] of Object.entries(editsRef.current)) {
@@ -164,61 +177,28 @@ export default function CourseTablePanel({
     const pupil = value.pupils.find((p) => p.id === e.studentId);
     return col < 0 || !pupil ? null : { col, pupil };
   }
-  const sameAsSaved = (e: Edit, mark: CourseMark | undefined) =>
-    !e.error &&
-    e.score === (mark?.score ?? null) &&
-    e.label === (mark?.label ?? "");
-  const cellText = (pos: Position, from: Edits = edits) => {
-    if (!table) return "";
-    const pupil = table.pupils[pos.row],
-      work = table.works[pos.col];
-    const e =
-      from[
-        editKey({
-          studentId: pupil.id,
-          lessonKey: table.lessons[work.lesson].lessonKey,
-          assessmentId: work.id,
-        })
-      ];
-    return e ? e.raw : markText(pupil.marks[pos.col], work);
-  };
-  // Records the typed text of a cell; text equal to the saved value is no edit at all.
-  function put(from: Edits, pos: Position, raw: string): Edits {
-    const pupil = table!.pupils[pos.row],
-      work = table!.works[pos.col];
-    const edit = makeEdit(raw, pupil, work, table!);
-    const next = { ...from };
-    if (sameAsSaved(edit, pupil.marks[pos.col])) delete next[editKey(edit)];
-    else next[editKey(edit)] = edit;
-    return next;
-  }
-  function commit(pos: Position, value: string): Edits {
-    // While a save is on its way nothing is typed: the edits it carries are decided when the answer comes.
-    if (
-      busy ||
-      !table ||
-      !editable(table.pupils[pos.row], table.works[pos.col], table)
-    )
-      return editsRef.current;
-    if (value === cellText(pos, editsRef.current)) return editsRef.current;
-    const next = put(editsRef.current, pos, value);
-    setEdits(next);
+  function commit(value: string): Edits {
+    // Nothing is typed while a save is on its way: the edits it carries are decided when the answer comes.
+    if (frozen || !table) return editsRef.current;
+    const next = commitCell(active, table, value, editsRef.current);
+    if (next !== editsRef.current) setEdits(next);
     return next;
   }
   function activate(pos: Position, from: Edits = editsRef.current) {
-    setActive(pos);
-    setText(cellText(pos, from));
+    if (!table) return;
+    setActive({ ...pos, table });
+    setText(cellText(table, pos, from));
   }
   useEffect(() => {
     input.current?.focus();
     input.current?.select();
-  }, [active?.row, active?.col]);
+  }, [cursor?.row, cursor?.col]);
 
   function move(key: string, e: KeyboardEvent<HTMLInputElement>) {
-    if (!active || !table) return;
-    const target = nextCell(active, key, table);
-    const next = commit(active, text);
-    if (target.row === active.row && target.col === active.col) {
+    if (!cursor || !table) return;
+    const target = nextCell(cursor, key, table);
+    const next = commit(text);
+    if (target.row === cursor.row && target.col === cursor.col) {
       // Tab at the edge leaves the table; the other keys stay put with the value selected for the next one.
       if (!key.endsWith("Tab")) {
         e.preventDefault();
@@ -230,7 +210,7 @@ export default function CourseTablePanel({
     activate(target, next);
   }
   function keyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (busy) return;
+    if (frozen) return;
     const box = e.currentTarget;
     const whole =
       box.selectionStart === 0 && box.selectionEnd === box.value.length;
@@ -241,27 +221,27 @@ export default function CourseTablePanel({
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") move(e.key, e);
     else if (e.key === "ArrowLeft" && caret(0)) move(e.key, e);
     else if (e.key === "ArrowRight" && caret(box.value.length)) move(e.key, e);
-    else if (e.key === "Escape" && active) {
+    else if (e.key === "Escape" && cursor && table) {
       e.preventDefault();
-      setText(cellText(active));
+      setText(cellText(table, cursor, edits));
     } else if (
       (e.key === "Delete" || e.key === "Backspace") &&
       whole &&
-      active
+      cursor
     ) {
       // Clearing is always explicit: a blank paste never clears.
       e.preventDefault();
       setText("");
-      commit(active, "");
+      commit("");
     }
   }
   function paste(e: ClipboardEvent<HTMLInputElement>) {
-    if (!active || !table) return;
+    if (!cursor || !table) return;
     e.preventDefault();
-    if (busy) return;
+    if (frozen) return;
     const { edits: pasted, skipped } = applyPaste(
       parsePaste(e.clipboardData.getData("text")),
-      active,
+      cursor,
       table,
     );
     let next = { ...editsRef.current };
@@ -270,23 +250,23 @@ export default function CourseTablePanel({
         row: index.pupils.get(edit.studentId)!,
         col: index.works.get(`${edit.lessonKey}|${edit.assessmentId}`)!,
       };
-      next = put(next, at, edit.raw);
+      next = putEdit(table, next, at, edit.raw);
     }
     setEdits(next);
-    setText(cellText(active, next));
-    setNote(skipped ? `Пропущено ячеек: ${skipped}` : "");
+    setText(cellText(table, cursor, next));
+    setNote(skipped ? { text: `Пропущено ячеек: ${skipped}` } : null);
   }
 
   async function submit(publish: boolean) {
     if (!table || busy) return;
-    if (active) commit(active, text);
+    commit(text);
     // What the requests carry; whatever is typed afterwards is not theirs to settle.
     const sent = Object.values(editsRef.current);
     const bodies = lessonBodies(table, sent, publish);
     if (!bodies.length) return;
     setBusy(true);
     setError("");
-    setNote("");
+    setNote(null);
     setProblems([]);
     const [groupId, subjectId] = course.split("|");
     const responses: SaveResponse[] = [];
@@ -319,15 +299,23 @@ export default function CourseTablePanel({
     setEdits(Object.fromEntries(outcome.edits.map((e) => [editKey(e), e])));
     const invalid = outcome.edits.filter((e) => e.error).length;
     setActive(null);
-    setError(failure);
     setProblems(
       outcome.conflicts.map((c) => ({ day: c.day, message: c.message })),
     );
-    setNote(
+    // A failed request is told once, with the summary: the table reloads at once, so the failure is no banner that would outlive it.
+    const summary =
       `Сохранено уроков: ${outcome.saved}, без изменений: ${outcome.unchanged}, не сохранено: ${outcome.conflicts.length}.` +
-        (invalid ? ` Исправьте ячейки с ошибками: ${invalid}.` : ""),
-    );
+      (invalid ? ` Исправьте ячейки с ошибками: ${invalid}.` : "");
+    setNote({
+      text: failure ? `Ошибка: ${failure} ${summary}` : summary,
+      alert: !!failure,
+    });
     setBusy(false);
+    setReload((n) => n + 1);
+  }
+  function refresh() {
+    setError("");
+    setNote((n) => (n?.alert ? null : n));
     setReload((n) => n + 1);
   }
   function print() {
@@ -343,13 +331,13 @@ export default function CourseTablePanel({
   function discard() {
     setEdits({});
     setActive(null);
-    setNote("");
+    setNote(null);
     setProblems([]);
   }
   function choose(change: () => void) {
     if (!leave()) return;
     setEdits({});
-    setNote("");
+    setNote(null);
     setProblems([]);
     setError("");
     change();
@@ -526,10 +514,7 @@ export default function CourseTablePanel({
                     </button>
                   </>
                 )}
-                <button
-                  disabled={busy || loading}
-                  onClick={() => setReload((n) => n + 1)}
-                >
+                <button disabled={frozen} onClick={refresh}>
                   Обновить
                 </button>
                 <button
@@ -543,8 +528,11 @@ export default function CourseTablePanel({
                 </button>
               </div>
               {note && (
-                <p role="status" className="info-line ct-noprint">
-                  {note}
+                <p
+                  role={note.alert ? "alert" : "status"}
+                  className={`${note.alert ? "error-banner" : "info-line"} ct-noprint`}
+                >
+                  {note.text}
                 </p>
               )}
               {!!problems.length && (
@@ -686,7 +674,7 @@ export default function CourseTablePanel({
                               ];
                             const can = editable(p, w, table);
                             const here =
-                              active?.row === row && active.col === col;
+                              cursor?.row === row && cursor.col === col;
                             const why = edit?.error || edit?.message;
                             const title =
                               [
@@ -704,7 +692,7 @@ export default function CourseTablePanel({
                             const entry =
                               firstEditable?.row === row &&
                               firstEditable.col === col &&
-                              !active;
+                              !cursor;
                             return (
                               <td
                                 key={key}
@@ -726,13 +714,13 @@ export default function CourseTablePanel({
                                 onFocus={() =>
                                   can &&
                                   !here &&
-                                  !busy &&
+                                  !frozen &&
                                   activate({ row, col })
                                 }
                                 onClick={() =>
                                   can &&
                                   !here &&
-                                  !busy &&
+                                  !frozen &&
                                   activate({ row, col })
                                 }
                               >
@@ -744,11 +732,11 @@ export default function CourseTablePanel({
                                       w.kind === "points" ? "decimal" : "text"
                                     }
                                     aria-label={`${p.name}: ${w.name}`}
-                                    readOnly={busy}
+                                    readOnly={frozen}
                                     onChange={(e) => setText(e.target.value)}
                                     onKeyDown={keyDown}
                                     onPaste={paste}
-                                    onBlur={() => commit({ row, col }, text)}
+                                    onBlur={() => commit(text)}
                                   />
                                 ) : (
                                   <span>

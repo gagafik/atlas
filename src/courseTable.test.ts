@@ -2,17 +2,21 @@ import { describe, it, expect, vi } from "vitest";
 import {
   afterSave,
   applyPaste,
+  cellText,
   chunks,
+  commitCell,
   courseCsv,
   defaultCoursePeriod,
   editable,
   lessonBodies,
   nextCell,
+  openCell,
   parseCell,
   parsePaste,
   type CoursePupil,
   type CourseTable,
   type Edit,
+  type Edits,
   type SaveResponse,
 } from "./courseTable";
 import { download } from "./utils";
@@ -221,6 +225,67 @@ describe("moving between cells", () => {
       row: 0,
       col: 0,
     });
+  });
+});
+
+describe("typing into a cell", () => {
+  // The saved mark of the first pupil in the first work.
+  const marked = (score: number | null, rows = 0) => {
+    const t = table();
+    if (score !== null)
+      t.pupils[0].marks = { "0": { score, label: "", comment: "" } };
+    if (rows) t.pupils.unshift(pupil("p0", [0, 1]));
+    return t;
+  };
+  const at = (t: CourseTable, row = 0, col = 0) => ({ row, col, table: t });
+  it("makes an edit of text that differs from the saved mark and none of text that equals it", () => {
+    const t = marked(8);
+    const none: Edits = {};
+    expect(commitCell(at(t), t, "8", none)).toBe(none);
+    const typed = commitCell(at(t), t, "9", none);
+    expect(Object.values(typed)).toMatchObject([
+      { studentId: "p1", lessonKey: "k1", assessmentId: "a", score: 9 },
+    ]);
+    // Typing the saved value back withdraws the edit.
+    expect(commitCell(at(t), t, "8", typed)).toEqual({});
+    expect(cellText(t, { row: 0, col: 0 }, typed)).toBe("9");
+  });
+  it("does not turn what a refreshed table replaced into an edit", () => {
+    // The mark was changed from 8 to 9 in the lesson editor and the table was refreshed while the cell still showed 8.
+    const before = marked(8),
+      after = marked(9);
+    const none: Edits = {};
+    expect(commitCell(at(before), after, "8", none)).toBe(none);
+    // The same text on a cell opened after the refresh is what the teacher typed.
+    expect(Object.keys(commitCell(at(after), after, "8", none))).toHaveLength(
+      1,
+    );
+  });
+  it("keeps the text of a cell off another pupil's row when the rows moved", () => {
+    const before = marked(null),
+      after = marked(null, 1);
+    const none: Edits = {};
+    expect(commitCell(at(before), after, "7", none)).toBe(none);
+    expect(openCell(at(before), after)).toBeNull();
+    expect(
+      Object.values(commitCell(at(after), after, "7", none)),
+    ).toMatchObject([{ studentId: "p0" }]);
+  });
+  it("keeps a cell open only on the table it was opened on", () => {
+    const t = marked(null);
+    expect(openCell(at(t, 1, 1), t)).toEqual({ row: 1, col: 1 });
+    expect(openCell(at(t), marked(null))).toBeNull();
+    expect(openCell(at(t), null)).toBeNull();
+    expect(openCell(null, t)).toBeNull();
+  });
+  it("takes nothing for a cell off the roster, in a locked lesson or of a viewer", () => {
+    const t = marked(null),
+      none: Edits = {};
+    // p3 is not on the roster of the first lesson; the third work belongs to the locked lesson.
+    expect(commitCell(at(t, 2, 0), t, "5", none)).toBe(none);
+    expect(commitCell(at(t, 0, 2), t, "5", none)).toBe(none);
+    const viewer = { ...marked(null), canEdit: false };
+    expect(commitCell(at(viewer), viewer, "5", none)).toBe(none);
   });
 });
 
