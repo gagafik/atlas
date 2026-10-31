@@ -141,6 +141,39 @@ export function countsLine(counts: TransferCounts): string {
   return parts.length ? parts.join(" · ") : "изменений нет";
 }
 
+/** A lesson of the select: one that cannot take marks stays listed but cannot be chosen. */
+export function lessonOption(lesson: TransferLesson) {
+  return {
+    value: lesson.lessonKey,
+    disabled: !lesson.editable,
+    label: `${lesson.start}–${lesson.end}${lesson.editable ? "" : " · недоступен"}${lesson.withdrawn ? " · скрыт от семьи" : ""}`,
+  };
+}
+
+/** The lesson the form holds once a day's lessons are loaded: the chosen one while it takes marks, else the first that does, else the first (the panel then says that no lesson of the day takes marks). */
+export function pickLesson(
+  lessons: TransferLesson[],
+  kept: string,
+): TransferLesson | undefined {
+  return (
+    lessons.find((l) => l.editable && l.lessonKey === kept) ??
+    lessons.find((l) => l.editable) ??
+    lessons.find((l) => l.lessonKey === kept) ??
+    lessons[0]
+  );
+}
+
+/** Why each disabled lesson is closed: a disabled option cannot be opened to show it. */
+export function closedLessons(lessons: TransferLesson[]) {
+  return lessons
+    .filter((l) => !l.editable)
+    .map((l) => ({
+      key: l.lessonKey,
+      time: `${l.start}–${l.end}`,
+      reason: l.reason,
+    }));
+}
+
 /** Whether the form names everything the server needs to preview. */
 export function formComplete(form: TransferForm): boolean {
   if (!form.lessonKey || !form.day || !form.workId) return false;

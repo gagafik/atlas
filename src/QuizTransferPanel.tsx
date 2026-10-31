@@ -6,11 +6,14 @@ import type { Activity, Quiz } from "./quiz";
 import {
   NEW_WORK,
   canSend,
+  closedLessons,
   countsLine,
   formComplete,
+  lessonOption,
   markText,
   outcomeLabels,
   overwriteIds,
+  pickLesson,
   targetBody,
   transferBody,
   type Preview,
@@ -96,8 +99,7 @@ export default function QuizTransferPanel({
         if (!live) return;
         setLessons(r.lessons);
         setForm((old) => {
-          const kept = r.lessons.find((l) => l.lessonKey === old.lessonKey),
-            pick = kept ?? r.lessons.find((l) => l.editable) ?? r.lessons[0];
+          const pick = pickLesson(r.lessons, old.lessonKey);
           const works = pick?.works.map((w) => w.id) ?? [];
           return {
             ...old,
@@ -119,10 +121,12 @@ export default function QuizTransferPanel({
       live = false;
     };
   }, [workspace, endpoint, form.day, epoch]);
-  // Every complete form is previewed; the last answer wins.
-  const signature = formComplete(form)
-    ? JSON.stringify(targetBody(form, revision))
-    : "";
+  const lesson = lessons?.find((l) => l.lessonKey === form.lessonKey);
+  // Every complete form for a lesson that takes marks is previewed; the last answer wins.
+  const signature =
+    lesson?.editable && formComplete(form)
+      ? JSON.stringify(targetBody(form, revision))
+      : "";
   useEffect(() => {
     setPreview(null);
     setChosen(new Set());
@@ -178,8 +182,8 @@ export default function QuizTransferPanel({
       if (alive.current) setSending(false);
     }
   }
-  const lesson = lessons?.find((l) => l.lessonKey === form.lessonKey),
-    works = lesson?.works.filter((w) => w.kind === "points") ?? [],
+  const works = lesson?.works.filter((w) => w.kind === "points") ?? [],
+    closed = closedLessons(lessons ?? []),
     conflicts = preview?.rows.filter((r) => r.outcome === "conflict") ?? [],
     todo =
       (preview?.counts.write ?? 0) +
@@ -228,13 +232,14 @@ export default function QuizTransferPanel({
               }
             >
               {!lessons?.length && <option value="">Уроков нет</option>}
-              {lessons?.map((l) => (
-                <option key={l.lessonKey} value={l.lessonKey}>
-                  {l.start}–{l.end}
-                  {l.editable ? "" : " · недоступен"}
-                  {l.withdrawn ? " · скрыт от семьи" : ""}
-                </option>
-              ))}
+              {lessons?.map((l) => {
+                const o = lessonOption(l);
+                return (
+                  <option key={o.value} value={o.value} disabled={o.disabled}>
+                    {o.label}
+                  </option>
+                );
+              })}
             </select>
           </label>
         </div>
@@ -243,8 +248,17 @@ export default function QuizTransferPanel({
         )}
         {lesson && !lesson.editable && (
           <p className="error-banner" role="alert">
-            {lesson.reason}
+            В этот день ни один урок курса не принимает оценки.
           </p>
+        )}
+        {closed.length > 0 && (
+          <ul className="quiz-transfer-closed muted">
+            {closed.map((c) => (
+              <li key={c.key}>
+                {c.time} · недоступен: {c.reason}
+              </li>
+            ))}
+          </ul>
         )}
         <label className="field">
           <span>Работа в журнале</span>
