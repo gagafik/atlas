@@ -20,21 +20,21 @@ Level=Literal['teacher','class_teacher','director']
 KINDS={'praise':'Похвала','remark':'Замечание'}
 LEVELS={'teacher':'Учитель','class_teacher':'Классный руководитель','director':'Директор'}
 STATES={'pending':'На согласовании','published':'Действует','rejected':'Отклонена','withdrawn':'Отозвана'}
-def category(id,kind,title,level='teacher',approval=False,quick=False,letter=False):
-    return dict(id=id,kind=kind,title=title,active=True,level=level,approval=approval,quick=quick,letter=letter)
+def category(id,kind,title,level='teacher',approval=False,quick=False,letter=False,report=False):
+    return dict(id=id,kind=kind,title=title,active=True,level=level,approval=approval,quick=quick,letter=letter,report=report)
 DEFAULT_CATEGORIES=[
     category('activity','praise','Активная работа на уроке',quick=True),
     category('help','praise','Помощь одноклассникам',quick=True),
     category('achievement','praise','Успех в конкурсе или олимпиаде'),
     category('class-praise','praise','Похвала классного руководителя','class_teacher'),
-    category('director-praise','praise','Благодарность директора','director',letter=True),
+    category('director-praise','praise','Благодарность директора','director',letter=True,report=True),
     category('discipline','remark','Нарушение дисциплины',quick=True),
     category('unprepared','remark','Не готов к уроку',quick=True),
     category('no-homework','remark','Нет домашнего задания',quick=True),
     category('uniform','remark','Нет школьной формы'),
     category('class-remark','remark','Замечание классного руководителя','class_teacher'),
-    category('performance-warning','remark','Предупреждение о неуспеваемости','class_teacher',approval=True,letter=True),
-    category('director-remark','remark','Замечание директора','director',letter=True),
+    category('performance-warning','remark','Предупреждение о неуспеваемости','class_teacher',approval=True,letter=True,report=True),
+    category('director-remark','remark','Замечание директора','director',letter=True,report=True),
 ]
 PAGE=50
 def stamp():return now().isoformat()
@@ -70,6 +70,7 @@ class Category(Model):
     approval:bool=False
     quick:bool=False
     letter:bool=False
+    report:bool=False  # printed in the pupil's report card by default
 
 
 class Config(Model):
@@ -90,6 +91,7 @@ class NewNotes(Model):
     day:date
     text:str=Field(default='',max_length=2000)
     visible:bool=True
+    printed:bool|None=None  # None takes the default of the category
     lessonKey:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
     @model_validator(mode='after')
     def unique(self):
@@ -101,6 +103,7 @@ class Edit(Model):
     version:int=Field(ge=1)
     categoryId:str=Field(min_length=1,max_length=40)
     text:str=Field(default='',max_length=2000)
+    printed:bool|None=None  # None keeps the current choice
     reason:str=Field(min_length=1,max_length=500)
 
 
@@ -229,7 +232,7 @@ class Behaviour:
             classes={c.id:c.name for c in snap.state.classes}
             result.update(className=classes.get(row['class_id'],''),withdrawReason=data.get('withdrawReason',''),visible=bool(row['visible']),
                           approval=bool(data.get('approval')),decision=data.get('decision',''),approvedBy=data.get('approvedBy',''),
-                          canChange=bool(user and self.may_change(user,row)),
+                          printed=bool(data.get('printed')),canChange=bool(user and self.may_change(user,row)),
                           canDecide=bool(user and user['role']=='admin' and row['status']=='pending'))
         return result
 
@@ -296,6 +299,18 @@ class Behaviour:
     def register(self,app,Workspace):
         from .behaviour_routes import register
         register(self,app,Workspace)
+
+
+def report_measures(db,workspace,students,start,end):
+    """Measures marked for the report card that were in force on the days of the period, {pupil: [..]}.
+    Only the kind, the category, the day and the letter number leave this function: never the text, the author or a reason."""
+    # The module creates its tables lazily and a read connection must not write.
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='behaviour_notes'").fetchone():return {}
+    result={}
+    for student,kind,day,raw in db.execute("SELECT student_id,kind,day,document FROM behaviour_notes WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?)) AND status='published' AND visible=1 AND day>=? AND day<=? AND json_extract(document,'$.printed')=1 ORDER BY day,seq",(workspace,encoded(sorted(students)),start,end)):
+        data=json.loads(raw)
+        result.setdefault(student,[]).append(dict(kind=kind,kindTitle=KINDS[kind],category=data['category'],day=day,letterNumber=data.get('letterNumber',''),levelTitle=LEVELS[data.get('level','teacher')]))
+    return result
 
 
 def csv_cell(value):

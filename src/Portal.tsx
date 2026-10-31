@@ -79,7 +79,7 @@ export default function Portal({
   const [section, setSectionValue] = useState("schedule");
   // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
   const [journalFocus, setJournalFocus] = useState<
-      { studentId: string; day: string } | undefined
+      { studentId: string; day?: string; finalsPeriodId?: string } | undefined
     >(),
     [wantedRecord, setWantedRecord] = useState("");
   function setSection(value: string) {
@@ -182,8 +182,14 @@ export default function Portal({
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setSectionValue(sections[event.type]);
       setJournalFocus(
-        event.type === "atlas-open-journal" && detail.studentId && detail.day
-          ? { studentId: detail.studentId, day: detail.day }
+        event.type === "atlas-open-journal" &&
+          detail.studentId &&
+          (detail.day || detail.finalsPeriodId)
+          ? {
+              studentId: detail.studentId,
+              day: detail.day,
+              finalsPeriodId: detail.finalsPeriodId,
+            }
           : undefined,
       );
       if (event.type === "atlas-open-schedule" && detail.studentId)

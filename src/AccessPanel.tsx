@@ -695,6 +695,10 @@ export default function AccessPanel({
                       "journal.final_publish": "Опубликован итог",
                       "journal.final_reopen": "Открыто исправление итога",
                       "journal.final_withdraw": "Отозван итог",
+                      "journal.final_report_settings":
+                        "Изменены настройки табеля школы",
+                      "journal.final_layout":
+                        "Изменён порядок предметов в табеле класса",
                       "journal.published":
                         "Опубликована запись учебного журнала",
                       "journal.withdrawn": "Отозвана запись учебного журнала",
