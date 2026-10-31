@@ -117,14 +117,19 @@ def publication(draft, old):
     return dict(base,content=dict(base['content'],assessments=draft['content']['assessments'],records=[dict(r,grades=grades[r['studentId']]) for r in base['content']['records']]))
 
 
-def news(published, old):
-    """Whether a publication holds anything the old one does not; a lesson never published needs a mark to be worth publishing."""
-    return published!=old if old else any(r['grades'] for r in published['content']['records'])
+def news(draft, old):
+    """Whether the draft holds works or marks the publication does not; a lesson never published needs a mark to be worth publishing.
+    A pupil who is in the draft roster only counts too: the publication cannot carry the mark yet, and the lesson editor has to publish the roster first."""
+    if not old: return any(r['grades'] for r in draft['content']['records'])
+    if draft['content']['assessments']!=old['content']['assessments']: return True
+    shown={r['studentId']:r['grades'] for r in old['content']['records']}
+    return any(r['grades']!=shown.get(r['studentId'],[]) for r in draft['content']['records'])
 
 
 def pending(draft, old):
-    try: return news(publication(draft,old),old)
+    try: publication(draft,old)
     except HTTPException: return True
+    return news(draft,old)
 
 
 def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
@@ -135,7 +140,7 @@ def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
     for i,item in enumerate(shown):
         lesson,content=item['document']['lesson'],item['document']['content']
         lessons.append(dict(lessonKey=item['key'],day=lesson['date'],start=lesson['start'],end=lesson['end'],version=item['version'],publishedVersion=item['publishedVersion'],
-                            editable=item['editable'],reason=item['reason'],rosterFrozen=item['frozen'],hasUnpublished=item['pending'],withdrawn=item['withdrawn']))
+                            editable=item['editable'],reason=item['reason'],rosterFrozen=item['frozen'],hasUnpublished=item['pending'],withdrawn=item['withdrawn'],openable=item['openable']))
         for a in content['assessments']:
             index[i,a['id']]=len(works);used.add(category_of(a))
             works.append(dict(lesson=i,id=a['id'],name=a['name'],kind=a['kind'],maxScore=a['maxScore'],weight=a['weight'],category=category_of(a)))
@@ -210,9 +215,11 @@ class CourseTable:
                 if record and staff_read(user,workspace,current or lesson):
                     problem=editing_problem(record,year[0]<=lesson['date']<=year[1],current)
                     item=dict(draft=True,document=doc,editable=problem is None,reason=problem[1] if problem else '',frozen=record['rosterFrozen'],pending=pending(doc,old),
-                              withdrawn=not old and self.withdrawn(db,workspace,existing['lessonKey']))
-                elif old: item=dict(draft=False,document=old,editable=False,reason=FOREIGN,frozen=False,pending=False,withdrawn=False)
-            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False,withdrawn=False)
+                              withdrawn=not old and self.withdrawn(db,workspace,existing['lessonKey']),openable=True)
+                # The lesson editor opens what resolved_entry lets this account read; a lesson of a substitute alone is refused there.
+                elif old: item=dict(draft=False,document=old,editable=False,reason=FOREIGN,frozen=False,pending=False,withdrawn=False,openable=record is not None)
+            # Only a teacher of the lesson, or the administrator, opens it in the journal: the class teacher reads marks here and nowhere else.
+            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False,withdrawn=False,openable=scope['kind']=='admin')
             if item is None or not first<=item['document']['lesson']['date']<=last or not item['document']['content']['assessments']: continue
             # The published copy of a marked draft tells which marks the families do not see yet.
             grades={(r['studentId'],g['assessmentId']):g for r in old['content']['records'] for g in r['grades']} if item['draft'] and old else {}
@@ -268,7 +275,7 @@ class CourseTable:
             published=publication(draft,old)
             try: Content.model_validate(published['content'])
             except ValidationError as exc: raise HTTPException(422,plain(exc)) from None
-            if news(published,old):
+            if news(draft,old):
                 if old and signature(old['lesson'])!=signature(draft['lesson']): raise HTTPException(409,'Сначала обновите и опубликуйте состав и время урока в журнале.')
                 # Two ordinary revisions, as when a grade is posted from the homework panel: the publication, then the draft.
                 updated=self.journal.store_revision(db,workspace,item.lessonKey,user,state.revision,version,published,previous,publish=True,created=created)

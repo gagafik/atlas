@@ -613,18 +613,20 @@ export default function CourseTablePanel({
                                     <EyeOff size={12} />
                                   </span>
                                 )}
-                                <button
-                                  className="ct-link ct-noprint"
-                                  title="Открыть урок в журнале"
-                                  aria-label={`Открыть урок ${ruDate(lesson.day)}`}
-                                  disabled={busy}
-                                  onClick={() =>
-                                    leave() &&
-                                    onOpen(lesson.lessonKey, lesson.day)
-                                  }
-                                >
-                                  <ExternalLink size={12} />
-                                </button>
+                                {lesson.openable && (
+                                  <button
+                                    className="ct-link ct-noprint"
+                                    title="Открыть урок в журнале"
+                                    aria-label={`Открыть урок ${ruDate(lesson.day)}`}
+                                    disabled={busy}
+                                    onClick={() =>
+                                      leave() &&
+                                      onOpen(lesson.lessonKey, lesson.day)
+                                    }
+                                  >
+                                    <ExternalLink size={12} />
+                                  </button>
+                                )}
                               </span>
                               {category && (
                                 <CategoryBadge category={category} />

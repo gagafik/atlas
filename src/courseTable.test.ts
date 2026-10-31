@@ -33,6 +33,7 @@ const lesson = (n: number, extra = {}) => ({
   rosterFrozen: false,
   hasUnpublished: false,
   withdrawn: false,
+  openable: true,
   ...extra,
 });
 const pupil = (id: string, lessons: number[], extra = {}): CoursePupil => ({

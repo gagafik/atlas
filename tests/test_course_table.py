@@ -575,6 +575,30 @@ def test_unpublished_roster_sync_blocks_publication_only(client, monkeypatch):
     assert mark(ok(table(teacher)), 's1', DAY, 'a') == dict(score=9, label='', comment='', unpublished=True)
 
 
+def test_mark_of_a_pupil_added_by_a_roster_sync_is_not_silently_left_in_the_draft(client, monkeypatch):
+    for module in (journal, timetable_history):
+        monkeypatch.setattr(module, 'today', lambda: date(2026, 8, 17))
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
+    resave(lambda s: s.students.append(Student(id='new', name='Новый ученик', classId='c-demo-a')))
+    t = ok(table(teacher))
+    assert write(teacher, entry(teacher, column(t, DAY)['lessonKey'], syncRoster='true'), syncRoster=True).status_code == 200
+    t = ok(table(teacher))
+    # The pupil is in the draft roster only and has no mark yet: nothing waits for publication.
+    assert pupil(t, 'new')['lessons'] == [0] and not column(t, DAY)['hasUnpublished']
+    before = stored_versions()
+    # The publication cannot carry this pupil before the lesson editor publishes the roster: the lesson is refused, not saved as a draft with a success line.
+    refused = ok(save(teacher, [edit(t, DAY, ('new', 'a', 7))], publish=True))
+    assert refused['saved'] == [] and [c['status'] for c in refused['conflicts']] == [409]
+    assert stored_versions() == before
+    assert ok(save(teacher, [edit(t, DAY, ('new', 'a', 7))]))['saved']
+    t = ok(table(teacher))
+    assert mark(t, 'new', DAY, 'a')['unpublished'] and column(t, DAY)['hasUnpublished']
+    # Publishing what is pending says the same, instead of leaving the button without an answer.
+    pending = ok(save(teacher, [edit(t, DAY)], publish=True))
+    assert pending['saved'] == [] and [c['status'] for c in pending['conflicts']] == [409]
+
+
 def test_substitute_lesson(client, clock):
     teacher, _ = staffed(client)
     create(client, 'teacher', login='sub', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
@@ -600,6 +624,33 @@ def test_unpublished_draft_of_a_substitute_lesson_stays_hidden(client, clock):
     state.datedLessons = [DatedLesson(id='sub', name='Замена', kind='change', placementId='eng', sourceDate=DAY, onDate=DAY, teacherIds=['t1'])]
     api.save('demo', state)
     assert ok(table(teacher))['lessons'] == []
+
+
+def opens(c, lesson):
+    """Whether the lesson editor of the journal opens this lesson for the account."""
+    return c.get('/api/journal/entry', params=dict(workspace='demo', lessonKey=lesson['lessonKey'], day=lesson['day'])).status_code == 200
+
+
+def test_lesson_link_is_offered_only_where_the_journal_opens_the_lesson(client, clock):
+    math, head = mathematics(client)
+    course(math, DAY, [work('m')], dict(m=dict(s1=7, s3=9)), publish=True, subject=MATH, group=MATH_GROUP)
+    # The class teacher reads the marks here and has no access to the lesson itself.
+    for viewer, expected in ((math, True), (client, True), (head, False)):
+        t = ok(table(viewer, 'g-math', 'sub0'))
+        assert t['lessons'] and {(l['openable'], opens(viewer, l)) for l in t['lessons']} == {(expected, expected)}
+    # A lesson taught by a substitute from the first day: the course teacher sees the published marks and the journal refuses to open it.
+    create(client, 'teacher')
+    create(client, 'teacher', login='sub', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    teacher = signed('teacher')
+    course(teacher, NEXT, [work('a')], dict(a=dict(s1=6)))
+    state = api.read('demo')
+    state.datedLessons = [DatedLesson(id='sub', name='Замена', kind='change', placementId='eng', sourceDate=DAY, onDate=DAY, teacherIds=['t1'])]
+    api.save('demo', state)
+    course(signed('sub'), DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
+    t = ok(table(teacher))
+    foreign, own = column(t, DAY), column(t, NEXT)
+    assert not foreign['editable'] and not foreign['openable'] and not opens(teacher, foreign)
+    assert own['openable'] and opens(teacher, own)
 
 
 @pytest.mark.parametrize('login', ['admin', 'lead', 'unrelated', 'parent'])

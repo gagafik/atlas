@@ -22,6 +22,8 @@ export interface CourseLesson {
   hasUnpublished: boolean;
   // The teacher hid the lesson from the families: publishing everything pending leaves it hidden.
   withdrawn: boolean;
+  // The journal opens this lesson for the account; a class teacher or a substitute-held lesson gets no link.
+  openable: boolean;
 }
 export interface CourseWork {
   // Index into CourseTable.lessons.
