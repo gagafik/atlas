@@ -135,7 +135,7 @@ def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
     for i,item in enumerate(shown):
         lesson,content=item['document']['lesson'],item['document']['content']
         lessons.append(dict(lessonKey=item['key'],day=lesson['date'],start=lesson['start'],end=lesson['end'],version=item['version'],publishedVersion=item['publishedVersion'],
-                            editable=item['editable'],reason=item['reason'],rosterFrozen=item['frozen'],hasUnpublished=item['pending']))
+                            editable=item['editable'],reason=item['reason'],rosterFrozen=item['frozen'],hasUnpublished=item['pending'],withdrawn=item['withdrawn']))
         for a in content['assessments']:
             index[i,a['id']]=len(works);used.add(category_of(a))
             works.append(dict(lesson=i,id=a['id'],name=a['name'],kind=a['kind'],maxScore=a['maxScore'],weight=a['weight'],category=category_of(a)))
@@ -183,6 +183,11 @@ class CourseTable:
         self.access=journal.access
         self.snapshots=homework.snapshots
 
+    @staticmethod
+    def withdrawn(db, workspace, key):
+        """Whether the teacher hid the lesson from the families: no publication is left and the history holds the withdrawal."""
+        return db.execute("SELECT 1 FROM journal_history WHERE workspace=? AND lesson_key=? AND action='journal.withdrawn' LIMIT 1",(workspace,key)).fetchone() is not None
+
     def shown(self, db, user, snap, scope, workspace, group, subject, start, end):
         """The document each lesson contributes, with what the table needs to know about it. Only a course teacher's read resolves schedule days."""
         state=snap.state
@@ -204,9 +209,10 @@ class CourseTable:
                     record=None
                 if record and staff_read(user,workspace,current or lesson):
                     problem=editing_problem(record,year[0]<=lesson['date']<=year[1],current)
-                    item=dict(draft=True,document=doc,editable=problem is None,reason=problem[1] if problem else '',frozen=record['rosterFrozen'],pending=pending(doc,old))
-                elif old: item=dict(draft=False,document=old,editable=False,reason=FOREIGN,frozen=False,pending=False)
-            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False)
+                    item=dict(draft=True,document=doc,editable=problem is None,reason=problem[1] if problem else '',frozen=record['rosterFrozen'],pending=pending(doc,old),
+                              withdrawn=not old and self.withdrawn(db,workspace,existing['lessonKey']))
+                elif old: item=dict(draft=False,document=old,editable=False,reason=FOREIGN,frozen=False,pending=False,withdrawn=False)
+            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False,withdrawn=False)
             if item is None or not first<=item['document']['lesson']['date']<=last or not item['document']['content']['assessments']: continue
             # The published copy of a marked draft tells which marks the families do not see yet.
             grades={(r['studentId'],g['assessmentId']):g for r in old['content']['records'] for g in r['grades']} if item['draft'] and old else {}
@@ -223,6 +229,8 @@ class CourseTable:
         stored=previous['document']['lesson']
         if stored['groupId']!=group or stored['subjectId']!=subject: raise HTTPException(403,'Урок не относится к этому курсу.')
         if previous['version']!=item.version: raise HTTPException(409,STALE)
+        # Publishing everything pending never brings back a lesson the teacher hid: it needs a mark typed in the table.
+        if publish and not previous['published'] and not item.cells and self.withdrawn(db,workspace,item.lessonKey): return 'unchanged',item.lessonKey
         current=current_lesson(state,stored,snap.course_rows(group,subject))
         record=self.journal.resolved_entry(state,workspace,user,item.lessonKey,previous,current,db=db)
         old=previous['published']

@@ -32,6 +32,7 @@ const lesson = (n: number, extra = {}) => ({
   reason: "",
   rosterFrozen: false,
   hasUnpublished: false,
+  withdrawn: false,
   ...extra,
 });
 const pupil = (id: string, lessons: number[], extra = {}): CoursePupil => ({
@@ -112,6 +113,11 @@ describe("parseCell", () => {
     expect(parseCell(" 0 ", points)).toEqual({ score: 0, label: "" });
     for (const bad of ["8,5,1", "-1", "11", "abc", "1e1", "8.5.1"])
       expect(parseCell(bad, points)).toHaveProperty("error");
+  });
+  it("accepts the full score and refuses anything above it", () => {
+    expect(parseCell("10", points)).toEqual({ score: 10, label: "" });
+    expect(parseCell("10,0", points)).toEqual({ score: 10, label: "" });
+    expect(parseCell("10,01", points)).toHaveProperty("error");
   });
   it("clears on empty input and keeps a text mark up to the limit", () => {
     expect(parseCell("  ", points)).toEqual({ score: null, label: "" });
@@ -266,6 +272,20 @@ describe("save requests", () => {
       { lessonKey: "k1", day: "2026-10-01", version: 1, cells: [] },
     ]);
   });
+  it("leaves a lesson hidden from the families hidden unless it has an edit of its own", () => {
+    const t = table();
+    t.lessons[0].hasUnpublished = true;
+    t.lessons[0].withdrawn = true;
+    expect(lessonBodies(t, [], true)).toEqual([]);
+    expect(lessonBodies(t, [edit("p1", "k1", "a")], true)).toEqual([
+      {
+        lessonKey: "k1",
+        day: "2026-10-01",
+        version: 1,
+        cells: [{ studentId: "p1", assessmentId: "a", score: 5, label: "" }],
+      },
+    ]);
+  });
   it("splits many lessons into requests of at most ten", () => {
     const parts = chunks(Array.from({ length: 25 }, (_, i) => i));
     expect(parts.map((p) => p.length)).toEqual([10, 10, 5]);
@@ -298,18 +318,16 @@ describe("save requests", () => {
         },
       ],
     };
-    const result = afterSave(
-      [
-        edit("p1", "k1", "a"),
-        edit("p1", "k2", "a"),
-        edit("p1", "k3", "a"),
-        edit("p2", "k3", "a"),
-        edit("p1", "k4", "a"),
-        edit("p1", "k5", "a"),
-        edit("p2", "k1", "a", { error: "x" }),
-      ],
-      [response],
-    );
+    const typed = [
+      edit("p1", "k1", "a"),
+      edit("p1", "k2", "a"),
+      edit("p1", "k3", "a"),
+      edit("p2", "k3", "a"),
+      edit("p1", "k4", "a"),
+      edit("p1", "k5", "a"),
+      edit("p2", "k1", "a", { error: "x" }),
+    ];
+    const result = afterSave(typed, [response], typed);
     expect(result.saved).toBe(1);
     expect(result.unchanged).toBe(1);
     expect(
@@ -324,11 +342,57 @@ describe("save requests", () => {
     expect(result.conflicts.map((c) => c.lessonKey)).toEqual(["k3", "k4"]);
   });
   it("keeps the edits of requests that never ran", () => {
+    const typed = [edit("p1", "k1", "a"), edit("p1", "k9", "a")];
     const result = afterSave(
-      [edit("p1", "k1", "a"), edit("p1", "k9", "a")],
+      typed,
       [{ saved: [{ lessonKey: "k1" }], unchanged: [], conflicts: [] }],
+      typed,
     );
     expect(result.edits.map((e) => e.lessonKey)).toEqual(["k9"]);
+  });
+  it("keeps what was typed or changed while the requests were on their way", () => {
+    const sent = [edit("p1", "k1", "a"), edit("p1", "k3", "a")];
+    const now = [
+      // Sent and unchanged, sent and typed over, and not sent at all, in a saved and in a conflicting lesson.
+      edit("p1", "k1", "a"),
+      edit("p2", "k1", "a"),
+      edit("p3", "k1", "a", { raw: "9", score: 9 }),
+      edit("p1", "k3", "a"),
+      edit("p2", "k3", "a"),
+    ];
+    const result = afterSave(
+      now,
+      [
+        {
+          saved: [{ lessonKey: "k1" }],
+          unchanged: [],
+          conflicts: [
+            {
+              lessonKey: "k3",
+              day: "2026-10-03",
+              status: 409,
+              message: "Журнал урока уже изменён.",
+              cells: [],
+            },
+          ],
+        },
+      ],
+      sent,
+    );
+    expect(
+      result.edits.map((e) => [e.studentId, e.lessonKey, e.message]),
+    ).toEqual([
+      ["p2", "k1", undefined],
+      ["p3", "k1", undefined],
+      ["p1", "k3", "Журнал урока уже изменён."],
+      ["p2", "k3", undefined],
+    ]);
+    const changed = afterSave(
+      [edit("p1", "k1", "a", { raw: "7", score: 7 })],
+      [{ saved: [{ lessonKey: "k1" }], unchanged: [], conflicts: [] }],
+      [edit("p1", "k1", "a")],
+    );
+    expect(changed.edits.map((e) => e.raw)).toEqual(["7"]);
   });
 });
 
@@ -353,6 +417,12 @@ describe("period", () => {
         periods.slice(1),
       ),
     ).toEqual({ start: "2026-08-17", end: "2026-10-25", periodId: "q1" });
+    // With several ended periods the latest one wins, whatever order they come in.
+    for (const order of [periods.slice(1), periods.slice(1).reverse()])
+      expect(
+        defaultCoursePeriod("2026-12-30", "2026-08-17", "2027-06-11", order)
+          .periodId,
+      ).toBe("q2");
   });
   it("falls back to the year so far", () => {
     expect(
@@ -377,7 +447,10 @@ describe("CSV", () => {
     t.pupils[0].sharePercentage = 0;
     t.pupils[2].marks = {};
     courseCsv(t);
-    const lines = vi.mocked(download).mock.lastCall![1].split("\r\n");
+    const text = vi.mocked(download).mock.lastCall![1];
+    // Excel reads the Cyrillic as UTF-8 only with the byte order mark.
+    expect(text.startsWith("\uFEFF")).toBe(true);
+    const lines = text.split("\r\n");
     expect(lines[0]).toContain('"01.10.2026 ФО Опрос (макс 10, вес 1)"');
     expect(lines[0].endsWith('"ФО %";"СОР %";"Итог по долям %"')).toBe(true);
     expect(lines[1]).toContain('"0";"\'=1+1";""');

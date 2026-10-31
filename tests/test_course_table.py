@@ -1,9 +1,12 @@
 """Course table: pupils against the works of one course, dated rows, roles, and the per-lesson atomic save and publication."""
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 import pytest
-from backend import api, journal, journal_periods, journal_reads, timetable_history
+from fastapi import HTTPException
+from backend import api, course_table, journal, journal_periods, journal_reads, timetable_history
 from backend.models import DatedLesson, Student
+from backend.timetable_history import History
 from test_access import client, enable, create, signed
 from test_journal import DAY, entry, write, report
 from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
@@ -89,6 +92,15 @@ def lead(teacher_id, class_id='c-demo-a'):
     api.save('demo', school)
 
 
+def mathematics(client):
+    """The maths teacher (t0) and the class teacher of 10A (t1), as accounts."""
+    enable(client)
+    create(client, 'teacher', login='math', grants=[dict(workspace='demo', view='teacher', entityIds=['t0'])])
+    create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    lead('t1')
+    return signed('math'), signed('lead')
+
+
 def stored_versions():
     with api.connect() as db:
         return db.execute('SELECT lesson_key,version,published_version FROM journal_entries ORDER BY lesson_key').fetchall()
@@ -101,8 +113,9 @@ def history_count(c, key):
 def test_table_lists_works_across_lessons(client, clock):
     teacher, _ = staffed(client)
     before = api.read('demo')
-    course(teacher, DAY, [work('a'), work('b', 20, 2, 'sor')], dict(a=dict(s1=8, s2=6), b=dict(s1=15)))
+    # The later lesson is saved first: the columns follow the dates, not the order of saving.
     course(teacher, NEXT, [work('c', 40, 1, 'soch')], dict(c=dict(s2=33.5)))
+    course(teacher, DAY, [work('a'), work('b', 20, 2, 'sor')], dict(a=dict(s1=8, s2=6), b=dict(s1=15)))
     course(client, DAY, [work('m')], dict(m=dict(s1=9)), subject=MATH, group=MATH_GROUP)
     t = ok(table(teacher))
     assert t['canEdit'] and t['scope'] == 'course' and t['source'] == 'draft'
@@ -173,6 +186,83 @@ def test_class_teacher_reads_only_published_marks_of_own_class(client, clock):
     full = ok(table(math, 'g-math', 'sub0'))
     assert [p['id'] for p in full['pupils']] == ['s1', 's3']
     assert ok(head.get(URL + '/courses?workspace=demo'))['courses'][0]['kind'] == 'class'
+
+
+def test_admin_and_class_teacher_read_the_publication_not_a_newer_draft(client, clock):
+    math, head = mathematics(client)
+    course(math, DAY, [work('m')], dict(m=dict(s1=8, s3=9)), publish=True, subject=MATH, group=MATH_GROUP)
+    t = ok(table(math, 'g-math', 'sub0'))
+    # The teacher changes a mark and adds a work; both stay drafts.
+    ok(save(math, [edit(t, DAY, ('s1', 'm', 3))], group='g-math', subject='sub0'))
+    record = entry(math, column(t, DAY)['lessonKey'])
+    record['document']['content']['assessments'].append(work('draft'))
+    assert write(math, record).status_code == 200
+    own = ok(table(math, 'g-math', 'sub0'))
+    assert [w['id'] for w in own['works']] == ['m', 'draft'] and mark(own, 's1', DAY, 'm') == dict(score=3, label='', comment='', unpublished=True)
+    for reader in (client, head):
+        t = ok(table(reader, 'g-math', 'sub0'))
+        assert [w['id'] for w in t['works']] == ['m'] and mark(t, 's1', DAY, 'm') == dict(score=8, label='', comment='')
+        assert pupil(t, 's1')['sharePercentage'] == 80 and not column(t, DAY)['hasUnpublished']
+
+
+def test_class_teacher_sees_marks_by_the_class_of_the_day(client, clock):
+    math, head = mathematics(client)
+    # s3 moves from 10D to 10A on NEXT: the 10A class teacher gets what was earned in 10A and nothing from before.
+    resave(lambda s: setattr(next(p for p in s.students if p.id == 's3'), 'classId', 'c-demo-a'), date(2026, 8, 24))
+    course(math, DAY, [work('m')], dict(m=dict(s1=7, s3=9)), publish=True, subject=MATH, group=MATH_GROUP)
+    course(math, NEXT, [work('m')], dict(m=dict(s1=5, s3=4)), publish=True, subject=MATH, group=MATH_GROUP)
+    t = ok(table(head, 'g-math', 'sub0'))
+    assert [p['id'] for p in t['pupils']] == ['s1', 's3']
+    assert pupil(t, 's3')['lessons'] == [1] and mark(t, 's3', DAY, 'm') is None and mark(t, 's3', NEXT, 'm')['score'] == 4
+    assert (pupil(t, 's1')['sharePercentage'], pupil(t, 's3')['sharePercentage']) == (60, 40)
+    full = ok(table(math, 'g-math', 'sub0'))
+    assert mark(full, 's3', DAY, 'm')['score'] == 9 and pupil(full, 's3')['sharePercentage'] == 65
+
+
+def test_class_teacher_reads_the_whole_class_courses_of_the_own_class(client, clock):
+    teacher, _ = staffed(client)
+    create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    lead('t1')
+    head = signed('lead')
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=8)), publish=True)
+    course(teacher, NEXT, [work('a')], dict(a=dict(s1=6)))
+    listed = ok(head.get(URL + '/courses?workspace=demo'))['courses']
+    # The courses of the own class 10A, the mixed maths group by its 10A pupil, and the course t1 teaches; nothing of 10D.
+    assert [(c['groupId'], c['subjectId'], c['kind'], c['canEdit']) for c in listed] == [
+        ('g-a', 'sub2', 'class', False), ('g-a', 'sub3', 'class', False), ('g-math', 'sub0', 'class', False), ('g-core', 'sub1', 'course', True)]
+    t = ok(table(head))
+    assert t['scope'] == 'class' and t['canEdit'] is False and [l['day'] for l in t['lessons']] == [DAY] and mark(t, 's1', DAY, 'a')['score'] == 8
+    assert table(head, 'g-d', 'sub2').status_code == 403
+    assert save(head, [edit(t, DAY, ('s1', 'a', 5))]).status_code == 403
+
+
+def test_moved_lesson_is_read_by_its_published_date(client, clock):
+    teacher, _ = staffed(client)
+    first = course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
+    resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='move', name='Перенос', kind='change', placementId='eng', sourceDate=date(2026, 8, 17),
+                                                          onDate=date(2026, 8, 18), startTime='14:00', endTime='14:40')]))
+    assert write(teacher, entry(teacher, first['lessonKey'], syncRoster='true'), syncRoster=True).status_code == 200
+    moved = '2026-08-18'
+    # The draft is dated after the move, the publication still on the old day: each reader finds the lesson by the copy it reads.
+    assert [l['day'] for l in ok(table(client, start=DAY, end=DAY))['lessons']] == [DAY]
+    assert ok(table(client, start=moved, end=moved))['lessons'] == []
+    assert [l['day'] for l in ok(table(teacher, start=moved, end=moved))['lessons']] == [moved]
+    assert ok(table(teacher, start=DAY, end=DAY))['lessons'] == []
+
+
+def test_course_rows_of_a_snapshot_stay_bounded(client, clock):
+    snap = api.journal.snapshots.get('demo')
+    for i in range(40): snap.course_rows(f'g{i}', 's')(date.fromisoformat(DAY))
+    assert len(snap.course_days) <= 32 and ('g39', 's') in snap.course_days and ('g0', 's') not in snap.course_days
+
+
+def test_rosters_of_a_database_before_dated_rosters_follow_the_group_of_the_day(client, clock):
+    snap = api.journal.snapshots.get('demo')
+    start, end = date.fromisoformat(DAY), date.fromisoformat(END)
+    # Without dated rosters nobody has a start or an end, and whoever is in the group when the period ends has a row.
+    before = SimpleNamespace(entities=snap.entities, history=History(snap.state))
+    assert course_table.spans(before, 'g-a', start, end) == {'s1': (None, None), 's2': (None, None)}
+    assert set(course_table.spans(snap, 'g-a', start, end)) == {'s1', 's2'}
 
 
 @pytest.mark.parametrize('login', ['unrelated', 'parent', 'student'])
@@ -309,6 +399,44 @@ def test_publishing_a_lesson_never_published_leaves_attendance_and_topic_in_the_
     assert after['document']['content']['topic'] == 'Тема в черновике' and after['document']['content']['records'][0]['attendance'] == 'present'
 
 
+def test_publishing_marks_adds_one_revision_when_nothing_else_is_in_the_draft(client, clock):
+    teacher, _ = staffed(client)
+    first = course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
+    t = ok(table(teacher))
+    before = history_count(teacher, first['lessonKey'])
+    done = ok(save(teacher, [edit(t, DAY, ('s1', 'a', 9))], publish=True))['saved'][0]
+    assert history_count(teacher, first['lessonKey']) == before + 1 and done['version'] == done['publishedVersion']
+
+
+def test_publishing_everything_pending_leaves_a_hidden_lesson_hidden(client, clock):
+    teacher, parent = staffed(client)
+    first = course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
+    course(teacher, NEXT, [work('a')], dict(a=dict(s1=6)))
+    assert teacher.post('/api/journal/withdraw?workspace=demo', json=dict(lessonKey=first['lessonKey'], version=first['version'])).status_code == 200
+    assert report(parent).json()['rows'] == []
+    t = ok(table(teacher))
+    assert column(t, DAY)['withdrawn'] and column(t, DAY)['hasUnpublished'] and not column(t, NEXT)['withdrawn']
+    # What the Publish button sends: every lesson with pending marks, and the cells typed in the lesson that has them.
+    result = ok(save(teacher, [edit(t, DAY), edit(t, NEXT, ('s1', 'a', 7))], publish=True))
+    assert [s['lessonKey'] for s in result['saved']] == [column(t, NEXT)['lessonKey']] and result['unchanged'] == [column(t, DAY)['lessonKey']]
+    assert [r['lesson']['date'] for r in report(parent).json()['rows']] == [NEXT]
+    # A mark typed in the hidden lesson is the teacher's own decision to show it again.
+    fresh = ok(table(teacher))
+    assert ok(save(teacher, [edit(fresh, DAY, ('s1', 'a', 4))], publish=True))['saved'][0]['published']
+    assert not column(ok(table(teacher)), DAY)['withdrawn'] and len(report(parent).json()['rows']) == 2
+
+
+def test_save_is_audited_only_when_something_is_saved(client, clock):
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(teacher))
+    audited = lambda: [a for a in client.get('/api/access/audit').json() if a['action'] == 'journal.course_saved']
+    ok(save(teacher, [edit(t, DAY, ('s1', 'a', 5))]))
+    assert audited() == []
+    ok(save(teacher, [edit(t, DAY, ('s1', 'a', 6))]))
+    assert len(audited()) == 1
+
+
 def test_partial_conflict_saves_the_rest(client, clock):
     teacher, _ = staffed(client)
     course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
@@ -373,6 +501,31 @@ def test_cell_problems_reject_the_whole_lesson(client, clock):
     assert [row for row in stored_versions() if row[0] == column(t, DAY)['lessonKey']] == [row for row in before if row[0] == column(t, DAY)['lessonKey']]
     fresh = ok(table(teacher))
     assert (mark(fresh, 's1', DAY, 'a')['score'], mark(fresh, 's2', NEXT, 'a')['score']) == (5, 7)
+
+
+def test_pupil_who_left_keeps_the_mark_and_gets_no_cell(client, clock):
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5, s2=6)))
+    resave(lambda s: setattr(next(p for p in s.students if p.id == 's2'), 'active', False), date.fromisoformat(DAY))
+    t = ok(table(teacher))
+    assert write(teacher, entry(teacher, column(t, DAY)['lessonKey'], syncRoster='true'), syncRoster=True).status_code == 200
+    t = ok(table(teacher))
+    # The mark stays and counts, read-only: the lesson roster no longer lists the pupil as enrolled.
+    assert column(t, DAY)['editable'] and pupil(t, 's2')['lessons'] == [] and mark(t, 's2', DAY, 'a')['score'] == 6 and pupil(t, 's2')['sharePercentage'] == 60
+    before = stored_versions()
+    result = ok(save(teacher, [edit(t, DAY, ('s1', 'a', 8), ('s2', 'a', 9))]))
+    assert result['saved'] == [] and result['conflicts'][0]['status'] == 422
+    assert [(c['studentId'], c['assessmentId']) for c in result['conflicts'][0]['cells']] == [('s2', 'a')]
+    assert stored_versions() == before
+
+
+def test_label_on_a_points_work_is_a_cell_problem(client, clock):
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(teacher))
+    result = ok(save(teacher, [edit(t, DAY, ('s1', 'a', 'хорошо'), ('s2', 'a', 4))]))
+    assert result['saved'] == [] and result['conflicts'][0]['status'] == 422
+    assert [(c['studentId'], c['assessmentId']) for c in result['conflicts'][0]['cells']] == [('s1', 'a')]
 
 
 def test_future_lesson_refused(client, monkeypatch):
@@ -477,6 +630,60 @@ def test_other_course_lesson_is_refused_per_lesson(client, clock):
     assert stored_versions() == before
     stale = save(teacher, [edit(mine, DAY, ('s1', 'a', 9))], revision=api.read('demo').revision + 1)
     assert stale.status_code == 409 and stored_versions() == before
+
+
+def record_of(**extra):
+    return dict(periodLocks=[], writable=True, needsSync=False, currentDate=DAY, futureLesson=False, document=dict(lesson=dict(date=DAY))) | extra
+
+
+def test_the_rules_for_writing_marks_apply_in_a_fixed_order(client, clock):
+    problem = lambda day_ok=True, current=None, **extra: course_table.editing_problem(record_of(**extra), day_ok, current)
+    assert problem() is None
+    # A closed period outranks everything else, then the right to write, then the schedule, then the calendar.
+    locked = problem(periodLocks=[dict(name='1 четверть')], writable=False, needsSync=True)
+    assert locked[0] == 403 and locked[1] not in (course_table.GONE, course_table.FOREIGN)
+    assert problem(writable=False, currentDate=None, needsSync=True) == (403, course_table.GONE)
+    assert problem(writable=False, needsSync=True) == (403, course_table.FOREIGN)
+    assert problem(writable=False, current=dict(status='cancelled')) == (403, course_table.GONE)
+    assert problem(needsSync=True, futureLesson=True)[0] == 409
+    assert problem(currentDate='2026-08-18', futureLesson=True)[0] == 409
+    assert problem(futureLesson=True, day_ok=False)[0] == 422
+    assert problem(document=dict(lesson=dict(date='2026-09-02')), currentDate='2026-09-02')[0] == 422
+    assert problem(day_ok=False)[0] == 422
+
+
+def test_publication_refuses_a_roster_that_lost_a_pupil():
+    lesson = dict(students=[])
+    def content(*ids): return dict(assessments=[], records=[dict(studentId=id, grades=[], topic='') for id in ids])
+    old = dict(lesson=lesson, content=content('s1', 's2'))
+    with pytest.raises(HTTPException) as caught: course_table.publication(dict(lesson=lesson, content=content('s1')), old)
+    assert caught.value.status_code == 409
+    assert course_table.publication(dict(lesson=lesson, content=content('s2', 's1')), old)['content']['records'][0]['studentId'] == 's1'
+
+
+def test_course_table_rechecks_the_account(client, clock, monkeypatch):
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(teacher))
+    before, original = stored_versions(), api.journal.reading
+    def revoke(operation):
+        # The account changes after the request was identified but before the read starts.
+        with api.connect() as db: db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
+        return original(operation)
+    monkeypatch.setattr(api.journal, 'reading', revoke)
+    assert table(teacher).status_code == 409 and signed('teacher').get(URL + '/courses?workspace=demo').status_code == 409
+    monkeypatch.setattr(api.journal, 'reading', original)
+    assert table(signed('teacher')).status_code == 200
+    snapshots = api.journal.snapshots.get
+    def revoke_writer(workspace):
+        result = snapshots(workspace)
+        with api.connect() as db: db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
+        return result
+    fresh = signed('teacher')
+    monkeypatch.setattr(api.journal.snapshots, 'get', revoke_writer)
+    assert save(fresh, [edit(t, DAY, ('s1', 'a', 9))]).status_code == 409 and stored_versions() == before
+    monkeypatch.setattr(api.journal.snapshots, 'get', snapshots)
+    assert ok(save(signed('teacher'), [edit(t, DAY, ('s1', 'a', 9))]))['saved']
 
 
 def test_request_limits(client, clock):

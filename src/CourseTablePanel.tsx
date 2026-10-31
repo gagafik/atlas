@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent } from "react";
-import { ExternalLink, Lock } from "lucide-react";
+import { ExternalLink, EyeOff, Lock } from "lucide-react";
 import { api } from "./api";
 import CategoryBadge from "./CategoryBadge";
 import {
@@ -28,6 +28,8 @@ import "./CourseTable.css";
 
 type Edits = Record<string, Edit>;
 const LEAVE = "В таблице есть несохранённые оценки. Перейти без сохранения?";
+const HIDDEN =
+  "Урок скрыт от учеников и родителей. «Опубликовать» не вернёт его, пока в нём нет правки из таблицы.";
 const scopeNotes = {
   course:
     "Вы видите черновики своих уроков. Точка в ячейке — оценка пока не опубликована для учеников и родителей.",
@@ -191,7 +193,12 @@ export default function CourseTablePanel({
     return next;
   }
   function commit(pos: Position, value: string): Edits {
-    if (!table || !editable(table.pupils[pos.row], table.works[pos.col], table))
+    // While a save is on its way nothing is typed: the edits it carries are decided when the answer comes.
+    if (
+      busy ||
+      !table ||
+      !editable(table.pupils[pos.row], table.works[pos.col], table)
+    )
       return editsRef.current;
     if (value === cellText(pos, editsRef.current)) return editsRef.current;
     const next = put(editsRef.current, pos, value);
@@ -223,6 +230,7 @@ export default function CourseTablePanel({
     activate(target, next);
   }
   function keyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (busy) return;
     const box = e.currentTarget;
     const whole =
       box.selectionStart === 0 && box.selectionEnd === box.value.length;
@@ -250,6 +258,7 @@ export default function CourseTablePanel({
   function paste(e: ClipboardEvent<HTMLInputElement>) {
     if (!active || !table) return;
     e.preventDefault();
+    if (busy) return;
     const { edits: pasted, skipped } = applyPaste(
       parsePaste(e.clipboardData.getData("text")),
       active,
@@ -271,11 +280,9 @@ export default function CourseTablePanel({
   async function submit(publish: boolean) {
     if (!table || busy) return;
     if (active) commit(active, text);
-    const bodies = lessonBodies(
-      table,
-      Object.values(editsRef.current),
-      publish,
-    );
+    // What the requests carry; whatever is typed afterwards is not theirs to settle.
+    const sent = Object.values(editsRef.current);
+    const bodies = lessonBodies(table, sent, publish);
     if (!bodies.length) return;
     setBusy(true);
     setError("");
@@ -308,7 +315,7 @@ export default function CourseTablePanel({
     } catch (e) {
       failure = (e as Error).message;
     }
-    const outcome = afterSave(Object.values(editsRef.current), responses);
+    const outcome = afterSave(Object.values(editsRef.current), responses, sent);
     setEdits(Object.fromEntries(outcome.edits.map((e) => [editKey(e), e])));
     const invalid = outcome.edits.filter((e) => e.error).length;
     setActive(null);
@@ -597,6 +604,15 @@ export default function CourseTablePanel({
                                     <Lock size={12} />
                                   </span>
                                 )}
+                                {lesson.withdrawn && (
+                                  <span
+                                    role="img"
+                                    title={HIDDEN}
+                                    aria-label={HIDDEN}
+                                  >
+                                    <EyeOff size={12} />
+                                  </span>
+                                )}
                                 <button
                                   className="ct-link ct-noprint"
                                   title="Открыть урок в журнале"
@@ -706,10 +722,16 @@ export default function CourseTablePanel({
                                   .filter(Boolean)
                                   .join(" ")}
                                 onFocus={() =>
-                                  can && !here && activate({ row, col })
+                                  can &&
+                                  !here &&
+                                  !busy &&
+                                  activate({ row, col })
                                 }
                                 onClick={() =>
-                                  can && !here && activate({ row, col })
+                                  can &&
+                                  !here &&
+                                  !busy &&
+                                  activate({ row, col })
                                 }
                               >
                                 {here ? (
@@ -720,6 +742,7 @@ export default function CourseTablePanel({
                                       w.kind === "points" ? "decimal" : "text"
                                     }
                                     aria-label={`${p.name}: ${w.name}`}
+                                    readOnly={busy}
                                     onChange={(e) => setText(e.target.value)}
                                     onKeyDown={keyDown}
                                     onPaste={paste}

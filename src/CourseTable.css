@@ -221,9 +221,14 @@
     max-height: 65vh;
   }
 }
+/* A named page: an unnamed @page rule would turn every printout of the app landscape. */
+@page course-table {
+  size: landscape;
+}
 @media print {
-  @page {
-    size: landscape;
+  /* On the body, which is in the flow: the absolutely positioned panel cannot carry the page name. */
+  body.course-table-printing {
+    page: course-table;
   }
   /* The print button marks the page: only this panel is printed, whatever else the journal shows. */
   body.course-table-printing * {

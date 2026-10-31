@@ -20,6 +20,8 @@ export interface CourseLesson {
   reason: string;
   rosterFrozen: boolean;
   hasUnpublished: boolean;
+  // The teacher hid the lesson from the families: publishing everything pending leaves it hidden.
+  withdrawn: boolean;
 }
 export interface CourseWork {
   // Index into CourseTable.lessons.
@@ -262,7 +264,8 @@ export function nextCell(
     if (editable(pupil, work, table)) return { row, col };
   }
 }
-/** One request body per lesson that has sendable edits. Publishing also lists the lessons with unpublished marks, without cells. */
+/** One request body per lesson that has sendable edits. Publishing also lists the lessons with unpublished marks, without cells;
+ *  a lesson the teacher hid from the families is published only together with an edit of its own. */
 export function lessonBodies(
   table: CourseTable,
   edits: Edit[],
@@ -279,7 +282,11 @@ export function lessonBodies(
         score,
         label,
       }));
-    if (!cells.length && !(publish && lesson.hasUnpublished)) return [];
+    if (
+      !cells.length &&
+      !(publish && lesson.hasUnpublished && !lesson.withdrawn)
+    )
+      return [];
     return [
       {
         lessonKey: lesson.lessonKey,
@@ -296,11 +303,16 @@ export function chunks<T>(items: T[], size = LESSONS_PER_REQUEST): T[][] {
     result.push(items.slice(i, i + size));
   return result;
 }
-/** What is left to type after the server answered: the edits of saved lessons are done, those of conflicting lessons stay with the reason. */
+/** What is left to type after the server answered. `sent` are the edits the requests carried: only those are decided, an edit
+ *  typed or changed while the requests were in flight stays. Edits of saved lessons are done, those of conflicting lessons stay with the reason. */
 export function afterSave(
   edits: Edit[],
   responses: SaveResponse[],
+  sent: Edit[],
 ): SaveOutcome {
+  const carried = new Map(
+    sent.filter((e) => !e.error).map((e) => [editKey(e), e.raw]),
+  );
   const done = new Set<string>();
   const conflicts = new Map<
     string,
@@ -328,8 +340,8 @@ export function afterSave(
   }
   return {
     edits: edits.flatMap((e) => {
-      // Edits with a local error were never sent, so nothing was decided about them.
-      if (e.error) return [e];
+      // Edits with a local error, or typed after the requests left, were never sent: nothing was decided about them.
+      if (e.error || carried.get(editKey(e)) !== e.raw) return [e];
       const conflict = conflicts.get(e.lessonKey);
       if (conflict)
         return [
@@ -407,7 +419,7 @@ export function courseCsv(table: CourseTable, filename?: string) {
     ]);
   download(
     filename ?? `Таблица курса ${table.group} ${table.subject}.csv`,
-    "﻿" +
+    "\uFEFF" +
       values
         .map((r) => r.map((v) => csvCell(String(v ?? ""))).join(";"))
         .join("\r\n"),
