@@ -574,3 +574,41 @@ def test_default_day_is_the_latest_lesson_day_of_the_course(client):
     assert (found['defaultDay'], found['defaultLessonKey']) == ('2026-08-31', '')
     day = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={found["defaultDay"]}'))['lessons']
     assert len(day) == 1 and day[0]['editable']
+
+
+def test_a_work_of_the_test_turned_into_a_text_scale_is_refused_by_the_preview(client):
+    quiz, teacher, parent, pupil, other = world(client)
+    solve(pupil, quiz, 's1', 'a'), solve(other, quiz, 's2', 'b')
+    release(teacher, quiz)
+    key = key_of(teacher)
+    assert ok(send(teacher, tbody(key)))['status'] == 'saved'
+    # The teacher turns the work this transfer created into a text scale and clears its marks.
+    record = entry(teacher, key)
+    record['document']['content']['assessments'][0]['kind'] = 'label'
+    for r in record['document']['content']['records']: r['grades'] = []
+    assert write(teacher, record).status_code == 200
+    before = stored_versions()
+    for publish in [False, True]:
+        shown = ok(preview(teacher, tbody(key, publish=publish)))
+        assert shown['allowed'] is False and shown['rows'] == [] and 'текстовой' in shown['reason']
+    refused = post(teacher, tbody(key) | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[]))
+    assert refused.status_code == 422 and 'текстовой' in refused.json()['detail'] and stored_versions() == before
+    # With the points restored the same transfer goes through again.
+    record = entry(teacher, key)
+    record['document']['content']['assessments'][0]['kind'] = 'points'
+    assert write(teacher, record).status_code == 200
+    assert ok(send(teacher, tbody(key)))['counts']['written'] == 2
+
+
+@pytest.mark.parametrize('kind', ['cancel', 'change'])
+def test_default_day_skips_a_day_the_teacher_cannot_enter_marks(client, kind):
+    quiz, teacher, parent, pupil, other = world(client)
+    held = lambda day, id: DatedLesson(id=id, name='Изменение', kind=kind, placementId='eng', sourceDate=day, onDate=day, **(dict(teacherIds=['t1']) if kind == 'change' else {}))
+    resave(lambda s: setattr(s, 'datedLessons', [held(date(2026, 8, 31), 'last')]))
+    found = summary(teacher)
+    assert (found['defaultDay'], found['defaultLessonKey']) == ('2026-08-24', '')
+    day = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={found["defaultDay"]}'))['lessons']
+    assert len(day) == 1 and day[0]['editable']
+    # When no lesson of the last two weeks takes marks, the latest day with a lesson is still offered, and the panel shows why it is closed.
+    resave(lambda s: setattr(s, 'datedLessons', [held(date(2026, 8, 31), 'last'), held(date(2026, 8, 24), 'before')]))
+    assert summary(teacher)['defaultDay'] == '2026-08-31'

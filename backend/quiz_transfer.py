@@ -159,7 +159,10 @@ class QuizTransfer:
                 work=works.get(body.assessmentId)
                 if not work:problem=409,'Работа удалена или изменена.'
                 elif work['kind']=='label':problem=422,'Результат теста переносится только в работу с баллами.'
-            elif work_id(quiz) in works:work=works[work_id(quiz)]
+            elif work_id(quiz) in works:
+                # The work of an earlier run, found again; the teacher may since have turned it into a text scale.
+                work=works[work_id(quiz)]
+                if work['kind']=='label':problem=422,'Работа этого теста в уроке стала текстовой. Верните баллы в редакторе урока или выберите другую работу.'
             else:
                 cfg=config(db,workspace);wanted=body.newWork.category or self.grading.default_category(ctx,cfg);found=names(cfg).get(wanted)
                 if not found or not found['active']:problem=422,'Выберите действующую категорию работы.'
@@ -209,6 +212,16 @@ class QuizTransfer:
     def view(self, plan):
         return {k:v for k,v in plan.items() if k not in INTERNAL}
 
+    def default_day(self, db, ctx, first):
+        """The latest day up to `first` (looking back two weeks) on which this account can enter marks; else the latest day with a lesson of the course, else `first`.
+        A day whose only lessons are cancelled, held by a substitute or in a closed period would open the panel on a dead end."""
+        lesson=lesson_of(ctx);rows=ctx['snap'].course_rows(lesson['groupId'],lesson['subjectId']);start=ctx['state'].settings.yearStart;seen=None
+        for d in (first-timedelta(days=n) for n in range(14)):
+            if d<start or not rows(d):continue
+            if not ctx['canTransfer'] or any(l['editable'] for l in self.lessons(db,ctx,d)['lessons']):return d
+            seen=seen or d
+        return seen or first
+
     def summary(self, db, ctx):
         quiz,workspace=ctx['quiz'],ctx['workspace']
         marks={}
@@ -226,9 +239,7 @@ class QuizTransfer:
         else:
             # A course test has no lesson of its own: offer the latest day of the course up to today (or the close of the test), looking back two weeks.
             closes=datetime.fromisoformat(quiz['closesAt']).astimezone(ZoneInfo('Asia/Qyzylorda')).date()
-            rows=ctx['snap'].course_rows(lesson['groupId'],lesson['subjectId']);first=min(today(),closes)
-            found=next((d for d in (first-timedelta(days=n) for n in range(14)) if d>=ctx['state'].settings.yearStart and rows(d)),first)
-            day,key=found.isoformat(),''
+            day,key=self.default_day(db,ctx,min(today(),closes)).isoformat(),''
         cfg=config(db,workspace)
         return dict(canTransfer=ctx['canTransfer'],quizMax=quiz_max(ctx),defaultCategory=self.grading.default_category(ctx,cfg),defaultDay=day,defaultLessonKey=key,
                     marks=list(marks.values()),runs=runs)
