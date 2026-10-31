@@ -25,6 +25,7 @@ class Snapshot:
         self.entities = {view: {x.id: x for x in getattr(state, table)} for view, table in VIEWS.items()}
         self.days, self.weeks = OrderedDict(), OrderedDict()
         self.lesson_days = OrderedDict()
+        self.course_days = OrderedDict()
         self.lock = RLock()
 
     def current_lesson(self, lesson):
@@ -42,6 +43,19 @@ class Snapshot:
                 if len(self.lesson_days)>8: self.lesson_days.popitem(last=False)
             self.lesson_days.move_to_end(day)
             return self.lesson_days[day]
+
+    def course_rows(self, group, subject):
+        """rows(day): the lessons of one group and subject on a day. The course table resolves many days of one course, and
+        journal.current_lesson only accepts rows of the same subject and group, so only those are kept, per course, for this revision."""
+        def rows(day):
+            with self.lock:
+                days = self.course_days.setdefault((group,subject),{})
+                self.course_days.move_to_end((group,subject))
+                while len(self.course_days)>32: self.course_days.popitem(last=False)
+                if day not in days:
+                    days[day] = [r for r in self.lesson_rows(day) if r['activity']=='lesson' and r['groupId']==group and r['subjectId']==subject]
+                return days[day]
+        return rows
 
     def student_lessons(self, day, student):
         # Notices cover lessons the pupil actually attends, excluding partial
