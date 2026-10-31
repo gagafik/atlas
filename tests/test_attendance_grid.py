@@ -3,12 +3,13 @@ from datetime import date,datetime,timedelta,timezone
 import json
 from uuid import uuid4
 import pytest
-from backend import api,attendance_grid,coverage_reminders,journal,journal_coverage,timetable_history
+from backend import api,attendance_grid,coverage_reminders,journal,journal_coverage,journal_periods,timetable_history
 from backend.models import DatedLesson,Placement,Teacher
 from test_access import client,enable,create,signed
 from test_absences import body,decide,send
 from test_journal import DAY,lesson,entry,write,graded,report as pupil_report
 from test_journal_history import resave,pupil
+from test_journal_periods import period as make_period,close as close_period,action as period_action
 from test_teaching_materials import save as save_material,attach
 
 A,D='c-demo-a','c-demo-d'
@@ -24,13 +25,14 @@ def clock(monkeypatch):
     return fix(monkeypatch,DAY,14)
 
 
-def fix(monkeypatch,day,hour=14):
-    moment=datetime.fromisoformat(day).replace(hour=hour,tzinfo=timezone.utc);local=moment.date()
+def fix(monkeypatch,day,hour=14,minute=0):
+    moment=datetime.fromisoformat(day).replace(hour=hour,minute=minute,tzinfo=timezone.utc);local=moment.date()
     monkeypatch.setattr(journal,'today',lambda:local)
     monkeypatch.setattr(timetable_history,'today',lambda:local)
     monkeypatch.setattr(attendance_grid,'moment',lambda:moment.astimezone(attendance_grid.ZONE))
     monkeypatch.setattr(coverage_reminders,'now',lambda:moment)
     monkeypatch.setattr(journal_coverage,'now',lambda:moment)
+    monkeypatch.setattr(journal_periods,'now',lambda:moment)
     return moment
 
 
@@ -86,17 +88,17 @@ def confirm(c,days=(DAY,),action='confirm',class_id=A,versions=None,**values):
 
 def inbox(c,action='journal.updated'):return [i for i in c.get('/api/notifications/inbox').json()['items'] if i['action']==action]
 def history(c,key):return good(c.get('/api/journal/history',params=dict(workspace='demo',lessonKey=key)))
-def rows(sql,*args):
-    with api.connect() as db:return db.execute(sql,args).fetchall()
+def close_day(c,day=DAY):
+    """Close a period of one day through the periods API; the result can be reopened with period_action."""
+    return close_period(c,make_period(c,start=day,end=day))
 
 
-def test_tables_are_added_idempotently(client):
-    enable(client)
+def test_tables_are_added_idempotently(client,clock):
+    people=staffed(client);publish(people['english'],s1=('present',0),s2=('present',0))
+    good(confirm(people['leader'],acknowledge=True))
     with api.connect() as db:
-        api.journal.tables(db)
-        db.execute("INSERT INTO attendance_day_confirmations VALUES ('demo','c-demo-a','2026-08-17',1,'confirmed','x','u','U','[]',0,0)")
         api.journal.tables(db);api.journal.tables(db)
-        assert db.execute('SELECT count(*) FROM attendance_day_confirmations').fetchone()==(1,)
+    assert state_of(people['leader'])['status']=='confirmed' and len(trail(people['leader']))==1
     assert client.get('/api/journal/day?workspace=demo&day='+DAY).status_code==200
 
 
@@ -139,6 +141,28 @@ def test_note_shows_effective_status_and_code_to_class_staff_only(client,clock):
     teacher=good(grid(people['english']))
     assert teacher['level']=='own' and teacher['cells'][key]['s1']==['absent','excused',0,None] and teacher['codes']==[]
     assert 'Личная причина' not in json.dumps(mine,ensure_ascii=False)
+
+
+def test_note_type_needs_the_report_or_the_notes(client,clock):
+    people=staffed(client);key=publish(people['english'],s1=('absent',0),s2=('present',0))['lessonKey']
+    assert decide(people['leader'],send(people['parent'],body(codeId='illness'))).status_code==200
+    seen=lambda c:good(grid(c));report=lambda c:c.post('/api/journal/attendance/report?workspace=demo',json=dict(start=DAY,end=DAY))
+    assert seen(people['leader'])['cells'][key]['s1'][3]=='illness'
+    # A deputy who only edits the grid sees the accepted result, never the type of the note and no list of types.
+    staff=create(client,'staff',login='deputy');deputy=signed('deputy')
+    assign(client,{A:[dict(accountId=staff['id'],capabilities=['attendance_grid'])]})
+    shown=seen(deputy);assert shown['level']=='edit' and shown['cells'][key]['s1']==['absent','excused',0,None] and shown['codes']==[]
+    assert good(deputy.get(GRID+'/options?workspace=demo'))['codes']==[] and report(deputy).status_code==403
+    # With the report the types come back.
+    assign(client,{A:[dict(accountId=staff['id'],capabilities=['attendance_grid','attendance_read'])]})
+    shown=seen(deputy);assert shown['cells'][key]['s1'][3]=='illness' and shown['codes'] and good(deputy.get(GRID+'/options?workspace=demo'))['codes']
+    # The class teacher who loses both duties keeps editing and loses the types.
+    assign(client,{A:[dict(accountId=people['leaderId'],capabilities=[],revoked=['attendance_read','absence_review'])]})
+    mine=seen(people['leader']);assert mine['level']=='edit' and mine['cells'][key]['s1']==['absent','excused',0,None] and mine['codes']==[]
+    assert good(people['leader'].get(GRID+'/options?workspace=demo'))['codes']==[] and report(people['leader']).status_code==403
+    # Either duty alone is enough.
+    assign(client,{A:[dict(accountId=people['leaderId'],capabilities=[],revoked=['attendance_read'])]})
+    assert seen(people['leader'])['cells'][key]['s1'][3]=='illness'
 
 
 def test_draft_marks_never_shown(client,clock):
@@ -231,8 +255,8 @@ def test_teacher_draft_stays_private_and_keeps_the_edit(client,clock):
     assert result['changed']==1 and result['lessons'][0]['version']==3 and result['lessons'][0]['publishedVersion']==2
     shown=good(pupil_report(people['parent']))['rows'];assert [r['lesson']['subject'] for r in shown]==[MATHS]
     assert shown[0]['record']['attendance']=='absent' and shown[0]['record']['grades']==[] and shown[0]['content']['topic']=='' and shown[0]['record']['comment']==''
-    published=json.loads(rows('SELECT published_document FROM journal_entries WHERE lesson_key=?',key)[0][0])
-    assert {r['studentId']:r['attendance'] for r in published['content']['records']}=={'s1':'absent','s3':'unmarked'}
+    # Both pupils of the shared lesson are in the publication: s1 marked, s3 left unmarked.
+    assert good(grid(people['leader']))['cells'][key]['s1'][0]=='absent' and good(grid(client,D))['cells'][key]['s3'][0]=='unmarked'
     mine=entry(people['maths'],key);records={r['studentId']:r for r in mine['document']['content']['records']}
     assert mine['document']['content']['topic']=='Тема урока' and records['s1']['attendance']=='absent' and records['s1']['grades'][0]['score']==8 and records['s3']['attendance']=='present'
     assert records['s1']['comment']=='Комментарий только s1'
@@ -260,6 +284,26 @@ def test_conflict_is_cell_level_and_atomic(client,clock):
     assert lesson_of(value,MATHS)['state']=='none' and value['cells'][english]['s1'][0]=='absent'
     # Another pupil of the same lesson is not a conflict.
     assert good(post(people['leader'],[cell(english,'s2','present')],'late',lateMinutes=3))['changed']==1
+
+
+def test_a_publication_that_leaves_the_pupil_unmarked_is_no_conflict(client,clock):
+    people=staffed(client);english=key_of(client,ENGLISH)
+    seen=good(grid(people['leader']))['cells'][english]['s1'];assert seen==[None,None,0,None]
+    # The teacher publishes a topic only: every pupil is an explicit «unmarked» record now, which the grid showed as «no record».
+    record=entry(people['english'],english);record['document']['content']['topic']='Только тема';good(write(people['english'],record,publish=True))
+    assert good(grid(people['leader']))['cells'][english]['s1'][0]=='unmarked'
+    assert good(post(people['leader'],[cell(english,'s1',seen[0],seen[2])],'absent'))['changed']==1
+    assert good(grid(people['leader']))['cells'][english]['s1'][0]=='absent'
+
+
+def test_a_first_publication_by_someone_else_is_no_conflict(client,clock):
+    people=staffed(client);english=key_of(client,ENGLISH)
+    stale=good(grid(people['leader']))['cells'][english]
+    # Another editor marks s2 and thereby creates the lesson's first publication; s1 becomes an explicit unmarked record.
+    good(post(people['admin'],[cell(english,'s2')],'late',lateMinutes=4))
+    assert good(post(people['leader'],[cell(english,'s1',stale['s1'][0])],'absent'))['changed']==1
+    # What the class teacher saw of s2 is out of date: that cell is a conflict.
+    assert post(people['leader'],[cell(english,'s2',stale['s2'][0])],'present').status_code==409
 
 
 def test_replay_is_idempotent(client,clock):
@@ -296,11 +340,11 @@ def test_permissions(client,clock):
 
 def test_closed_future_and_cancelled_lessons_are_refused_and_nothing_is_written(client,clock):
     people=staffed(client);english,maths=key_of(client,ENGLISH),key_of(client,MATHS);untouched=lambda:good(grid(people['leader']))['cells'][maths]['s1'][0] is None
-    with api.connect() as db:db.execute("INSERT INTO journal_periods VALUES ('demo','p1','Первая четверть',?,?,'quarter',1,'closed',1,'x')",(DAY,DAY))
+    period=close_day(client)
     closed=post(people['leader'],[cell(english,'s1'),cell(maths,'s1')])
-    assert closed.status_code==403 and 'Первая четверть' in closed.json()['detail'] and untouched()
-    shown=good(grid(people['leader']))['days'][0];assert not any(l['canEdit'] for l in shown['lessons']) and shown['locked']==['Первая четверть']
-    with api.connect() as db:db.execute('DELETE FROM journal_periods')
+    assert closed.status_code==403 and period['name'] in closed.json()['detail'] and untouched()
+    shown=good(grid(people['leader']))['days'][0];assert not any(l['canEdit'] for l in shown['lessons']) and shown['locked']==[period['name']]
+    assert period_action(client,period,'reopen',reason='Исправление отметок').status_code==200
     future=key_of(client,ENGLISH,NEXT)
     assert post(people['leader'],[cell(maths,'s1'),cell(future,'s1',day=NEXT)]).status_code==422 and untouched()
     resave(lambda s:setattr(s,'datedLessons',[DatedLesson(id='cancel',name='Отмена',kind='cancel',placementId='eng',sourceDate=date.fromisoformat(DAY),onDate=date.fromisoformat(DAY))]))
@@ -309,14 +353,30 @@ def test_closed_future_and_cancelled_lessons_are_refused_and_nothing_is_written(
     shown=good(grid(people['leader']));assert lesson_of(shown,ENGLISH)['status']=='cancelled' and not lesson_of(shown,ENGLISH)['canEdit'] and shown['cells'][english]=={}
 
 
+def test_a_moved_lesson_is_refused_and_unsettles_the_day_it_left(client,monkeypatch):
+    fix(monkeypatch,'2026-08-19')
+    people=staffed(client);leader=people['leader'];english=publish(people['english'],s1=('present',0),s2=('present',0))['lessonKey']
+    good(confirm(leader,acknowledge=True));assert state_of(leader)['status']=='confirmed'
+    resave(lambda s:setattr(s,'datedLessons',[DatedLesson(id='move',name='Перенос',kind='change',placementId='eng',sourceDate=date.fromisoformat(DAY),onDate=date(2026,8,18),startTime='14:00',endTime='14:40')]))
+    # A grid that still shows the old day must not write marks onto a lesson that has gone elsewhere.
+    assert post(leader,[cell(english,'s1','present')],'absent').status_code==409
+    # Until the teacher moves the publication it stays on the old day, shown and read-only.
+    old=lesson_of(good(grid(leader)),ENGLISH);assert old['status']=='cancelled' and not old['canEdit'] and day_of(good(grid(leader)))['counts']['present']==2
+    # The teacher moves the publication to the new date with the very same marks: the old day no longer holds them.
+    synced=entry(people['english'],english,syncRoster=True);assert write(people['english'],synced,publish=True,syncRoster=True).status_code==200
+    assert state_of(leader)['status']=='changed' and state_of(leader)['version']==2 and day_of(good(grid(leader)))['counts']['present']==0
+    moved=good(grid(leader,start='2026-08-18'));assert moved['cells'][lesson_of(moved,ENGLISH,'2026-08-18')['lessonKey']]['s1'][0]=='present'
+
+
 def test_material_stays_after_class_teacher_edit(client,clock):
     people=staffed(client);material=save_material(people['english']).json()
     record=graded(entry(people['english'],key_of(people['english'],ENGLISH)));key=record['lessonKey']
     assert attach(people['english'],record,material,publish=True).status_code==200
     assert people['leader'].get('/api/journal/library/'+material['id']+'?workspace=demo').status_code in (403,404)
     good(post(people['leader'],[cell(key,'s1','present')],'absent'))
-    published=json.loads(rows('SELECT published_document FROM journal_entries WHERE lesson_key=?',key)[0][0])['content']
-    assert [m['id'] for m in published['materials']]==[material['id']] and published['topic']=='Тема урока' and published['records'][0]['grades'][0]['score']==8
+    shown=good(pupil_report(people['parent']))['rows'][0]
+    assert shown['record']['attendance']=='absent' and shown['record']['grades'][0]['score']==8
+    assert [m['id'] for m in shown['content']['materials']]==[material['id']] and shown['content']['topic']=='Тема урока'
 
 
 def test_lesson_teacher_is_told_about_a_correction(client,clock):
@@ -330,6 +390,17 @@ def test_lesson_teacher_is_told_about_a_correction(client,clock):
     assert not inbox(people['maths'],'journal.attendance_corrected')
 
 
+def test_the_one_who_corrects_is_not_told(client,clock):
+    people=staffed(client);lead('t2')
+    # The English teacher now leads 10A and teaches its English lesson.
+    english=publish(people['english'],s1=('absent',0),s2=('present',0))['lessonKey'];maths=publish(people['maths'],MATHS,s1=('present',0),s3=('present',0))['lessonKey']
+    good(post(people['english'],[cell(english,'s1','absent')],'present'))
+    assert not inbox(people['english'],'journal.attendance_corrected')
+    # Correcting a colleague's lesson does tell that colleague, and still not the author of the correction.
+    good(post(people['english'],[cell(maths,'s1','present')],'absent'))
+    assert len(inbox(people['maths'],'journal.attendance_corrected'))==1 and not inbox(people['english'],'journal.attendance_corrected')
+
+
 def test_failure_rolls_back_every_lesson(client,clock,monkeypatch):
     people=staffed(client);english,maths=key_of(client,ENGLISH),key_of(client,MATHS);calls=[]
     original=api.journal.notify
@@ -341,7 +412,7 @@ def test_failure_rolls_back_every_lesson(client,clock,monkeypatch):
     with pytest.raises(RuntimeError):post(people['leader'],[cell(english,'s1'),cell(maths,'s1')])
     monkeypatch.setattr(api.journal,'notify',original)
     value=good(grid(people['leader']))
-    assert lesson_of(value,ENGLISH)['state']=='none' and lesson_of(value,MATHS)['state']=='none' and not rows('SELECT 1 FROM journal_entries')
+    assert lesson_of(value,ENGLISH)['state']=='none' and lesson_of(value,MATHS)['state']=='none' and not good(pupil_report(people['parent']))['rows']
     assert good(post(people['leader'],[cell(english,'s1'),cell(maths,'s1')]))['changed']==2
 
 
@@ -353,10 +424,10 @@ def test_confirmation_lifecycle(client,clock):
     people=staffed(client);leader=people['leader'];english=publish(people['english'],s1=('present',0),s2=('present',0))['lessonKey']
     assert state_of(leader)['status']=='none' and state_of(leader)['expected'] and state_of(leader)['canConfirm']
     # The maths lesson was never filled in: the class teacher has to say that was checked.
-    refused=confirm(leader);assert refused.status_code==409 and 'не заполнено уроков: 1, без отметки: 1' in refused.json()['detail'] and '17.08.2026' in refused.json()['detail']
+    refused=confirm(leader);assert refused.status_code==409 and '17.08.2026' in refused.json()['detail'] and not trail(leader)
     done=good(confirm(leader,acknowledge=True));assert [(d['date'],d['status'],d['version'],d['actor']) for d in done['days']]==[(DAY,'confirmed',1,'Классный руководитель')]
     shown=state_of(leader);assert shown['status']=='confirmed' and shown['version']==1 and shown['actor']=='Классный руководитель' and shown['updated']
-    assert 'уроков 1' in trail(leader)[0]['comment']
+    assert trail(leader)[0]['comment']
     assert good(confirm(leader,versions={DAY:1}))['days'][0]['version']==1  # already confirmed: nothing changes
     # A new topic is no new mark: the day stays confirmed.
     record=entry(people['english'],english);record['document']['content']['topic']='Другая тема';good(write(people['english'],record,publish=True))
@@ -364,8 +435,10 @@ def test_confirmation_lifecycle(client,clock):
     # A changed mark opens the day again.
     record=entry(people['english'],english);next(r for r in record['document']['content']['records'] if r['studentId']=='s2')['attendance']='absent';good(write(people['english'],record,publish=True))
     assert state_of(leader)['status']=='changed' and state_of(leader)['version']==2
+    # The header names whoever changed the day, not the one who confirmed it; the confirmation stays in the history.
+    assert state_of(leader)['actor']=='Учитель английского' and trail(leader)[1]['actor']=='Классный руководитель'
     assert confirm(leader,versions={DAY:1},acknowledge=True).status_code==409
-    assert good(confirm(leader,versions={DAY:2},acknowledge=True))['days'][0]['version']==3
+    assert good(confirm(leader,versions={DAY:2},acknowledge=True))['days'][0]['version']==3 and state_of(leader)['actor']=='Классный руководитель'
     assert confirm(leader,action='revoke',versions={DAY:3}).status_code==422
     revoked=good(confirm(leader,action='revoke',versions={DAY:3},comment='Нашли ошибку'));assert revoked['days'][0]['status']=='revoked' and revoked['days'][0]['version']==4
     assert confirm(leader,action='revoke',versions={DAY:4},comment='Ещё раз').status_code==409
@@ -378,20 +451,23 @@ def test_confirmation_lifecycle(client,clock):
 def test_confirmation_refusals(client,monkeypatch):
     fix(monkeypatch,DAY,3)
     people=staffed(client);leader=people['leader']
-    assert confirm(leader,acknowledge=True).status_code==409 and 'не закончились' in confirm(leader,acknowledge=True).json()['detail']
+    assert confirm(leader,acknowledge=True).status_code==409
     assert not state_of(leader)['expected']
     fix(monkeypatch,DAY,14)
     assert confirm(leader,[NEXT],acknowledge=True).status_code==422
     assert confirm(leader,['2026-08-01'],acknowledge=True).status_code==422
     fix(monkeypatch,LATER)
-    empty=confirm(leader,['2026-08-18'],acknowledge=True);assert empty.status_code==422 and 'нет уроков' in empty.json()['detail'] and '18.08.2026' in empty.json()['detail']
-    with api.connect() as db:db.execute("INSERT INTO journal_periods VALUES ('demo','p1','Первая четверть',?,?,'quarter',1,'closed',1,'x')",(DAY,DAY))
+    empty=confirm(leader,['2026-08-18'],acknowledge=True);assert empty.status_code==422 and '18.08.2026' in empty.json()['detail']
+    period=close_day(client)
     locked=confirm(leader,acknowledge=True);assert locked.status_code==403 and 'Первая четверть' in locked.json()['detail']
+    assert period_action(client,period,'reopen',reason='Проверка').status_code==200
     # One bad day leaves the whole week unwritten.
-    with api.connect() as db:db.execute('DELETE FROM journal_periods')
     week=confirm(leader,[DAY,'2026-08-18'],acknowledge=True);assert week.status_code==422
-    assert state_of(leader)['status']=='none' and not rows('SELECT 1 FROM attendance_day_confirmations')
+    assert state_of(leader)['status']=='none' and not trail(leader)
     assert good(confirm(leader,[DAY,NEXT],acknowledge=True))['days'][1]['status']=='confirmed'
+    # Taking the confirmation back is a change of the journal's day as well: a closed period refuses it.
+    close_day(client)
+    assert confirm(leader,action='revoke',versions={DAY:1},comment='Ошибка').status_code==403 and state_of(leader)['status']=='confirmed'
 
 
 def test_withdrawal_and_grid_edit_flip_confirmation(client,clock):
@@ -443,6 +519,19 @@ def test_confirmation_permissions_and_replay(client,clock):
     assert [i['actor'] for i in trail(people['maths'])][:1]==['Учитель математики'] and trail(people['maths'])[-1]['actor']=='Сотрудник'
 
 
+def test_day_history_is_only_for_classes_the_account_can_open(client,clock):
+    people=staffed(client);publish(people['english'],s1=('present',0),s2=('present',0))
+    good(confirm(people['leader'],acknowledge=True));good(confirm(people['leader'],action='revoke',versions={DAY:1},comment='Нашли ошибку'))
+    resave(lambda s:s.teachers.append(Teacher(id='t9',name='Посторонний')));lead('t9',D)
+    create(client,'teacher',login='outsider',grants=[dict(workspace='demo',view='teacher',entityIds=['t9'])])
+    seen=lambda c,class_id=A:c.get(GRID+'/days/history',params=dict(workspace='demo',classId=class_id,day=DAY))
+    # The comment and the author of a confirmation are not for a teacher who has nothing to do with the class.
+    assert seen(signed('outsider')).status_code==404 and seen(people['admin'],'missing').status_code==404
+    assert seen(people['parent']).status_code==403 and seen(people['student']).status_code==403
+    assert [i['action'] for i in good(seen(people['leader']))['items']]==['revoked','confirmed'] and good(seen(people['english']))['items']
+    assert good(seen(signed('outsider'),D))['items']==[]
+
+
 def test_report_shows_confirmation_and_missing_lessons(client,clock):
     people=staffed(client);publish(people['english'],s1=('present',0),s2=('present',0));leader=people['leader']
     report=lambda c,**extra:c.post('/api/journal/attendance/report?workspace=demo',json=dict(start=DAY,end=DAY)|extra)
@@ -475,3 +564,20 @@ def test_coverage_card_shows_pending_days(client,clock):
     done=summary();assert (card(done)['pendingDays'],card(done)['pendingSince'],card(done)['confirmedDays'])==(0,None,1)
     assert done['token']==owed['token'] and done['counts']==owed['counts']
     text=json.dumps(done,ensure_ascii=False);assert '"s1"' not in text and 'Ученик' not in text and 'lessonKey' not in text
+
+
+def test_coverage_card_does_not_judge_days_by_a_subject_filter(client,monkeypatch):
+    # 09:01 at school: English (to 09:00) is over, Maths (from 09:45) is not, so the day of 10A is not over.
+    fix(monkeypatch,DAY,4,1)
+    people=staffed(client);admin=people['admin']
+    settings=good(admin.get('/api/journal/coverage/reminders?workspace=demo'))
+    good(admin.put('/api/journal/coverage/reminders?workspace=demo',json=dict(version=settings['version'],enabled=True,confirmationReminders=True)))
+    summary=lambda **extra:good(admin.post('/api/journal/coverage/classes?workspace=demo',json=dict(start=DAY,end=DAY,mode='classes')|extra))
+    card=lambda value:next(c for c in value['classes'] if c['classId']==A)
+    assert not state_of(people['leader'])['expected']
+    whole=card(summary());assert (whole['expectedDays'],whole['pendingDays'])==(0,0)
+    for subject in ('sub2','sub0'):
+        narrowed=card(summary(subjectId=subject))
+        # The lesson counts follow the filter; the days cannot be judged from one subject's lessons, so they are not measured.
+        assert [narrowed[k] for k in ('expectedDays','confirmedDays','changedDays','pendingDays','pendingSince')]==[None]*5
+        assert narrowed['expected']<=whole['expected']

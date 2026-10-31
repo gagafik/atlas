@@ -62,10 +62,11 @@ export type ClassSummary = {
   lastRecord: string | null;
   unfilledSince: string | null;
   unbound: number;
-  // Daily attendance confirmation, read live by the server; null while nothing is owed (never started, reminders off).
-  expectedDays?: number;
-  confirmedDays?: number;
-  changedDays?: number;
+  // Daily attendance confirmation, read live by the server. pendingDays is null while nothing is owed (never started,
+  // reminders off); every field is null while a subject filter narrows the rows, because a day cannot be judged from them.
+  expectedDays?: number | null;
+  confirmedDays?: number | null;
+  changedDays?: number | null;
   pendingDays?: number | null;
   pendingSince?: string | null;
 };

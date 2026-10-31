@@ -48,7 +48,8 @@ def marks_changed(db,workspace,before,after):
         rows=db.execute('''SELECT class_id,version FROM attendance_day_confirmations WHERE workspace=? AND day=? AND status='confirmed'
             AND EXISTS(SELECT 1 FROM json_each(pupils) p WHERE p.value IN (SELECT value FROM json_each(?)))''',(workspace,day,encoded(sorted(ids)))).fetchall()
         for class_id,version in rows:
-            db.execute("UPDATE attendance_day_confirmations SET status='changed',version=?,updated=? WHERE workspace=? AND class_id=? AND day=?",(version+1,stamp,workspace,class_id,day))
+            # The row names whoever made its last move, so the header never blames the confirmer for another person's change; the confirmation stays in the history.
+            db.execute("UPDATE attendance_day_confirmations SET status='changed',version=?,updated=?,actor_id=?,actor_name=? WHERE workspace=? AND class_id=? AND day=?",(version+1,stamp,user['id'],user['name'],workspace,class_id,day))
             db.execute("INSERT INTO attendance_day_history(workspace,class_id,day,version,created,actor_id,actor_name,action,comment,request_id) VALUES (?,?,?,?,?,?,?,'changed','',NULL)",
                 (workspace,class_id,day,version+1,stamp,user['id'],user['name']))
 
@@ -90,6 +91,11 @@ def summarize(days,states,since):
     owed=sorted(d for d in days if since and d>=since and status(d)!='confirmed')
     return dict(expectedDays=len(days),confirmedDays=sum(status(d)=='confirmed' for d in days),changedDays=sum(status(d)=='changed' for d in days),
         pendingDays=len(owed) if since else None,pendingSince=owed[0] if owed else None)
+
+
+def unmeasured():
+    """The fields of summarize() when the rows were narrowed by a filter that has nothing to do with confirmations."""
+    return dict(expectedDays=None,confirmedDays=None,changedDays=None,pendingDays=None,pendingSince=None)
 
 
 def counts():

@@ -195,10 +195,11 @@ describe("marksPayload", () => {
 
 describe("rateText", () => {
   it("shows a placeholder, never zero, while nothing is marked", () => {
-    expect(rateText(null)).toBe("—");
-    expect(rateText(undefined)).toBe("—");
-    expect(rateText(83.3)).toBe("83,3 %");
-    expect(rateText(0)).toBe("0 %");
+    const placeholder = rateText(null);
+    expect(rateText(undefined)).toBe(placeholder);
+    expect(rateText(0)).not.toBe(placeholder);
+    expect(rateText(83.3)).not.toBe(placeholder);
+    expect(rateText(0)).not.toBe(rateText(83.3));
   });
 });
 

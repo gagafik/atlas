@@ -117,6 +117,12 @@ class AttendanceGrid:
         if edit and level!='edit':raise HTTPException(403,EDIT_ONLY)
         return level
 
+    def typed(self,db,user,snap,workspace):
+        """Classes whose absence types this account may see: the report (attendance_read) and the notes (absence_review) show them there already.
+        Editing the grid (attendance_grid) and teaching in the class show the result of a note, never its type."""
+        if user['role']=='admin':return {c.id for c in snap.state.classes}
+        return self.absences.classes(db,user,snap,workspace,'attendance_read')|self.absences.classes(db,user,snap,workspace,'absence_review')
+
     def class_lessons(self,snap,class_ids,days):
         """{day: (lesson rows of the classes, {pupil id: pupil of that day})}. Only the groups of these classes are resolved, never the whole school."""
         days=tuple(days);key=(frozenset(class_ids),days)
@@ -150,8 +156,9 @@ class AttendanceGrid:
             FROM json_each(?) x CROSS JOIN journal_coverage_documents e ON e.workspace=? AND e.lesson_key=x.value''',(encoded(keys),workspace))
         return {r[0]:dict(version=r[1],publishedVersion=r[2],lesson=json.loads(r[3]) if r[3] else None,draftTeachers=json.loads(r[4]) if r[4] else []) for r in rows}
 
-    def build(self,db,user,snap,workspace,class_id,start,end,level,lessons):
-        """The grid of one class in one read snapshot: lessons, cells, counts and day states. Returns (response part, private data)."""
+    def build(self,db,user,snap,workspace,class_id,start,end,level,lessons,typed=False):
+        """The grid of one class in one read snapshot: lessons, cells, counts and day states. Returns (response part, private data).
+        `typed`: the account may see the absence type of an excused cell."""
         state=snap.state;today,at=self.clock();iso_today=today.isoformat()
         closed=range_locks(db,workspace,start.isoformat(),end.isoformat())
         locked=lambda day:[p['name'] for p in closed if p['start']<=day<=p['end']]
@@ -200,7 +207,7 @@ class AttendanceGrid:
                 items.append(dict(lessonKey=key,start=lesson['start'],end=lesson['end'],subject=lesson['subject'],subjectId=lesson['subjectId'],group=lesson['group'],teachers=lesson['teachers'],
                     status='archived',state='published',hasDraftChanges=False,frozen=False,archived=True,canEdit=False,version=old[key]['version'],publishedVersion=old[key]['publishedVersion'],
                     _date=lesson['date'],_roster=pupils,_ended=ended(lesson['date'],lesson['end']),_cancelled=False))
-        hidden=level=='own'
+        hidden=not typed
         cells={};by_day={};by_pupil={};total=store.counts()
         for item in items:
             row=cells[item['lessonKey']]={}
@@ -304,8 +311,9 @@ class AttendanceGrid:
                 levels=self.scopes(db,user,snap,workspace,year.yearStart,year.yearEnd);leading=led(user,snap,workspace)
                 classes=sorted((c for c in snap.state.classes if c.id in levels),key=lambda c:(c.name.casefold(),c.id))
                 first=next((c.id for c in classes if c.id in leading),classes[0].id if classes else '')
-                # Absence types are for the class staff who already see them in the report, not for a subject teacher.
-                codes=absence_codes.current(db,workspace)['items'] if any(levels[c.id]!='own' for c in classes) else []
+                # Absence types are for those who already see them in the report or the notes, not for a grid editor or a subject teacher.
+                see=self.typed(db,user,snap,workspace)
+                codes=absence_codes.current(db,workspace)['items'] if any(c.id in see for c in classes) else []
                 return dict(available=bool(classes),admin=user['role']=='admin',today=self.clock()[0].isoformat(),yearStart=year.yearStart,yearEnd=year.yearEnd,
                     classes=[dict(id=c.id,name=c.name,level=levels[c.id],classTeacher=c.id in leading) for c in classes],defaultClassId=first,codes=codes)
 
@@ -316,8 +324,9 @@ class AttendanceGrid:
                 db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
                 level=self.level(db,user,snap,workspace,classId,start,end)
                 lessons=self.class_lessons(snap,{classId},dates(start,end))
-                value,_=self.build(db,user,snap,workspace,classId,start,end,level,lessons)
-                codes=absence_codes.current(db,workspace)['items'] if level!='own' else []
+                typed=classId in self.typed(db,user,snap,workspace)
+                value,_=self.build(db,user,snap,workspace,classId,start,end,level,lessons,typed)
+                codes=absence_codes.current(db,workspace)['items'] if typed else []
                 className=snap.entities['class_'][classId].name
             # Only access is rechecked before the answer is released, as the attendance report does.
             with self.access.lock,self.access.connect() as db:
@@ -369,11 +378,12 @@ class AttendanceGrid:
                     edits={};told=0
                     for cell in group:
                         if cell.studentId not in roster:raise HTTPException(404,'Ученик не относится к классу на эту дату.')
-                        was=published.get(cell.studentId)
-                        if was!=((cell.expected,cell.expectedLate) if cell.expected is not None else None):stale.append(f"{current['subject']} {day:%d.%m}");continue
-                        # Nothing to do when the family already sees this mark; a missing record equals an unmarked one.
-                        if was==target or was is None and target==('unmarked',0):continue
-                        edits[cell.studentId]=target;told+=was is not None and was[0]!='unmarked'
+                        # A missing record is an unmarked one on both sides: a publication that leaves the pupil unmarked changes nothing the grid showed.
+                        was=published.get(cell.studentId,store.UNMARKED)
+                        if was!=((cell.expected,cell.expectedLate) if cell.expected is not None else store.UNMARKED):stale.append(f"{current['subject']} {day:%d.%m}");continue
+                        # Nothing to do when the family already sees this mark.
+                        if was==target:continue
+                        edits[cell.studentId]=target;told+=was[0]!='unmarked'
                     plan.append((key,current,existing,resolved,edits,told))
                 if stale:raise HTTPException(409,'Отметки изменились: '+', '.join(list(dict.fromkeys(stale))[:5])+'. Обновите сетку.')
                 created=now().isoformat();done=[];changed=0;recipients={}
