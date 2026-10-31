@@ -47,7 +47,7 @@ export default function FinalGradesTable({
   phrases: string[];
   current: boolean;
   lastScale: { current: string };
-  onDirty: (dirty: boolean) => void;
+  onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
 }) {
   const [rows, setRows] = useState<Row[]>([]),
@@ -62,7 +62,9 @@ export default function FinalGradesTable({
     generation = useRef(0),
     inputs = useRef<Record<string, HTMLInputElement | null>>({}),
     requests = useRef(new Map<string, string>()),
-    list = useId();
+    list = useId(),
+    // The panel tells the tables apart by this key, so saving one never clears the unsaved mark of another.
+    table = useId();
   const scale = scales.find((s) => s.id === scaleId && s.active);
 
   async function load(id: string) {
@@ -90,7 +92,7 @@ export default function FinalGradesTable({
         : {},
     );
     setDirty(false);
-    onDirty(false);
+    onDirty(table, false);
   }
   function fail(e: unknown) {
     setError(e instanceof Error ? e.message : "Не удалось выполнить действие.");
@@ -119,7 +121,7 @@ export default function FinalGradesTable({
     void init();
     return () => {
       generation.current++;
-      onDirty(false);
+      onDirty(table, false);
     };
   }, [bookId, classId, subjectId]);
 
@@ -149,7 +151,7 @@ export default function FinalGradesTable({
   function edit(id: string, patch: Partial<TableEntry>) {
     setValues((v) => ({ ...v, [id]: { ...v[id], ...patch } }));
     setDirty(true);
-    onDirty(true);
+    onDirty(table, true);
   }
   function choose(id: string, value: string) {
     if (value.startsWith("o:"))
@@ -182,6 +184,17 @@ export default function FinalGradesTable({
     )
       return;
     await run(() => reload(id, true));
+  }
+  // Reloading throws away what was typed, so it asks first, like the other ways of leaving the typed values.
+  async function refresh() {
+    if (
+      dirty &&
+      !window.confirm(
+        "Несохранённые изменения будут потеряны: таблица загрузится заново. Продолжить?",
+      )
+    )
+      return;
+    await run(() => reload(scaleId, recalculate));
   }
   async function convert() {
     if (
@@ -346,10 +359,7 @@ export default function FinalGradesTable({
               ))}
           </select>
         </label>
-        <button
-          disabled={busy}
-          onClick={() => void run(() => reload(scaleId, recalculate))}
-        >
+        <button disabled={busy} onClick={() => void refresh()}>
           Обновить таблицу
         </button>
         {editable && (

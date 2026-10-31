@@ -6,6 +6,7 @@ import {
   defaultDraft,
   eligibleFor,
   isForeign,
+  markDirty,
   needsExplanation,
   submittableRows,
   tablePrefill,
@@ -321,4 +322,19 @@ it("splits a long list into ordered pieces of at most the given size", () => {
   expect(pieces.map((p) => p.length)).toEqual([100, 100, 50]);
   expect(pieces.flat()).toEqual(items);
   expect(chunked([], 100)).toEqual([]);
+});
+
+it("keeps the unsaved mark of one table when another table is saved or closed", () => {
+  // The matrix and the report-card steps each have a table open; both hold typed results.
+  let keys: readonly string[] = [];
+  keys = markDirty(keys, "matrix", true);
+  keys = markDirty(keys, "steps", true);
+  expect(keys.length).toBe(2);
+  // The table in the steps is saved (or closed): the matrix still has something to lose.
+  keys = markDirty(keys, "steps", false);
+  expect(keys).toEqual(["matrix"]);
+  // A table that never held anything cannot clear the mark of another one.
+  expect(markDirty(keys, "other", false)).toEqual(["matrix"]);
+  expect(markDirty(keys, "matrix", true)).toEqual(["matrix"]);
+  expect(markDirty(keys, "matrix", false)).toEqual([]);
 });

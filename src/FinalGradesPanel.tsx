@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { defaultDraft, finalLabel, names, needsReason } from "./finalGrades";
+import {
+  defaultDraft,
+  finalLabel,
+  markDirty,
+  names,
+  needsReason,
+} from "./finalGrades";
 import FinalGradesMatrix from "./FinalGradesMatrix";
 import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import { PERSONAL_PRINT, printNode } from "./printReport";
@@ -385,7 +391,8 @@ export default function FinalGradesPanel({
     }),
     [calculations, setCalculations] = useState<Record<string, Calculation>>({}),
     [dirty, setDirty] = useState(false),
-    [tableDirty, setTableDirty] = useState(false),
+    // The tables that hold unsaved results, by table key: the matrix and the steps may have one open each.
+    [dirtyTables, setDirtyTables] = useState<readonly string[]>([]),
     // Raised after every change, so the matrices and the steps never show numbers from before it.
     [epoch, setEpoch] = useState(0),
     [report, setReport] = useState<{
@@ -396,7 +403,12 @@ export default function FinalGradesPanel({
     } | null>(null);
   const lock = useRef(false),
     lastScale = useRef(""),
+    // Raised when a notification asks for a report: the card is brought into view once it has loaded.
+    reveal = useRef(false),
     reportRef = useRef<HTMLDivElement>(null);
+  const tableDirty = dirtyTables.length > 0;
+  const markTable = (table: string, unsaved: boolean) =>
+    setDirtyTables((keys) => markDirty(keys, table, unsaved));
   const leave = () =>
     (!dirty && !tableDirty) ||
     window.confirm(
@@ -544,6 +556,7 @@ export default function FinalGradesPanel({
     const period = focus?.finalsPeriodId;
     if (!focus || !period) return;
     setOpen(true);
+    reveal.current = true;
     void run(async () => {
       await loadOptions();
       setStudentId(focus.studentId);
@@ -554,8 +567,17 @@ export default function FinalGradesPanel({
           workspace,
         ),
       );
+    }).then((done) => {
+      if (!done) reveal.current = false;
     });
   }, [focus]);
+  // The panel sits below the journal, so a card opened from a notification would otherwise load out of sight.
+  useEffect(() => {
+    if (!report || !reveal.current) return;
+    reveal.current = false;
+    reportRef.current?.focus({ preventScroll: true });
+    reportRef.current?.scrollIntoView({ block: "start" });
+  }, [report]);
   // Families, administrators and the class teacher of the pupils read published reports.
   const readsReports =
     !!options?.classTeacher || !options?.staff || options.admin;
@@ -707,7 +729,7 @@ export default function FinalGradesPanel({
                       lastScale={lastScale}
                       refresh={epoch}
                       leave={leave}
-                      onDirty={setTableDirty}
+                      onDirty={markTable}
                       onChanged={() => {
                         void loadSheet(bookId, offset);
                         changed();
@@ -1233,7 +1255,7 @@ export default function FinalGradesPanel({
                 lastScale={lastScale}
                 refresh={epoch}
                 leave={leave}
-                onDirty={setTableDirty}
+                onDirty={markTable}
                 onChanged={() => {
                   void loadOptions();
                   if (bookId) void loadSheet(bookId, offset);
@@ -1289,7 +1311,12 @@ export default function FinalGradesPanel({
                 </p>
                 {report && (
                   <>
-                    <div className="final-report" ref={reportRef}>
+                    <div
+                      className="final-report"
+                      aria-label="Табель ученика"
+                      tabIndex={-1}
+                      ref={reportRef}
+                    >
                       <h3>Табель · {report.period.name}</h3>
                       <p>
                         {options.students.find((s) => s.id === studentId)?.name}{" "}

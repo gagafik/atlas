@@ -77,7 +77,7 @@ export default function ReportCardSteps({
   // Raised by the panel after changes made outside the steps (the row list, preparation).
   refresh?: number;
   leave: () => boolean;
-  onDirty: (dirty: boolean) => void;
+  onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
 }) {
   const { busy, error, notice, setError, setNotice, run } = useBusy();

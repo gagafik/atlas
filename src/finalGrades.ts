@@ -204,6 +204,18 @@ export const submittableRows = (
   recalculate = false,
 ) => pending(rows, values, scale, recalculate, true);
 
+// Several tables can be open at once (the matrix and the report-card steps), each with its own unsaved edits.
+// The panel keeps the keys of the tables that hold some, so one table being saved or reloaded never hides the others.
+export function markDirty(
+  keys: readonly string[],
+  key: string,
+  dirty: boolean,
+): readonly string[] {
+  const has = keys.includes(key);
+  if (dirty) return has ? keys : [...keys, key];
+  return has ? keys.filter((k) => k !== key) : keys;
+}
+
 // ---- Mass actions from the class x subject matrix -------------------------
 
 const NEEDS: Record<string, string> = {

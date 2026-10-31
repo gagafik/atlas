@@ -71,7 +71,7 @@ export default function FinalGradesMatrix({
   // Raised by the parent after changes made outside this matrix (the row list, the preparation, another matrix).
   refresh?: number;
   leave: () => boolean;
-  onDirty: (dirty: boolean) => void;
+  onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
 }) {
   const [data, setData] = useState<Matrix | null>(null),
