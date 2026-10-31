@@ -539,6 +539,23 @@ describe("marks of a held lesson", () => {
     const row = vi.mocked(download).mock.lastCall![1].split("\r\n")[1];
     expect(row).toContain('"09:20"');
   });
+  it("leaves the type column empty on a row a school note excused", () => {
+    const d = structuredClone(document);
+    d.content.records[0] = record("s1", "absent", { absenceCode: "family" });
+    const approvals = { s1: { id: "notice", version: 2 } };
+    journalCsv(documentRows(d, "key", 1, approvals), "j.csv", null, {
+      family: "Семейные обстоятельства",
+    });
+    const csv = vi.mocked(download).mock.lastCall![1];
+    expect(csv).toContain("Уважительная причина");
+    expect(csv).not.toContain("Семейные обстоятельства");
+    journalCsv(documentRows(d, "key", 1), "j.csv", null, {
+      family: "Семейные обстоятельства",
+    });
+    expect(vi.mocked(download).mock.lastCall![1]).toContain(
+      "Семейные обстоятельства",
+    );
+  });
   it("keeps the absence type names across later report pages", () => {
     const page = (extra: Partial<JournalReportPage>): JournalReportPage => ({
       rows: [],

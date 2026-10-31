@@ -58,11 +58,18 @@ def beside_other_news(old, new):
     return first != last and not (first[0] == 'unmarked' and last[0] == 'present')
 
 
+def plain(projection):
+    """The same lesson with nothing a family hears about besides the topic, the homework (it has its own entry) and the mark."""
+    return projection | dict(content=projection['content'] | dict(assessments=[], homeworkFiles=[], materials=[], curriculum=None),
+                             record=projection['record'] | dict(comment='', grades=[]))
+
+
 def routine(old, new):
-    """A plain first 'present' (or no mark yet) with nothing else changed for this pupil: a lesson held as usual, not news for the family."""
+    """A plain first 'present' (or no mark yet) with nothing else changed for this pupil: a lesson held as usual, not news for the family.
+    A first publication is measured against the plain lesson: a planned work, materials or a personal comment are news."""
     first, last = attendance_mark(old), attendance_mark(new)
     if new is None or first[0] != 'unmarked' or last[0] not in ('unmarked', 'present'): return False
-    if old is None: return True
+    old = old or plain(new)
     without = lambda p: {k: v for k, v in p['record'].items() if k != 'attendance'}
     return old | dict(record=None) == new | dict(record=None) and without(old) == without(new)
 

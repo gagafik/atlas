@@ -505,7 +505,8 @@ export function journalCsv(
         content.homework,
         content.dueDate || "",
         record.leftAt || "",
-        record.absenceCode
+        // The teacher's type is a label on an absence; a row excused by a school note does not show it as the reason.
+        record.attendance === "absent" && record.absenceCode
           ? (codeNames[record.absenceCode] ?? record.absenceCode)
           : "",
       ]);

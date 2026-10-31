@@ -102,6 +102,55 @@ def test_plan_then_present_is_silent(client,monkeypatch):
     assert family_report(parent)['summary']['attendance']['present']==1
 
 
+WORK=dict(id='work',name='Контрольная',kind='points',maxScore=20,weight=1)
+def pupil_record(content,student='s1'):return next(r for r in content['records'] if r['studentId']==student)
+def actions(c):return [i['action'] for i in inbox(c)['items']]
+
+
+@pytest.mark.parametrize('news,parent_hears,other_hears',[
+    (lambda c:c.update(topic='Тема урока'),[],[]),
+    (lambda c:c.update(topic='Тема урока',homework='Стр. 12',dueDate='2026-08-19'),['journal.homework'],['journal.homework']),
+    (lambda c:c.update(assessments=[WORK]),['journal.updated'],['journal.updated']),
+    (lambda c:pupil_record(c).update(comment='Отлично работал на уроке'),['journal.updated'],[]),
+])
+def test_first_save_of_a_held_lesson_tells_only_what_is_news(client,news,parent_hears,other_hears):
+    # Presence and a topic are silent; new homework, a planned work and a personal comment are told, to the families they concern.
+    family(client);parent,other,teacher=signed('parent'),signed('other-parent'),signed('teacher')
+    opened=entry(teacher,lesson(teacher)['lessonKey']);news(opened['document']['content']);save(teacher,opened)
+    assert actions(parent)==parent_hears and actions(other)==other_hears
+
+
+@pytest.mark.parametrize('assessments,heard',[([],[]),([WORK],['journal.updated'])])
+def test_plan_published_ahead_is_told_when_it_names_a_work(client,monkeypatch,assessments,heard):
+    family(client);parent,teacher=signed('parent'),signed('teacher')
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,16))
+    plan=entry(teacher,lesson(teacher)['lessonKey']);plan['document']['content'].update(topic='План урока',assessments=assessments)
+    assert not plan['attendanceDefaulted'];save(teacher,plan)
+    assert actions(parent)==heard
+
+
+@pytest.mark.parametrize('change',[
+    lambda c:c.update(topic='Другая тема'),
+    lambda c:pupil_record(c).update(comment='Хорошо поработал'),
+])
+def test_held_lesson_differing_from_the_plan_is_told(client,monkeypatch,change):
+    family(client);parent,teacher=signed('parent'),signed('teacher')
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,16))
+    key=lesson(teacher)['lessonKey'];plan=entry(teacher,key);plan['document']['content'].update(topic='План')
+    save(teacher,plan);assert told(parent)==[]
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
+    held=entry(teacher,key);assert held['attendanceDefaulted'];change(held['document']['content'])
+    save(teacher,held);assert len(told(parent))==1
+
+
+def test_mark_corrected_back_to_present_is_told(client):
+    family(client);parent,teacher=signed('parent'),signed('teacher')
+    key=lesson(teacher)['lessonKey'];absent=save(teacher,mark(entry(teacher,key),'s1',attendance='absent'))
+    (first,)=told(parent);assert 'отсутствие' in first['title']
+    save(teacher,mark(absent,'s1',attendance='present'))
+    (second,)=told(parent);assert 'присутствие' in second['title']
+
+
 def test_lesson_not_yet_begun_keeps_unmarked(client,monkeypatch):
     key=lesson(client)['lessonKey']
     monkeypatch.setattr(journal,'today',lambda:date(2026,8,17));monkeypatch.setattr(journal,'minute',lambda:'00:01')
@@ -146,6 +195,30 @@ def test_closed_period_shows_stored_marks(client,monkeypatch):
     locked=entry(client,lesson(client)['lessonKey'])
     assert not locked['writable'] and not locked['attendanceDefaulted']
     assert {r['attendance'] for r in locked['document']['content']['records']}=={'unmarked'}
+
+
+def test_editor_default_skips_former_pupils_and_a_roster_waiting_for_review(client,monkeypatch):
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
+    key=lesson(client,'Математика')['lessonKey'];plan=entry(client,key)
+    for r in plan['document']['content']['records']:r['attendance']='unmarked'
+    assert write(client,plan).status_code==200
+    state=api.read('demo');next(g for g in state.groups if g.id=='g-math').studentIds=['s2','s3'];api.save('demo',state)
+    stale=entry(client,key)
+    assert stale['needsSync'] and not stale['attendanceDefaulted']
+    assert {r['attendance'] for r in stale['document']['content']['records']}=={'unmarked'}
+    synced=entry(client,key,syncRoster=True)
+    assert {s['id']:s['enrolled'] for s in synced['document']['lesson']['students']}=={'s1':False,'s2':True,'s3':True}
+    assert synced['attendanceDefaulted']
+    assert {i:r['attendance'] for i,r in marks(synced).items()}=={'s1':'unmarked','s2':'present','s3':'present'}
+
+
+def test_editor_offers_the_absence_types_of_the_school(client):
+    key=lesson(client)['lessonKey']
+    assert {c['id']:c['active'] for c in entry(client,key)['absenceCodes']}=={'illness':True,'family':True,'school':True,'other':True}
+    set_codes(client,active={'family','school','other'})
+    codes=entry(client,key)['absenceCodes']
+    assert {c['id']:c['active'] for c in codes}=={'illness':False,'family':True,'school':True,'other':True}
+    assert all(c['name'] for c in codes)
 
 
 def test_excused_mark_comes_only_from_a_note(client):
@@ -220,7 +293,7 @@ def test_late_share_in_both_reports(client):
     key=lesson(teacher)['lessonKey'];opened=entry(teacher,key);total=length(opened)
     assert total%4==0
     saved=opened
-    for late,share in [(total//4,0.25),(LATE_SHARE_FROM-1,0),(total+30,1)]:
+    for late,share in [(total//4,0.25),(LATE_SHARE_FROM-1,0),(LATE_SHARE_FROM,round(LATE_SHARE_FROM/total,2)),(total+30,1)]:
         saved=save(teacher,mark(saved,'s1',attendance='late',lateMinutes=late))
         school=school_report(teacher).json()['totals'];personal=family_report(parent)['summary']
         assert school['lateMinutes']==personal['lateMinutes']==late
