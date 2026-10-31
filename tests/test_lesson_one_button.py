@@ -13,7 +13,8 @@ from test_absences import setup, send, decide, body
 from test_journal import DAY, lesson, entry, write, graded
 from test_attendance_reports import report as school_report, details, export, pupil
 from test_journal_coverage import report as coverage, english, known
-from test_journal_periods import period, close
+from test_journal_periods import period, close, archive
+from test_curriculum import new as new_plan
 from test_grade_feed import family
 
 
@@ -195,6 +196,31 @@ def test_closed_period_shows_stored_marks(client,monkeypatch):
     locked=entry(client,lesson(client)['lessonKey'])
     assert not locked['writable'] and not locked['attendanceDefaulted']
     assert {r['attendance'] for r in locked['document']['content']['records']}=={'unmarked'}
+
+
+def test_closed_period_archive_names_the_absence_type(client,monkeypatch):
+    stamp=datetime(2026,10,14,10,tzinfo=timezone.utc)
+    monkeypatch.setattr(journal_periods,'now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
+    _,_,parent,teacher=setup(client);known()
+    key=lesson(teacher)['lessonKey'];save(teacher,mark(entry(teacher,key),'s1',attendance='absent',absenceCode='illness'))
+    # The type is switched off after the lesson: the archive must still say what it was called.
+    set_codes(client,active={'family','school','other'})
+    closed=close(client,period(client))
+    for who in [client,teacher]:
+        archived=archive(who,closed,lessonKey=key);assert archived.status_code==200,archived.text
+        assert marks(archived.json())['s1']['absenceCode']=='illness'
+        assert archived.json()['absenceCodes']['illness']=='Болезнь'
+    # The type names are school-level: they come with the single lesson only, not with the listing.
+    assert 'absenceCodes' not in archive(client,closed).json()
+    assert archive(parent,closed,lessonKey=key).status_code==403
+
+
+def test_topic_chosen_from_the_plan_is_told(client):
+    family(client);parent,teacher=signed('parent'),signed('teacher')
+    plan=new_plan(teacher);opened=entry(teacher,lesson(teacher)['lessonKey'])
+    opened['document']['content']['curriculum']=dict(planId=plan['id'],version=plan['version'],topicId='intro',units=1,title='',standard='')
+    save(teacher,opened)
+    assert actions(parent)==['journal.updated']
 
 
 def test_editor_default_skips_former_pupils_and_a_roster_waiting_for_review(client,monkeypatch):

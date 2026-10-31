@@ -128,6 +128,32 @@ describe("journal export", () => {
     expect(csv).toContain('"Тест";"0";"10";"0";"СОР"');
     expect(csv).toContain('"Участие";"A*";"";"";"ФО"');
   });
+  it("exports the leaving time and the absence type by the school's name", () => {
+    const d = structuredClone(document);
+    d.content.assessments = [];
+    d.content.records[0].grades = [];
+    const lastCells = (names?: Record<string, string>) => {
+      journalCsv(documentRows(d, "key", 1), "j.csv", null, names);
+      const [, row] = vi.mocked(download).mock.lastCall![1].split("\r\n");
+      return row.split(";").slice(-2);
+    };
+    Object.assign(d.content.records[0], {
+      attendance: "absent",
+      lateMinutes: 0,
+      absenceCode: "family",
+    });
+    expect(lastCells({ family: "Семейные обстоятельства" })).toEqual([
+      '""',
+      '"Семейные обстоятельства"',
+    ]);
+    expect(lastCells()).toEqual(['""', '"family"']);
+    Object.assign(d.content.records[0], {
+      attendance: "left",
+      leftAt: "09:20",
+      absenceCode: "",
+    });
+    expect(lastCells()).toEqual(['"09:20"', '""']);
+  });
   it("exports attendance and homework when no assessment exists", () => {
     const d = structuredClone(document);
     d.content.assessments = [];

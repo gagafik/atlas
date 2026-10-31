@@ -55,6 +55,7 @@ type Archived = {
   lessonKey: string;
   publishedVersion: number;
   document: JournalDocument;
+  absenceCodes?: Record<string, string>;
 };
 type History = {
   id: number;
@@ -650,6 +651,7 @@ export default function JournalPeriodsPanel({
                             ),
                             `Архив-журнала-${archived.document.lesson.date}.csv`,
                             categories,
+                            archived.absenceCodes,
                           )
                         }
                       >
@@ -662,7 +664,13 @@ export default function JournalPeriodsPanel({
                       ).map((r) => (
                         <article key={r.student.id}>
                           <h4>{r.student.name}</h4>
-                          <p>{attendanceText(r.record, r.lesson)}</p>
+                          <p>
+                            {attendanceText(
+                              r.record,
+                              r.lesson,
+                              archived.absenceCodes,
+                            )}
+                          </p>
                           {r.record.comment && <p>{r.record.comment}</p>}
                           {r.content.assessments.map((a) => {
                             const g = r.record.grades.find(
