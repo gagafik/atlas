@@ -447,7 +447,7 @@ from .web_push import PushService
 push_service = PushService(access)
 push_service.register(app)
 from .school_forms import SchoolForms
-school_forms = SchoolForms(access, notifications, portal_stamp)
+school_forms = SchoolForms(access, notifications, portal_stamp, messages)
 school_forms.register(app, Workspace)
 from .meetings import Meetings
 meetings = Meetings(access, notifications, portal_stamp)

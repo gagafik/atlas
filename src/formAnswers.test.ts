@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keepTyped } from "./formAnswers";
+import { choiceClosed, keepTyped, limitsFor } from "./formAnswers";
 describe("keepTyped", () => {
   const ids = ["a", "b", "c"];
   it("keeps only values changed since the answer was loaded", () => {
@@ -28,5 +28,32 @@ describe("keepTyped", () => {
       a: "fresh text",
     });
     expect(keepTyped({ a: "s" }, {}, {}, ["a"])).toEqual({ a: "s" });
+  });
+});
+
+describe("limitsFor", () => {
+  it("drops limits of removed choices and empty values and keeps the rest", () => {
+    expect(
+      limitsFor(["First", " Second ", ""], {
+        First: 3,
+        Second: 5,
+        Gone: 2,
+        Empty: null,
+      }),
+    ).toEqual({ First: 3, Second: 5 });
+    expect(
+      limitsFor(["First", "Second"], { First: undefined, Second: 0 }),
+    ).toEqual({});
+    expect(limitsFor(["First"], { First: 1.5 })).toEqual({});
+    expect(limitsFor(["First"], undefined)).toEqual({});
+  });
+});
+
+describe("choiceClosed", () => {
+  it("closes a full choice unless the answer already holds a seat", () => {
+    expect(choiceClosed(0, false)).toBe(true);
+    expect(choiceClosed(0, true)).toBe(false);
+    expect(choiceClosed(2, false)).toBe(false);
+    expect(choiceClosed(undefined, false)).toBe(false);
   });
 });

@@ -236,7 +236,9 @@ def open_meetings(db, user, workspace, data, kids):
 
 def open_forms(db, user, workspace, data, kids):
     row = db.execute('SELECT user_id,form_id FROM school_form_answers WHERE id=?', (data.get('recordId'),)).fetchone() if has_table(db, 'school_form_answers') else None
-    return dict(formId=row[1]) if row and (row[0] == user['id'] or user['role'] == 'admin') else None
+    if row: return dict(formId=row[1]) if row[0] == user['id'] or user['role'] == 'admin' else None
+    # A reminder points at the form itself: it opens for a person the form was addressed to.
+    return dict(formId=data.get('recordId')) if exists(db, 'school_form_recipients', 'SELECT 1 FROM school_form_recipients WHERE form_id=? AND user_id=?', (data.get('recordId'), user['id'])) else None
 
 
 def open_timetable(db, user, workspace, data, kids):

@@ -14,3 +14,22 @@ export function keepTyped<T>(
       result[id] = typed[id];
   return result;
 }
+
+// A seat limit belongs to a choice that still exists and holds a whole number of seats: renamed, removed or emptied choices lose theirs.
+export function limitsFor(
+  choices: string[],
+  limits: Record<string, number | null | undefined> | undefined,
+): Record<string, number> {
+  const kept = new Set(choices.map((c) => c.trim()).filter(Boolean));
+  return Object.fromEntries(
+    Object.entries(limits ?? {}).filter(
+      (entry): entry is [string, number] =>
+        kept.has(entry[0]) && Number.isInteger(entry[1]) && entry[1]! >= 1,
+    ),
+  );
+}
+
+// A choice with no seats left is closed, except for an answer that already holds one of them.
+export function choiceClosed(left: number | undefined, held: boolean) {
+  return left === 0 && !held;
+}

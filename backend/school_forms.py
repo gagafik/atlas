@@ -1,6 +1,7 @@
-"""Named school forms with explicit per-form delegation and fixed audiences."""
+"""School forms with explicit per-form delegation. Audiences are fixed at publication, except standing forms; surveys may be anonymous."""
 from contextlib import closing, contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 import csv
 import hashlib
 import json
@@ -11,12 +12,18 @@ from fastapi import HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
-from .access import now
+from .access import WORKSPACES, now
+from .class_staff import led
+from .messages import Directory
 from .natural import natural
-from .notifications import encoded, permission_key
+from .notifications import ZONE, encoded, has_table, permission_key
 from .portal_cache import PortalSnapshots
-from .school_forms_models import (STAFF, Definition, NewForm, EditForm, AccessChange,
-                                  Transition, AnswerWrite, Review, Mutation, validate_answers)
+from .school_forms_models import (ANONYMOUS_MIN, STAFF, Audience, Definition, NewForm, EditForm, AccessChange,
+                                  Transition, AnswerWrite, Review, Mutation, Reminder, validate_answers)
+
+HOLDING = ('submitted', 'returned', 'approved')  # answers in these statuses keep their seats
+# Announcement audiences are resolved for an administrator's form as for an administrator's message; this account is only the sender.
+SYSTEM = dict(id='system', name='Атлас', role='admin', active=True, workspaces=WORKSPACES, grants=[])
 
 
 def tables(db):
@@ -43,6 +50,11 @@ def tables(db):
         seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,request_id TEXT,fingerprint TEXT,result TEXT,
         UNIQUE(user_id,request_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS school_form_request_owner ON school_form_requests(user_id,seq)')
+    # Ballots and anonymous answers share only the form id, and carry no time or insertion order that could pair them.
+    db.execute('CREATE TABLE IF NOT EXISTS school_form_ballots (form_id TEXT,user_id TEXT,entity_id TEXT,PRIMARY KEY(form_id,user_id,entity_id)) WITHOUT ROWID')
+    db.execute('CREATE TABLE IF NOT EXISTS school_form_anonymous (id TEXT,form_id TEXT,answers TEXT,PRIMARY KEY(form_id,id)) WITHOUT ROWID')
+    # One row per account, form and local day: the reminder is sent once however many people press the button. Created last: prepare() looks for it.
+    db.execute('CREATE TABLE IF NOT EXISTS school_form_reminders (form_id TEXT,user_id TEXT,day TEXT,created TEXT,PRIMARY KEY(form_id,user_id,day))')
 
 
 def grant_ids(user, workspace, view):
@@ -64,6 +76,11 @@ def accepting(form):
     return form['status']=='open' and (not doc['opensAt'] or datetime.fromisoformat(doc['opensAt'])<=current) and (not doc['closesAt'] or current<datetime.fromisoformat(doc['closesAt']))
 
 
+def local_day():
+    """The school's calendar day (Asia/Qyzylorda): reminders are counted per this day, not per UTC date."""
+    return now().astimezone(ZONE).date()
+
+
 def version(form, expected):
     if form['version']!=expected: raise HTTPException(409,'Форма изменилась. Обновите её перед действием.')
 
@@ -76,14 +93,63 @@ def compatible(db, form, expected):
     if not old or any(old[k]!=form['definition'][k] for k in ['kind','questions','audience']): raise HTTPException(409,'Вопросы или аудитория формы изменились. Загрузите свежую версию: введённый текст останется на экране.')
 
 
+def seats(db, form, exclude=''):
+    """{question id: {choice: seats left}} for the limited options; `exclude` is an answer that keeps its own seat."""
+    left={}
+    for q in form['definition']['questions']:
+        limits=q.get('limits')
+        if not limits: continue
+        # The id is quoted in the path: question ids may contain '-'. A single choice and a list both count once per chosen value.
+        taken=dict(db.execute('SELECT j.value,count(*) FROM school_form_answers a,json_each(a.document,?) j WHERE a.form_id=? AND a.status IN (SELECT value FROM json_each(?)) AND a.id!=? GROUP BY j.value',
+                              (f'$.answers."{q["id"]}"',form['id'],encoded(HOLDING),exclude)))
+        left[q['id']]={choice:max(0,limit-taken.get(choice,0)) for choice,limit in limits.items()}
+    return left
+
+
+def reserve(db, form, answer, answers):
+    """Refuse a submission that finds an option full. Runs inside the write transaction, so held answers never exceed a limit."""
+    left=seats(db,form,answer['id'])
+    if not left: return
+    # One seat per child, not one per parent: another account's held answer for the same child counts as the child's seat.
+    if answer['entityId'] and db.execute('SELECT 1 FROM school_form_answers WHERE form_id=? AND entity_id=? AND id!=? AND status IN (SELECT value FROM json_each(?))',(form['id'],answer['entityId'],answer['id'],encoded(HOLDING))).fetchone():
+        raise HTTPException(409,'За этого ребёнка уже подан ответ другим представителем.')
+    for question in form['definition']['questions']:
+        places=left.get(question['id'])
+        if not places: continue
+        value=answers.get(question['id'])
+        for choice in value if isinstance(value,list) else [] if value in [None,''] else [value]:
+            if places.get(choice)==0: raise HTTPException(409,f'Места на вариант «{choice}» закончились. Выберите другой вариант.')
+
+
+def withheld(count):
+    """Results of an anonymous survey stay closed until enough people have answered to hide each one."""
+    return count<ANONYMOUS_MIN
+
+
+def tally(definition, answers):
+    """(answers counted, one entry per question) for an iterable of answer dicts."""
+    result={q['id']:dict(id=q['id'],title=q['title'],answered=0,choices={choice:0 for choice in (['Да','Нет'] if q['kind']=='consent' else q['choices'])}) for q in definition['questions']}
+    total=0
+    for given in answers:
+        total+=1
+        for key,question in result.items():
+            value=given.get(key)
+            if value is None or value=='' or value==[]:continue
+            question['answered']+=1
+            values=value if isinstance(value,list) else ['Да' if value is True else 'Нет' if value is False else value]
+            for chosen in values:
+                if chosen in question['choices']: question['choices'][chosen]+=1
+    return total,list(result.values())
+
+
 class SchoolForms:
-    def __init__(self, access, notifications, stamp):
-        self.access,self.notifications=access,notifications
+    def __init__(self, access, notifications, stamp, messages):
+        self.access,self.notifications,self.messages=access,notifications,messages
         self.snapshots=PortalSnapshots(access.read,stamp)
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='school_form_request_owner'").fetchone(): return
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='school_form_reminders'").fetchone(): return
         with self.access.lock,self.access.connect() as db:
             tables(db);self.notifications.tables(db)
 
@@ -123,20 +189,44 @@ class SchoolForms:
             raise HTTPException(404,'Форма недоступна.')
         return permission
 
+    def still(self, form, account, entity, role, snap, workspace):
+        """The name a recipient row shows while it still gives access, else None.
+
+        Access follows the role and the current links, not the rights the account had at publication:
+        ending one child's link closes the form for that child only, and new teacher grants keep a survey."""
+        if account['role']!=role: return None
+        audience=form['definition']['audience']
+        if entity:
+            pupil=snap.entities['student'].get(entity)
+            if not pupil or not pupil.active or entity not in grant_ids(account,workspace,'student') or audience['classIds'] and pupil.classId not in audience['classIds']: return None
+            name=pupil.name
+        else: name=account['name']
+        if audience.get('preset','roles')=='class_teachers' and not led(account,snap,workspace): return None
+        return name
+
+    def audience_contexts(self, user, doc, snap, workspace):
+        """[(pupil id, pupil name)] of an account in an audience by roles and classes: its active linked pupils, or one empty pair for staff."""
+        if user['role'] not in ['parent','student']: return [('','')]
+        classes=doc['audience']['classIds']
+        pupils=[snap.entities['student'][id] for id in grant_ids(user,workspace,'student') if id in snap.entities['student']]
+        return sorted((s.id,s.name) for s in pupils if s.active and (not classes or s.classId in classes))
+
     def contexts(self, db, form, user, snap, workspace):
         if form['status']=='draft': return []
-        result=[];doc=form['definition']
-        for entity, in db.execute('SELECT entity_id FROM school_form_recipients WHERE form_id=? AND user_id=? AND permissions=?',(form['id'],user['id'],permission_key(user))):
-            if entity:
-                pupil=snap.entities['student'].get(entity)
-                if not pupil or not pupil.active or entity not in grant_ids(user,workspace,'student') or doc['audience']['classIds'] and pupil.classId not in doc['audience']['classIds']: continue
-                name=pupil.name
-            else: name=user['name']
-            result.append(dict(entityId=entity,name=name))
+        doc=form['definition']
+        # A standing form is open to whoever belongs to the audience now; once closed, only people with a recipient row keep it.
+        if doc.get('standing') and form['status']=='open' and user['role'] in doc['audience']['roles']:
+            return [dict(entityId=entity,name=name or user['name']) for entity,name in self.audience_contexts(user,doc,snap,workspace)]
+        result=[]
+        for entity,role in db.execute('SELECT entity_id,role FROM school_form_recipients WHERE form_id=? AND user_id=? ORDER BY entity_id',(form['id'],user['id'])).fetchall():
+            name=self.still(form,user,entity,role,snap,workspace)
+            if name is not None: result.append(dict(entityId=entity,name=name))
         return result
 
     def require_recipient(self, db, form, user, snap, workspace, entity):
-        if not any(c['entityId']==entity for c in self.contexts(db,form,user,snap,workspace)): raise HTTPException(404,'Ответ на эту форму недоступен.')
+        found=next((c for c in self.contexts(db,form,user,snap,workspace) if c['entityId']==entity),None)
+        if not found: raise HTTPException(404,'Ответ на эту форму недоступен.')
+        return found
 
     def save_form(self, db, form, user, action):
         form['version']+=1;form['updated']=now().isoformat()
@@ -157,22 +247,36 @@ class SchoolForms:
         db.execute('DELETE FROM school_form_requests WHERE user_id=? AND seq NOT IN (SELECT seq FROM school_form_requests WHERE user_id=? ORDER BY seq DESC LIMIT 100)',(user['id'],user['id']))
         return result
 
-    def recipients(self, db, form, snap, workspace):
-        doc=form['definition'];roles=doc['audience']['roles'];classes=doc['audience']['classIds'];result=[];users={}
-        if set(classes)-snap.entities['class_'].keys(): raise HTTPException(422,'В аудитории есть отсутствующий класс.')
-        for row in db.execute('SELECT * FROM accounts WHERE active=1 AND role IN (SELECT value FROM json_each(?))',(encoded(roles),)):
-            user=self.access.public(row)
-            if not enabled(user,snap,workspace): continue
-            if user['role'] in ['parent','student']:
-                pupils=[snap.entities['student'][id] for id in grant_ids(user,workspace,'student') if id in snap.entities['student']]
-                pupils=[s for s in pupils if s.active and (not classes or s.classId in classes)]
-                contexts=[(s.id,s.name) for s in pupils]
-            else: contexts=[('', '')]
+    def accounts_of(self, db, form, snap, workspace, user):
+        """([(account, [(pupil id, pupil name)])], saved-group members out of reach) for the audience of the form as it is now."""
+        doc=form['definition'];audience=doc['audience'];preset=audience.get('preset','roles');found=[]
+        if preset=='roles':
+            if set(audience['classIds'])-snap.entities['class_'].keys(): raise HTTPException(422,'В аудитории есть отсутствующий класс.')
+            for row in db.execute('SELECT * FROM accounts WHERE active=1 AND role IN (SELECT value FROM json_each(?))',(encoded(audience['roles']),)):
+                account=self.access.public(row)
+                if enabled(account,snap,workspace): found.append((account,self.audience_contexts(account,doc,snap,workspace)))
+            return found,0
+        # Announcement audiences come from the messages module: one resolver for both, no copy of its rules here.
+        if preset=='saved':
+            if user['role']!='admin': raise HTTPException(403,'Сохранённую группу проверяет и публикует администратор, который её составил.')
+            if not has_table(db,'message_saved_groups'): raise HTTPException(422,'Сохранённая группа недоступна.')
+        body=SimpleNamespace(recipientId=None,recipientIds=[],studentId=None,schoolwide=False,audience=preset,roles=[],groupIds=[],savedGroupId=audience.get('savedGroupId'))
+        # The audience is set by an administrator, so the channel matrix of a teacher sender does not apply; a saved group belongs to its owner.
+        selected,unavailable=self.messages.audiences.select(db,body,user if preset=='saved' else SYSTEM,Directory(snap.state,workspace))
+        pupils=snap.entities['student']
+        for account,scopes in selected:
+            if enabled(account,snap,workspace): found.append((account,[(id,pupils[id].name) for id in scopes if id in pupils] if account['role'] in ['parent','student'] else [('','')]))
+        return found,unavailable
+
+    def recipients(self, db, form, snap, workspace, user):
+        """(rows, accounts, fingerprint, unavailable): one row per account and child, with the rights that were checked."""
+        result=[];users={};found,unavailable=self.accounts_of(db,form,snap,workspace,user)
+        for account,contexts in found:
             for entity,name in contexts:
-                result.append((user['id'],entity,permission_key(user),user['role'],user['name'],name));users[user['id']]=user
+                result.append((account['id'],entity,permission_key(account),account['role'],account['name'],name));users[account['id']]=account
                 if len(result)>10000: raise HTTPException(422,'Аудитория больше 10 000 ответов. Разделите форму.')
         fingerprint=hashlib.sha256(encoded(sorted(result)).encode()).hexdigest()
-        return result,list(users.values()),fingerprint
+        return result,list(users.values()),fingerprint,unavailable
 
     def delegates(self, db, form, snap, workspace):
         result=[]
@@ -219,6 +323,49 @@ class SchoolForms:
             mark=rank(*row)[0];rows=[r for r in rows if r[0]>mark]
         return rows
 
+    def anonymous_answer(self, db, form, user, body):
+        """Cast a ballot and store the answer apart from it. Nothing written here names the author: no history, stamp, audit or notice."""
+        # Answers stay out of the stored request hash: for a short list of options it could be recomputed for every account.
+        clean=body.model_copy(update={'answers':{}})
+        fingerprint,old=self.replay(db,user,clean,'answer:'+form['id'])
+        if old: return old
+        compatible(db,form,body.formVersion)
+        if not accepting(form): raise HTTPException(409,'Приём ответов сейчас закрыт.')
+        if body.action!='submit': raise HTTPException(422,'Анонимный ответ отправляется один раз: черновик и отзыв недоступны.')
+        validate_answers(form['definition'],body.answers,True)
+        if db.execute('SELECT 1 FROM school_form_ballots WHERE form_id=? AND user_id=? AND entity_id=?',(form['id'],user['id'],body.entityId)).fetchone(): raise HTTPException(409,'Вы уже ответили на этот опрос.')
+        db.execute('INSERT INTO school_form_ballots VALUES (?,?,?)',(form['id'],user['id'],body.entityId))
+        db.execute('INSERT INTO school_form_anonymous VALUES (?,?,?)',(str(uuid4()),form['id'],encoded(body.answers)))
+        return self.remember(db,user,clean,fingerprint,dict(id='',version=1,status='submitted'))
+
+    def roster(self, db, form, snap, workspace):
+        """[(account, child id, role, child name)] of recipient rows that still give access to a live account."""
+        accounts={};result=[]
+        for row in db.execute('SELECT a.*,r.entity_id,r.role FROM school_form_recipients r JOIN accounts a ON a.id=r.user_id WHERE r.form_id=? AND a.active=1',(form['id'],)):
+            if row[0] not in accounts:
+                account=self.access.public(row[:8]);accounts[row[0]]=account if enabled(account,snap,workspace) else None
+            account=accounts[row[0]]
+            name=self.still(form,account,row[8],row[9],snap,workspace) if account else None
+            if name is not None: result.append((account,row[8],row[9],name if row[8] else ''))
+        return result
+
+    def answered(self, db, form):
+        """[(account id, child id, role)] of people who have answered. A draft or a withdrawn answer is not an answer."""
+        table,clause=('school_form_ballots','') if form['definition'].get('anonymous') else ('school_form_answers'," AND a.status NOT IN ('draft','withdrawn')")
+        return db.execute(f'SELECT a.user_id,a.entity_id,r.role FROM {table} a JOIN school_form_recipients r ON r.form_id=a.form_id AND r.user_id=a.user_id AND r.entity_id=a.entity_id WHERE a.form_id=?'+clause,(form['id'],)).fetchall()
+
+    def pending_people(self, db, form, snap, workspace):
+        """(recipient rows, those who have not answered). Parents answer separately, but a second parent of an answered child is not chased."""
+        rows=self.roster(db,form,snap,workspace);given=self.answered(db,form)
+        done={(user,entity) for user,entity,_ in given}
+        covered=set() if form['definition'].get('anonymous') else {(entity,role) for _,entity,role in given if entity}
+        return rows,[r for r in rows if (r[0]['id'],r[1]) not in done and (r[1],r[2]) not in covered]
+
+    def own_status(self, db, form, user):
+        """{child id: state of the caller's own answer}; an anonymous survey only knows that a ballot was cast."""
+        if form['definition'].get('anonymous'): return {entity:'submitted' for entity, in db.execute('SELECT entity_id FROM school_form_ballots WHERE form_id=? AND user_id=?',(form['id'],user['id']))}
+        return dict(db.execute('SELECT entity_id,status FROM school_form_answers WHERE form_id=? AND user_id=?',(form['id'],user['id'])))
+
     def documents(self, db, form_id, ids):
         return dict(db.execute('SELECT id,document FROM school_form_answers WHERE form_id=? AND id IN (SELECT value FROM json_each(?))',(form_id,encoded(ids))))
 
@@ -226,27 +373,35 @@ class SchoolForms:
         @app.get('/api/forms/options')
         def options(request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
-                if user['role']!='admin': return dict(canCreate=False,classes=[],staff=[])
+                if user['role']!='admin': return dict(canCreate=False,classes=[],staff=[],savedGroups=[])
                 staff=[]
                 for row in db.execute("SELECT * FROM accounts WHERE active=1 AND role IN ('editor','teacher','staff','viewer') ORDER BY name,id"):
                     account=self.access.public(row)
                     if enabled(account,snap,workspace): staff.append(dict(id=account['id'],name=account['name'],role=account['role']))
-                return dict(canCreate=True,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],staff=staff)
+                # The groups the administrator saved in Messages; a database that never used them has no table, and a read creates none.
+                groups=[dict(id=id,name=name) for id,name in db.execute('SELECT id,name FROM message_saved_groups WHERE workspace=? AND owner_id=? ORDER BY name,id',(workspace,user['id']))] if has_table(db,'message_saved_groups') else []
+                return dict(canCreate=True,classes=[dict(id=c.id,name=c.name) for c in snap.state.classes],staff=staff,savedGroups=groups)
 
         @app.get('/api/forms/items')
         def listing(request:Request,workspace:Workspace='school',before:int=Query(default=9223372036854775807,ge=1),limit:int=Query(default=30,ge=1,le=50)):
             with self.context(request,workspace) as (db,user,snap):
                 where='';params=[workspace,before]
                 if user['role']!='admin':
+                    # Delegation follows the rights it was given under; a recipient row only needs the same role (contexts() checks the links).
+                    # An open standing form is offered to its roles even without a row: whoever joined later can answer.
                     where=''' AND (EXISTS (SELECT 1 FROM school_form_access a WHERE a.form_id=f.id AND a.user_id=? AND a.permissions=?) OR
-                        EXISTS (SELECT 1 FROM school_form_recipients r WHERE r.form_id=f.id AND r.user_id=? AND r.permissions=?))'''
-                    params += [user['id'],permission_key(user),user['id'],permission_key(user)]
+                        EXISTS (SELECT 1 FROM school_form_recipients r WHERE r.form_id=f.id AND r.user_id=? AND r.role=?) OR
+                        f.status='open' AND json_extract(f.document,'$.standing')=1 AND EXISTS (SELECT 1 FROM json_each(f.document,'$.audience.roles') WHERE value=?))'''
+                    params += [user['id'],permission_key(user),user['id'],user['role'],user['role']]
                 rows=db.execute('SELECT f.seq,f.id FROM school_forms f WHERE f.workspace=? AND f.seq<?'+where+' ORDER BY f.seq DESC LIMIT ?',(*params,limit+1)).fetchall()
                 items=[]
                 for seq,id in rows[:limit]:
                     form=self.form(db,workspace,id);permission=self.permission(db,form,user);contexts=self.contexts(db,form,user,snap,workspace)
                     if not permission and not contexts: continue
-                    items.append(dict(id=id,title=form['definition']['title'],kind=form['definition']['kind'],version=form['version'],status=form['status'],accepting=accepting(form),closesAt=form['definition']['closesAt'],permission=permission,contexts=contexts))
+                    doc=form['definition']
+                    own=self.own_status(db,form,user) if contexts else {}
+                    items.append(dict(id=id,title=doc['title'],kind=doc['kind'],version=form['version'],status=form['status'],accepting=accepting(form),closesAt=doc['closesAt'],permission=permission,
+                                      standing=bool(doc.get('standing')),anonymous=bool(doc.get('anonymous')),contexts=[c|dict(status=own.get(c['entityId'],'none')) for c in contexts]))
                 return dict(items=items,nextBefore=rows[limit-1][0] if len(rows)>limit else None)
 
         @app.post('/api/forms/items')
@@ -266,9 +421,13 @@ class SchoolForms:
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);permission=self.permission(db,form,user);contexts=self.contexts(db,form,user,snap,workspace)
                 if not permission and not contexts: raise HTTPException(404,'Форма недоступна.')
-                result=form|dict(permission=permission,contexts=contexts,accepting=accepting(form))
+                result=form|dict(permission=permission,contexts=contexts,accepting=accepting(form),seatsLeft=seats(db,form))
                 if not permission:
                     result['definition']={k:v for k,v in form['definition'].items() if k!='audience'}
+                elif form['definition'].get('anonymous'):
+                    # Only the number of ballots: there are no answer rows to count by status.
+                    result['counts']={'submitted':db.execute('SELECT count(*) FROM school_form_ballots WHERE form_id=?',(id,)).fetchone()[0]}
+                    result['audienceCount']=db.execute('SELECT count(*) FROM school_form_recipients WHERE form_id=?',(id,)).fetchone()[0]
                 else:
                     result['counts']=dict(db.execute('SELECT status,count(*) FROM school_form_answers WHERE form_id=? GROUP BY status',(id,)))
                     # A saved draft is private: only aggregate completed/submitted states leave the respondent scope.
@@ -303,7 +462,9 @@ class SchoolForms:
                 version(form,body.version)
                 if form['status']!='draft': raise HTTPException(409,'Опубликованные вопросы неизменны. Создайте новую форму.')
                 definition=body.definition.model_dump(mode='json')
-                if permission!='admin' and definition['audience']!=form['definition']['audience']: raise HTTPException(403,'Аудиторию задаёт администратор.')
+                # The stored draft may predate the newer keys: compare it as the model reads it, so an untouched old audience is not a change.
+                if permission!='admin' and (Audience.model_validate(form['definition']['audience']).model_dump(mode='json')!=definition['audience'] or any(definition[k]!=form['definition'].get(k,False) for k in ['standing','anonymous'])):
+                    raise HTTPException(403,'Аудиторию, постоянный приём и анонимность задаёт администратор.')
                 if set(definition['audience']['classIds'])-snap.entities['class_'].keys(): raise HTTPException(422,'Выберите действующие классы.')
                 form['definition']=definition;result=self.save_form(db,form,user,'edited')
                 return self.remember(db,user,body,fingerprint,result)
@@ -330,10 +491,10 @@ class SchoolForms:
         def preview(id:str,request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require(db,form,user,True)
-                recipients,users,fingerprint=self.recipients(db,form,snap,workspace)
+                recipients,users,fingerprint,unavailable=self.recipients(db,form,snap,workspace,user)
                 roles={}
                 for row in recipients: roles[row[3]]=roles.get(row[3],0)+1
-                return dict(version=form['version'],audienceHash=fingerprint,accounts=len(users),responses=len(recipients),roles=roles)
+                return dict(version=form['version'],audienceHash=fingerprint,accounts=len(users),responses=len(recipients),roles=roles,unavailable=unavailable)
 
         @app.post('/api/forms/items/{id}/transition')
         def transition(id:str,body:Transition,request:Request,workspace:Workspace='school'):
@@ -343,11 +504,13 @@ class SchoolForms:
                 if old: return old
                 version(form,body.version);doc=form['definition'];users=[]
                 if body.action=='publish':
-                    if form['status']!='draft' or not doc['questions'] or not doc['audience']['roles']: raise HTTPException(422,'Для публикации заполните вопросы и аудиторию черновика.')
+                    audience=doc['audience']
+                    if form['status']!='draft' or not doc['questions'] or audience.get('preset','roles')=='roles' and not audience['roles']: raise HTTPException(422,'Для публикации заполните вопросы и аудиторию черновика.')
                     if doc['kind']=='consent' and not any(q['kind']=='consent' and q['required'] for q in doc['questions']): raise HTTPException(422,'Для согласия добавьте обязательный вопрос «Да / Нет».')
                     if doc['closesAt'] and datetime.fromisoformat(doc['closesAt'])<=now(): raise HTTPException(422,'Срок ответа уже прошёл.')
-                    recipients,users,current_hash=self.recipients(db,form,snap,workspace)
+                    recipients,users,current_hash,_=self.recipients(db,form,snap,workspace,user)
                     if not recipients: raise HTTPException(422,'В выбранной аудитории нет действующих аккаунтов.')
+                    if doc.get('anonymous') and len(recipients)<ANONYMOUS_MIN: raise HTTPException(422,f'Анонимный опрос нужен минимум для {ANONYMOUS_MIN} адресатов: иначе ответ можно угадать.')
                     if current_hash!=body.audienceHash: raise HTTPException(409,'Аудитория изменилась. Повторите предварительную проверку.')
                     db.executemany('INSERT INTO school_form_recipients VALUES (?,?,?,?,?,?,?)',[(id,*r) for r in recipients])
                     form['status']='open'
@@ -356,6 +519,7 @@ class SchoolForms:
                     form['status']='closed'
                 elif body.action=='reopen':
                     if form['status'] not in ['open','closed']: raise HTTPException(409,'Эту форму нельзя открыть повторно.')
+                    if doc.get('standing') and body.closesAt: raise HTTPException(422,'Постоянная форма принимает ответы без срока. Закройте её вручную.')
                     if body.closesAt and body.closesAt<=now(): raise HTTPException(422,'Выберите будущий срок.')
                     if body.closesAt and doc['opensAt'] and body.closesAt<=datetime.fromisoformat(doc['opensAt']): raise HTTPException(422,'Окончание должно быть позже начала приёма.')
                     doc['closesAt']=body.closesAt.isoformat() if body.closesAt else None
@@ -371,6 +535,10 @@ class SchoolForms:
         def personal(id:str,request:Request,entityId:str='',workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require_recipient(db,form,user,snap,workspace,entityId)
+                if form['definition'].get('anonymous'):
+                    # The server cannot link a ballot to an answer, so the author sees only that they have answered.
+                    voted=db.execute('SELECT 1 FROM school_form_ballots WHERE form_id=? AND user_id=? AND entity_id=?',(id,user['id'],entityId)).fetchone()
+                    return dict(answer=dict(id='',version=1 if voted else 0,status='submitted' if voted else 'draft',answers={},comment='',updated=None,entityId=entityId),history=[],formVersion=form['version'],accepting=accepting(form))
                 answer=self.answer(db,form,user,entityId)
                 # The applicant continues from their private correction; staff never receive it.
                 draft=answer.pop('draft',None);saved=answer.pop('draftUpdated',None);answer.pop('hidden',None)
@@ -381,9 +549,15 @@ class SchoolForms:
         @app.put('/api/forms/items/{id}/answer')
         def answer_write(id:str,body:AnswerWrite,request:Request,workspace:Workspace='school'):
             with self.context(request,workspace,True) as (db,user,snap):
-                form=self.form(db,workspace,id);self.require_recipient(db,form,user,snap,workspace,body.entityId)
+                form=self.form(db,workspace,id);context=self.require_recipient(db,form,user,snap,workspace,body.entityId)
+                if form['definition'].get('anonymous'): return self.anonymous_answer(db,form,user,body)
                 fingerprint,old=self.replay(db,user,body,'answer:'+id)
                 if old: return old
+                if form['definition'].get('standing'):
+                    # The audience is live, so the account joins the recipient rows with its first write: staff results list answers through them.
+                    db.execute('''INSERT INTO school_form_recipients(form_id,user_id,entity_id,permissions,role,name,entity_name) VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(form_id,user_id,entity_id) DO UPDATE SET permissions=excluded.permissions,role=excluded.role,name=excluded.name,entity_name=excluded.entity_name''',
+                        (id,user['id'],body.entityId,permission_key(user),user['role'],user['name'],context['name'] if body.entityId else ''))
                 compatible(db,form,body.formVersion)
                 answer=self.answer(db,form,user,body.entityId)
                 # A returned application may be corrected after the deadline or a manual close: staff can still decide it.
@@ -397,6 +571,7 @@ class SchoolForms:
                 else:
                     if answer['status']=='submitted': raise HTTPException(409,'Сначала отзовите ответ или дождитесь возврата на исправление.')
                     validate_answers(form['definition'],body.answers,body.action=='submit')
+                    if body.action=='submit': reserve(db,form,answer,body.answers)
                     # A decided application is archived in history; a new submission starts the next cycle.
                     if body.action=='submit': answer.pop('draft',None);answer['answers']=body.answers;answer['status']='submitted';answer['comment']=''
                     # An unsent correction stays private; staff keep the version they reviewed.
@@ -412,6 +587,12 @@ class SchoolForms:
         def responses(id:str,request:Request,workspace:Workspace='school',after:str='',limit:int=Query(default=50,ge=1,le=100)):
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require(db,form,user)
+                if form['definition'].get('anonymous'):
+                    count=db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]
+                    if withheld(count): return dict(items=[],nextAfter=None,withheld=True,minimum=ANONYMOUS_MIN,count=count)
+                    # Random ids give an order that says nothing about when or by whom an answer was sent.
+                    rows=db.execute('SELECT id,answers FROM school_form_anonymous WHERE form_id=? AND id>? ORDER BY id LIMIT ?',(id,after,limit+1)).fetchall()
+                    return dict(items=[dict(id=row[0],answers=json.loads(row[1])) for row in rows[:limit]],nextAfter=rows[limit-1][0] if len(rows)>limit else None,withheld=False,count=count)
                 rows=self.ordered(db,id,snap,"a.status!='draft'",after)[:limit+1];documents=self.documents(db,id,[r[1] for r in rows[:limit]]);mine=grant_ids(user,workspace,'student')
                 items=[]
                 for key,answer_id,class_name,name,entity_name,role,owner,entity in rows[:limit]:
@@ -464,23 +645,74 @@ class SchoolForms:
         def summary(id:str,request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require(db,form,user)
-                result={q['id']:dict(id=q['id'],title=q['title'],answered=0,choices={choice:0 for choice in (['Да','Нет'] if q['kind']=='consent' else q['choices'])}) for q in form['definition']['questions']}
-                total=0
-                for document, in db.execute("SELECT document FROM school_form_answers WHERE form_id=? AND status NOT IN ('draft','withdrawn')",(id,)):
-                    total+=1;answers=json.loads(document)['answers']
-                    for key,question in result.items():
-                        value=answers.get(key)
-                        if value is None or value=='' or value==[]:continue
-                        question['answered']+=1
-                        values=value if isinstance(value,list) else ['Да' if value is True else 'Нет' if value is False else value]
-                        for chosen in values:
-                            if chosen in question['choices']: question['choices'][chosen]+=1
-                return dict(responses=total,questions=list(result.values()))
+                if form['definition'].get('anonymous'):
+                    count=db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]
+                    if withheld(count): return dict(responses=count,questions=[],withheld=True)
+                    total,questions=tally(form['definition'],(json.loads(answers) for answers, in db.execute('SELECT answers FROM school_form_anonymous WHERE form_id=?',(id,))))
+                else:
+                    total,questions=tally(form['definition'],(json.loads(document)['answers'] for document, in db.execute("SELECT document FROM school_form_answers WHERE form_id=? AND status NOT IN ('draft','withdrawn')",(id,))))
+                return dict(responses=total,questions=questions)
+
+        @app.get('/api/forms/items/{id}/seats')
+        def seats_left(id:str,request:Request,workspace:Workspace='school'):
+            with self.context(request,workspace) as (db,user,snap):
+                form=self.form(db,workspace,id)
+                if not self.permission(db,form,user) and not self.contexts(db,form,user,snap,workspace): raise HTTPException(404,'Форма недоступна.')
+                return seats(db,form)
+
+        @app.get('/api/forms/items/{id}/pending')
+        def pending(id:str,request:Request,workspace:Workspace='school',offset:int=Query(default=0,ge=0),limit:int=Query(default=50,ge=1,le=100)):
+            with self.context(request,workspace) as (db,user,snap):
+                form=self.form(db,workspace,id);permission=self.require(db,form,user);doc=form['definition']
+                anonymous=bool(doc.get('anonymous'))
+                # A standing form is open to everybody and expects nothing from anybody: there is nobody to chase.
+                if doc.get('standing'): return dict(applicable=False,anonymous=False,audience=0,answered=0,pendingCount=0,remindedToday=0,canRemind=False,items=[],nextOffset=None)
+                rows,people=self.pending_people(db,form,snap,workspace)
+                reminded={owner for owner, in db.execute('SELECT user_id FROM school_form_reminders WHERE form_id=? AND day=?',(id,local_day().isoformat()))}
+                classes,pupils=snap.entities['class_'],snap.entities['student']
+                def rank(row):
+                    account,entity,role,pupil=row;group=classes.get(pupils[entity].classId) if entity in pupils else None;label=group.name if group else ''
+                    return (0 if group else 1,natural(label),natural(pupil or account['name']),natural(account['name']),account['id'],entity),label
+                ranked=sorted(((rank(r),r) for r in people),key=lambda r:r[0][0])
+                # An anonymous survey shows how many have answered and never who is left: the list would shrink next to the answers.
+                page=[] if anonymous else ranked[offset:offset+limit]
+                return dict(applicable=True,anonymous=anonymous,audience=len(rows),answered=len(rows)-len(people),pendingCount=len(people),
+                            remindedToday=len({r[0]['id'] for r in people if r[0]['id'] in reminded}),canRemind=accepting(form) and permission in ['admin','manage'],
+                            items=[dict(name=r[0]['name'],role=r[2],entityName=r[3],className=key[1],remindedToday=r[0]['id'] in reminded) for key,r in page],
+                            nextOffset=offset+limit if not anonymous and len(ranked)>offset+limit else None)
+
+        @app.post('/api/forms/items/{id}/remind')
+        def remind(id:str,body:Reminder,request:Request,workspace:Workspace='school'):
+            with self.context(request,workspace,True) as (db,user,snap):
+                form=self.form(db,workspace,id);self.require(db,form,user,True)
+                fingerprint,old=self.replay(db,user,body,'remind:'+id)
+                if old: return old
+                if form['definition'].get('standing'): raise HTTPException(409,'Постоянная форма не ждёт ответа от всех.')
+                if not accepting(form): raise HTTPException(409,'Приём закрыт: напоминать не о чем.')
+                today=local_day();day=today.isoformat()
+                _,people=self.pending_people(db,form,snap,workspace)
+                reminded={owner for owner, in db.execute('SELECT user_id FROM school_form_reminders WHERE form_id=? AND day=?',(id,day))}
+                # One entry per account naming only its unanswered children; whoever was already reminded today is skipped, whoever pressed the button.
+                accounts={};children={}
+                for account,entity,role,pupil in people:
+                    if account['id'] in reminded: continue
+                    accounts[account['id']]=account;children.setdefault(account['id'],[])
+                    if entity: children[account['id']].append(dict(id=entity,name=pupil))
+                skipped=len({r[0]['id'] for r in people})-len(accounts)
+                db.executemany('INSERT INTO school_form_reminders(form_id,user_id,day,created) VALUES (?,?,?,?)',[(id,user_id,day,now().isoformat()) for user_id in accounts])
+                db.execute('DELETE FROM school_form_reminders WHERE day<?',((today-timedelta(days=30)).isoformat(),))
+                if accounts:
+                    self.notifications.deliver(db,list(accounts.values()),workspace,form['version'],'forms.reminder',topic='forms.reminder:'+id,
+                                               target=lambda u:dict(module='forms',recordId=id,students=children[u['id']],title=f"Напоминание: ответьте на «{form['definition']['title']}»"))
+                self.access.record(db,'forms.reminded',workspace,form['version'],detail=str(len(accounts)),principal=user)
+                return self.remember(db,user,body,fingerprint,dict(reminded=len(accounts),skipped=skipped))
 
         @app.get('/api/forms/items/{id}/export')
         def export(id:str,request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
-                form=self.form(db,workspace,id);self.require(db,form,user)
+                form=self.form(db,workspace,id);self.require(db,form,user);anonymous=bool(form['definition'].get('anonymous'))
+                if anonymous and withheld(db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]):
+                    raise HTTPException(409,f'Результаты анонимного опроса откроются, когда ответят не менее {ANONYMOUS_MIN} человек.')
                 output=tempfile.SpooledTemporaryFile(max_size=512*1024,mode='w+',encoding='utf-8',newline='')
                 writer=csv.writer(output);questions=form['definition']['questions']
                 def cell(value):
@@ -488,13 +720,19 @@ class SchoolForms:
                     return "'"+text if text.lstrip().startswith(('=','+','-','@')) else text
                 try:
                     output.write('\ufeff')
-                    writer.writerow(['Отправитель','Ученик','Класс','Роль','Статус','Изменено','Комментарий',*[cell(q['title']) for q in questions]])
-                    rows=self.ordered(db,id,snap,"a.status NOT IN ('draft','withdrawn')")
-                    for start in range(0,len(rows),500):
-                        page=rows[start:start+500];documents=self.documents(db,id,[r[1] for r in page])
-                        for key,answer_id,class_name,name,entity_name,role,owner,entity in page:
-                            answer=json.loads(documents[answer_id])
-                            writer.writerow([cell(v) for v in [name,entity_name,class_name,role,answer['status'],answer['updated'],answer['comment'],*[answer['answers'].get(q['id']) for q in questions]]])
+                    if anonymous:
+                        # Answers only, in the order of their random ids: no sender, class, status or time.
+                        writer.writerow([cell(q['title']) for q in questions])
+                        for answers, in db.execute('SELECT answers FROM school_form_anonymous WHERE form_id=? ORDER BY id',(id,)):
+                            given=json.loads(answers);writer.writerow([cell(given.get(q['id'])) for q in questions])
+                    else:
+                        writer.writerow(['Отправитель','Ученик','Класс','Роль','Статус','Изменено','Комментарий',*[cell(q['title']) for q in questions]])
+                        rows=self.ordered(db,id,snap,"a.status NOT IN ('draft','withdrawn')")
+                        for start in range(0,len(rows),500):
+                            page=rows[start:start+500];documents=self.documents(db,id,[r[1] for r in page])
+                            for key,answer_id,class_name,name,entity_name,role,owner,entity in page:
+                                answer=json.loads(documents[answer_id])
+                                writer.writerow([cell(v) for v in [name,entity_name,class_name,role,answer['status'],answer['updated'],answer['comment'],*[answer['answers'].get(q['id']) for q in questions]]])
                     output.seek(0)
                 except BaseException:
                     output.close();raise
