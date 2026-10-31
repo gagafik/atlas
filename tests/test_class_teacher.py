@@ -237,7 +237,7 @@ def test_explicit_revoke_wins_and_follows_live_link(client):
     revoke(client, teacher, 'absence_review')
     assert t.get(url('/' + notice['id'])).status_code == 404 and decide(t, notice).status_code == 404
     assert report(t).status_code == 200
-    assert own(t)[0]['classes'][0]['capabilities'] == ['attendance_read', 'journal_coverage', 'behaviour_notes']
+    assert own(t)[0]['classes'][0]['capabilities'] == ['attendance_read', 'journal_coverage', 'behaviour_notes', 'attendance_grid']
     assert settings(client)['assignments'] == {A: [dict(accountId=teacher['id'], capabilities=[], revoked=['absence_review'])]}
     lead(None)
     assert own(t) == []

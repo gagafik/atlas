@@ -3,6 +3,7 @@ import { api } from "./api";
 import { classCapabilities, type ClassCapability } from "./classStaff";
 import AbsencePanel from "./AbsencePanel";
 import AttendancePanel from "./AttendancePanel";
+import AttendanceGridPanel from "./AttendanceGridPanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import { canLeaveHomework } from "./homeworkNavigation";
 import "./classStaff.css";
@@ -109,6 +110,9 @@ export default function ClassStaffWorkspace({
             {has("absence_review") && <AbsencePanel workspace={workspace} />}
             {has("attendance_read") && (
               <AttendancePanel workspace={workspace} />
+            )}
+            {(has("attendance_grid") || has("attendance_read")) && (
+              <AttendanceGridPanel workspace={workspace} />
             )}
             {has("journal_coverage") && (
               <JournalCoveragePanel workspace={workspace} />

@@ -251,7 +251,7 @@ class JournalCoverage:
                 while len(self.cache)>CACHE_ENTRIES or sum(len(v[1]['rows']) for v in self.cache.values())>CACHE_ROWS:self.cache.popitem(last=False)
         return value|dict(token=token)
 
-    def summary(self,db,user,snap,workspace,classes,cached):
+    def summary(self,db,user,snap,workspace,classes,cached,subject=False):
         """One row per class from the cached snapshot; a mixed group counts in every class it covers. No pupil is named or counted."""
         rows=[dict(zip(KEYS,r))|dict(classIds=r[CLASS_IDS],teacherIds=r[TEACHER_IDS]) for r in cached['rows']]
         pending=[r for r in rows if actionable(r)]
@@ -260,13 +260,21 @@ class JournalCoverage:
         teachers=snap.entities['teacher'];result=[];by_class={}
         for r in rows:
             for id in r['classIds']:by_class.setdefault(id,[]).append(r)
+        # The daily attendance confirmation is read live like the accounts above: never cached, not in the token, no pupil data.
+        from .attendance_days import day_states,expected_days,starts,summarize,unmeasured
+        from .coverage_reminders import settings as reminder_settings
+        # A subject filter leaves only that subject's lessons in the rows: whether a day is over or confirmed cannot be told from them, so it is not measured.
+        owed=expected_days(rows);days=[r['date'] for r in rows]
+        states=day_states(db,workspace,set(classes),min(days),max(days)) if days and not subject else {}
+        first=starts(db,workspace,reminder_settings(db,workspace)['confirmSince']) if not subject else {}
         for c in sorted((c for c in snap.state.classes if c.id in classes),key=lambda c:(c.name.casefold(),c.id)):
             mine=by_class.get(c.id,[]);due=[r for r in mine if r['due']];open_=[r for r in mine if actionable(r)]
             result.append(dict(classId=c.id,className=c.name,classTeacher=teachers[c.classTeacherId].name if c.classTeacherId in teachers else None,expected=len(due),unfilled=len(open_),
                 **{status:sum(r['status']==status for r in due) for status in ['missing','draft','incomplete','stale','complete']},
                 upcoming=sum(r['status']=='upcoming' for r in mine),rosterUnknown=sum(r['rosterUnknown'] for r in due),
                 lastRecord=max((r['date'] for r in mine if r['publishedVersion'] is not None and r['status']!='orphaned'),default=None),
-                unfilledSince=min((r['date'] for r in open_),default=None),unbound=sum(not bound&set(r['teacherIds']) for r in open_)))
+                unfilledSince=min((r['date'] for r in open_),default=None),unbound=sum(not bound&set(r['teacherIds']) for r in open_),
+                **(unmeasured() if subject else summarize(owed.get(c.id,set()),states.get(c.id,{}),first.get(c.id,first['default'])))))
         value=dict(classes=result,counts=cached['counts'])
         if user['role']=='admin':
             # Whether a colleague has an account is account administration data: administrators only.
@@ -333,7 +341,7 @@ class JournalCoverage:
                 token=self.token(db,user,snap,workspace,body)
                 cached=self.result(db,user,snap,workspace,body,token)
                 classes,_=self.scope(db,user,snap,workspace,body)
-                value=self.summary(db,user,snap,workspace,classes,cached)
+                value=self.summary(db,user,snap,workspace,classes,cached,subject=bool(body.subjectId))
             self.finish(user,snap,workspace,cached['token'],body,'journal.coverage_classes_read')
             return value|dict(token=cached['token'],asOf=body.asOf.isoformat())
         @app.post('/api/journal/coverage/details')

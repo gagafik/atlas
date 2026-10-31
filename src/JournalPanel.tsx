@@ -13,6 +13,7 @@ import AbsencePanel from "./AbsencePanel";
 import { useLessonMarks } from "./LessonMarks";
 import LessonPupilCards from "./LessonPupilCards";
 import AttendancePanel from "./AttendancePanel";
+import AttendanceGridPanel from "./AttendanceGridPanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
@@ -611,6 +612,13 @@ export default function JournalPanel({
         return (
           <AttendancePanel
             key={`attendance-${workspace}`}
+            workspace={workspace}
+          />
+        );
+      case "attendanceGrid":
+        return (
+          <AttendanceGridPanel
+            key={`attendance-grid-${workspace}`}
             workspace={workspace}
           />
         );

@@ -9,6 +9,7 @@ import {
 } from "./journal";
 import { download } from "./utils";
 import { codeBreakdown, codeName } from "./absenceForm";
+import { ruDate } from "./journalCoverage";
 
 type Counts = {
   records: number;
@@ -45,7 +46,20 @@ type Options = {
   students: { id: string; name: string; classId: string; active: boolean }[];
   subjects: { id: string; name: string }[];
 };
+type DayConfirmation = {
+  classId: string;
+  className: string;
+  expectedDays: number;
+  confirmedDays: number;
+  changedDays: number;
+  // null: the class never confirmed a day and the reminders are off, so nothing is owed yet.
+  pendingDays: number | null;
+  pendingSince: string | null;
+};
 type Report = {
+  // A number for one or a few classes, "not_measured" for the whole school, a pupil or an archive.
+  missingJournals?: number | "not_measured";
+  dayConfirmation?: { classes: DayConfirmation[] } | null;
   codes?: { id: string; name: string }[];
   token: string;
   generatedAt: string;
@@ -320,9 +334,11 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
             Опубликованные отметки за выбранный период, до 366 дней. Классы
             показаны по текущему составу, включая неактивных учеников.
             Неотмечено — опубликованные записи без отметки; уроки без
-            опубликованного журнала в эти числа не входят. Процент посещаемости
-            по ним не рассчитывается. По умолчанию показан текущий учебный
-            период или месяц по времени школы.
+            опубликованного журнала в эти числа не входят и процент посещаемости
+            по ним не рассчитывается. Для выбранного класса (или нескольких
+            ваших классов) число таких уроков показано отдельно, для всей школы
+            и по ученику оно не рассчитывается. По умолчанию показан текущий
+            учебный период или месяц по времени школы.
           </p>
           {error && (
             <p role="alert" className="error-banner">
@@ -449,6 +465,24 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
                     {new Date(report.generatedAt).toLocaleString("ru-RU")}.
                   </p>
                   <Totals value={report.totals} codes={report.codes} />
+                  {typeof report.missingJournals === "number" && (
+                    <p>
+                      Прошедших уроков без опубликованного журнала:{" "}
+                      <strong>{report.missingJournals}</strong>
+                    </p>
+                  )}
+                  {report.dayConfirmation?.classes.map((c) => (
+                    <p key={c.classId}>
+                      {c.className}: подтверждено дней{" "}
+                      <strong>
+                        {c.confirmedDays} из {c.expectedDays}
+                      </strong>
+                      {c.changedDays > 0 &&
+                        `, изменено после подтверждения: ${c.changedDays}`}
+                      {c.pendingSince &&
+                        `; ждёт подтверждения с ${ruDate(c.pendingSince)}`}
+                    </p>
+                  ))}
                   <div className="dated-toolbar">
                     {[
                       ["students", "По ученикам"],

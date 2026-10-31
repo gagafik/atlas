@@ -234,7 +234,12 @@ export async function loadRemainingReport(
   return current;
 }
 export type JournalPanelName =
-  "finalGrades" | "absences" | "periods" | "coverage" | "attendance";
+  | "finalGrades"
+  | "absences"
+  | "periods"
+  | "coverage"
+  | "attendance"
+  | "attendanceGrid";
 // The server says which management panels have anything for this account; they follow the lesson list.
 export function journalPanels(options: {
   panels?: Partial<Record<JournalPanelName, boolean>>;
@@ -245,6 +250,7 @@ export function journalPanels(options: {
     "periods",
     "coverage",
     "attendance",
+    "attendanceGrid",
   ];
   return order.filter((name) => options.panels?.[name]);
 }

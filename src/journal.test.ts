@@ -339,12 +339,14 @@ describe("management panels", () => {
       finalGrades: true,
       absences: true,
       attendance: true,
+      attendanceGrid: true,
       coverage: true,
       periods: true,
     };
     expect(names(all)).toEqual([
       "absences",
       "attendance",
+      "attendanceGrid",
       "coverage",
       "finalGrades",
       "periods",
