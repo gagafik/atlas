@@ -226,9 +226,14 @@ def register(service,app,Workspace):
             rows=db.execute("SELECT r.class_id,r.subject_id,r.status,r.assigned='',r.proposal IS NOT NULL,count(*),min(json_extract(r.source,'$.student.className')),min(json_extract(r.source,'$.subject')) FROM grading_rows r WHERE "+where+' GROUP BY 1,2,3,4,5',params).fetchall()
             cells={};names={'class':{},'subject':{}}
             for c,s,status,free,proposed,n,class_name,subject_name in rows:
-                cell=cells.setdefault((c,s),dict(classId=c,subjectId=s,total=0,draft=0,submitted=0,approved=0,published=0,proposed=0,unassigned=0))
+                cell=cells.setdefault((c,s),dict(classId=c,subjectId=s,total=0,draft=0,submitted=0,approved=0,published=0,proposed=0,unassigned=0,unavailable=0))
                 cell['total']+=n;cell[status]+=n;cell['proposed']+=n*proposed;cell['unassigned']+=n*free
                 names['class'][c]=class_name or '';names['subject'][s]=subject_name or ''
+            # Drafts left with an account that is no longer a teacher's (the teacher left or lost the grant): nobody can edit them until the administrator reassigns.
+            if user['role']=='admin':
+                live={t['id'] for t in service.teachers(db,workspace,snap)}
+                for c,s,account,n in db.execute("SELECT r.class_id,r.subject_id,r.assigned,count(*) FROM grading_rows r WHERE "+where+" AND r.status='draft' AND r.assigned<>'' GROUP BY 1,2,3",params):
+                    if account not in live:cells[(c,s)]['unavailable']+=n
             ordered=lambda kind:[dict(id=k,name=v) for k,v in sorted(names[kind].items(),key=lambda x:(natural(x[1]),x[0]))]
             return dict(book=book,classes=ordered('class'),subjects=ordered('subject'),cells=sorted(cells.values(),key=lambda c:(c['classId'],c['subjectId'])))
 

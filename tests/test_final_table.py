@@ -1,6 +1,7 @@
 from uuid import uuid4
+import pytest
 from backend import api
-from backend.models import DatedLesson
+from backend.models import DatedLesson,Placement,Workload
 from test_access import client,enable,create,signed  # noqa: F401
 from test_journal import entry,lesson,write,graded,DAY
 from test_journal_periods import period,close,action,period_clock  # noqa: F401
@@ -55,6 +56,32 @@ def test_ambiguous_teacher_is_not_guessed(client):
     b=prepare(client,close(client,period(client)))
     rows=[r for r in sheet(client,b).json()['items'] if r['source']['subject']==ENGLISH]
     assert rows and all(r['assigned']=='' for r in rows)
+
+
+def teach(*extra):
+    """More English lessons on Monday for 10A, as (workload id, teacher, period)."""
+    school=api.read('demo')
+    school.workloads+=[Workload(id=w,groupId='g-a',subjectId='sub2',teacherId=t,hours=1,profileId='secondary',roomIds=['r0']) for w,t,_ in extra]
+    school.placements+=[Placement(id=w,workloadId=w,day=0,period=p,roomId='r0') for w,_,p in extra]
+    api.save('demo',school)
+
+
+@pytest.mark.parametrize('extra,order',[([('more','t2',3),('other','t1',4)],[('t2',2),('t1',1)]),([('other','t1',3)],[('t1',1),('t2',1)])])
+def test_course_teachers_are_ordered_by_lessons_then_by_id(client,extra,order):
+    teach(*extra);english(client)
+    accounts={'t2':create(client,'teacher')['id'],'t1':create(client,'teacher',login='second',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])['id']}
+    row=pair(client,prepare(client,close(client,period(client))),'s1')
+    # The teacher with the most lessons answers for the course; on a tie the lower id does.
+    assert [(t['id'],t['lessons']) for t in row['source']['teachers']]==order and row['assigned']==accounts[order[0][0]]
+
+
+def test_row_known_only_from_a_published_journal_takes_the_teachers_of_the_course(client):
+    english(client);teacher=create(client,'teacher')
+    # s2 leaves 10A after the lesson was published: its document still lists s2, the schedule at closure does not.
+    school=api.read('demo');school.students=[x.model_copy(update=dict(classId='c-demo-d')) if x.id=='s2' else x for x in school.students];api.save('demo',school)
+    b=prepare(client,close(client,period(client)))
+    gone=pair(client,b,'s2');assert gone['source']['expected']==0 and gone['source']['published']==1
+    assert [t['id'] for t in gone['source']['teachers']]==['t2'] and gone['assigned']==teacher['id']
 
 
 def test_reclose_keeps_admin_assignment_over_automatic(client):
@@ -142,6 +169,19 @@ def test_batch_save_replays_request_id(client):
     assert t.post(url,json=other).status_code==409
 
 
+def test_batch_refuses_rows_of_another_book_and_rows_that_are_no_longer_drafts(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher');old=pair(t,b,'s1')
+    # The period is reopened and closed again: the old book is frozen, but its row is still assigned to the teacher.
+    b2=prepare(client,close(client,action(client,p,'reopen').json()));assert b2['id']!=b['id']
+    assert table(t,b2,s,[(old,dict(label='Выше'))]).status_code==404 and accept(t,b2,s,[old]).status_code==404
+    frozen=sheet(t,b).json()['items'];assert [(i['id'],i['version'],i['proposal']) for i in frozen]==[(old['id'],old['version'],None)]
+    # A row that was sent for approval is not a draft any more: the table cannot silently put it back.
+    row=pair(t,b2,'s1');sent=table(t,b2,s,[(row,dict(label='Выше'))],submit=True).json()['items'][0]
+    again=table(t,b2,s,[(dict(row,version=sent['version']),dict(label='Ниже',explanation='Решение учителя'))])
+    assert again.status_code==409 and 'в черновик' in again.json()['detail']
+    kept=pair(t,b2,'s1');assert kept['status']=='submitted' and kept['proposal']['label']=='Выше' and kept['version']==sent['version']
+
+
 def test_accept_recommendations_uses_server_calculation(client):
     p,b,s,r,_=seeded(client);t=signed('teacher');good,weak=own_rows(client,b,r['assigned'],'s1','s2')
     empty=own_rows(client,b,r['assigned'],'s1',subject='Математика')[0]
@@ -194,6 +234,18 @@ def test_matrix_counts_and_scope(client):
     assert matrix(signed('parent'),b).status_code==403
     create(client,'teacher',login='idle',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
     assert matrix(signed('idle'),b).status_code==404 and matrix(client,dict(b,id='missing')).status_code==404
+
+
+def test_matrix_shows_drafts_left_with_a_departed_teacher(client):
+    english(client);teacher=create(client,'teacher');b=prepare(client,close(client,period(client)))
+    cell=lambda subject:next(c for c in matrix(client,b).json()['cells'] if c['subjectId']==subject)
+    assert (cell('sub2')['total'],cell('sub2')['unassigned'],cell('sub2')['unavailable'])==(2,0,0)
+    gone=client.put('/api/access/users/'+teacher['id'],json={k:v for k,v in teacher.items() if k!='id'}|dict(active=False));assert gone.status_code==200,gone.text
+    # Nobody can edit the drafts of a departed teacher, so the cell says so; rows without an owner are counted separately.
+    assert (cell('sub2')['unassigned'],cell('sub2')['unavailable'],cell('sub0')['unavailable'])==(0,2,0)
+    other=create(client,'teacher',login='other')
+    batch(client,[r for r in sheet(client,b,subjectId='sub2').json()['items']],'assign',teacherId=other['id']).raise_for_status()
+    assert cell('sub2')['unavailable']==0
 
 
 def test_handles_require_class_and_respect_scope(client):

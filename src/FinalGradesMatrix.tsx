@@ -14,6 +14,8 @@ type Cell = {
   published: number;
   proposed: number;
   unassigned: number;
+  // Drafts whose teacher account is no longer valid.
+  unavailable: number;
 };
 type Matrix = {
   book: Book;
@@ -187,6 +189,7 @@ export default function FinalGradesMatrix({
   const label = (c: Cell) =>
     `${name(data.classes, c.classId)}, ${name(data.subjects, c.subjectId)}`;
   const unassigned = cells.reduce((n, c) => n + c.unassigned, 0);
+  const unavailable = cells.reduce((n, c) => n + c.unavailable, 0);
   return (
     <div className="final-matrix">
       {error && (
@@ -210,8 +213,11 @@ export default function FinalGradesMatrix({
       {admin ? (
         <>
           <p>
-            Строк без ответственного: {unassigned}. Ячейка — один класс и один
-            предмет; отметьте нужные и выберите действие.
+            Строк без ответственного: {unassigned}.
+            {unavailable > 0 &&
+              ` Черновиков, у которых учётная запись учителя недоступна: ${unavailable}; назначьте другого учителя.`}{" "}
+            Ячейка — один класс и один предмет; отметьте нужные и выберите
+            действие.
           </p>
           <div className="final-table-wrap">
             <table className="final-table final-grid">
@@ -257,6 +263,12 @@ export default function FinalGradesMatrix({
                           <small>{progress(cell)}</small>
                           {cell.unassigned > 0 && (
                             <small> · без учителя {cell.unassigned}</small>
+                          )}
+                          {cell.unavailable > 0 && (
+                            <small>
+                              {" "}
+                              · учётная запись недоступна {cell.unavailable}
+                            </small>
                           )}
                         </td>
                       );

@@ -89,19 +89,25 @@ export default function ReportCardSteps({
     [preview, setPreview] = useState<ClassReport | null>(null),
     [final, setFinal] = useState<ClassReport | null>(null),
     [phrases, setPhrases] = useState(options.phrases.join("\n")),
-    [yearRule, setYearRule] = useState(options.yearRule);
+    [yearRule, setYearRule] = useState(options.yearRule),
+    [loading, setLoading] = useState(false);
   const cards = useRef<HTMLDivElement>(null);
   const admin = options.admin;
   // The newest book of the period; a re-closure gets a book of its own.
   const book = options.books.find((b) => b.period.id === periodId);
   const ready = !!periodId && !!classId;
   const query = `periodId=${encodeURIComponent(periodId)}&classId=${encodeURIComponent(classId)}`;
+  // The selects stay usable while a load runs, so a reply is shown only while the period and class it was asked for are still chosen.
+  const key = `${periodId}/${classId}`;
+  const chosen = useRef(key);
+  const fresh = () => chosen.current === key;
 
   async function loadLayout() {
     const r: Layout = await api(
       `final-grades/report-layouts/${periodId}/${classId}`,
       workspace,
     );
+    if (!fresh()) return;
     setLayout(r);
     setItems(ordered(r));
     setHidden(r.hidden);
@@ -113,23 +119,39 @@ export default function ReportCardSteps({
       `final-grades/books/${book.id}/handles?${new URLSearchParams({ classId })}`,
       workspace,
     );
+    if (!fresh()) return;
     const total: Counts = {};
     for (const x of r.items) total[x.status] = (total[x.status] || 0) + 1;
     setCounts(total);
   }
   async function loadFinal() {
-    setFinal(await api(`final-grades/class-report?${query}`, workspace));
+    const r = await api(`final-grades/class-report?${query}`, workspace);
+    if (fresh()) setFinal(r);
   }
   useEffect(() => {
+    chosen.current = key;
     setLayout(null);
     setCounts(null);
     setPreview(null);
     setFinal(null);
+    setError("");
+    setNotice("");
+    setLoading(ready && admin);
     if (!ready || !admin) return;
-    void run(async () => {
-      await loadLayout();
-      await loadCounts();
-    });
+    // Not behind the busy lock: the load of the newly chosen class must never be dropped because the previous one is still running.
+    void (async () => {
+      try {
+        await loadLayout();
+        if (fresh()) await loadCounts();
+      } catch (e) {
+        if (fresh())
+          setError(
+            e instanceof Error ? e.message : "Не удалось загрузить класс.",
+          );
+      } finally {
+        if (fresh()) setLoading(false);
+      }
+    })();
   }, [periodId, classId]);
 
   function move(i: number, by: number) {
@@ -170,7 +192,7 @@ export default function ReportCardSteps({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      {busy && <p role="status">Загрузка…</p>}
+      {(busy || loading) && <p role="status">Загрузка…</p>}
     </>
   );
 
@@ -180,16 +202,7 @@ export default function ReportCardSteps({
         <h3>Табели класса</h3>
         {picks}
         {messages}
-        <button
-          disabled={busy || !ready}
-          onClick={() =>
-            void run(async () => {
-              setFinal(
-                await api(`final-grades/class-report?${query}`, workspace),
-              );
-            })
-          }
-        >
+        <button disabled={busy || !ready} onClick={() => void run(loadFinal)}>
           Показать табели класса
         </button>
         <p>
@@ -310,7 +323,8 @@ export default function ReportCardSteps({
                       },
                     );
                     await loadLayout();
-                    setNotice("Порядок и состав предметов сохранены.");
+                    if (fresh())
+                      setNotice("Порядок и состав предметов сохранены.");
                   })
                 }
               >
@@ -428,12 +442,11 @@ export default function ReportCardSteps({
                 disabled={busy || !book}
                 onClick={() =>
                   void run(async () => {
-                    setPreview(
-                      await api(
-                        `final-grades/class-report?${query}&preview=true`,
-                        workspace,
-                      ),
+                    const r = await api(
+                      `final-grades/class-report?${query}&preview=true`,
+                      workspace,
                     );
+                    if (fresh()) setPreview(r);
                   })
                 }
               >

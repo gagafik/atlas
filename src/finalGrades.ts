@@ -110,10 +110,21 @@ export function tableScale<S extends ScaleRef>(
   );
 }
 
-// What a row shows: its saved result on this scale, otherwise the computed recommendation (nothing is saved by showing it).
-export function tablePrefill(row: TableRowLike, scale: ScaleRef): TableEntry {
+// A result saved on another scale is a decision of its own: the table keeps it until the user recalculates the class on this scale.
+export const isForeign = (
+  row: Pick<TableRowLike, "proposal">,
+  scale: ScaleRef,
+) => !!row.proposal && row.proposal.scale.id !== scale.id;
+
+// What a row shows: its saved result, otherwise the computed recommendation (nothing is saved by showing it).
+// With `recalculate` a result saved on another scale is replaced by the recommendation of this one.
+export function tablePrefill(
+  row: TableRowLike,
+  scale: ScaleRef,
+  recalculate = false,
+): TableEntry {
   const p = row.proposal;
-  if (p && p.scale.id === scale.id)
+  if (p && (p.scale.id === scale.id || !recalculate))
     return {
       outcome: p.outcome,
       label: p.label,
@@ -142,15 +153,18 @@ export function needsExplanation(
 const filled = (e: TableEntry) => e.outcome !== "graded" || !!e.label;
 
 // The draft rows that have a result and differ from what is stored. A pre-filled grade counts once the user saves.
+// A row saved on another scale is left alone unless the class is recalculated on this one.
 export function changedRows(
   rows: TableRowLike[],
   values: Record<string, TableEntry>,
   scale: ScaleRef,
+  recalculate = false,
 ): (TableEntry & { id: string; version: number })[] {
   const result: (TableEntry & { id: string; version: number })[] = [];
   for (const r of rows) {
     const v = values[r.id];
     if (r.status !== "draft" || !v || !filled(v)) continue;
+    if (!recalculate && isForeign(r, scale)) continue;
     const p = r.proposal;
     const same =
       !!p &&

@@ -368,12 +368,19 @@ export default function BehaviourNotes({
     if (text === null) return;
     const reason = window.prompt("Причина изменения");
     if (!reason?.trim()) return;
+    // OK turns the print mark over, Cancel leaves it as it is.
+    const flip = window.confirm(
+      note.printed
+        ? "Запись печатается в табеле. Убрать её из табеля?"
+        : "Запись не печатается в табеле. Печатать её в табеле?",
+    );
     await run(async () => {
       await api(`behaviour/notes/${note.id}/edit`, workspace, "POST", {
         version: note.version,
         categoryId: note.categoryId,
         text,
         reason,
+        ...(flip ? { printed: !note.printed } : {}),
       });
       await refreshAfterChange();
     }, "Запись изменена.");

@@ -4,6 +4,7 @@ import {
   chunked,
   defaultDraft,
   eligibleFor,
+  isForeign,
   needsExplanation,
   tablePrefill,
   tableScale,
@@ -99,11 +100,68 @@ it("shows a saved result as it is and otherwise the recommendation", () => {
   expect(tablePrefill(row("2", "draft", null, "Выше"), thresholds).label).toBe(
     "Выше",
   );
-  // A result saved on another scale is not carried over to this one.
-  const other = proposal({ id: "z", version: 1 }, "Ниже");
-  expect(tablePrefill(row("3", "draft", other, null), thresholds).label).toBe(
-    "",
+});
+
+it("keeps a result saved on another scale until the class is recalculated", () => {
+  const other = {
+    scale: { id: "z", version: 1 },
+    outcome: "exempt",
+    label: "",
+    comment: "Приказ",
+    explanation: "Освобождён по справке",
+  };
+  const foreign = row("3", "draft", other, "Выше");
+  expect(tablePrefill(foreign, thresholds)).toEqual({
+    outcome: "exempt",
+    label: "",
+    comment: "Приказ",
+    explanation: "Освобождён по справке",
+  });
+  // The user asked for this scale: the recommendation of this scale takes over.
+  expect(tablePrefill(foreign, thresholds, true)).toEqual({
+    outcome: "graded",
+    label: "Выше",
+    comment: "",
+    explanation: "",
+  });
+  expect(isForeign(foreign, thresholds)).toBe(true);
+  expect(isForeign(row("4", "draft", null), thresholds)).toBe(false);
+  expect(
+    isForeign(row("5", "draft", proposal(thresholds, "Ниже")), thresholds),
+  ).toBe(false);
+});
+
+it("never saves a decision made on another scale unless the class is recalculated", () => {
+  // Three rows on scale a, one pupil exempted on scale z: saving the table must leave the exemption alone.
+  const rows = [
+    row("1", "draft", proposal({ id: "a", version: 3 }, "Ниже"), "Выше"),
+    row("2", "draft", null, "Выше"),
+    row(
+      "3",
+      "draft",
+      {
+        ...proposal({ id: "z", version: 1 }, ""),
+        outcome: "exempt",
+        explanation: "Освобождён по справке",
+      },
+      "Выше",
+    ),
+  ];
+  const values = Object.fromEntries(
+    rows.map((r) => [r.id, tablePrefill(r, thresholds)]),
   );
+  expect(changedRows(rows, values, thresholds).map((r) => r.id)).toEqual(["2"]);
+  const again = Object.fromEntries(
+    rows.map((r) => [r.id, tablePrefill(r, thresholds, true)]),
+  );
+  expect(changedRows(rows, again, thresholds, true)).toEqual([
+    expect.objectContaining({ id: "2", label: "Выше" }),
+    expect.objectContaining({ id: "3", outcome: "graded", label: "Выше" }),
+  ]);
+  // Row 1 keeps its own saved grade on its own scale, so it is not saved again.
+  expect(
+    changedRows(rows, again, thresholds, true).map((r) => r.id),
+  ).not.toContain("1");
 });
 
 it("starts a table on the scale the class already uses and never guesses among several", () => {

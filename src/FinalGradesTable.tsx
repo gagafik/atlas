@@ -4,6 +4,7 @@ import {
   changedRows,
   chunked,
   finalLabel,
+  isForeign,
   names,
   needsExplanation,
   tablePrefill,
@@ -52,6 +53,7 @@ export default function FinalGradesTable({
     [scaleId, setScaleId] = useState(""),
     [values, setValues] = useState<Record<string, TableEntry>>({}),
     [dirty, setDirty] = useState(false),
+    [recalculate, setRecalculate] = useState(false),
     [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
@@ -75,12 +77,15 @@ export default function FinalGradesTable({
       offset = page.nextOffset;
     }
   }
-  function show(loaded: Row[], chosen: Scale | undefined) {
+  function show(loaded: Row[], chosen: Scale | undefined, again: boolean) {
     setRows(loaded);
     setScaleId(chosen?.id || "");
+    setRecalculate(again);
     setValues(
       chosen
-        ? Object.fromEntries(loaded.map((r) => [r.id, tablePrefill(r, chosen)]))
+        ? Object.fromEntries(
+            loaded.map((r) => [r.id, tablePrefill(r, chosen, again)]),
+          )
         : {},
     );
     setDirty(false);
@@ -102,7 +107,7 @@ export default function FinalGradesTable({
       let loaded = await load(guess?.id || "");
       const chosen = tableScale(loaded, scales, lastScale.current);
       if (chosen && chosen.id !== guess?.id) loaded = await load(chosen.id);
-      if (mine === generation.current) show(loaded, chosen);
+      if (mine === generation.current) show(loaded, chosen, false);
     } catch (e) {
       if (mine === generation.current) fail(e);
     } finally {
@@ -132,10 +137,12 @@ export default function FinalGradesTable({
       lock.current = false;
     }
   }
-  async function reload(id: string) {
+  // `again` is the user's explicit choice to put rows saved on another scale onto this one.
+  async function reload(id: string, again: boolean) {
     show(
       await load(id),
       scales.find((s) => s.id === id && s.active),
+      again,
     );
   }
   function edit(id: string, patch: Partial<TableEntry>) {
@@ -173,10 +180,24 @@ export default function FinalGradesTable({
       )
     )
       return;
-    await run(() => reload(id));
+    await run(() => reload(id, true));
+  }
+  async function convert() {
+    if (
+      dirty &&
+      !window.confirm(
+        "Несохранённые изменения будут потеряны: итоги пересчитаются по этой шкале. Продолжить?",
+      )
+    )
+      return;
+    await run(() => reload(scaleId, true));
   }
   async function accept() {
-    const drafts = rows.filter((r) => r.status === "draft");
+    // A result saved on another scale stays as it is unless the class is recalculated.
+    const drafts = rows.filter(
+      (r) =>
+        r.status === "draft" && (recalculate || !scale || !isForeign(r, scale)),
+    );
     if (!scale || !drafts.length) return;
     if (
       dirty &&
@@ -201,7 +222,7 @@ export default function FinalGradesTable({
           skipped[s.reason] = (skipped[s.reason] || 0) + 1;
       }
       lastScale.current = scale.id;
-      await reload(scale.id);
+      await reload(scale.id, recalculate);
       onChanged();
       const left = Object.entries(skipped).map(
         ([reason, n]) => `${SKIPPED[reason] || reason} — ${n}`,
@@ -213,7 +234,7 @@ export default function FinalGradesTable({
   }
   async function save(submit: boolean) {
     if (!scale) return;
-    const todo = changedRows(rows, values, scale);
+    const todo = changedRows(rows, values, scale, recalculate);
     if (!todo.length) {
       setError("");
       setNotice("Нет изменений для сохранения.");
@@ -261,7 +282,7 @@ export default function FinalGradesTable({
         );
       }
       lastScale.current = scale.id;
-      await reload(scale.id);
+      await reload(scale.id, recalculate);
       onChanged();
       setNotice(
         submit
@@ -272,6 +293,15 @@ export default function FinalGradesTable({
   }
 
   const editable = current && !!scale;
+  // Draft rows whose saved result belongs to another scale: they keep it until the class is recalculated on this one.
+  const foreign = scale
+    ? rows.filter((r) => r.status === "draft" && isForeign(r, scale))
+    : [];
+  const kept = (r: Row) => !recalculate && foreign.includes(r);
+  const otherScale = (r: Row) =>
+    scales.find((s) => s.id === r.proposal?.scale.id)?.name ||
+    r.proposal?.scale.name ||
+    "другой шкале";
   return (
     <div className="final-table-block">
       {!current && (
@@ -304,7 +334,10 @@ export default function FinalGradesTable({
               ))}
           </select>
         </label>
-        <button disabled={busy} onClick={() => void run(() => reload(scaleId))}>
+        <button
+          disabled={busy}
+          onClick={() => void run(() => reload(scaleId, recalculate))}
+        >
           Обновить таблицу
         </button>
         {editable && (
@@ -335,6 +368,18 @@ export default function FinalGradesTable({
         нужно, когда итог отличается от рекомендации, а также для неаттестации и
         освобождения.
       </p>
+      {editable && !!foreign.length && (
+        <p role="status">
+          {recalculate
+            ? `Итоги по другой шкале (${foreign.length}) заменятся расчётом по шкале «${scale?.name}», когда вы сохраните таблицу.`
+            : `Итоги, сохранённые по другой шкале (${foreign.length}), остаются как есть: сохранение и принятие рекомендаций их не меняют. `}
+          {!recalculate && (
+            <button disabled={busy} onClick={() => void convert()}>
+              Пересчитать по шкале «{scale?.name}»
+            </button>
+          )}
+        </p>
+      )}
       {!rows.length && !busy && <p>В этом классе по предмету нет строк.</p>}
       {!!rows.length && (
         <div className="final-table-wrap">
@@ -359,7 +404,8 @@ export default function FinalGradesTable({
             <tbody>
               {rows.map((r) => {
                 const v = values[r.id];
-                const open = editable && r.status === "draft" && !!v;
+                const open =
+                  editable && r.status === "draft" && !!v && !kept(r);
                 const name = r.source.student.name;
                 const advice = r.advice;
                 return (
@@ -432,6 +478,7 @@ export default function FinalGradesTable({
                     )}
                     <td>
                       {names[r.status]}
+                      {kept(r) && ` · сохранён по шкале «${otherScale(r)}»`}
                       {r.proposal?.carriedFrom && r.status === "draft" && (
                         <span className="error">
                           {" "}

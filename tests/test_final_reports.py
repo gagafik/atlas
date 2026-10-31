@@ -5,7 +5,7 @@ from fractions import Fraction
 import pytest
 from backend import api
 from backend.final_reports import gpa_of,nearest_band
-from backend.models import Placement
+from backend.models import Placement,Student,Workload
 from test_access import client,enable,create,signed  # noqa: F401
 from test_journal import entry,lesson,write,graded,DAY
 from test_journal_periods import period,close,action,period_clock  # noqa: F401
@@ -139,6 +139,54 @@ def test_year_grade_comes_from_period_finals(client):
     assert 'basis' not in again and again['recommended']=='4' and again['rawPercent']=='70'
 
 
+def year_advice(c,book,s,student='s1'):
+    row=pair(c,book,student);return c.get(BASE+'/rows/'+row['id']+'/evidence?workspace=demo').json()['recommendations'][s['id']+':'+str(s['version'])]
+
+
+def quarter(c,s,name,day,label,student='s1',**extra):
+    """Close a one-day quarter and publish the pupil's English result in it (no result when the label is None)."""
+    p=close(c,period(c,name=name,start=day,end=day,kind='quarter'));b=prepare(c,p)
+    if label is not None:finish(c,pair(c,b,student),s,label=label,**dict(explanation='Решение педсовета')|extra)
+    return p
+
+
+def year(c):return prepare(c,close(c,period(c,name='Год',start=DAY,end='2026-08-24',kind='year')))
+
+
+def test_year_grade_counts_the_quarters_and_not_a_semester_on_top(client):
+    two_days(client);s=points_scale(client)
+    quarter(client,s,'1 четверть',DAY,'5');quarter(client,s,'2 четверть','2026-08-24','4')
+    semester=prepare(client,close(client,period(client,name='Полугодие',start=DAY,end='2026-08-24',kind='semester')))
+    finish(client,pair(client,semester,'s1'),s,label='3',explanation='Решение педсовета')
+    advice=year_advice(client,year(client),s)
+    # The semester summary of 3 would pull the mean down to 4; the quarters alone average 4.5.
+    assert [x['name'] for x in advice['periods']]==['1 четверть','2 четверть'] and advice['points']=='4.50' and advice['recommended']=='5'
+
+
+def test_year_grade_names_the_period_without_a_result(client):
+    two_days(client);s=points_scale(client)
+    quarter(client,s,'1 четверть',DAY,'5');quarter(client,s,'2 четверть','2026-08-24',None)
+    advice=year_advice(client,year(client),s)
+    assert advice['missing']==['2 четверть'] and [x['name'] for x in advice['periods']]==['1 четверть'] and advice['points']=='5.00' and advice['recommended']=='5'
+
+
+def test_year_grade_skips_an_exempt_quarter_without_calling_it_missing(client):
+    two_days(client);s=points_scale(client)
+    quarter(client,s,'1 четверть',DAY,'4');quarter(client,s,'2 четверть','2026-08-24','',outcome='exempt',explanation='Освобождён приказом')
+    advice=year_advice(client,year(client),s)
+    assert advice['missing']==[] and advice['points']=='4.00' and advice['recommended']=='4'
+    assert [(x['label'],x['points']) for x in advice['periods']]==[('4','4'),('Освобождён',None)]
+
+
+def test_year_grade_warns_when_a_quarter_was_reclosed_after_its_result(client):
+    two_days(client);s=points_scale(client)
+    first=quarter(client,s,'1 четверть',DAY,'5');quarter(client,s,'2 четверть','2026-08-24','4')
+    close(client,action(client,first,'reopen').json())
+    advice=year_advice(client,year(client),s)
+    # The published result of the first quarter belongs to the earlier closure; staff are told, the grade still counts.
+    assert [(x['name'],x['current']) for x in advice['periods']]==[('1 четверть',False),('2 четверть',True)] and advice['points']=='4.50'
+
+
 def test_year_rule_works_and_no_finals_fall_back(client):
     two_days(client);s=points_scale(client)
     for day in [DAY,'2026-08-24']:close(client,period(client,name='Четверть '+day,start=day,end=day,kind='quarter'))
@@ -199,6 +247,14 @@ def test_class_report_access(client):
     assert [x['id'] for x in class_report(t,p).json()['pupils']]==['s1']
 
 
+def test_class_report_lists_only_active_pupils(client):
+    p,b,s,first,second=published_pair(client)
+    school=api.read('demo');school.students=[x.model_copy(update=dict(active=False)) if x.id=='s1' else x for x in school.students];api.save('demo',school)
+    got=class_report(client,p);assert got.status_code==200
+    # The pupil who left has published grades, but the class report only reads the current pupils.
+    assert [x['id'] for x in got.json()['pupils']]==['s2'] and got.json()['subjects']==[] and 'Ученик 1' not in got.text
+
+
 def test_class_report_preview_is_admin_only_and_has_no_drafts(client):
     english(client);create(client,'parent');create(client,'teacher');lead('t2')
     p=close(client,period(client));b=prepare(client,p);s=points_scale(client);t=signed('teacher')
@@ -239,6 +295,27 @@ def test_published_notice_names_subject_and_opens_report(client):
     assert opened.json()['module']=='finals' and opened.json()['recordId']==p['id'] and opened.json()['studentId']=='s1'
     assert [i for i in signed('second').get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']==[]
     assert 'rawPercent' not in str(entry_) and 'Решение' not in str(entry_)
+
+
+def test_published_notice_names_three_subjects_and_counts_the_rest(client):
+    english(client);create(client,'parent');create(client,'teacher')
+    # Physics belongs to the other half of the class in the seed, so 10A gets its own physics lesson: four subjects for s1.
+    school=api.read('demo');school.workloads.append(Workload(id='w-phys',groupId='g-a',subjectId='sub1',teacherId='t1',hours=1,profileId='secondary',roomIds=['r2']))
+    school.placements+=[Placement(id='hist',workloadId='w2',day=0,period=3,roomId='r2'),Placement(id='phys',workloadId='w-phys',day=0,period=4,roomId='r2')];api.save('demo',school)
+    p=close(client,period(client));b=prepare(client,p);s=points_scale(client)
+    for subject in [ENGLISH,MATHS,'История','Физика']:finish(client,pair(client,b,'s1',subject),s,label='5',explanation='Решение педсовета')
+    notices=[i for i in signed('parent').get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']
+    assert len(notices)==1
+    title=notices[0]['title']
+    assert title.endswith('Английский язык — 5, История — 5, Математика — 5 и ещё 1') and 'Физика' not in title
+
+
+def test_finals_notice_stops_opening_when_the_child_has_no_result_in_that_period(client):
+    p,b,s,first,second=published_pair(client);parent=signed('parent')
+    notice=next(i for i in parent.get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published')
+    # Results of the same child in another period do not open this period's report.
+    with api.connect() as db:db.execute("UPDATE final_results SET period_id='elsewhere' WHERE period_id=?",(p['id'],))
+    assert parent.post(f"/api/notifications/{notice['id']}/open").status_code==404
 
 
 def test_withdrawn_notice_has_no_grade_and_retracts_old_title(client):
@@ -313,6 +390,18 @@ def test_report_without_behaviour_tables(client):
         for name in ['behaviour_notes','behaviour_history','behaviour_requests']:db.execute('DROP TABLE IF EXISTS '+name)
     got=report(signed('parent'),p);assert got.status_code==200 and got.json()['measures']==[]
     with api.connect() as db:assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='behaviour_notes'").fetchone()
+
+
+def test_export_is_not_limited_to_one_page_of_the_sheet(client):
+    enable(client)
+    # 32 pupils in 10A take English and history: more rows than the 50 of one sheet page.
+    school=api.read('demo');school.students+=[Student(id=f'x{i}',name=f'Ученик Х{i}',classId=A) for i in range(30)]
+    school.placements.append(Placement(id='hist',workloadId='w2',day=0,period=3,roomId='r2'));api.save('demo',school)
+    b=prepare(client,close(client,period(client)));total=sheet(client,b).json()['total']
+    assert total>50
+    response=client.get(BASE+'/books/'+b['id']+'/export',params=dict(workspace='demo'));assert response.status_code==200,response.text
+    rows=list(csv.reader(response.content.decode('utf-8-sig').splitlines(),delimiter=';'))
+    assert len(rows)-1==total
 
 
 def test_export_contains_every_row_and_respects_scope(client):
