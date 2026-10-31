@@ -434,6 +434,9 @@ messages.drafts.register(app, Workspace)
 messages.groups.register(app, Workspace)
 messages.moderation.register(app, Workspace)
 messages.recovery.register(app, Workspace)
+messages.channels.register(app, Workspace)
+messages.audiences.register(app, Workspace)
+messages.feed.register(app, Workspace)
 from .portal import register_portal
 register_portal(app, Workspace, read, portal_stamp)
 from .assistant import register_assistant

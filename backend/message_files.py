@@ -15,6 +15,9 @@ from . import homework_files as storage
 
 MAX_OWNER=250*1024*1024
 QUOTA_DAYS=30  # Sent files count towards the per-user quota only this long; unsent ones always count.
+SUFFIXES=('.heic','.heif','.doc','.xls')  # accepted in messages only: phone photos and old Office files
+# Types a browser may show in place; everything else is always a download. Content is checked against the type on upload.
+IMAGE={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.heic':'image/heic','.heif':'image/heif'}
 
 
 def tables(db):
@@ -86,7 +89,7 @@ class MessageFiles:
                 user,directory=self.messages.context(request,workspace)
                 with self.access.lock,self.access.connect() as db:
                     self.messages.tables(db);tables(db);db.execute('BEGIN IMMEDIATE');self.can_upload(db,user,directory,threadId)
-                    collect_unused(db);name=storage.name_for(filename)
+                    collect_unused(db);name=storage.name_for(filename,SUFFIXES)
                     # Rolling window: unsent files (including reservations) always count, sent ones for QUOTA_DAYS.
                     used,count,pending=db.execute("SELECT coalesce(sum(CASE WHEN post_id IS NULL OR created>=? THEN size ELSE 0 END),0),count(CASE WHEN post_id IS NULL THEN 1 END),count(CASE WHEN status='uploading' THEN 1 END) FROM message_files WHERE workspace=? AND owner_id=?",((now()-timedelta(days=QUOTA_DAYS)).isoformat(),workspace,user['id'])).fetchone()
                     if used+storage.MAX_FILE>MAX_OWNER:raise HTTPException(413,'За последние 30 дней загружено 250 МиБ вложений. Удалите неотправленные файлы или повторите позже.')
@@ -163,7 +166,7 @@ class MessageFiles:
             return dict(ok=True)
 
         @app.get('/api/messages/files/{id}')
-        def download(id:str,request:Request,workspace:Workspace='school'):
+        def download(id:str,request:Request,workspace:Workspace='school',inline:bool=False):
             user,directory=self.messages.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 self.messages.tables(db);tables(db)
@@ -178,6 +181,7 @@ class MessageFiles:
                 path=storage.file_path(root_for(db),id)
                 try:stat=path.stat()
                 except OSError:raise HTTPException(404,'Файл недоступен в хранилище.') from None
-            return FileResponse(path,stat_result=stat,media_type='application/octet-stream',headers={
-                'Content-Disposition':"attachment; filename*=UTF-8''"+quote(row[5],safe=''),'Content-Length':str(row[6]),
+            shown=IMAGE.get(Path(row[5]).suffix.lower()) if inline else None
+            return FileResponse(path,stat_result=stat,media_type=shown or 'application/octet-stream',headers={
+                'Content-Disposition':('inline' if shown else 'attachment')+"; filename*=UTF-8''"+quote(row[5],safe=''),'Content-Length':str(row[6]),
                 'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"})

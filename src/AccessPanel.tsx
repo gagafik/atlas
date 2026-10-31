@@ -667,6 +667,12 @@ export default function AccessPanel({
                       "message.moderation_dismiss": "Жалоба отклонена",
                       "message.manager_recovered":
                         "Восстановлено управление обсуждением",
+                      "message.channels_updated": "Изменены каналы сообщений",
+                      "message.saved_group_saved":
+                        "Сохранена группа получателей",
+                      "message.saved_group_deleted":
+                        "Удалена группа получателей",
+                      "message.feed_replied": "Ответ под объявлением",
                       "state.undo": "Отмена изменения",
                       "state.redo": "Повтор изменения",
                       "journal.draft_saved":

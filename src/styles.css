@@ -4759,6 +4759,28 @@ main {
 .period-ack input { flex:0 0 auto; width:auto; margin-top:4px; }
 .period-archive { margin-top:16px; padding:12px; background:var(--surface, #fff); }
 .message-moderation fieldset, .message-report fieldset { min-width: 0; }
+.message-saved-groups { margin: 12px 0; padding: 12px; border: 1px solid #dce3ea; border-radius: 10px; min-width: 0; overflow-wrap: anywhere; }
+.message-saved-groups summary { cursor: pointer; font-weight: 600; }
+.message-saved-groups fieldset { min-width: 0; }
+.message-channel-group { min-width: 0; border: 1px solid #dce3ea; border-radius: 10px; margin: 8px 0; }
+.message-channel-group .check-line { display: flex; gap: 8px; margin: 6px 0; align-items: flex-start; }
+.message-channel-group .check-line input { flex: 0 0 auto; width: auto; margin-top: 4px; }
+.block-line { display: block; }
+.message-image { display: block; max-width: 100%; height: auto; max-height: 420px; border-radius: 8px; margin: 6px 0; }
+.message-inbox .message-row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; width: 100%; }
+.message-inbox .message-row-preview { color: #4c564f; max-width: 100%; overflow-wrap: anywhere; }
+.message-preview { min-width: 0; overflow-wrap: anywhere; }
+.message-feed { min-width: 0; max-width: 1000px; }
+.message-feed .message-posts article { min-width: 0; }
+.message-feed .message-posts .message-unread { background: #eef6f0; border: 1px solid #31705a; }
+.message-feed h3 { margin: 0 0 4px; }
+.feed-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.feed-actions button[aria-pressed="true"] { border-color: var(--green); background: #e7f1e9; }
+.feed-replies { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid #dce3ea; min-width: 0; }
+.feed-reply { padding: 8px 10px; margin: 8px 0; background: #fff; border-radius: 8px; overflow-wrap: anywhere; }
+.feed-reply.message-own { background: #e7f1e9; }
+.feed-reply time { display: block; font-size: 12px; color: #6c766f; margin: 3px 0; }
+.feed-replies textarea { width: 100%; resize: vertical; }
 
 /* Final-grade forms and personal report cards share the journal layout. */
 .final-grades-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 12px 0; }

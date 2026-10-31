@@ -1,39 +1,53 @@
 """Private school conversations and fixed-recipient announcements."""
 from collections import defaultdict
+from contextlib import closing
 from datetime import timedelta
 import hashlib
 import json
+import sqlite3
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import HTTPException, Query, Request
 from pydantic import Field
 from .access import now
+from .class_staff import led
 from .journal import user_ids
+from .message_files import tables as file_tables
+from .message_channels import ALWAYS, CLOSED, DEFAULT_CHANNELS, load
 from .models import Model
-from .notifications import encoded
+from .notifications import clip, encoded
 from .portal_cache import PortalSnapshots
 from .resources import teacher_ids
 
-STAFF={'admin','editor','teacher','viewer'}
+STAFF={'admin','editor','teacher','viewer','staff'}
 FAMILY={'student','parent'}
+PEER={'student':'student_classmates','parent':'parent_class_parents'}  # the channel between families of one class, by role
 
 
 class NewThread(Model):
     requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
     kind: Literal['direct','group','announcement'] = 'direct'
-    title: str = Field(min_length=1,max_length=160)
+    title: str = Field(default='',max_length=160)  # a dialog needs none; an announcement is checked in create()
     text: str = Field(default='',max_length=10000)
     recipientId: str | None = None
     recipientIds: list[str] = Field(default_factory=list,max_length=199)
     studentId: str | None = None
     groupIds: list[str] = Field(default_factory=list,max_length=200)
-    roles: list[Literal['student','parent','teacher','editor','viewer','admin']] = Field(default_factory=list,max_length=6)
+    roles: list[Literal['student','parent','teacher','editor','viewer','admin','staff']] = Field(default_factory=list,max_length=7)
     schoolwide: bool = False
+    audience: Literal['school','teachers','class_teachers','staff','my_classes','my_courses','saved'] | None = None
+    savedGroupId: str | None = Field(default=None,max_length=100)
+    replies: Literal['off','author','all'] = 'off'
     requireAck: bool = False
     draftId: str | None = Field(default=None,pattern=r'^[a-f0-9-]{36}$')
     fileIds: list[str] = Field(default_factory=list,max_length=5)
     draftVersion: int | None = Field(default=None,ge=1)
+
+    def signature(self):
+        """What a retry is compared with. Fields added later stay out while they hold their defaults, so requests stored earlier still replay."""
+        unset=[n for n,v in [('draftVersion',self.draftVersion is None),('audience',self.audience is None),('savedGroupId',self.savedGroupId is None),('replies',self.replies=='off')] if v]
+        return self.model_dump(exclude=set(unset))
 
 
 class Reply(Model):
@@ -70,11 +84,12 @@ class Directory:
         self.teacher_groups=defaultdict(set)
         for w in state.workloads:
             for teacher in teacher_ids(w): self.teacher_groups[teacher].add(w.groupId)
+        self.channels=DEFAULT_CHANNELS  # replaced by the stored matrix of the workspace in Messages.context
 
     def enabled(self,user):
         if not user or not user['active']: return False
         if user['role']=='admin': return True
-        if user['role']=='editor': return self.workspace in user['workspaces']
+        if user['role'] in ('editor','staff'): return self.workspace in user['workspaces']
         valid=dict(student=self.students,teacher={t.id for t in self.state.teachers},class_={c.id for c in self.state.classes},group=self.members,room={r.id for r in self.state.rooms})
         return any(g['workspace']==self.workspace and set(g['entityIds']) & set(valid.get('class_' if g['view']=='class' else g['view'],())) for g in user['grants'])
 
@@ -88,12 +103,83 @@ class Directory:
         if user['role']=='teacher': return set().union(*(self.members[g] for g in self.groups(user)))
         return user_ids(user,self.workspace,'student') & self.students.keys() if user['role'] in FAMILY else set()
 
-    def pair(self,a,b,student):
+    def led_pupils(self,user):
+        """Active pupils of the classes this teacher leads."""
+        classes=led(user,self,self.workspace)
+        return {id for id,s in self.students.items() if s.classId in classes} if classes else set()
+
+    def reachable_students(self,user):
+        pupils=self.pupils(user)
+        return pupils|self.led_pupils(user) if user['role']=='teacher' and 'class_teacher_families' in self.channels else pupils
+
+    def links(self,a,b,student):
+        """Channels that connect a to b about a pupil, whatever the matrix switched off."""
+        ar,br=a['role'],b['role']
+        if ar in STAFF and br in STAFF: return set() if student else {ALWAYS} if ar=='admin' else {'staff_staff'}
+        if ar in FAMILY and br in FAMILY:
+            # Families of one class: the same role, and the pupil of a studies with some pupil of b.
+            if ar!=br or student not in self.pupils(a): return set()
+            return {PEER[ar]} if any(self.students[p].classId==self.students[student].classId for p in self.pupils(b)) else set()
+        if ar in FAMILY:
+            if student not in self.pupils(a): return set()
+            if br=='admin': return {ar+'_admin'}
+            if br!='teacher': return set()
+            return {ar+'_any_teacher'}|({ar+'_teachers'} if student in self.pupils(b) else set())|({ar+'_class_teacher'} if student in self.led_pupils(b) else set())
+        if student not in self.pupils(b): return set()
+        if ar=='admin': return {ALWAYS}
+        if ar!='teacher': return set()
+        return ({'teacher_'+('students' if br=='student' else 'parents')} if student in self.pupils(a) else set())|({'class_teacher_families'} if student in self.led_pupils(a) else set())
+
+    def start(self,a,b,student):
+        """May a open a conversation with b about the pupil? An administrator sender needs no channel."""
         if not self.enabled(a) or not self.enabled(b) or a['id']==b['id']: return False
-        if a['role'] in STAFF and b['role'] in STAFF: return student is None
-        if (a['role'] in FAMILY)==(b['role'] in FAMILY): return False
-        family,staff=(a,b) if a['role'] in FAMILY else (b,a)
-        return student in self.pupils(family) and staff['role'] in ['admin','teacher'] and student in self.pupils(staff)
+        return bool(self.links(a,b,student)&(self.channels|{ALWAYS}))
+
+    def closed(self,a,b,student):
+        """The two accounts are linked, but only through channels the administrator switched off."""
+        return self.enabled(a) and self.enabled(b) and a['id']!=b['id'] and any(l and not l&(self.channels|{ALWAYS}) for l in (self.links(a,b,student),self.links(b,a,student)))
+
+    def pair(self,a,b,student):
+        """A live link: a channel is open in either direction. Replying is judged by may_reply, starting by start."""
+        return self.start(a,b,student) or self.start(b,a,student)
+
+    def start_about(self,a,b,student):
+        if a['role'] in STAFF and b['role'] in STAFF: return self.start(a,b,None)
+        if student: return self.start(a,b,student)
+        return any(self.start(a,b,s) for s in self.pupils(a if a['role'] in FAMILY else b))
+
+    def peer(self,user,student):
+        """A family account whose pupil studies in the class of this one, while the channel between those families is open."""
+        if user['role'] not in FAMILY or PEER[user['role']] not in self.channels or student not in self.students: return False
+        return any(self.students[p].classId==self.students[student].classId for p in self.pupils(user))
+
+    def related(self,user,student,family=None):
+        """Is the pupil within the account's reach? family() gives the roles of the family accounts of the conversation; it is called only when needed."""
+        if student in self.reachable_students(user) or self.peer(user,student): return True
+        if user['role']!='teacher' or student not in self.students or not family or not {'student_any_teacher','parent_any_teacher'}&self.channels: return False
+        # A teacher who does not teach the pupil joins only while the channel to every family role of the conversation is open.
+        roles=family()
+        return bool(roles) and all(r+'_any_teacher' in self.channels for r in roles)
+
+    def reach(self,user,c):
+        """Pupils through which the user may write to account c (empty for staff); None when c is out of reach."""
+        if c['id']==user['id'] or not self.enabled(c): return None
+        if c['role'] in FAMILY:
+            scopes=sorted(s for s in self.pupils(c) if self.start(user,c,s))
+            return scopes or None
+        return [] if c['role'] in STAFF and self.start(user,c,None) else None
+
+    def audiences(self,user):
+        if user['role']=='admin': return ['school','teachers','class_teachers','staff','saved']
+        if user['role']!='teacher': return []
+        return ['my_classes','my_courses']+(['school'] if 'teacher_school' in self.channels else [])+(['teachers','class_teachers','staff'] if 'teacher_colleagues_all' in self.channels else [])+['saved']
+
+    def classes(self,user):
+        if user['role']=='admin': return {c.id for c in self.state.classes}
+        if user['role']!='teacher': return set()
+        mine=self.groups(user)
+        whole={c for g in self.state.groups if g.id in mine and g.kind=='whole' for c in g.classIds}
+        return whole|led(user,self,self.workspace) if 'class_teacher_families' in self.channels else whole
 
 
 class Messages:
@@ -110,6 +196,12 @@ class Messages:
         self.moderation=MessageModeration(self)
         from .message_recovery import MessageRecovery
         self.recovery=MessageRecovery(self)
+        from .message_channels import MessageChannels
+        self.channels=MessageChannels(self)
+        from .message_audiences import MessageAudiences
+        self.audiences=MessageAudiences(self)
+        from .message_feed import MessageFeed
+        self.feed=MessageFeed(self)
 
     def tables(self,db):
         self.access.tables(db)
@@ -125,19 +217,29 @@ class Messages:
             db.execute('ALTER TABLE message_members ADD COLUMN live_through INTEGER')
         db.execute('''CREATE TABLE IF NOT EXISTS message_posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT,author_id TEXT,author_name TEXT,created TEXT,body TEXT)''')
+        # A feed reply under an announcement points at its root post. It never moves latest_id, so history, search and read markers ignore it.
+        # reply_public records whether the reply was written while everybody could read replies: later changes of the channel do not publish it.
+        columns={r[1] for r in db.execute('PRAGMA table_info(message_posts)')}
+        if 'reply_to' not in columns: db.execute('ALTER TABLE message_posts ADD COLUMN reply_to INTEGER')
+        if 'reply_public' not in columns: db.execute('ALTER TABLE message_posts ADD COLUMN reply_public INTEGER')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_thread ON message_posts(thread_id,id)')
+        db.execute('CREATE INDEX IF NOT EXISTS message_post_replies ON message_posts(reply_to,id) WHERE reply_to IS NOT NULL')
         db.execute('CREATE INDEX IF NOT EXISTS message_post_rate ON message_posts(author_id,created)')
         db.execute('CREATE TABLE IF NOT EXISTS message_requests (user_id TEXT,request_id TEXT,body_hash TEXT,thread_id TEXT,PRIMARY KEY(user_id,request_id))')
         db.execute('CREATE TABLE IF NOT EXISTS message_group_scopes (thread_id TEXT PRIMARY KEY,kind TEXT,group_ids TEXT)')
         db.execute('CREATE TABLE IF NOT EXISTS message_exclusions (thread_id TEXT,user_id TEXT,action TEXT,created TEXT,PRIMARY KEY(thread_id,user_id))')
         db.execute('CREATE TABLE IF NOT EXISTS message_group_managers (thread_id TEXT PRIMARY KEY,manager_id TEXT)')
         self.moderation.tables(db)
+        self.channels.tables(db)
+        self.audiences.tables(db)
+        self.feed.tables(db)
 
     def context(self,request,workspace):
         user=request.state.user
         if not user: raise HTTPException(403,'Для переписки сначала создайте учётные записи школы.')
         directory=Directory(self.snapshots.get(workspace).state,workspace)
         if not directory.enabled(user): raise HTTPException(403,'Нет доступа к сообщениям этого пространства.')
+        directory.channels=self.channels.current(workspace)
         return user,directory
 
     def accounts(self,db,thread_ids=None,user_ids=None):
@@ -153,26 +255,35 @@ class Messages:
         revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(directory.workspace,)).fetchone()
         if not row or not row[4] or self.access.public(row)!=user or not revision or revision[0]!=directory.state.revision:
             raise HTTPException(409,'Права или школьные данные изменились. Обновите сообщения.')
+        # Writes see the matrix as it is inside the transaction, not as it was when the request began.
+        directory.channels=load(db,directory.workspace)
 
-    def recipient_accounts(self,db,body,user,directory):
-        if body.kind=='direct':return self.accounts(db,user_ids=[user['id'],body.recipientId])
-        if body.kind=='group' and body.recipientIds:return self.accounts(db,user_ids=[user['id'],*body.recipientIds])
-        # Narrow SQL candidates before decoding account permissions; a class
-        # discussion must not deserialize every school family's account.
-        params=[user['id'],encoded(body.roles)]
-        clause='role IN (SELECT value FROM json_each(?))'
-        if not body.schoolwide:
-            pupils=set().union(*(directory.members.get(g,set()) for g in body.groupIds))
-            clause+=''' AND role IN ('student','parent') AND EXISTS (
+    @staticmethod
+    def narrow(workspace,pupils):
+        """SQL clause and parameters: a family account whose grants name one of the pupils."""
+        return '''role IN ('student','parent') AND EXISTS (
                 SELECT 1 FROM json_each(accounts.permissions,'$.grants') grant_row
                 JOIN json_each(grant_row.value,'$.entityIds') entity
                 WHERE json_extract(grant_row.value,'$.workspace')=?
                 AND json_extract(grant_row.value,'$.view')='student'
-                AND entity.value IN (SELECT value FROM json_each(?)))'''
-            params.extend([directory.workspace,encoded(sorted(pupils))])
+                AND entity.value IN (SELECT value FROM json_each(?)))''',[workspace,encoded(sorted(pupils))]
+
+    def candidates(self,db,directory,user,roles,pupils):
+        """The author and active accounts of the roles; pupils=None takes every account of those roles, otherwise only families of these pupils."""
+        # Narrow SQL candidates before decoding account permissions; a class
+        # discussion must not deserialize every school family's account.
+        params=[user['id'],encoded(roles)]
+        clause='role IN (SELECT value FROM json_each(?))'
+        if pupils is not None:
+            more,args=self.narrow(directory.workspace,pupils);clause+=' AND '+more;params.extend(args)
         rows=db.execute('SELECT * FROM accounts WHERE active=1 AND (id=? OR ('+clause+'))',params)
         # recipients() still validates roles, current assignments and every grant.
         return {row[0]:self.access.public(row) for row in rows}
+
+    def recipient_accounts(self,db,body,user,directory):
+        if body.kind=='direct':return self.accounts(db,user_ids=[user['id'],body.recipientId])
+        if body.kind=='group' and body.recipientIds:return self.accounts(db,user_ids=[user['id'],*body.recipientIds])
+        return self.candidates(db,directory,user,body.roles,None if body.schoolwide else set().union(*(directory.members.get(g,set()) for g in body.groupIds)))
 
     def thread_accounts(self,db,id,user):
         row=db.execute('SELECT kind,author_id FROM message_threads WHERE id=?',(id,)).fetchone()
@@ -190,11 +301,13 @@ class Messages:
         elif thread['kind']=='group':
             scope=self.groups.scope(db,thread)
             manager=accounts.get(thread['managerId'])
-            if not self.groups.eligible(thread,manager,directory,scope,manager=True):return None
+            family=lambda:self.groups.family_roles(db,thread,accounts)
+            if not self.groups.eligible(thread,manager,directory,scope,manager=True,family=family):return None
             manager_row=db.execute('SELECT role FROM message_members WHERE thread_id=? AND user_id=?',(thread['id'],thread['managerId'])).fetchone()
             if not manager_row or manager_row[0]!=manager['role']:return None
-            if not self.groups.eligible(thread,user,directory,scope):return None
-            if user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user) & self.groups.pupils(thread,directory,scope):return None
+            if not self.groups.eligible(thread,user,directory,scope,family=family):return None
+            # A parent of the same class may be in a family's own group: the pupil of the thread is not theirs.
+            if user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user) & self.groups.pupils(thread,directory,scope) and not (scope[0]=='contacts' and directory.peer(user,thread['studentId'])):return None
         elif thread['status']=='withdrawn' and user['id']!=thread['authorId']: return None
         elif user['role'] in FAMILY and not set(json.loads(row[1])) & directory.pupils(user): return None
         return row
@@ -260,19 +373,20 @@ class Messages:
             selected=[]
             for id in body.recipientIds:
                 target=accounts.get(id)
-                if not directory.pair(user,target,body.studentId):raise HTTPException(403,'Один из собеседников недоступен.')
+                if not directory.start(user,target,body.studentId):raise HTTPException(403,CLOSED if target and directory.closed(user,target,body.studentId) else 'Один из собеседников недоступен.')
                 selected.append((target,[body.studentId] if body.studentId else []))
             return selected
         if body.kind!='group' and body.recipientIds:raise HTTPException(422,'Несколько собеседников доступны в групповом диалоге.')
         if body.kind=='direct':
             target=accounts.get(body.recipientId)
-            if not directory.pair(user,target,body.studentId): raise HTTPException(403,'Выберите доступного собеседника и ученика.')
+            if not directory.start(user,target,body.studentId): raise HTTPException(403,CLOSED if target and directory.closed(user,target,body.studentId) else 'Выберите доступного собеседника и ученика.')
             if body.requireAck or body.schoolwide or body.groupIds or body.roles: raise HTTPException(422,'Параметры объявления не относятся к личной переписке.')
             return [(target,[body.studentId] if body.studentId else [])]
         if user['role'] not in ['admin','teacher']: raise HTTPException(403,'Объявления публикуют администраторы и учителя.')
         if body.kind=='group' and (body.requireAck or body.schoolwide):raise HTTPException(422,'Выберите учебные группы; подтверждение ознакомления относится к объявлениям.')
         if body.recipientId or body.studentId: raise HTTPException(422,'Выберите аудиторию объявления.')
         if not body.roles or len(set(body.roles))!=len(body.roles): raise HTTPException(422,'Выберите роли получателей без повторов.')
+        self.audiences.channels_for(user,directory,body.roles)
         if body.schoolwide:
             if user['role']!='admin': raise HTTPException(403,'Объявление всей школе доступно администратору.')
             if body.groupIds: raise HTTPException(422,'Выберите всю школу или отдельные группы.')
@@ -281,30 +395,102 @@ class Messages:
             if not body.groupIds or not set(body.groupIds)<=directory.groups(user): raise HTTPException(403,'Выберите доступные учебные группы.')
             pupils=set().union(*(directory.members[g] for g in body.groupIds))
             if not set(body.roles)<=FAMILY: raise HTTPException(422,'Для учебной группы доступны ученики и родители.')
-        selected=[]
-        for candidate in accounts.values():
-            if candidate['id']==user['id'] or candidate['role'] not in body.roles or not directory.enabled(candidate): continue
-            scopes=directory.pupils(candidate)&pupils if candidate['role'] in FAMILY else set()
-            if candidate['role'] not in FAMILY or scopes: selected.append((candidate,sorted(scopes)))
+        selected=self.pick(accounts,user,directory,body.roles,pupils)
         if not selected: raise HTTPException(422,'В выбранной аудитории нет активных аккаунтов.')
         if body.kind=='group' and not 2<=len(selected)<=199:raise HTTPException(422,'В групповом диалоге нужно от 3 до 200 участников вместе с автором.')
         return selected
+
+    @staticmethod
+    def pick(accounts,user,directory,roles,pupils):
+        """Accounts of these roles with a current assignment; a family account keeps only its pupils among `pupils`."""
+        selected=[]
+        for candidate in accounts.values():
+            if candidate['id']==user['id'] or candidate['role'] not in roles or not directory.enabled(candidate): continue
+            scopes=directory.pupils(candidate)&pupils if candidate['role'] in FAMILY else set()
+            if candidate['role'] not in FAMILY or scopes: selected.append((candidate,sorted(scopes)))
+        return selected
+
+    def selection(self,db,body,user,directory):
+        """(recipients, saved-group members out of reach now). Preview and send resolve alike, on the links and matrix of this moment."""
+        if body.audience or body.savedGroupId:
+            if body.kind!='announcement': raise HTTPException(422,'Аудитория выбирается только для объявления.')
+            if not body.audience: raise HTTPException(422,'Выберите аудиторию объявления.')
+            return self.audiences.select(db,body,user,directory)
+        return self.recipients(body,user,directory,self.recipient_accounts(db,body,user,directory)),0
+
+    def may_reply(self,thread,user,directory,accounts,live):
+        """A reply needs a channel open from the replier to someone still in the conversation, or from its author to the replier."""
+        if user['role']=='admin': return True
+        peers=[u for u in live if u['id']!=user['id']]
+        if not peers: return True
+        # The family of one pupil keeps answering each other, as it may bring each other in (may_add); no class channel is needed between them.
+        pupil=thread['studentId']
+        if user['role'] in FAMILY and pupil in directory.pupils(user) and any(p['role'] in FAMILY and pupil in directory.pupils(p) for p in peers): return True
+        author=accounts.get(thread['authorId'])
+        # A staff reply reaches the families of the conversation: a colleague's channel does not stand for theirs.
+        colleagues=user['role'] in STAFF and any(p['role'] in FAMILY for p in peers)
+        audience=[p for p in peers if p['role'] in FAMILY] if colleagues else peers
+        if any(directory.start_about(user,p,thread['studentId']) for p in audience): return True
+        return bool(author and author['id']!=user['id'] and not (colleagues and author['role'] in STAFF) and directory.start_about(author,user,thread['studentId']))
+
+    def unread(self,db,user,directory):
+        """(threads with something new that the account may read, whether the count stopped at its limit of threads to examine)."""
+        rows=db.execute('''SELECT t.*,m.read_id FROM message_threads t JOIN message_members m ON m.thread_id=t.id AND m.user_id=?
+            WHERE t.workspace=? AND t.latest_id>m.read_id ORDER BY t.latest_id DESC LIMIT 100''',(user['id'],directory.workspace)).fetchall()
+        accounts=self.accounts(db,thread_ids=[r[0] for r in rows if r[2] in ['direct','group']])
+        count=0
+        for row in rows:
+            thread=self.thread(db,row[:11]);found=self.visible(db,thread,user,directory,accounts)
+            if found and (thread['latestId'] if found[1] is None else found[1])>found[0][2]: count+=1
+        return count,len(rows)==100
+
+    @staticmethod
+    def children(thread,member,own,names):
+        """Pupils a conversation is about. A family account (own = its pupils) learns only the names of its own children."""
+        ids=[thread['studentId']] if thread['studentId'] else sorted(json.loads(member[1])) if own is not None else []
+        return [dict(id=i,name=names[i]) for i in ids if i in names and (own is None or i in own)]
+
+    def previews(self,db,items):
+        """Sender, date, text and attachment flag of the last post each account may read: a former participant sees no later one."""
+        file_tables(db);ids=encoded([item['latestId'] for item in items])
+        posts={r[0]:r for r in db.execute('SELECT id,author_name,created,body FROM message_posts WHERE id IN (SELECT value FROM json_each(?))',(ids,))}
+        hidden={r[0] for r in db.execute('SELECT post_id FROM message_moderation WHERE hidden=1 AND post_id IN (SELECT value FROM json_each(?))',(ids,))}
+        files={r[0] for r in db.execute("SELECT post_id FROM message_files WHERE status='ready' AND post_id IN (SELECT value FROM json_each(?))",(ids,))}
+        for item in items:
+            post=posts.get(item['latestId']);masked=item['latestId'] in hidden
+            item.update(sender=post[1] if post else '',date=post[2] if post else item['created'],hasFiles=item['latestId'] in files and not masked,
+                        preview='Сообщение скрыто администратором.' if masked else clip(post[3],140) if post else '')
+
+    def class_teachers(self,user,directory):
+        """For each pupil of a family account: the class teacher's account that may be written to now, by the class teacher on record."""
+        classes={c.id:c for c in directory.state.classes}
+        leaders={sid:classes[directory.students[sid].classId].classTeacherId for sid in directory.pupils(user) if directory.students[sid].classId in classes}
+        leaders={sid:t for sid,t in leaders.items() if t}
+        if not leaders: return []
+        with self.access.lock,self.access.connect() as db:
+            self.tables(db)
+            teachers=[self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='teacher'")]
+        return [dict(studentId=sid,id=u['id'],name=u['name']) for sid,t in sorted(leaders.items()) for u in teachers if t in user_ids(u,directory.workspace,'teacher') and directory.start(user,u,sid)]
 
     def register(self,app,Workspace):
         @app.get('/api/messages/options')
         def options(request:Request,workspace:Workspace='school'):
             user,directory=self.context(request,workspace)
-            pupils=directory.pupils(user)
-            return dict(role=user['role'],userId=user['id'],students=[dict(id=s.id,name=s.name) for s in directory.students.values() if s.id in pupils],
-                        groups=[dict(id=g.id,name=g.name) for g in directory.state.groups if g.id in directory.groups(user)],canAnnounce=user['role'] in ['admin','teacher'])
+            pupils=directory.reachable_students(user);mine=directory.groups(user);classes=directory.classes(user)
+            result=dict(role=user['role'],userId=user['id'],students=[dict(id=s.id,name=s.name) for s in directory.students.values() if s.id in pupils],
+                        groups=[dict(id=g.id,name=g.name) for g in directory.state.groups if g.id in mine],canAnnounce=user['role'] in ['admin','teacher'],
+                        audiences=directory.audiences(user),classes=[dict(id=c.id,name=c.name) for c in directory.state.classes if c.id in classes] if user['role']=='teacher' else [],
+                        publicReplies='feed_public_replies' in directory.channels)
+            # The class teacher of each pupil, from the class record on every request: one click for the family, no searching.
+            return result|dict(classTeachers=self.class_teachers(user,directory)) if user['role'] in FAMILY else result
 
         @app.get('/api/messages/contacts')
         def contacts(request:Request,workspace:Workspace='school',studentId:str|None=None,q:str=Query(default='',max_length=100),offset:int=Query(default=0,ge=0,le=100000)):
             user,directory=self.context(request,workspace)
-            if studentId and studentId not in directory.pupils(user): raise HTTPException(403,'Ученик недоступен.')
+            if studentId and studentId not in directory.reachable_students(user): raise HTTPException(403,'Ученик недоступен.')
             with self.access.lock,self.access.connect() as db:
                 self.tables(db)
-                items=[dict(id=u['id'],name=u['name'],role=u['role']) for u in self.accounts(db).values() if q.casefold() in u['name'].casefold() and directory.pair(user,u,studentId)]
+                items=[dict(id=u['id'],name=u['name'],role=u['role']) for u in self.accounts(db).values() if q.casefold() in u['name'].casefold() and directory.start(user,u,studentId)]
             items.sort(key=lambda u:(u['name'],u['id']))
             return dict(items=items[offset:offset+50],nextOffset=offset+50 if len(items)>offset+50 else None)
 
@@ -313,25 +499,29 @@ class Messages:
             user,directory=self.context(request,workspace)
             with self.access.lock,self.access.connect() as db:
                 self.tables(db)
-                selected=self.recipients(body,user,directory,self.recipient_accounts(db,body,user,directory))
-            return dict(count=len(selected),byRole={role:sum(u['role']==role for u,_ in selected) for role in {u['role'] for u,_ in selected}})
+                selected,unavailable=self.selection(db,body,user,directory)
+            return self.audiences.summary(body.kind,selected,unavailable)
 
         @app.post('/api/messages/threads')
         def create(body:NewThread,request:Request,workspace:Workspace='school'):
             user,directory=self.context(request,workspace)
             self.body_valid(body)
+            if body.kind=='announcement' and not body.title: raise HTTPException(422,'Укажите тему объявления.')
+            if body.replies!='off' and body.kind!='announcement': raise HTTPException(422,'Ответы настраиваются только под объявлением.')
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
-                accounts=self.recipient_accounts(db,body,user,directory)
-                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,body=body.model_dump(exclude={'draftVersion'} if body.draftVersion is None else set())))
+                prior,signature=self.replay(db,user,body.requestId,dict(workspace=workspace,body=body.signature()))
                 if prior:
                     self.find(db,prior,user,directory,self.thread_accounts(db,prior,user))
                     return dict(id=prior)
-                recipients=self.recipients(body,user,directory,accounts)
+                if body.replies=='all' and 'feed_public_replies' not in directory.channels: raise HTTPException(403,CLOSED)
+                recipients,_=self.selection(db,body,user,directory)
+                if body.kind=='announcement' and len(recipients)>self.audiences.limit(body.kind): raise HTTPException(422,'В аудитории больше допустимого числа получателей.')
                 self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,None)
                 self.rate(db,user)
                 id=uuid4().hex;created=now().isoformat()
                 db.execute('INSERT INTO message_threads VALUES (?,?,?,?,?,?,1,?,?,?,0)',(id,workspace,body.kind,body.title,user['id'],body.studentId,'open',int(body.requireAck),created))
+                if body.replies!='off': self.feed.set_mode(db,id,body.replies)
                 scopes=[body.studentId] if body.studentId else []
                 db.executemany('INSERT INTO message_members (thread_id,user_id,role,scope_students) VALUES (?,?,?,?)',[(id,u['id'],u['role'],encoded(ids)) for u,ids in [(user,scopes),*recipients]])
                 if body.kind=='group':db.execute('INSERT INTO message_group_scopes VALUES (?,?,?)',(id,'contacts' if body.recipientIds else 'audience',encoded(body.groupIds)))
@@ -357,14 +547,29 @@ class Messages:
                         AND NOT EXISTS(SELECT 1 FROM message_moderation h WHERE h.post_id=p.id AND h.hidden=1)))
                     ORDER BY coalesce(m.live_through,t.latest_id) DESC LIMIT 101''',(user['id'],workspace,before,before,int(unreadOnly),q.casefold(),q.casefold())).fetchall()
                 accounts=self.accounts(db,thread_ids=[r[0] for r in rows[:100] if r[2] in ['direct','group']])
-                items=[]
+                items=[];names={s.id:s.name for s in directory.state.students};own=directory.pupils(user) if user['role'] in FAMILY else None
                 for row in rows[:100]:
                     thread=self.thread(db,row[:11]);found=self.visible(db,thread,user,directory,accounts)
                     if not found: continue
                     member,through=found;latest=thread['latestId'] if through is None else through
                     if unreadOnly and latest<=member[2]: continue
-                    items.append(thread|dict(latestId=latest,unread=latest>member[2],acknowledged=member[3]==thread['version'],readOnly=through is not None))
-            return dict(items=items,nextBefore=rows[99][11] if len(rows)>100 else None)
+                    items.append(thread|dict(latestId=latest,unread=latest>member[2],acknowledged=member[3]==thread['version'],readOnly=through is not None,
+                                             children=self.children(thread,member,own,names)))
+                self.previews(db,items)
+                # Only the first page tells the unread total; later pages are older rows the account has scrolled to.
+                # A first page that holds every conversation of the account already contains the answer.
+                if before is not None: total=(None,False)
+                elif not q and len(rows)<=100: total=(sum(item['unread'] for item in items),False)
+                else: total=self.unread(db,user,directory)
+            return dict(items=items,nextBefore=rows[99][11] if len(rows)>100 else None,unreadCount=total[0],unreadMore=total[1])
+
+        @app.get('/api/messages/unread')
+        def unread_total(request:Request,workspace:Workspace='school'):
+            user,directory=self.context(request,workspace)
+            try:
+                with closing(self.access.read_connect()) as db: count,more=self.unread(db,user,directory)
+            except sqlite3.OperationalError: count,more=0,False  # no conversations stored yet
+            return dict(count=count,more=more)
 
         @app.get('/api/messages/threads/{id}')
         def detail(id:str,request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
@@ -374,15 +579,15 @@ class Messages:
                 thread,member,through=self.readable(db,id,user,directory,accounts)
                 bound=thread['latestId'] if through is None else through
                 posts=db.execute('SELECT id,author_id,author_name,created,body FROM message_posts WHERE thread_id=? AND id<=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT 51',(id,bound,before,before)).fetchall()
-                peers=[]
+                peers=[];live=[]
                 # Read receipts of a former participant would reveal activity after their access ended.
                 if through is None and (thread['authorId']==user['id'] or thread['kind'] in ['direct','group']):
                     for uid,read_id,ack in db.execute('SELECT user_id,read_id,ack_version FROM message_members WHERE thread_id=?',(id,)):
                         if uid!=user['id'] and (peer:=accounts.get(uid)) and self.member(db,thread,peer,directory,accounts):
-                            peers.append(dict(id=uid,name=peer['name'],read=read_id>=thread['latestId'],acknowledged=ack==thread['version']))
+                            live.append(peer);peers.append(dict(id=uid,name=peer['name'],read=read_id>=thread['latestId'],acknowledged=ack==thread['version']))
                 attachments=self.files.for_posts(db,[r[0] for r in posts[:50]])
                 hidden={r[0] for r in db.execute('SELECT post_id FROM message_moderation WHERE hidden=1 AND post_id IN (SELECT value FROM json_each(?))',(encoded([r[0] for r in posts[:50]]),))}
-                return thread|dict(userId=user['id'],latestId=bound,readOnly=through is not None,canReply=through is None and thread['kind'] in ['direct','group'] and thread['status']=='open',canManage=through is None and thread['managerId']==user['id'],
+                return thread|self.feed.detail(db,thread,user,directory,through)|dict(userId=user['id'],latestId=bound,readOnly=through is not None,canReply=through is None and thread['kind'] in ['direct','group'] and thread['status']=='open' and self.may_reply(thread,user,directory,accounts,live),canManage=through is None and thread['managerId']==user['id'],
                     acknowledged=member[3]==thread['version'],participants=peers,posts=[dict(zip(['id','authorId','author','created','text'],row))|dict(text='Сообщение скрыто администратором.' if row[0] in hidden else row[4],hidden=row[0] in hidden,files=[] if row[0] in hidden else attachments[row[0]]) for row in reversed(posts[:50])],
                     nextBefore=posts[49][0] if len(posts)>50 else None)
 
@@ -397,12 +602,13 @@ class Messages:
                 if prior: return dict(id=prior)
                 # Simultaneous replies are all kept in commit order; only closing, membership and management check versions.
                 if thread['kind'] not in ['direct','group'] or thread['status']!='open': raise HTTPException(409,'Ответы в этой переписке закрыты.')
+                live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
+                if not self.may_reply(thread,user,directory,accounts,live): raise HTTPException(403,CLOSED)
                 self.drafts.consume(db,user,workspace,body.draftId,body.draftVersion,id)
                 post=self.post(db,thread,user,body.text)
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post)
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
-                live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
                 self.advance(db,id,post,live)
                 self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received')
                 self.access.record(db,'message.replied',workspace,detail=id)
@@ -414,7 +620,7 @@ class Messages:
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.recheck(db,user,directory)
                 thread,_,through=self.readable(db,id,user,directory,self.thread_accounts(db,id,user))
-                if through is not None and body.throughId>through or not db.execute('SELECT 1 FROM message_posts WHERE thread_id=? AND id=?',(id,body.throughId)).fetchone(): raise HTTPException(422,'Укажите сообщение из этой переписки.')
+                if through is not None and body.throughId>through or not db.execute('SELECT 1 FROM message_posts WHERE thread_id=? AND id=? AND reply_to IS NULL',(id,body.throughId)).fetchone(): raise HTTPException(422,'Укажите сообщение из этой переписки.')
                 # Opening proves the live link: a row from before live_through, or one left stale, may read everything up to now.
                 if through is None: self.advance(db,id,thread['latestId'],[user])
                 db.execute('UPDATE message_members SET read_id=max(read_id,?) WHERE thread_id=? AND user_id=?',(body.throughId,id,user['id']))

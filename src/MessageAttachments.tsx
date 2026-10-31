@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "./api";
 import { uploadFile } from "./uploads";
+import { inlineImage } from "./messages";
 
 export type MessageFile = {
   id: string;
@@ -9,8 +10,40 @@ export type MessageFile = {
   size: number;
   created: string;
 };
-export function messageFileUrl(workspace: string, id: string) {
-  return `/api/messages/files/${id}?${new URLSearchParams({ workspace })}`;
+export function messageFileUrl(workspace: string, id: string, inline = false) {
+  return `/api/messages/files/${id}?${new URLSearchParams(inline ? { workspace, inline: "true" } : { workspace })}`;
+}
+/** Files of a posted message. A picture the browser can show appears above its link; where it cannot be decoded, the link remains. */
+export function MessageFileList({
+  workspace,
+  files,
+}: {
+  workspace: string;
+  files: MessageFile[];
+}) {
+  const [failed, setFailed] = useState<string[]>([]);
+  if (!files.length) return null;
+  return (
+    <ul className="homework-files">
+      {files.map((f) => (
+        <li key={f.id}>
+          {inlineImage(f.filename) && !failed.includes(f.id) && (
+            <img
+              loading="lazy"
+              alt={f.filename}
+              className="message-image"
+              src={messageFileUrl(workspace, f.id, true)}
+              onError={() => setFailed((old) => [...old, f.id])}
+            />
+          )}
+          <a href={messageFileUrl(workspace, f.id)} download>
+            {f.filename}
+          </a>{" "}
+          · {Math.max(1, Math.ceil(f.size / 1024))} КБ
+        </li>
+      ))}
+    </ul>
+  );
 }
 export default function MessageAttachments({
   workspace,
@@ -48,7 +81,7 @@ export default function MessageAttachments({
         <input
           type="file"
           multiple
-          accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+          accept=".pdf,.png,.jpg,.jpeg,.heic,.heif,.txt,.doc,.docx,.xls,.xlsx,.pptx"
           disabled={items.length >= 5}
           onChange={(e) => {
             const files = Array.from(e.target.files || []);
@@ -84,7 +117,11 @@ export default function MessageAttachments({
             });
           }}
         />
-        <small>До 5 файлов по 10 МБ. До отправки их видите только вы.</small>
+        <small>
+          До 5 файлов по 10 МБ: фото (JPG, PNG, HEIC, HEIF), PDF, TXT, Word
+          (DOC, DOCX), Excel (XLS, XLSX) и PPTX. До отправки их видите только
+          вы.
+        </small>
         {serverBusy && <small role="status">Сервер занят, повторяем…</small>}
       </label>
       {!!available.length && (
