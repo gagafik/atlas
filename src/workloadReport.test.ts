@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clip, hours, monthOf, weekOf } from "./workloadReport";
+import { clip, hours, monthOf, weekOf, within } from "./workloadReport";
 
 describe("workload periods", () => {
   it("takes the Monday and Sunday of the week, across a month and a year", () => {
@@ -45,6 +45,15 @@ describe("workload periods", () => {
       end: "2026-08-31",
     });
     expect(clip(monthOf("2027-06-01"), year).end).toBe("2027-06-11");
+  });
+  it("finds no period for a preset wholly outside the school year", () => {
+    const year = { yearStart: "2026-08-17", yearEnd: "2027-06-11" };
+    expect(within(weekOf("2027-07-14"), year)).toBeNull();
+    expect(within(monthOf("2026-07-10"), year)).toBeNull();
+    expect(within(weekOf("2027-06-09"), year)).toEqual({
+      start: "2027-06-07",
+      end: "2027-06-11",
+    });
   });
 });
 

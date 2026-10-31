@@ -117,3 +117,12 @@ export const clip = (
   start: range.start < year.yearStart ? year.yearStart : range.start,
   end: range.end > year.yearEnd ? year.yearEnd : range.end,
 });
+
+// The part of a range inside the school year; null when none of it is (a preset in the summer break).
+export function within(
+  range: { start: string; end: string },
+  year: { yearStart: string; yearEnd: string },
+) {
+  const found = clip(range, year);
+  return found.start <= found.end ? found : null;
+}

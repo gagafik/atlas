@@ -9,6 +9,7 @@ import {
   hours,
   monthOf,
   weekOf,
+  within,
   type WorkloadFigures,
   type WorkloadLesson,
   type WorkloadOptions,
@@ -170,9 +171,8 @@ export default function TeacherWorkload({
       .then((o: WorkloadOptions) => {
         if (!live) return;
         setOptions(o);
-        const month = clip(monthOf(o.today), o);
         const first =
-          month.start > month.end ? clip(monthOf(o.yearStart), o) : month;
+          within(monthOf(o.today), o) ?? clip(monthOf(o.yearStart), o);
         setStart(first.start);
         setEnd(first.end);
       })
@@ -213,7 +213,11 @@ export default function TeacherWorkload({
     };
   }, [options, start, end, teacherId, workspace]);
   const preset = (range: { start: string; end: string }) => {
-    const found = options ? clip(range, options) : range;
+    const found = options ? within(range, options) : range;
+    if (!found) {
+      setError("Эти даты вне учебного года.");
+      return;
+    }
     setStart(found.start);
     setEnd(found.end);
   };
