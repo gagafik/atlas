@@ -334,3 +334,68 @@ def test_staff_meetings_are_not_lessons(client, clock):
     s.placements.append(Placement(id='meeting', workloadId='w-staff', day=0, period=3, roomId='r2'))
     api.save('demo', State.model_validate(s.model_dump()))
     assert figures(client, 't2', MON, MON)['planned'] == 1
+
+
+def month_totals(c, month):
+    response = c.get(f'/api/calendar/substitution-report?workspace=demo&month={month}')
+    assert response.status_code == 200, response.text
+    return {t['teacherId']: t for t in response.json()['teachers']}
+
+
+# What both reports count; the month totals call taught «held».
+SHARED = ['planned', 'own', 'substitutions', 'extra', 'missed', 'missedAbsent', 'cancelled', 'moved', 'merged', 'upcoming', 'uncovered']
+
+
+def test_the_month_totals_and_the_workload_report_agree_when_nothing_is_published(client, clock):
+    s = api.read('demo')
+    s.placements.append(Placement(id='hist', workloadId='w3', day=0, period=1, roomId='r2'))
+    s.datedLessons = [change(date(2026, 8, 24), teacherIds=['t3'], changeType='substitution'),
+                      DatedLesson(id='cancel', name='Отмена', kind='cancel', placementId='eng', sourceDate=date(2026, 8, 31), onDate=date(2026, 8, 31)),
+                      DatedLesson(id='moved', name='Перенос', kind='change', placementId='math', sourceDate=date(2026, 8, 24), onDate=date(2026, 8, 26), changeType='move'),
+                      change(placement='hist', changeType='merge', mergeWith=f'{MON}:eng', teacherIds=['t2'], roomIds=['r0']),
+                      DatedLesson(id='extra', name='Разовый', kind='add', changeType='extra', onDate=date(2026, 8, 19), groupId=s.workloads[0].groupId, profileId='secondary',
+                                  subjectId=s.workloads[0].subjectId, startTime='14:00', endTime='14:40', teacherIds=['t2'], roomIds=['r0'])]
+    # One absence is over, one is still ahead of the clock: both reports treat them alike.
+    s.absences = [TeacherAbsence(id='past', name='Болезнь', teacherId='t0', start=date(2026, 9, 7), end=date(2026, 9, 7)),
+                  TeacherAbsence(id='ahead', name='Командировка', teacherId='t2', start=date(2026, 9, 21), end=date(2026, 9, 21))]
+    api.save('demo', State.model_validate(s.model_dump()))
+    seen = dict.fromkeys(SHARED, 0)
+    for month, first, last in [('2026-08', MON, date(2026, 8, 31)), ('2026-09', date(2026, 9, 1), date(2026, 9, 30))]:
+        totals, body = month_totals(client, month), report(client, first, last).json()
+        assert {t['teacherId'] for t in body['teachers']} == set(totals)
+        for t in body['teachers']:
+            other = totals[t['teacherId']]
+            assert {k: t[k] for k in SHARED} == {k: other[k] for k in SHARED} and t['taught'] == other['held']
+            for k in SHARED: seen[k] += t[k]
+    # The comparison is not vacuous: every kind of fact is present.
+    assert [k for k in SHARED if not seen[k]] == [], seen
+
+
+def test_the_two_reports_differ_for_a_lesson_published_during_an_absence(client, clock):
+    stored(absences=[TeacherAbsence(id='a', name='Болезнь', teacherId='t2', start=MON, end=MON)])
+    publish(client)
+    month, mine = month_totals(client, '2026-08')['t2'], figures(client, 't2', MON, date(2026, 8, 31))
+    # Only the workload report reads the journal: it finds the lesson taught, the month totals still call it left without a substitute.
+    assert (month['uncovered'], mine['uncovered'], mine['differs']) == (1, 0, 0)
+    assert mine['taught'] == month['held'] + 1 and mine['confirmed'] == 1
+
+
+def test_the_two_reports_differ_for_a_lesson_published_before_it_ends(client, clock):
+    clock(MON, '08:30')
+    publish(client)
+    month, mine = month_totals(client, '2026-08')['t2'], figures(client, 't2', MON, date(2026, 8, 31))
+    assert (mine['taught'], mine['confirmed']) == (month['held'] + 1, 1) and month['upcoming'] == mine['upcoming'] + 1
+
+
+def test_a_lesson_in_an_entered_absence_is_without_a_substitute_even_before_its_date(client, clock):
+    ahead = TODAY + timedelta(days=7)
+    stored(absences=[TeacherAbsence(id='a', name='Командировка', teacherId='t2', start=ahead, end=ahead)])
+    t2 = figures(client, 't2', ahead, ahead)
+    # The lesson has not been due yet, but nobody is going to teach it: it is reported at once, not when its day comes.
+    assert (t2['planned'], t2['plannedToDate'], t2['uncovered'], t2['missed'], t2['missedAbsent'], t2['upcoming'], t2['taught']) == (1, 0, 1, 1, 1, 0, 0)
+    assert t2['lessons'][0]['outcome'] == 'uncovered'
+    assert month_totals(client, '2026-09')['t2']['uncovered'] == t2['uncovered']
+    # A substitute turns it into a lesson that is merely still to come.
+    stored(datedLessons=[change(ahead, teacherIds=['t3'], changeType='substitution')])
+    t2, t3 = figures(client, 't2', ahead, ahead), figures(client, 't3', ahead, ahead)
+    assert (t2['uncovered'], t2['missed'], t3['upcoming'], t3['uncovered']) == (0, 1, 1, 0)

@@ -127,6 +127,37 @@ def test_a_cancelled_leave_asks_to_remove_the_absence_it_made(staff):
     assert 'Ошибка' not in staff.get('/api/calendar/absence-feed?workspace=demo').text
 
 
+def regrant(c, login, **values):
+    """Change an account the way the access panel does: the stored user with some fields replaced."""
+    user = next(u for u in c.get('/api/access/users').json() if u['login'] == login)
+    response = c.put('/api/access/users/' + user['id'], json={k: v for k, v in user.items() if k != 'id'} | values)
+    assert response.status_code == 200, response.text
+
+
+def test_a_cancelled_leave_still_asks_for_removal_when_the_account_is_deactivated(staff):
+    item = approved(staff)
+    apply(staff, 'absences', feed(staff)['pending'][0]['absence'])
+    ok(action(staff, item, 'cancel', kind='leave', reason='Ошибка'))
+    assert len(feed(staff)['withdrawn']) == 1
+    regrant(staff, 'teacher', active=False)
+    [withdrawn] = feed(staff)['withdrawn']
+    assert (withdrawn['leaveId'], withdrawn['absenceId'], withdrawn['teacherId']) == (item['id'], 'leave-' + item['id'], 't2')
+    apply(staff, 'absences', remove=withdrawn['absenceId'])
+    assert feed(staff)['withdrawn'] == [] and api.read('demo').absences == []
+
+
+def test_a_cancelled_leave_finds_its_absences_after_the_teacher_link_changed(staff):
+    create(staff, 'teacher', login='double', grants=[dict(workspace='demo', view='teacher', entityIds=['t2', 't3'])])
+    item = approved(staff, signed('double'))
+    for pending in feed(staff)['pending']: apply(staff, 'absences', pending['absence'])
+    ok(action(staff, item, 'cancel', kind='leave', reason='Ошибка'))
+    # One teacher is left on the account, so a single absence would now be named without an index; the stored ones are still found.
+    regrant(staff, 'double', grants=[dict(workspace='demo', view='teacher', entityIds=['t2'])])
+    assert sorted((w['absenceId'], w['teacherId']) for w in feed(staff)['withdrawn']) == [(f'leave-{item["id"]}-0', 't2'), (f'leave-{item["id"]}-1', 't3')]
+    regrant(staff, 'double', role='staff', grants=[])
+    assert len(feed(staff)['withdrawn']) == 2
+
+
 def test_partial_days_keep_their_hours_and_midnight_becomes_the_last_minute(staff):
     short = approved(staff, startTime='10:00', endTime='11:00')
     [item] = feed(staff)['pending']

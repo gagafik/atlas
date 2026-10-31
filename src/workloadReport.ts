@@ -118,6 +118,10 @@ export const clip = (
   end: range.end > year.yearEnd ? year.yearEnd : range.end,
 });
 
+// Whether typed dates make a period the server can count: while a date is being edited an input is empty or the end is before the start.
+export const validPeriod = (start: string, end: string) =>
+  !!start && !!end && start <= end;
+
 // The part of a range inside the school year; null when none of it is (a preset in the summer break).
 export function within(
   range: { start: string; end: string },

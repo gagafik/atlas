@@ -8,6 +8,7 @@ import {
   clip,
   hours,
   monthOf,
+  validPeriod,
   weekOf,
   within,
   type WorkloadFigures,
@@ -183,8 +184,14 @@ export default function TeacherWorkload({
       live = false;
     };
   }, [workspace]);
+  const counted = validPeriod(start, end);
   useEffect(() => {
-    if (!options || !start || !end || end < start) return;
+    // A date being edited (empty or after the other) has nothing to count: drop the old report and any pending wait.
+    if (!options || !counted) {
+      setLoading(false);
+      setReport(null);
+      return;
+    }
     let live = true;
     setLoading(true);
     api(
@@ -211,7 +218,7 @@ export default function TeacherWorkload({
     return () => {
       live = false;
     };
-  }, [options, start, end, teacherId, workspace]);
+  }, [options, counted, start, end, teacherId, workspace]);
   const preset = (range: { start: string; end: string }) => {
     const found = options ? within(range, options) : range;
     if (!found) {
@@ -350,10 +357,18 @@ export default function TeacherWorkload({
         Считается по дате: расписание того дня, замены и отмены. В «проведено»
         входят только завершившиеся уроки; публикация журнала подтверждает урок
         и показывает, кто его провёл. Уроки без публикации считаются по
-        расписанию и помечены как неподтверждённые.
+        расписанию и помечены как неподтверждённые. Урок учителя с внесённым
+        отсутствием и без замены считается «Без замены» и «Пропущено» сразу, как
+        только отсутствие внесено, в том числе на будущие даты, пока не
+        назначена замена.
       </p>
+      {options && !counted && (
+        <p role="status">
+          Укажите обе даты периода: конец не должен быть раньше начала.
+        </p>
+      )}
       {loading && <p role="status">Считаю нагрузку…</p>}
-      {report && !loading && (
+      {report && counted && !loading && (
         <>
           <div className="workload-actions">
             <label>

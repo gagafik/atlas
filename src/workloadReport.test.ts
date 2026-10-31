@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { clip, hours, monthOf, weekOf, within } from "./workloadReport";
+import {
+  clip,
+  hours,
+  monthOf,
+  validPeriod,
+  weekOf,
+  within,
+} from "./workloadReport";
 
 describe("workload periods", () => {
   it("takes the Monday and Sunday of the week, across a month and a year", () => {
@@ -54,6 +61,16 @@ describe("workload periods", () => {
       start: "2027-06-07",
       end: "2027-06-11",
     });
+  });
+});
+
+describe("typed workload periods", () => {
+  it("accepts a day, a span and nothing that is empty or reversed", () => {
+    expect(validPeriod("2026-08-17", "2026-08-17")).toBe(true);
+    expect(validPeriod("2026-08-17", "2026-09-30")).toBe(true);
+    expect(validPeriod("", "2026-09-30")).toBe(false);
+    expect(validPeriod("2026-08-17", "")).toBe(false);
+    expect(validPeriod("2026-09-30", "2026-08-17")).toBe(false);
   });
 });
 

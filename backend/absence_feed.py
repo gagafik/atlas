@@ -39,20 +39,25 @@ def teachers_of(db, access, owner, workspace, known):
     return sorted(user_ids(person, workspace, 'teacher') & known) if person and person['active'] else []
 
 
+def made_by(stored, leave_id):
+    """The stored absences a leave made: its own id, or with an index when the account then had several teachers."""
+    base = 'leave-' + leave_id
+    return [a for id, a in stored.items() if id == base or id.startswith(base + '-') and id[len(base) + 1:].isdigit()]
+
+
 def feed(db, access, state, workspace, day):
     """pending: approved leave to add as an absence; withdrawn: absences of a cancelled leave; uncovered: lessons of absent teachers not yet replaced."""
     names, settings, lessons = {t.id: t.name for t in state.teachers}, state.settings, Lessons(state)
     stored, linked, pending, withdrawn = {a.id: a for a in state.absences}, {}, [], []
     # A leave never exposes its code or note: the neutral name is all the timetable gets.
     for id, owner, start_date, end_date, start_min, end_min, status in (db.execute(LEAVES, (workspace, (day - timedelta(days=HORIZON)).isoformat())).fetchall() if has_table(db, 'staff_time_leave') else []):
+        if status == 'cancelled':
+            # Found by id, not through the account's present teacher link: a deactivated or relinked account must not leave its absence behind.
+            withdrawn += [dict(leaveId=id, absenceId=a.id, teacherId=a.teacherId, teacher=names.get(a.teacherId, ''), start=a.start.isoformat(), end=a.end.isoformat()) for a in made_by(stored, id)]
+            continue
         if owner not in linked: linked[owner] = teachers_of(db, access, owner, workspace, names.keys())
         for i, teacher_id in enumerate(linked[owner]):
             absence_id = 'leave-' + id + ('' if len(linked[owner]) == 1 else f'-{i}')
-            if status == 'cancelled':
-                if absence_id in stored:
-                    a = stored[absence_id]
-                    withdrawn.append(dict(leaveId=id, absenceId=a.id, teacherId=a.teacherId, teacher=names.get(a.teacherId, ''), start=a.start.isoformat(), end=a.end.isoformat()))
-                continue
             start, end = max(date.fromisoformat(start_date), settings.yearStart), min(date.fromisoformat(end_date), settings.yearEnd)
             start_time, end_time = clock(start_min), clock(end_min)
             if start > end or start_time >= end_time or absence_id in stored: continue
