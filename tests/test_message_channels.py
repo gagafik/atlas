@@ -260,6 +260,35 @@ def test_parent_manager_adds_the_other_family_of_the_pupil_whatever_the_class_ch
     assert not detail(signed('mum'),group)['readOnly']
 
 
+def drop_teaching(*teachers):
+    """Take the teachers off every workload, as a timetable change does."""
+    state=api.read('demo')
+    for w in state.workloads:
+        if w.teacherId in teachers: w.teacherId='t1'
+        w.additionalTeacherIds=[t for t in w.additionalTeacherIds if t not in teachers]
+    api.save('demo',state)
+
+
+def test_family_of_one_pupil_keeps_answering_each_other_when_the_teachers_leave_on_defaults(client):
+    people=setup(client);parent=signed('parent');pupil=signed('student');far=signed('other')
+    colleague=create(client,'teacher',login='colleague',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
+    mum=create(client,'parent',login='mum',name='Мама');mum_user=signed('mum')
+    group=family_group(parent,[people['teacher']['id'],colleague['id']])
+    assert join(parent,group,mum['id']).status_code==200 and join(parent,group,people['student']['id']).status_code==200
+    # Neither teacher teaches the pupil any more: only the family is left, and on defaults no class channel connects the families.
+    drop_teaching('t2','t3')
+    for user in [parent,mum_user,pupil]:
+        value=detail(user,group);assert not value['readOnly'] and value['canReply']
+        assert reply(user,group).status_code==200
+    # The teachers keep what they read, and nobody else gains access.
+    assert detail(signed('teacher'),group)['readOnly'] and far.get(url('threads/'+group)).status_code==404
+    # Families of other pupils who joined through the class channel do not count as the family of this pupil.
+    matrix(client,add=['parent_class_parents']);assert join(parent,group,people['other']['id']).status_code==200
+    matrix(client,remove=['parent_class_parents'])
+    assert detail(far,group)['readOnly'] and reply(far,group).status_code==404
+    for user in [parent,mum_user,pupil]:assert detail(user,group)['canReply'] and reply(user,group).status_code==200
+
+
 def test_staff_to_staff_channel_can_be_switched_off(client):
     people=setup(client);teacher=signed('teacher');colleague=people['staff']['id']
     assert colleague in {u['id'] for u in teacher.get(url('contacts')).json()['items']}

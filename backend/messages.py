@@ -423,6 +423,9 @@ class Messages:
         if user['role']=='admin': return True
         peers=[u for u in live if u['id']!=user['id']]
         if not peers: return True
+        # The family of one pupil keeps answering each other, as it may bring each other in (may_add); no class channel is needed between them.
+        pupil=thread['studentId']
+        if user['role'] in FAMILY and pupil in directory.pupils(user) and any(p['role'] in FAMILY and pupil in directory.pupils(p) for p in peers): return True
         author=accounts.get(thread['authorId'])
         # A staff reply reaches the families of the conversation: a colleague's channel does not stand for theirs.
         colleagues=user['role'] in STAFF and any(p['role'] in FAMILY for p in peers)
