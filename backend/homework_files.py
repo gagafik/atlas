@@ -137,20 +137,27 @@ def file_path(root, id):
     return root/(id+'.bin')
 
 
-def name_for(filename):
+HEIF_BRANDS={b'heic',b'heix',b'hevc',b'hevx',b'heim',b'heis',b'mif1',b'msf1'}
+
+
+def name_for(filename,extra=()):
+    """extra: further suffixes a store accepts (messages take phone photos and old Office files); every other store keeps the base list."""
     name=filename.replace('\\','/').rsplit('/',1)[-1].strip()
     if not name or len(name)>180 or any(ord(c)<32 or ord(c)==127 for c in name):
         raise HTTPException(422,'Используйте имя файла длиной до 180 символов без управляющих знаков.')
-    if Path(name).suffix.lower() not in ['.pdf','.png','.jpg','.jpeg','.txt','.docx','.xlsx','.pptx']:
-        raise HTTPException(422,'Можно приложить PDF, PNG, JPG, TXT, DOCX, XLSX или PPTX.')
+    if Path(name).suffix.lower() not in ['.pdf','.png','.jpg','.jpeg','.txt','.docx','.xlsx','.pptx',*extra]:
+        types=['PDF','PNG','JPG','TXT','DOCX','XLSX','PPTX',*(s[1:].upper() for s in extra)]
+        raise HTTPException(422,'Можно приложить '+', '.join(types[:-1])+' или '+types[-1]+'.')
     return name
 
 
 def validate_file(path, name):
     with path.open('rb') as file:
-        prefix=file.read(8)
+        head=file.read(12);prefix=head[:8]
         suffix=Path(name).suffix.lower()
         valid=(suffix=='.pdf' and prefix.startswith(b'%PDF-') or
+               suffix in ['.heic','.heif'] and head[4:8]==b'ftyp' and head[8:12] in HEIF_BRANDS or
+               suffix in ['.doc','.xls'] and prefix==b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1' or
                suffix=='.png' and prefix==b'\x89PNG\r\n\x1a\n' or
                suffix in ['.jpg','.jpeg'] and prefix.startswith(b'\xff\xd8\xff') or
                suffix in ['.docx','.xlsx','.pptx'] and prefix.startswith(b'PK\x03\x04') or

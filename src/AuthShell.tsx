@@ -35,7 +35,7 @@ const LiveLessons = lazy(() => import("./LiveLessons"));
 const LiveProjector = lazy(() => import("./LiveProjector"));
 const HallScreens = lazy(() => import("./HallScreens"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
-const ClassStaffWorkspace = lazy(() => import("./ClassStaffWorkspace"));
+const StaffWorkspace = lazy(() => import("./StaffWorkspace"));
 const Registers = lazy(() => import("./Registers"));
 const RecoveryForm = lazy(() =>
   import("./Recovery").then((module) => ({ default: module.RecoveryForm })),
@@ -530,8 +530,9 @@ export default function AuthShell() {
             <main className="auth-screen">Открываю рабочее место…</main>
           }
         >
-          <ClassStaffWorkspace
+          <StaffWorkspace
             key={session.user.id + ":" + session.user.version}
+            session={session}
             controls={controls}
           />
         </Suspense>

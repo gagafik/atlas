@@ -350,3 +350,73 @@ def test_live_through_column_is_added_to_existing_member_table(tmp_path):
         api.messages.tables(db);api.messages.tables(db)
         assert 'live_through' in {r[1] for r in db.execute('PRAGMA table_info(message_members)')}
         assert db.execute('SELECT thread_id,user_id,role,scope_students,read_id,ack_version,live_through FROM message_members').fetchall()==[('t','u','parent','["s1"]',7,2,None)]
+
+
+def test_inbox_row_shows_sender_date_child_and_preview(client):
+    people=setup(client);teacher=signed('teacher')
+    renamed={k:v for k,v in people['parent'].items() if k!='id'}|dict(name='Мама Ани')
+    assert client.put('/api/access/users/'+people['parent']['id'],json=renamed).status_code==200
+    parent=signed('parent');child=next(s.name for s in api.read('demo').students if s.id=='s1')
+    sent=parent.post(url(),json=payload(people['teacher']['id'])|dict(title=''));assert sent.status_code==200,sent.text
+    inbox=teacher.get(url()).json();row=inbox['items'][0]
+    assert row['sender']=='Мама Ани' and row['title']=='' and 'уточните задание' in row['preview'] and not row['hasFiles'] and row['date']
+    assert row['children']==[dict(id='s1',name=child)]
+    assert inbox['unreadCount']==1 and teacher.get(url('unread')).json()=={'count':1,'more':False}
+    assert parent.get(url()).json()['unreadCount']==0 and parent.get(url()).json()['items'][0]['children']==[dict(id='s1',name=child)]
+    id=sent.json()['id'];assert teacher.put(url('threads/'+id+'/read'),json=dict(throughId=detail(teacher,id)['latestId'])).status_code==200
+    assert teacher.get(url('unread')).json()['count']==0 and teacher.get(url()).json()['unreadCount']==0
+    # An account that took part in nothing has nothing to count.
+    assert signed('other').get(url('unread')).json()['count']==0
+
+
+def test_inbox_preview_respects_history_and_moderation(client):
+    from test_message_files_groups import group,upload
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
+    id=group(teacher)
+    say=lambda text,**extra:teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text=text)|extra)
+    assert say('Перед удалением').status_code==200
+    removed=teacher.post(url('threads/'+id+'/participants'),json=dict(version=detail(teacher,id)['version'],userId=people['other']['id'],action='remove'));assert removed.status_code==200,removed.text
+    draft=str(uuid4());file=upload(teacher,draft,id).json()['id']
+    assert say('Секрет',draftId=draft,fileIds=[file]).status_code==200
+    row=lambda user:next(t for t in user.get(url()).json()['items'] if t['id']==id)
+    # Whoever left or was removed reads no further than the last post they could see.
+    assert row(other)['readOnly'] and row(other)['preview']=='Перед удалением' and not row(other)['hasFiles']
+    assert row(parent)['preview']=='Секрет' and row(parent)['hasFiles'] and row(parent)['sender']==people['teacher']['name']
+    post=detail(parent,id)['posts'][-1]['id']
+    made=parent.post(url('posts/'+str(post)+'/report'),json=dict(requestId=str(uuid4()),reason='Нарушение',shareEvidence=True));assert made.status_code==200,made.text
+    state=client.get(url('reports/'+made.json()['id'])).json()
+    assert client.post(url('reports/'+made.json()['id']+'/decision'),json=dict(requestId=str(uuid4()),version=state['version'],postVersion=state['postVersion'],action='hide',note='Скрыто')).status_code==200
+    assert row(parent)['preview']=='Сообщение скрыто администратором.' and not row(parent)['hasFiles']
+    assert 'Секрет' not in str(teacher.get(url()).json())
+
+
+def test_announcement_requires_subject_but_dialog_does_not(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent')
+    body=dict(requestId=str(uuid4()),kind='announcement',title='',text='Текст',groupIds=['g-a'],roles=['parent'])
+    refused=teacher.post(url(),json=body);assert refused.status_code==422 and 'тему' in refused.json()['detail']
+    assert teacher.post(url(),json=body|dict(title='Тема')).status_code==200
+    assert parent.post(url(),json=payload(people['teacher']['id'])|dict(title='')).status_code==200
+    group=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='',text='Вопрос.',groupIds=['g-a'],roles=['parent','student']))
+    assert group.status_code==200,group.text
+
+
+def test_unread_never_counts_a_thread_the_account_cannot_read(client):
+    from test_message_files_groups import group
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
+    notice=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='announcement',title='Тема',text='Текст',groupIds=['g-a'],roles=['parent'])).json()['id']
+    assert parent.get(url('unread')).json()=={'count':1,'more':False}
+    assert teacher.post(url('threads/'+notice+'/change'),json=dict(version=1,action='withdraw')).status_code==200
+    assert parent.get(url('threads/'+notice)).status_code==404
+    assert parent.get(url('unread')).json()=={'count':0,'more':False} and parent.get(url()).json()['unreadCount']==0
+    # Whoever was removed from a discussion is not told about what was said after that.
+    id=group(teacher)
+    removed=teacher.post(url('threads/'+id+'/participants'),json=dict(version=detail(teacher,id)['version'],userId=people['other']['id'],action='remove'));assert removed.status_code==200,removed.text
+    assert other.get(url('unread')).json()['count']==1
+    assert other.put(url('threads/'+id+'/read'),json=dict(throughId=detail(other,id)['latestId'])).status_code==200
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='После ухода.')).status_code==200
+    assert other.get(url('unread')).json()['count']==0 and other.get(url()).json()['unreadCount']==0
+
+
+def test_unread_answers_before_any_message_was_ever_sent(client):
+    setup(client)
+    assert signed('parent').get(url('unread')).json()=={'count':0,'more':False}

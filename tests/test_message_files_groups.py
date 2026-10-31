@@ -244,3 +244,54 @@ def test_message_quota_is_rolling_and_counts_unsent_files(client,monkeypatch):
     blocked=upload(parent,second,body=b'abc')  # unsent files count at any age while a draft keeps them
     assert blocked.status_code==413 and '30 дней' in blocked.json()['detail'],blocked.text
     with api.connect() as db:assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==3
+
+
+HEIC=b'\x00\x00\x00\x18ftypheic'+b'\x00'*16
+OLE=bytes.fromhex('d0cf11e0a1b11ae1')+b'\x00'*32
+JPEG=b'\xff\xd8\xff\xe0'+b'\x00'*16
+
+
+def sent(user,teacher_id,files):
+    """Upload (name, bytes) pairs as one draft and send them to the teacher; returns thread id and file ids."""
+    draft=str(uuid4());ids=[]
+    for name,body in files:
+        uploaded=upload(user,draft,filename=name,body=body);assert uploaded.status_code==200,(name,uploaded.text);ids.append(uploaded.json()['id'])
+    created=user.post(url(),json=payload(teacher_id)|dict(text='',draftId=draft,fileIds=ids));assert created.status_code==200,created.text
+    return created.json()['id'],ids
+
+
+def test_message_attachments_accept_phone_photos_and_old_office(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher');draft=str(uuid4())
+    thread,ids=sent(parent,people['teacher']['id'],[('photo.HEIC',HEIC),('letter.doc',OLE),('table.xls',OLE)])
+    assert [f['filename'] for f in detail(teacher,thread)['posts'][0]['files']]==['photo.HEIC','letter.doc','table.xls']
+    for id in ids:assert download(teacher,id).status_code==200
+    # The content has to be what the name says, and other types stay refused.
+    for name in ['photo.heic','photo.heif','letter.doc','table.xls']:
+        wrong=upload(parent,draft,filename=name,body=b'%PDF-1.4 fake');assert wrong.status_code==422,name
+    assert upload(parent,draft,filename='photo.heic',body=b'\x00\x00\x00\x18ftypmp42'+b'\x00'*16).status_code==422
+    assert upload(parent,draft,filename='run.exe',body=b'MZ'+b'\x00'*16).status_code==422
+    assert upload(parent,draft,filename='photo.heif',body=b'\x00\x00\x00\x18ftypmif1'+b'\x00'*16).status_code==200
+
+
+def test_inline_only_for_validated_images(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher');other=signed('other')
+    thread,(photo,note)=sent(parent,people['teacher']['id'],[('look.JPG',JPEG),('note.txt',b'Text')])
+    shown=teacher.get(url('files/'+photo,inline='true'))
+    assert shown.status_code==200 and shown.headers['content-type']=='image/jpeg' and shown.headers['content-disposition'].startswith('inline;')
+    assert shown.headers['x-content-type-options']=='nosniff' and shown.headers['cache-control']=='no-store' and 'sandbox' in shown.headers['content-security-policy']
+    plain=download(teacher,photo);assert plain.headers['content-type']=='application/octet-stream' and plain.headers['content-disposition'].startswith('attachment;')
+    text=teacher.get(url('files/'+note,inline='true'));assert text.headers['content-type']=='application/octet-stream' and text.headers['content-disposition'].startswith('attachment;')
+    assert other.get(url('files/'+photo,inline='true')).status_code==404
+    # A hidden post takes its pictures with it.
+    report=teacher.post(url('posts/'+str(detail(teacher,thread)['posts'][0]['id'])+'/report'),json=dict(requestId=str(uuid4()),reason='Нарушение',shareEvidence=True)).json()['id']
+    state=client.get(url('reports/'+report)).json()
+    assert client.post(url('reports/'+report+'/decision'),json=dict(requestId=str(uuid4()),version=state['version'],postVersion=state['postVersion'],action='hide',note='Скрыто')).status_code==200
+    assert teacher.get(url('files/'+photo,inline='true')).status_code==404 and teacher.get(url('files/'+photo)).status_code==404
+
+
+def test_other_stores_keep_their_file_types(client):
+    from test_homework import setup as homework_setup,get as homework,upload as homework_upload
+    record,pupil,_,_=homework_setup(client);key=record['lessonKey'];assignment=homework(pupil,key)['assignment']
+    assert homework_upload(pupil,key,assignment,body=HEIC,filename='photo.heic').status_code==422
+    assert homework_upload(pupil,key,assignment,body=OLE,filename='letter.doc').status_code==422
+    assert homework_upload(pupil,key,assignment,body=b'%PDF-1.4',filename='letter.pdf').status_code==200

@@ -79,9 +79,14 @@ def test_staff_never_inherits_teacher_grades_editor_or_family_access(client):
     for path in ['/api/journal/options','/api/journal/day?day='+DAY,'/api/journal/report?studentId=s1&start='+DAY+'&end='+DAY,
                  '/api/journal/entry?lessonKey='+record['lessonKey']+'&day='+DAY,
                  '/api/journal/homework/options','/api/journal/curriculum/options','/api/journal/library/options',
-                 '/api/final-grades/options','/api/intake/options','/api/messages/options']:
+                 '/api/final-grades/options','/api/intake/options']:
         r=worker.get(path+('&' if '?' in path else '?')+'workspace=demo')
         assert r.status_code in [403,404],(path,r.status_code,r.text)
+    # Staff messaging is open to colleagues only: no pupils, no groups, no announcements, no family contact.
+    options=worker.get('/api/messages/options?workspace=demo').json()
+    assert options['students']==[] and options['groups']==[] and not options['canAnnounce'] and options['audiences']==[]
+    assert worker.get('/api/messages/contacts?workspace=demo&studentId=s1').status_code==403
+    assert {u['role'] for u in worker.get('/api/messages/contacts?workspace=demo').json()['items']}.isdisjoint({'parent','student'})
     assert worker.post(url(),json=body()).status_code==403
     assert worker.get(url().replace('demo','school')).status_code==403
     assert worker.put(BASE,json=payload(client,{})).status_code==403

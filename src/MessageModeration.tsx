@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { MessageFile } from "./MessageAttachments";
+import { noTitle } from "./messages";
 
 const statuses: Record<string, string> = {
   open: "Ожидает рассмотрения",
@@ -138,7 +139,7 @@ function RecoveryItem({
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   return (
     <article className="message-case">
-      <h4>{item.title}</h4>
+      <h4>{item.title || noTitle}</h4>
       {!item.candidates.length ? (
         <p>
           Нет подходящего действующего участника. Проверьте аккаунты и учебные
@@ -355,7 +356,7 @@ export default function MessageModeration({
               </p>
               {current.evidence && (
                 <>
-                  <h4>{current.evidence.title}</h4>
+                  <h4>{current.evidence.title || noTitle}</h4>
                   <p>
                     {current.evidence.author} ·{" "}
                     {new Date(current.evidence.created).toLocaleString("ru-RU")}

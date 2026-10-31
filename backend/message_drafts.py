@@ -97,7 +97,7 @@ class MessageDrafts:
                 # Rehydrate contact labels only while the current relationship permits it.
                 accounts = self.messages.accounts(db, user_ids=[content.get('recipientId'), *content['recipientIds']])
                 people = [dict(id=p['id'], name=p['name'], role=p['role']) for p in accounts.values()
-                          if directory.pair(user, p, content.get('studentId'))]
+                          if directory.start(user, p, content.get('studentId'))]
                 return dict(id=id, version=row[0], threadId=row[2], content=content, updated=row[4],
                             files=[message_files.meta(f) for f in files], people=people)
 
