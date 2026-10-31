@@ -4860,6 +4860,7 @@ main {
 .final-subject { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 4px 0; }
 .final-subject h4, .final-subject p { margin: 4px 0; }
 .final-preview { font-weight: 700; }
+.final-stale { display: block; font-weight: 700; }
 .final-signatures { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 36px; }
 .final-signatures span { flex: 1; min-width: 120px; border-top: 1px solid currentColor; padding-top: 4px; }
 @media (max-width: 600px) { .final-subject { flex-direction: column; } }

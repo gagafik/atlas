@@ -273,6 +273,20 @@ def test_class_report_preview_is_admin_only_and_has_no_drafts(client):
     assert class_report(client,p,preview='true').status_code==409
 
 
+def test_class_report_preview_after_reclose_ignores_results_of_the_earlier_closure(client):
+    p,b,s,first,second=published_pair(client)
+    reopened=action(client,p,'reopen').json();b2=prepare(client,close(client,reopened));assert b2['id']!=b['id']
+    items=lambda body:next(x for x in body['pupils'] if x['id']=='s1')['items']
+    # The new book only holds drafts: the grades of the earlier closure are not part of it.
+    assert items(class_report(client,p,preview='true').json())==[]
+    # The final copy keeps showing them, marked as belonging to the earlier closure.
+    final=items(class_report(client,p).json());assert [(i['label'],i['current']) for i in final]==[('5',False),('4',False)]
+    row=pair(client,b2,'s1');batch(client,[propose(client,row,s,label='4',explanation='Пересмотр').json()],'approve').raise_for_status()
+    shown=class_report(client,p,preview='true').json()
+    assert shown['preview'] is True and [(i['subject'],i['label'],i['preview'],i['current']) for i in items(shown)]==[(ENGLISH,'4',True,True)]
+    assert [(i['label'],i['current']) for i in items(class_report(client,p).json())]==[('5',False),('4',False)]
+
+
 def test_class_teacher_without_rows_gets_the_panel(client):
     english(client);create(client,'teacher');create(client,'teacher',login='leader',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
     create(client,'teacher',login='other',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])]);create(client,'parent')

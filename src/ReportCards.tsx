@@ -63,6 +63,11 @@ const ReportCards = forwardRef<HTMLDivElement, { report: ClassReport }>(
                   {item.preview && (
                     <span className="final-preview"> · Предварительно</span>
                   )}
+                  {item.current === false && (
+                    <span className="final-stale">
+                      Последний опубликованный итог; нового итога пока нет.
+                    </span>
+                  )}
                 </p>
               </div>
             ))}

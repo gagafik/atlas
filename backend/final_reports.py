@@ -199,6 +199,8 @@ def register(service,app,Workspace):
                 book=db.execute('SELECT id FROM grading_books WHERE workspace=? AND period_id=? AND closure_version=?',(workspace,periodId,period['version'])).fetchone()
                 if period['status']!='closed' or not book:raise HTTPException(409,'Подготовьте ведомость нового закрытия.')
                 book=service.book(db,workspace,book[0])
+                # Results of an earlier closure are not part of this book: they would print as grades the new closure has not approved.
+                by={s:[i for i in items if i['current']] for s,items in by.items()}
                 # Approved but unpublished grades stand in for the published ones; drafts and submitted rows never appear.
                 for (rid,) in db.execute("SELECT id FROM grading_rows WHERE workspace=? AND book_id=? AND status='approved' AND student_id IN (SELECT value FROM json_each(?))",(workspace,book['id'],encoded(sorted(ids)))).fetchall():
                     row=service.row(db,workspace,rid,user);item=public_result(row,book)|dict(preview=True,current=True)
