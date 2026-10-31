@@ -1,6 +1,6 @@
 """School-administered parent/teacher meeting contracts."""
-from datetime import timezone
-from typing import Literal
+from datetime import date, timezone
+from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, model_validator
 from .models import Model
 
@@ -117,4 +117,41 @@ class Reschedule(Mutation):
     def valid(self):
         self.reason=self.reason.strip()
         if not self.reason:raise ValueError('Укажите причину переноса.')
+        return self
+
+
+class SwitchSettings(RequestId):
+    """Per-school switch: may pupils book consultations themselves. Version 0 means it was never saved."""
+    version: int = Field(ge=0)
+    pupilBooking: bool
+    reason: str = Field(min_length=1,max_length=500)
+
+
+class ConsultationSeries(RequestId):
+    """A teacher's weekly consultation hours; the server turns it into one event with 1:1 slots."""
+    accountId: str | None = Field(default=None,max_length=100)
+    teacherId: str = Field(min_length=1,max_length=100)
+    title: str = Field(default='Консультации',min_length=1,max_length=160)
+    description: str = Field(default='',max_length=2000)
+    startDate: date
+    endDate: date
+    weekdays: list[Annotated[int,Field(ge=0,le=6)]] = Field(min_length=1,max_length=7)
+    startTime: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+    endTime: str = Field(pattern=r'^([01]\d|2[0-3]):[0-5]\d$')
+    slotMinutes: int = Field(default=15,ge=5,le=60)
+    gapMinutes: int = Field(default=0,ge=0,le=30)
+    cancelMinutes: int = Field(default=60,ge=0,le=10080)
+    reminderMinutes: int = Field(default=60,ge=0,le=10080)
+    roomId: str | None = Field(default=None,max_length=100)
+    location: str = Field(default='',max_length=300)
+    previewHash: str | None = Field(default=None,max_length=64)
+
+    @model_validator(mode='after')
+    def valid(self):
+        if self.endDate<self.startDate or (self.endDate-self.startDate).days+1>200:raise ValueError('Период консультаций — от одного дня до 200 дней.')
+        if len(set(self.weekdays))!=len(self.weekdays):raise ValueError('Не повторяйте дни недели.')
+        window=int(self.endTime[:2])*60+int(self.endTime[3:])-int(self.startTime[:2])*60-int(self.startTime[3:])
+        if window<=0:raise ValueError('Конец приёма должен быть позже начала.')
+        if window<self.slotMinutes:raise ValueError('В окно приёма не помещается ни один полный интервал.')
+        if not self.roomId and not self.location:raise ValueError('Укажите кабинет или место консультаций.')
         return self

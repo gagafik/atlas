@@ -11,7 +11,16 @@ export type Host = {
   current?: boolean;
   studentIds?: string[];
 };
+export type Pattern = {
+  startDate: string;
+  endDate: string;
+  weekdays: number[];
+  startTime: string;
+  endTime: string;
+};
 export type Definition = {
+  kind?: "consultation";
+  pattern?: Pattern;
   title: string;
   description: string;
   startsAt: string;
@@ -26,10 +35,18 @@ export type Definition = {
 };
 export type Options = {
   canManage: boolean;
+  pupilBooking: boolean;
+  settingsVersion?: number;
   students: Named[];
   hosts: (Named & { role: string; teachers: Named[] })[];
   classes: Named[];
   rooms: Named[];
+  ownTeachers: Named[];
+  classMeeting: {
+    canCreate: boolean;
+    classes: Named[];
+    parallels: { grade: string; classIds: string[] }[];
+  };
 };
 export type MeetingEvent = {
   id: string;
@@ -39,6 +56,7 @@ export type MeetingEvent = {
   hosts: Host[];
   registrationOpen: boolean;
   slotCount: number | null;
+  canManage: boolean;
 };
 export type EventItem = {
   id: string;
@@ -46,6 +64,117 @@ export type EventItem = {
   status: string;
   startsAt: string;
   endsAt: string;
+  hostName?: string;
+  pattern?: Pattern | null;
+};
+// A consultation booking of the family's children; the note is only the author's.
+export type MineBooking = {
+  id: string;
+  version: number;
+  eventTitle: string;
+  hostName: string;
+  studentName: string;
+  bookedBy: string;
+  byPupil: boolean;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  location: string;
+  roomName: string;
+  reason: string;
+  ownBooking: boolean;
+  canCancel: boolean;
+  note?: string;
+};
+export type SeriesPreview = {
+  slotCount: number;
+  days: number;
+  skipped: { date: string; startsAt?: string; reason: string; count: number }[];
+  skippedCount: number;
+  skippedPast: number;
+  previewHash: string;
+};
+export type Section = "events" | "consultations" | "class" | "day";
+export type ClassPlan = {
+  classes: Named[];
+  pupils: number;
+  guardians: number;
+  withoutGuardian: string[];
+  withoutGuardianCount: number;
+  conflicts: string[];
+  closedDay: string | null;
+};
+export type ClassItem = {
+  id: string;
+  version: number;
+  status: string;
+  title: string;
+  description?: string;
+  startsAt: string;
+  endsAt: string;
+  place: string;
+  reason: string;
+  // Staff: class names, counts and flags. Family: only their own children.
+  classNames?: string[];
+  pupils?: number;
+  marked?: number;
+  canEdit?: boolean;
+  canCancel?: boolean;
+  canMark?: boolean;
+  students?: Named[];
+};
+export type RosterRow = {
+  studentId: string;
+  name: string;
+  classId: string;
+  className: string;
+  mark: string;
+  guardians: string[];
+};
+export type ClassDetail = ClassItem & {
+  description: string;
+  roomId: string | null;
+  location: string;
+  grade: string | null;
+  classIds: string[];
+  organizerName: string;
+  roster: RosterRow[];
+  withoutGuardian: string[];
+  history: { action: string; created: string; reason?: string }[];
+};
+export type DayView = {
+  date: string;
+  hostName: string;
+  lessons: {
+    start: string;
+    end: string;
+    subject: string;
+    group: string;
+    rooms: string[];
+    status: string;
+    activity: string;
+  }[];
+  slots: {
+    id: string;
+    eventTitle: string;
+    kind: "consultation" | "meeting";
+    startsAt: string;
+    endsAt: string;
+    status: string;
+    location: string;
+    roomName: string;
+    booking?: Booking;
+    conflict?: string | null;
+  }[];
+  classMeetings: {
+    id: string;
+    title: string;
+    startsAt: string;
+    endsAt: string;
+    place: string;
+    classNames: string[];
+    pupils: number;
+  }[];
 };
 export type Booking = {
   id: string;
@@ -107,7 +236,19 @@ export const labels: Record<string, string> = {
   no_show: "Не пришли",
   booked: "Запись создана",
   rescheduled: "Встреча перенесена",
+  present: "Пришли",
+  absent: "Не пришли",
 };
+export const weekdayNames = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+export const shortDate = (day: string) => day.split("-").reverse().join(".");
+export const patternText = (p: Pattern) =>
+  `${p.weekdays.map((d) => weekdayNames[d]).join(", ")} · ${p.startTime}–${p.endTime} · ${shortDate(p.startDate)}–${shortDate(p.endDate)}`;
+export const todaySchool = () =>
+  schoolInput(new Date().toISOString()).slice(0, 10);
+export const addDays = (day: string, n: number) =>
+  new Date(Date.parse(day + "T12:00:00Z") + n * 86400000)
+    .toISOString()
+    .slice(0, 10);
 // Inputs and displays use school time regardless of the parent's device zone.
 export function schoolInput(iso: string) {
   const parts = new Intl.DateTimeFormat("sv-SE", {

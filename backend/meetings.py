@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from .access import now
 from .notifications import encoded, permission_key
+from . import account_grants
 from .portal_cache import PortalSnapshots
 from .messages import Directory
 from .school_forms import grant_ids, enabled
@@ -16,6 +17,7 @@ from .meeting_models import utc
 from .meeting_availability import Occupancy, ZONE
 
 HOST_ROLES={'admin','teacher','staff','editor'}
+FAMILY_ROLES=('parent','student')
 
 
 def tables(db):
@@ -38,7 +40,6 @@ def tables(db):
       id TEXT PRIMARY KEY,event_id TEXT,slot_id TEXT,workspace TEXT,parent_id TEXT,student_id TEXT,
       host_id TEXT,permissions TEXT,starts_at TEXT,ends_at TEXT,status TEXT,version INTEGER,document TEXT);
     CREATE UNIQUE INDEX IF NOT EXISTS meeting_booked_slot ON meeting_bookings(slot_id) WHERE status!='cancelled';
-    CREATE UNIQUE INDEX IF NOT EXISTS meeting_booked_child ON meeting_bookings(event_id,host_id,student_id) WHERE status!='cancelled';
     CREATE INDEX IF NOT EXISTS meeting_parent_time ON meeting_bookings(workspace,parent_id,status,starts_at,ends_at);
     CREATE INDEX IF NOT EXISTS meeting_child_time ON meeting_bookings(workspace,student_id,status,starts_at,ends_at);
     CREATE INDEX IF NOT EXISTS meeting_host_time ON meeting_bookings(workspace,host_id,starts_at,id);
@@ -51,13 +52,25 @@ def tables(db):
     CREATE TABLE IF NOT EXISTS meeting_requests (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,request_id TEXT,fingerprint TEXT,result TEXT,UNIQUE(user_id,request_id));
     CREATE INDEX IF NOT EXISTS meeting_request_owner ON meeting_requests(user_id,seq);
+    CREATE TABLE IF NOT EXISTS meeting_settings (workspace TEXT PRIMARY KEY,version INTEGER NOT NULL,document TEXT NOT NULL);
     ''')
+    # A consultation series books one child once per teacher and date: the date is the occasion ('' for parent meetings, which keep one booking per event).
+    if 'occasion' not in {r[1] for r in db.execute('PRAGMA table_info(meeting_bookings)')}:db.execute("ALTER TABLE meeting_bookings ADD COLUMN occasion TEXT NOT NULL DEFAULT ''")
+    db.execute('DROP INDEX IF EXISTS meeting_booked_child')
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS meeting_booked_child_occasion ON meeting_bookings(event_id,host_id,student_id,occasion) WHERE status!='cancelled'")
     from .meeting_waitlist import tables as waitlist_tables
     waitlist_tables(db)
+    from .class_meetings import tables as class_tables
+    class_tables(db)  # last: its marker index tells prepare() that every table above exists
 
 
 def version(item,expected):
     if item['version']!=expected:raise HTTPException(409,'Запись изменилась. Обновите данные перед действием.')
+
+
+def consultation(event):
+    """Consultation hours of one teacher; a stored document without a kind is a parent meeting."""
+    return event['definition'].get('kind')=='consultation'
 
 
 class Meetings:
@@ -67,13 +80,14 @@ class Meetings:
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='meeting_waitlist_ready'").fetchone():return
-        with self.access.lock,self.access.connect() as db:tables(db);self.notifications.tables(db)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='class_meetings_ready'").fetchone():return
+        # granted_users() also runs in read transactions, where the grant lookup tables can no longer be created.
+        with self.access.lock,self.access.connect() as db:tables(db);self.notifications.tables(db);account_grants.tables(db)
 
     @contextmanager
     def context(self,request,workspace,write=False):
         user=request.state.user
-        if not user or user['role'] not in ['admin','teacher','staff','editor','parent']:raise HTTPException(403,'Для встреч нужен аккаунт родителя или сотрудника.')
+        if not user or user['role'] not in ['admin','teacher','staff','editor','parent','student']:raise HTTPException(403,'Для встреч нужен аккаунт родителя или сотрудника.')
         snap=self.snapshots.get(workspace)
         if not enabled(user,snap,workspace):raise HTTPException(403,'Нет доступа к встречам этого пространства.')
         self.prepare()
@@ -82,6 +96,9 @@ class Meetings:
             revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
             if not account or self.access.public(account)!=user or not revision or revision[0]!=snap.state.revision:raise HTTPException(409,'Права или школьные данные изменились. Обновите страницу.')
             db.row_factory=sqlite3.Row
+            # A pupil enters only when the school allows it, or while an earlier booking or request of theirs is still open (read and cancel).
+            if user['role']=='student' and not self.pupil_booking(db,workspace) and not db.execute("SELECT 1 FROM meeting_bookings WHERE workspace=? AND parent_id=? AND status='scheduled' UNION ALL SELECT 1 FROM meeting_waitlist WHERE workspace=? AND parent_id=? AND status IN ('waiting','offered') LIMIT 1",(workspace,user['id'],workspace,user['id'])).fetchone():
+                raise HTTPException(403,'Запись учеников на консультации выключена школой.')
         if write:
             with self.access.lock,self.access.connect() as db:
                 db.execute('BEGIN IMMEDIATE');check(db);yield db,user,snap
@@ -91,6 +108,20 @@ class Meetings:
 
     def admin(self,user):
         if user['role']!='admin':raise HTTPException(403,'Даты, ведущих и интервалы назначает администрация.')
+
+    def pupil_booking(self,db,workspace):
+        """May pupils book consultations themselves in this school? Off until an administrator turns it on."""
+        row=db.execute('SELECT document FROM meeting_settings WHERE workspace=?',(workspace,)).fetchone()
+        return bool(row and json.loads(row[0]).get('pupilBooking'))
+
+    def can_manage(self,db,event,user,snap,workspace):
+        """An administrator manages every event; a teacher only the consultation hours they currently host."""
+        if user['role']=='admin':return True
+        host=self.hosts(db,event,snap,workspace).get(user['id']) if consultation(event) else None
+        return bool(host and host['current'])
+
+    def manage(self,db,event,user,snap,workspace):
+        if not self.can_manage(db,event,user,snap,workspace):raise HTTPException(403,'Даты, ведущих и интервалы назначает администрация.')
 
     def event(self,db,workspace,id):
         row=db.execute('SELECT * FROM meeting_events WHERE id=? AND workspace=?',(id,workspace)).fetchone()
@@ -124,14 +155,26 @@ class Meetings:
         return set().union(*(directory.members[g] for g in directory.teacher_groups.get(host['teacherId'],())))
 
     def parent_pupils(self,user,snap,workspace):
-        return {id for id in grant_ids(user,workspace,'student') if id in snap.entities['student'] and snap.entities['student'][id].active} if user['role']=='parent' else set()
+        """The pupils a family account is linked to: a parent's children, or the pupil themselves."""
+        return {id for id in grant_ids(user,workspace,'student') if id in snap.entities['student'] and snap.entities['student'][id].active} if user['role'] in FAMILY_ROLES else set()
+
+    def bookable_pupils(self,db,event,user,snap,workspace):
+        """Whom this account may book for in this event: a parent always, a pupil only for themselves in consultations while the school allows it."""
+        if user['role']=='parent' or user['role']=='student' and consultation(event) and self.pupil_booking(db,workspace):return self.parent_pupils(user,snap,workspace)
+        return set()
+
+    def family_others(self,db,event,student,exclude,workspace):
+        """Consultations also tell the pupil and every guardian, not only the account that booked."""
+        if not consultation(event):return []
+        return [u for u in self.notifications.granted_users(db,workspace,'student',{student},['student','parent']) if u['id'] not in exclude]
 
     def visible_hosts(self,db,event,user,snap,workspace):
         hosts=self.hosts(db,event,snap,workspace)
         if user['role']=='admin':return hosts
-        if user['role']!='parent':return {id:h for id,h in hosts.items() if id==user['id'] and h['current']}
-        if event['status']=='draft':return {}
-        directory=Directory(snap.state,workspace);pupils=self.parent_pupils(user,snap,workspace)
+        if user['role'] not in FAMILY_ROLES:return {id:h for id,h in hosts.items() if id==user['id'] and h['current']}
+        pupils=self.bookable_pupils(db,event,user,snap,workspace)
+        if event['status']=='draft' or not pupils:return {}
+        directory=Directory(snap.state,workspace)
         return {id:h for id,h in hosts.items() if pupils & self.eligible_pupils(h,directory)}
 
     def require_event(self,db,event,user,snap,workspace):
@@ -180,12 +223,18 @@ class Meetings:
         doc=event['definition'];instant=now()
         return event['status']=='open' and (not doc['bookingOpensAt'] or datetime.fromisoformat(doc['bookingOpensAt'])<=instant) and (not doc['bookingClosesAt'] or instant<datetime.fromisoformat(doc['bookingClosesAt'])) and instant<datetime.fromisoformat(doc['endsAt'])
 
-    def slot_conflict(self,db,slot,occupancy,ignore=None):
+    def slot_conflict(self,db,slot,occupancy,ignore=None,ignore_class=''):
         if (problem:=occupancy.conflict(slot['starts_at'],slot['ends_at'],slot['teacher_id'],slot['room_id'])):return problem
+        # Consultations stop on closed days; parent meetings may be held in holidays.
+        if slot['event_id'] and slot['event_id'] not in occupancy.kinds:
+            row=db.execute("SELECT json_extract(document,'$.kind') FROM meeting_events WHERE id=?",(slot['event_id'],)).fetchone();occupancy.kinds[slot['event_id']]=row[0] if row else None
+        if occupancy.kinds.get(slot['event_id'])=='consultation' and (name:=occupancy.closed(datetime.fromisoformat(slot['starts_at']).astimezone(ZONE).date())):return f'Школа закрыта: {name}.'
         for column,value in [('host_id',slot['host_id']),('teacher_id',slot['teacher_id']),('room_id',slot['room_id'])]:
             if not value:continue
             row=db.execute(f"SELECT 1 FROM meeting_slots s JOIN meeting_events e ON e.id=s.event_id WHERE s.workspace=? AND s.{column}=? AND s.status='open' AND e.status NOT IN ('cancelled','archived') AND s.starts_at<? AND s.ends_at>? AND s.id!=? LIMIT 1",(slot['workspace'],value,slot['ends_at'],slot['starts_at'],ignore or '')).fetchone()
             if row:return 'Ведущий или кабинет занят другим интервалом встреч.'
+        owners=[(clause,value) for clause,value in [('c.room_id=?',slot['room_id']),("EXISTS(SELECT 1 FROM json_each(c.teacher_ids) WHERE value=?)",slot['teacher_id'])] if value]
+        if owners and db.execute("SELECT 1 FROM class_meetings c WHERE c.workspace=? AND c.status='scheduled' AND c.starts_at<? AND c.ends_at>? AND c.id!=? AND ("+' OR '.join(c for c,_ in owners)+') LIMIT 1',(slot['workspace'],slot['ends_at'],slot['starts_at'],ignore_class,*(v for _,v in owners))).fetchone():return 'На это время назначено собрание класса.'
         return None
 
     def availability(self,db,event,body,snap,workspace):
@@ -258,14 +307,15 @@ class Meetings:
 
     def booking_access(self,db,booking,event,user,snap,workspace):
         if user['role']=='admin':return True
-        if user['role']=='parent':return booking['parent_id']==user['id'] and bool(self.booking_owner(db,booking,snap,workspace))
+        if user['role'] in FAMILY_ROLES:return booking['parent_id']==user['id'] and bool(self.booking_owner(db,booking,snap,workspace))
         host=self.hosts(db,event,snap,workspace).get(user['id'])
         return bool(booking['host_id']==user['id'] and host and host['current'])
 
     def booking_public(self,booking,event,user):
         doc=json.loads(booking['document'])
-        doc['canReschedule']=user['role']=='admin' and booking['status']=='scheduled' and event['status'] in ['open','closed'] and now()<datetime.fromisoformat(booking['starts_at'])
-        return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or user['role']=='parent' and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role']!='parent' and booking['status']!='cancelled' and event['status'] not in ['cancelled','archived'] and now()>=datetime.fromisoformat(booking['starts_at']))
+        own_series=consultation(event) and booking['host_id']==user['id']
+        doc['canReschedule']=(user['role']=='admin' or own_series) and booking['status']=='scheduled' and event['status'] in ['open','closed'] and now()<datetime.fromisoformat(booking['starts_at'])
+        return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or own_series or user['role'] in FAMILY_ROLES and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role'] not in FAMILY_ROLES and booking['status']!='cancelled' and event['status'] not in ['cancelled','archived'] and now()>=datetime.fromisoformat(booking['starts_at']))
 
     def notice(self,booking_id,event,document,starts_at,prefix):
         """Notification target of a booking: event, local time, host and child. The parent's note and any reason stay in the booking."""
@@ -283,6 +333,7 @@ class Meetings:
             recipients=[];owner=self.booking_owner(db,booking,snap,workspace);host=self.hosts(db,event,snap,workspace).get(booking['host_id'])
             if owner:recipients.append(owner)
             if host and host['current']:recipients.append(host['user'])
+            recipients+=self.family_others(db,event,booking['student_id'],{r['id'] for r in recipients},workspace)
             self.notifications.deliver(db,recipients,workspace,booking['version']+1,'meeting.cancelled',target=self.notice(booking['id'],event,document,booking['starts_at'],'Встреча отменена'))
 
     def register(self,app,Workspace):
@@ -293,4 +344,8 @@ class Meetings:
         register_reschedule(self,app,Workspace)
         from .meeting_waitlist import register as register_waitlist
         register_waitlist(self,app,Workspace)
+        from .meeting_consultations import register as register_consultations
+        register_consultations(self,app,Workspace)
+        from .class_meetings import register as register_class_meetings
+        register_class_meetings(self,app,Workspace)
         self.reminders=MeetingReminders(self);self.reminders.register(app)

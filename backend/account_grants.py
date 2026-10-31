@@ -23,7 +23,8 @@ def projection(source):
 
 def tables(db):
     names=tuple(name for _,name in OBJECTS)
-    found=set(db.execute('SELECT type,name FROM sqlite_master WHERE name IN ('+','.join('?' for _ in names)+')',names))
+    # tuple(): a connection with sqlite3.Row rows must not look like missing tables, or every call would rebuild the lookup (and fail on a read-only connection).
+    found={tuple(row) for row in db.execute('SELECT type,name FROM sqlite_master WHERE name IN ('+','.join('?' for _ in names)+')',names)}
     if found==OBJECTS:return
     # Missing tables/indexes/triggers require a complete rebuild: an absent
     # trigger may have missed permission changes. No process/path cache is used.

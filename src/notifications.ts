@@ -90,6 +90,8 @@ const EVENTS: Record<string, string> = {
   behaviour: "atlas-open-behaviour",
   assessments: "atlas-open-assessments",
   meetings: "atlas-open-meetings",
+  // Class meetings are a section of the same panel.
+  class_meetings: "atlas-open-meetings",
   forms: "atlas-open-forms",
   // The report card opens in the journal section, where the final-grades panel lives.
   finals: "atlas-open-journal",
@@ -109,5 +111,6 @@ export function openEvent(
     detail.studentId = result.studentId;
     detail.finalsPeriodId = result.recordId;
   } else if (result.module === "timetable") detail.studentId = result.studentId;
+  else if (result.module === "class_meetings") detail.section = "class";
   return [EVENTS[result.module], detail];
 }

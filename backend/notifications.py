@@ -231,7 +231,18 @@ def open_assessments(db, user, workspace, data, kids):
 def open_meetings(db, user, workspace, data, kids):
     row = db.execute('SELECT event_id,parent_id,student_id,host_id FROM meeting_bookings WHERE workspace=? AND id=?', (workspace, data.get('recordId'))).fetchone() if has_table(db, 'meeting_bookings') else None
     if not row: return None
-    return dict(eventId=row[0]) if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids else None
+    if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids: return dict(eventId=row[0])
+    # A guardian also opens a consultation that someone else of the family booked for their child.
+    consultation = db.execute("SELECT json_extract(document,'$.kind') FROM meeting_events WHERE id=?", (row[0],)).fetchone()
+    return dict(eventId=row[0]) if user['role'] == 'parent' and row[2] in kids and consultation and consultation[0] == 'consultation' else None
+
+
+def open_class_meetings(db, user, workspace, data, kids):
+    # The class teacher's panel re-checks the meeting server-side; a guardian opens it while a child of theirs is still invited.
+    key = data.get('recordId')
+    if not exists(db, 'class_meetings', 'SELECT 1 FROM class_meetings WHERE workspace=? AND id=?', (workspace, key)): return None
+    if user['role'] in ('admin', 'teacher'): return {}
+    return {} if user['role'] == 'parent' and any(exists(db, 'class_meeting_invitees', 'SELECT 1 FROM class_meeting_invitees WHERE meeting_id=? AND student_id=?', (key, kid)) for kid in kids) else None
 
 
 def open_forms(db, user, workspace, data, kids):
@@ -243,7 +254,7 @@ def open_timetable(db, user, workspace, data, kids):
     return {} if kids or user['role'] not in FAMILY else None
 
 
-OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
+OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings, class_meetings=open_class_meetings,
                forms=open_forms, timetable=open_timetable, finals=open_finals, duty=lambda *args: {})
 # Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
 NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
