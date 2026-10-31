@@ -34,6 +34,15 @@ export function choiceClosed(left: number | undefined, held: boolean) {
   return left === 0 && !held;
 }
 
+// A checkbox of a full choice cannot be ticked, but a ticked one can always be cleared: a stale draft or a refused last seat must not lock the form.
+export function choiceLocked(
+  left: number | undefined,
+  held: boolean,
+  ticked: boolean,
+) {
+  return choiceClosed(left, held) && !ticked;
+}
+
 // A held answer names the choices whose seats it keeps: one value for a single choice, a list for several.
 export function holdsChoice(
   held: Record<string, unknown> | undefined,

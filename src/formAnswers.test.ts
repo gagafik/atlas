@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   choiceClosed,
+  choiceLocked,
   holdsChoice,
   keepTyped,
   limitsFor,
@@ -60,6 +61,18 @@ describe("choiceClosed", () => {
     expect(choiceClosed(0, true)).toBe(false);
     expect(choiceClosed(2, false)).toBe(false);
     expect(choiceClosed(undefined, false)).toBe(false);
+  });
+});
+
+describe("choiceLocked", () => {
+  it("keeps a full choice closed for adding but always clearable once ticked", () => {
+    expect(choiceLocked(0, false, false)).toBe(true);
+    expect(choiceLocked(0, false, true)).toBe(false);
+  });
+  it("never locks a choice that has seats or whose seat the answer holds", () => {
+    expect(choiceLocked(0, true, false)).toBe(false);
+    expect(choiceLocked(3, false, false)).toBe(false);
+    expect(choiceLocked(undefined, false, false)).toBe(false);
   });
 });
 

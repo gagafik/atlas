@@ -3,6 +3,7 @@ import { api } from "./api";
 import { roleNames, type Account, type Role } from "./auth";
 import {
   choiceClosed,
+  choiceLocked,
   holdsChoice,
   keepTyped,
   limitsFor,
@@ -586,6 +587,9 @@ export default function SchoolForms({
     holdsChoice(answer?.heldAnswers, q.id, c);
   const closed = (q: Question, c: string) =>
     choiceClosed(seats[q.id]?.[c], held(q, c));
+  // A ticked checkbox stays clearable even when its choice is full; only adding it is refused.
+  const locked = (q: Question, c: string) =>
+    choiceLocked(seats[q.id]?.[c], held(q, c), holdsChoice(values, q.id, c));
   const seatNote = (q: Question, c: string) =>
     seats[q.id]?.[c] === undefined
       ? ""
@@ -1707,7 +1711,7 @@ export default function SchoolForms({
                                     >
                                       <input
                                         type="checkbox"
-                                        disabled={closed(q, c)}
+                                        disabled={locked(q, c)}
                                         checked={
                                           Array.isArray(values[q.id]) &&
                                           (values[q.id] as string[]).includes(c)
