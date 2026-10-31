@@ -152,15 +152,15 @@ export function needsExplanation(
 
 const filled = (e: TableEntry) => e.outcome !== "graded" || !!e.label;
 
-// The draft rows that have a result and differ from what is stored. A pre-filled grade counts once the user saves.
-// A row saved on another scale is left alone unless the class is recalculated on this one.
-export function changedRows(
+type Pending = TableEntry & { id: string; version: number };
+function pending(
   rows: TableRowLike[],
   values: Record<string, TableEntry>,
   scale: ScaleRef,
-  recalculate = false,
-): (TableEntry & { id: string; version: number })[] {
-  const result: (TableEntry & { id: string; version: number })[] = [];
+  recalculate: boolean,
+  everything: boolean,
+): Pending[] {
+  const result: Pending[] = [];
   for (const r of rows) {
     const v = values[r.id];
     if (r.status !== "draft" || !v || !filled(v)) continue;
@@ -174,7 +174,7 @@ export function changedRows(
       p.label === v.label &&
       p.comment === v.comment &&
       p.explanation === v.explanation;
-    if (!same)
+    if (everything || !same)
       result.push({
         id: r.id,
         version: r.version,
@@ -187,6 +187,23 @@ export function changedRows(
   return result;
 }
 
+// The draft rows that have a result and differ from what is stored. A pre-filled grade counts once the user saves.
+// A row saved on another scale is left alone unless the class is recalculated on this one.
+export const changedRows = (
+  rows: TableRowLike[],
+  values: Record<string, TableEntry>,
+  scale: ScaleRef,
+  recalculate = false,
+) => pending(rows, values, scale, recalculate, false);
+
+// Sending for approval takes the whole table: drafts saved earlier and left as they are go with the edited ones.
+export const submittableRows = (
+  rows: TableRowLike[],
+  values: Record<string, TableEntry>,
+  scale: ScaleRef,
+  recalculate = false,
+) => pending(rows, values, scale, recalculate, true);
+
 // ---- Mass actions from the class x subject matrix -------------------------
 
 const NEEDS: Record<string, string> = {
@@ -197,6 +214,19 @@ const NEEDS: Record<string, string> = {
 // Only rows in the status the server accepts for the action are sent, so a whole class is never refused for one stray row.
 export const eligibleFor = (action: string, row: { status: string }) =>
   NEEDS[action] === row.status;
+
+// A cell of the class x subject matrix as it is kept in a selection.
+export const cellKey = (c: { classId: string; subjectId: string }) =>
+  JSON.stringify([c.classId, c.subjectId]);
+
+// Only cells that are on screen can be acted on: a tick made before the class was switched must never reach rows nobody sees.
+export const visibleSelection = (
+  selected: string[],
+  shown: { classId: string; subjectId: string }[],
+) => {
+  const keys = new Set(shown.map(cellKey));
+  return selected.filter((k) => keys.has(k));
+};
 
 export function chunked<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];

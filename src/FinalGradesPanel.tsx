@@ -386,6 +386,8 @@ export default function FinalGradesPanel({
     [calculations, setCalculations] = useState<Record<string, Calculation>>({}),
     [dirty, setDirty] = useState(false),
     [tableDirty, setTableDirty] = useState(false),
+    // Raised after every change, so the matrices and the steps never show numbers from before it.
+    [epoch, setEpoch] = useState(0),
     [report, setReport] = useState<{
       period: Period;
       items: Published[];
@@ -437,6 +439,8 @@ export default function FinalGradesPanel({
     setSelected([]);
     return r as Sheet;
   }
+  // Called after a change of rows: the matrices and the steps count the same rows as the list.
+  const changed = () => setEpoch((n) => n + 1);
   function clearRow() {
     setRow(null);
     setMarks([]);
@@ -484,6 +488,7 @@ export default function FinalGradesPanel({
       } while (after);
       clearRow();
       await loadSheet(bookId, offset);
+      changed();
       setNotice(
         `Назначено учителям уроков: ${assigned}; без ответственного осталось: ${skipped}.${missing.size ? ` Нет единственной учётной записи у учителей: ${[...missing].join(", ")}.` : ""}`,
       );
@@ -510,6 +515,7 @@ export default function FinalGradesPanel({
       setReason("");
       clearRow();
       await loadSheet(bookId, offset);
+      changed();
       setNotice(
         `${names[action] || action}: выполнено для ${selected.length} строк.`,
       );
@@ -592,6 +598,7 @@ export default function FinalGradesPanel({
                     setReport(null);
                     await loadOptions();
                     if (bookId) await loadSheet(bookId, offset);
+                    changed();
                   });
               }}
             >
@@ -698,9 +705,13 @@ export default function FinalGradesPanel({
                       phrases={options.phrases}
                       teachers={options.teachers}
                       lastScale={lastScale}
+                      refresh={epoch}
                       leave={leave}
                       onDirty={setTableDirty}
-                      onChanged={() => void loadSheet(bookId, offset)}
+                      onChanged={() => {
+                        void loadSheet(bookId, offset);
+                        changed();
+                      }}
                     />
                     <div className="dated-toolbar">
                       {(["classId", "subjectId"] as const).map((key) => (
@@ -1083,6 +1094,7 @@ export default function FinalGradesPanel({
                                     );
                                     lastScale.current = draft.scaleId;
                                     await loadSheet(bookId, offset);
+                                    changed();
                                     await openRow(r);
                                     setNotice(
                                       submit
@@ -1219,9 +1231,14 @@ export default function FinalGradesPanel({
                 workspace={workspace}
                 options={options}
                 lastScale={lastScale}
+                refresh={epoch}
                 leave={leave}
                 onDirty={setTableDirty}
-                onChanged={() => void loadOptions()}
+                onChanged={() => {
+                  void loadOptions();
+                  if (bookId) void loadSheet(bookId, offset);
+                  changed();
+                }}
               />
             )}
             {options && readsReports && (

@@ -1,13 +1,16 @@
 import { expect, it } from "vitest";
 import {
+  cellKey,
   changedRows,
   chunked,
   defaultDraft,
   eligibleFor,
   isForeign,
   needsExplanation,
+  submittableRows,
   tablePrefill,
   tableScale,
+  visibleSelection,
 } from "./finalGrades";
 
 const thresholds = { id: "a", version: 3, active: true };
@@ -212,6 +215,59 @@ it("saves only draft rows with a result that differs from the stored one", () =>
     changedRows(rows.slice(1, 2), values, { id: "a", version: 4, active: true })
       .length,
   ).toBe(1);
+});
+
+it("sends the whole table for approval, including drafts saved earlier and left unchanged", () => {
+  const mine = { id: "a", version: 3 };
+  const rows = [
+    row("saved", "draft", proposal(mine, "Выше"), "Выше"),
+    row("carried", "draft", proposal(mine, "Ниже"), "Выше"),
+    row("fresh", "draft", null, "Выше"),
+    row("blank", "draft", null, null),
+    row("sent", "submitted", proposal(mine, "Выше"), "Выше"),
+    row("other", "draft", proposal({ id: "z", version: 1 }, "Ниже"), "Выше"),
+  ];
+  const values = Object.fromEntries(
+    rows.map((r) => [r.id, tablePrefill(r, thresholds)]),
+  );
+  // Nothing was edited, yet saving a draft sends only the pupil without a stored result.
+  expect(changedRows(rows, values, thresholds).map((r) => r.id)).toEqual([
+    "fresh",
+  ]);
+  // Sending for approval takes every draft with a result, but not a blank row, a sent row or a result saved on another scale.
+  expect(submittableRows(rows, values, thresholds).map((r) => r.id)).toEqual([
+    "saved",
+    "carried",
+    "fresh",
+  ]);
+  const again = Object.fromEntries(
+    rows.map((r) => [r.id, tablePrefill(r, thresholds, true)]),
+  );
+  expect(
+    submittableRows(rows, again, thresholds, true).map((r) => r.id),
+  ).toEqual(["saved", "carried", "fresh", "other"]);
+  // What is sent is what the table shows, with the version the server expects.
+  expect(submittableRows(rows, values, thresholds)[0]).toEqual({
+    id: "saved",
+    version: 1,
+    outcome: "graded",
+    label: "Выше",
+    comment: "",
+    explanation: "",
+  });
+});
+
+it("never acts on a ticked cell that is no longer on screen", () => {
+  const cells = [
+    { classId: "10A", subjectId: "eng" },
+    { classId: "10A", subjectId: "math" },
+    { classId: "10D", subjectId: "eng" },
+  ];
+  const selected = [cellKey(cells[0]), cellKey(cells[2])];
+  expect(visibleSelection(selected, cells)).toEqual(selected);
+  // The class was switched to 10D: the tick on 10A stays in the state but must not reach the action.
+  expect(visibleSelection(selected, [cells[2]])).toEqual([cellKey(cells[2])]);
+  expect(visibleSelection(selected, [])).toEqual([]);
 });
 
 it("asks for an explanation exactly when the server does", () => {

@@ -208,6 +208,18 @@ def test_accept_is_not_publication(client):
     assert 'journal.finals_published' not in [n['action'] for n in parent.get('/api/notifications/inbox').json()['items']]
 
 
+def test_saved_drafts_go_to_approval_with_the_values_the_table_shows(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher');first,second=own_rows(client,b,r['assigned'],'s1','s2')
+    # One click accepted the recommendations, a second click sends the same table without touching a value.
+    assert {i['status'] for i in accept(t,b,s,[first,second]).json()['items']}=={'draft'}
+    kept=[pair(t,b,x) for x in ('s1','s2')];assert {k['status'] for k in kept}=={'draft'}
+    shown=lambda k:dict(outcome=k['proposal']['outcome'],label=k['proposal']['label'],comment=k['proposal']['comment'],explanation=k['proposal']['explanation'])
+    sent=table(t,b,s,[(k,shown(k)) for k in kept],submit=True);assert sent.status_code==200,sent.text
+    assert {i['id']:i['status'] for i in sent.json()['items']}=={first['id']:'submitted',second['id']:'submitted'}
+    after=[pair(t,b,x) for x in ('s1','s2')]
+    assert [a['proposal']['label'] for a in after]==[k['proposal']['label'] for k in kept] and report(signed('parent'),p).json()['items']==[]
+
+
 def test_sheet_with_scale_returns_advice_to_staff_only(client):
     p,b,s,r,_=seeded(client);t=signed('teacher');parent=signed('parent')
     items=sheet(t,b,scaleId=s['id']).json()['items']

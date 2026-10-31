@@ -66,6 +66,7 @@ export default function ReportCardSteps({
   workspace,
   options,
   lastScale,
+  refresh = 0,
   leave,
   onDirty,
   onChanged,
@@ -73,6 +74,8 @@ export default function ReportCardSteps({
   workspace: string;
   options: Options;
   lastScale: { current: string };
+  // Raised by the panel after changes made outside the steps (the row list, preparation).
+  refresh?: number;
   leave: () => boolean;
   onDirty: (dirty: boolean) => void;
   onChanged: () => void;
@@ -91,7 +94,8 @@ export default function ReportCardSteps({
     [phrases, setPhrases] = useState(options.phrases.join("\n")),
     [yearRule, setYearRule] = useState(options.yearRule),
     [loading, setLoading] = useState(false);
-  const cards = useRef<HTMLDivElement>(null);
+  const cards = useRef<HTMLDivElement>(null),
+    mounted = useRef(false);
   const admin = options.admin;
   // The newest book of the period; a re-closure gets a book of its own.
   const book = options.books.find((b) => b.period.id === periodId);
@@ -153,6 +157,23 @@ export default function ReportCardSteps({
       }
     })();
   }, [periodId, classId]);
+
+  // The counts of steps 2 and 5 follow what was done elsewhere in the panel.
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    if (ready && admin)
+      void loadCounts().catch((e) => {
+        if (fresh())
+          setError(
+            e instanceof Error
+              ? e.message
+              : "Не удалось обновить итоги класса.",
+          );
+      });
+  }, [refresh]);
 
   function move(i: number, by: number) {
     const j = i + by;
@@ -334,6 +355,7 @@ export default function ReportCardSteps({
           )}
           {step === 2 && book && (
             <FinalGradesMatrix
+              key={`${book.id}-${classId}`}
               workspace={workspace}
               book={book}
               admin
@@ -342,6 +364,7 @@ export default function ReportCardSteps({
               teachers={options.teachers}
               lastScale={lastScale}
               classFilter={classId}
+              refresh={refresh}
               leave={leave}
               onDirty={onDirty}
               onChanged={() => {

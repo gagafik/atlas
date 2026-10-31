@@ -7,6 +7,7 @@ import {
   isForeign,
   names,
   needsExplanation,
+  submittableRows,
   tablePrefill,
   tableScale,
   type TableEntry,
@@ -234,10 +235,18 @@ export default function FinalGradesTable({
   }
   async function save(submit: boolean) {
     if (!scale) return;
-    const todo = changedRows(rows, values, scale, recalculate);
+    // Sending takes every drafted result, saved earlier or not; saving a draft takes only what changed.
+    const todo = (submit ? submittableRows : changedRows)(
+      rows,
+      values,
+      scale,
+      recalculate,
+    );
     if (!todo.length) {
       setError("");
-      setNotice("Нет изменений для сохранения.");
+      setNotice(
+        submit ? "Нет итогов для отправки." : "Нет изменений для сохранения.",
+      );
       return;
     }
     const bad = todo.find(
@@ -284,10 +293,13 @@ export default function FinalGradesTable({
       lastScale.current = scale.id;
       await reload(scale.id, recalculate);
       onChanged();
+      // Drafts that are still without a result stay behind; the user is told so.
+      const blank =
+        rows.filter(
+          (r) => r.status === "draft" && (recalculate || !isForeign(r, scale)),
+        ).length - done;
       setNotice(
-        submit
-          ? `Отправлено на утверждение: ${done}.`
-          : `Черновики сохранены: ${done}.`,
+        `${submit ? "Отправлено на утверждение" : "Черновики сохранены"}: ${done}.${submit && blank > 0 ? ` Без итога осталось: ${blank}.` : ""}`,
       );
     });
   }

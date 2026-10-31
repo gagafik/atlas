@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import FinalGradesTable from "./FinalGradesTable";
-import { chunked, eligibleFor } from "./finalGrades";
+import { cellKey, chunked, eligibleFor, visibleSelection } from "./finalGrades";
 import type { Book, Named, Scale } from "./finalGradesTypes";
 
 type Cell = {
@@ -30,8 +30,6 @@ const ACTIONS: Record<string, string> = {
   approve: "Утвердить",
   publish: "Опубликовать",
 };
-const cellKey = (c: { classId: string; subjectId: string }) =>
-  JSON.stringify([c.classId, c.subjectId]);
 // Text first, so the state of a cell never depends on colour.
 const progress = (c: Cell) =>
   [
@@ -43,6 +41,9 @@ const progress = (c: Cell) =>
     .filter(Boolean)
     .join(", ") + ` из ${c.total}`;
 
+const cellText = (d: Matrix, c: Cell) =>
+  `${d.classes.find((x) => x.id === c.classId)?.name || c.classId}, ${d.subjects.find((x) => x.id === c.subjectId)?.name || c.subjectId}`;
+
 // Progress of the whole book by class and subject. A teacher sees a list of own courses, the administrator a grid with mass actions.
 export default function FinalGradesMatrix({
   workspace,
@@ -53,6 +54,7 @@ export default function FinalGradesMatrix({
   teachers,
   lastScale,
   classFilter = "",
+  refresh = 0,
   leave,
   onDirty,
   onChanged,
@@ -66,6 +68,8 @@ export default function FinalGradesMatrix({
   lastScale: { current: string };
   // Show the row of one class only (the report-card steps).
   classFilter?: string;
+  // Raised by the parent after changes made outside this matrix (the row list, the preparation, another matrix).
+  refresh?: number;
   leave: () => boolean;
   onDirty: (dirty: boolean) => void;
   onChanged: () => void;
@@ -78,17 +82,32 @@ export default function FinalGradesMatrix({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const lock = useRef(false);
+  const lock = useRef(false),
+    generation = useRef(0),
+    mounted = useRef(false);
 
+  // Two loads can overlap; only the newest answer is shown.
   async function load() {
-    setData(await api(`final-grades/books/${book.id}/matrix`, workspace));
+    const mine = ++generation.current;
+    const r = await api(`final-grades/books/${book.id}/matrix`, workspace);
+    if (mine === generation.current) setData(r);
   }
+  // The cells on screen: with a class filter the other classes are not shown, so they cannot be acted on either.
+  const shown = (d: Matrix | null) =>
+    (d?.cells || []).filter((c) => !classFilter || c.classId === classFilter);
   useEffect(() => {
     setOpened(null);
     setSelected([]);
     setError("");
     void load().catch((e) => setError(e instanceof Error ? e.message : ""));
-  }, [book.id]);
+  }, [book.id, classFilter]);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    void load().catch((e) => setError(e instanceof Error ? e.message : ""));
+  }, [refresh]);
 
   async function run(work: () => Promise<void>) {
     if (lock.current) return;
@@ -108,12 +127,14 @@ export default function FinalGradesMatrix({
     }
   }
   async function perform() {
-    if (!selected.length || !leave()) return;
+    // A tick that is no longer on screen (another class was chosen) is dropped, never acted on.
+    const picked = visibleSelection(selected, shown(data));
+    if (!picked.length || !leave()) return;
     // The open table would hold versions that this action changes.
     setOpened(null);
     await run(async () => {
       const rows: { id: string; version: number }[] = [];
-      for (const key of selected) {
+      for (const key of picked) {
         const [classId, subjectId] = JSON.parse(key) as string[];
         const r = await api(
           `final-grades/books/${book.id}/handles?${new URLSearchParams({ classId, subjectId })}`,
@@ -135,7 +156,7 @@ export default function FinalGradesMatrix({
       if (
         action === "publish" &&
         !window.confirm(
-          `Опубликовать выбранные итоги (${rows.length}) ученикам и родителям?`,
+          `Опубликовать итоги (${rows.length}) ученикам и родителям? Ячейки: ${listed(picked)}.`,
         )
       )
         return;
@@ -164,6 +185,15 @@ export default function FinalGradesMatrix({
       );
     });
   }
+  // The cells of an action by name, so a confirmation shows what it touches and not only how many rows.
+  function listed(keys: string[]) {
+    const names = shown(data)
+      .filter((c) => keys.includes(cellKey(c)))
+      .map((c) => cellText(data!, c));
+    return names.length > 5
+      ? `${names.slice(0, 5).join("; ")} и ещё ${names.length - 5}`
+      : names.join("; ");
+  }
   function open(cell: Cell) {
     if (leave()) setOpened(cell);
   }
@@ -176,9 +206,7 @@ export default function FinalGradesMatrix({
     ) : (
       <p role="status">Загрузка…</p>
     );
-  const cells = data.cells.filter(
-    (c) => !classFilter || c.classId === classFilter,
-  );
+  const cells = shown(data);
   const classes = data.classes.filter(
     (c) => !classFilter || c.id === classFilter,
   );
@@ -186,8 +214,8 @@ export default function FinalGradesMatrix({
     list.find((x) => x.id === id)?.name || id;
   const find = (c: string, s: string) =>
     cells.find((x) => x.classId === c && x.subjectId === s);
-  const label = (c: Cell) =>
-    `${name(data.classes, c.classId)}, ${name(data.subjects, c.subjectId)}`;
+  const label = (c: Cell) => cellText(data, c);
+  const picked = visibleSelection(selected, cells);
   const unassigned = cells.reduce((n, c) => n + c.unassigned, 0);
   const unavailable = cells.reduce((n, c) => n + c.unavailable, 0);
   return (
@@ -309,10 +337,10 @@ export default function FinalGradesMatrix({
               </label>
             )}
             <button
-              disabled={busy || !selected.length || !book.current}
+              disabled={busy || !picked.length || !book.current}
               onClick={() => void perform()}
             >
-              Выполнить для выбранных ({selected.length})
+              Выполнить для выбранных ({picked.length})
             </button>
           </div>
           <p>
