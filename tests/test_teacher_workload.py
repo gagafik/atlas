@@ -285,6 +285,15 @@ def test_a_publication_by_a_teacher_outside_every_version_gets_a_neutral_name(cl
     assert 'Учитель вне текущего состава' in {t['name'] for t in body['teachers']}
 
 
+def test_a_teacher_renamed_later_keeps_the_current_name_in_every_period(client, clock):
+    s = api.read('demo')
+    s.teachers = [t.model_copy(update=dict(name='Новая фамилия')) if t.id == 't2' else t for t in s.teachers]
+    api.save('demo', s, effective=date(2026, 9, 7))
+    # A period wholly before the change is still reported under the name the teacher has now.
+    assert figures(client, 't2', MON, date(2026, 8, 31))['name'] == 'Новая фамилия'
+    assert figures(client, 't2', date(2026, 9, 7), date(2026, 9, 14))['name'] == 'Новая фамилия'
+
+
 def test_a_moved_lesson_counts_once_on_the_day_it_was_given(client, clock):
     wednesday = date(2026, 8, 19)
     stored(datedLessons=[DatedLesson(id='moved', name='Перенос', kind='change', placementId='eng', sourceDate=MON, onDate=wednesday, changeType='move')])
