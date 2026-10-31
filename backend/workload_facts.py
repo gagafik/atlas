@@ -1,0 +1,113 @@
+"""Per-teacher lesson facts for dates: who taught, replaced, missed or has yet to teach.
+
+The one place that decides who taught a lesson on a date. A dated change beats a journal publication, and a
+publication beats the weekly template (and a closure recorded later). Pure apart from moment(): no database, no writes.
+"""
+from zoneinfo import ZoneInfo
+from .access import now
+from .calendar_ops import dates, resolve_day
+from .journal import key_for
+from .scheduling import minutes
+
+FIELDS = ('planned', 'plannedToDate', 'taught', 'minutes', 'own', 'substitutions', 'extra', 'journalOnly', 'merged', 'missed', 'missedAbsent',
+          'uncovered', 'cancelled', 'moved', 'upcoming', 'confirmed', 'differs')
+KINDS = ('substitution', 'merge', 'self_study', 'move')
+ZONE = ZoneInfo('Asia/Qyzylorda')
+
+
+def blank():
+    return {**dict.fromkeys(FIELDS, 0), 'byType': dict.fromkeys(KINDS, 0)}
+
+
+def moment():
+    """School date and time now, for deciding which lessons have finished."""
+    t = now().astimezone(ZONE)
+    return t.date(), t.strftime('%H:%M')
+
+
+def day_facts(view, ctx, day, clock, published, pubs):
+    """published: lesson key -> publication; pubs: the publications dated this day. clock None treats every day as past."""
+    iso = day.isoformat()
+    rows = [r for r in resolve_day(view, day, ctx)[0] if r['activity'] == 'lesson' and ctx.maps['groups'][r['groupId']].kind != 'staff']
+    live = {r['id']: r for r in rows if r['status'] != 'cancelled'}
+    gone = [a for a in view.absences if a.start <= day <= a.end]
+    facts, seen = [], set()
+    def absent(t, start, end): return any(a.teacherId == t and a.startTime < end and start < a.endTime for a in gone)
+    def fact(t, group, subject, start, end, outcome, kind, planned, past, pub, differs):
+        return dict(teacherId=t, date=iso, start=start, end=end, minutes=minutes(end) - minutes(start), group=group, subject=subject, outcome=outcome,
+                    kind=kind, planned=planned, past=past or bool(pub), confirmed=bool(pub), differs=differs, absent=absent(t, start, end))
+    for r in rows:
+        key = key_for(r)
+        seen.add(key)
+        pub = published.get(key)
+        # A publication of another date (after a move) does not confirm this row.
+        if pub and pub['date'] != iso: pub = None
+        active, moved = r['status'] != 'cancelled', bool(r.get('movedTo'))
+        # A calendar closure is neither planned nor missed.
+        closed = not active and (not r['changeId'] or bool(r['excludedClassIds']) and not r['classIds'])
+        dated = bool(r['changeId']) and not moved
+        teachers = list(r['teacherIds']) if active and (dated or not pub) else list(pub['teacherIds']) if pub and (active or closed) else []
+        start, end = (pub['start'], pub['end']) if pub and not dated else (r['start'], r['end'])
+        past = clock is None or day < clock[0] or day == clock[0] and end <= clock[1]
+        differs = bool(pub) and (closed or not active or set(pub['teacherIds']) != set(r['teacherIds']))
+        originals = r['originalTeacherIds'] if r['placementId'] and r['sourceDate'] == r['date'] and not closed else []
+        host = live.get(r.get('mergeWith'))
+        for t in dict.fromkeys([*originals, *teachers]):
+            planned = t in originals
+            if t not in teachers: outcome, kind = 'moved' if moved else 'cancelled' if not active else 'replaced', None
+            elif host and t in host['teacherIds']: outcome, kind = 'merged', 'merge'
+            elif not pub and absent(t, start, end): outcome, kind = 'uncovered', None
+            elif not pub and not past: outcome, kind = 'upcoming', None
+            else:
+                outcome = 'taught'
+                kind = ('extra' if not r['placementId'] else 'own' if t in r['originalTeacherIds'] else
+                        (r['changeType'] or 'substitution') if r['changeId'] else 'journal')
+            facts.append(fact(t, r['group'], r['subject'], start, end, outcome, kind, planned, past, pub, differs))
+    for key, pub in pubs.items():
+        group = ctx.maps['groups'].get(pub['groupId'])
+        if key in seen or group and group.kind == 'staff': continue
+        for t in pub['teacherIds']:
+            # A dated subject change makes a new key: the old publication must not count the same time twice.
+            if any(f['teacherId'] == t and f['outcome'] in ('taught', 'merged') and f['start'] < pub['end'] and pub['start'] < f['end'] for f in facts): continue
+            facts.append(fact(t, pub['group'], pub['subject'], pub['start'], pub['end'], 'taught', 'journal', False, True, pub, True))
+    return facts
+
+
+def period_facts(history, first, last, clock, published, names):
+    """Facts of every day first..last, each against the template valid that day. names gets the teachers of the versions seen."""
+    calendars, by_day = {}, {}
+    for key, pub in published.items(): by_day.setdefault(pub['date'], {})[key] = pub
+    for day in dates(first, last):
+        view, ctx = history.context(day)
+        index = history.segment(day)
+        # Duties and meetings are not lessons: the resolved day skips their costly rows.
+        if index not in calendars: calendars[index] = view.model_copy(update=dict(commitments=[]))
+        names.update({t.id: t.name for t in view.teachers})
+        yield from day_facts(calendars[index], ctx, day, clock, published, by_day.get(day.isoformat(), {}))
+
+
+def add(total, f):
+    """Add one fact to a blank() total."""
+    total['planned'] += f['planned']
+    total['plannedToDate'] += f['planned'] and f['past']
+    total['differs'] += f['differs']
+    total['confirmed'] += f['confirmed'] and f['outcome'] == 'taught'
+    outcome = f['outcome']
+    if outcome == 'taught':
+        total['taught'] += 1
+        total['minutes'] += f['minutes']
+        if f['kind'] in ('own', 'extra'): total[f['kind']] += 1
+        elif f['kind'] == 'journal': total['journalOnly'] += 1
+        else:
+            total['substitutions'] += 1
+            total['byType'][f['kind']] = total['byType'].get(f['kind'], 0) + 1
+    elif outcome == 'merged':
+        total['merged'] += 1
+        total['byType']['merge'] += 1
+    elif outcome == 'upcoming': total['upcoming'] += 1
+    elif outcome == 'moved': total['moved'] += 1
+    else:
+        total['missed'] += f['planned']
+        total['cancelled'] += outcome == 'cancelled'
+        total['uncovered'] += outcome == 'uncovered'
+        total['missedAbsent'] += f['absent'] and f['planned']

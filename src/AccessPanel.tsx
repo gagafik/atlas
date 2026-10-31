@@ -637,6 +637,8 @@ export default function AccessPanel({
                         "Просмотрен архив журналов",
                       "journal.coverage_exported":
                         "Выгружена проверка журналов",
+                      "staff-time.workload_exported":
+                        "Выгружена нагрузка учителей",
                       "absence.bulk_preview":
                         "Подготовлено общее решение по объяснительным",
                       "absence.bulk_applied":

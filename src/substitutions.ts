@@ -69,6 +69,9 @@ export interface ReportTeacher {
   missedAbsent: number;
   cancelled: number;
   moved: number;
+  merged?: number;
+  upcoming?: number;
+  uncovered?: number;
   byType: Record<string, number>;
 }
 export interface SubstitutionReportData {

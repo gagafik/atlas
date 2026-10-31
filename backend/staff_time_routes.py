@@ -129,6 +129,7 @@ def register(s,app,Workspace):
             db.execute('UPDATE staff_time_leave SET status=?,version=version+1,updated=? WHERE id=?',(status,stamp(),id))
             result=s.public_leave(s.leave(db,workspace,id));s.history(db,workspace,user,'leave',id,row['employee_id'],body.action,body.reason,result)
             s.notify(db,user,snap,workspace,row['employee_id'],result['version'],'staff-time.changed')
+            if body.action in ['approve','cancel']:s.notify_schedulers(db,user,snap,workspace,row['employee_id'],result['version'],body.action)
             return s.remember(db,user,body,key,result)
 
     @app.get('/api/staff-time/periods/{month}/preview')
