@@ -293,6 +293,8 @@ export default function QuizAttemptPanel({
     ),
   );
   const canReview = work.canReview && !active && !!work.questions;
+  // A course test has no lesson of its own: its results go to the journal from the results table.
+  const canGrade = canReview && quiz.scope !== "course";
   const markComplete = work.questions?.every(
     (q) =>
       q.kind !== "essay" ||
@@ -615,7 +617,7 @@ export default function QuizAttemptPanel({
           </button>
         </fieldset>
       )}
-      {canReview && quiz.released && work.status === "reviewed" && (
+      {canGrade && quiz.released && work.status === "reviewed" && (
         <section className="quiz-grade">
           <button
             disabled={busy || reviewDirty || gradeDirty}

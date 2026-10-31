@@ -116,13 +116,22 @@ class Definition(Model):
 class QuizWrite(Model):
     version: int = Field(ge=0)
     revision: int = Field(ge=0)
-    lessonKey: str = Field(pattern=r'^[a-f0-9]{64}$')
-    day: date
+    # A lesson test names the lesson and its day; a course test names the group and the subject, and no lesson.
+    lessonKey: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
+    day: date | None = None
+    groupId: str | None = Field(default=None,min_length=1,max_length=100)
+    subjectId: str | None = Field(default=None,min_length=1,max_length=100)
     definition: Definition
     studentIds: list[str] = Field(min_length=1,max_length=500)
     variantsByStudent: dict[str,str] = Field(default_factory=dict,max_length=500)
     publish: bool = False
     copyFrom: str | None = Field(default=None,max_length=80)
+    @model_validator(mode='after')
+    def scope(self):
+        lesson,course=[self.lessonKey,self.day],[self.groupId,self.subjectId]
+        if not (all(x is not None for x in lesson) and all(x is None for x in course) or all(x is None for x in lesson) and all(x is not None for x in course)):
+            raise ValueError('Укажите урок или курс теста.')
+        return self
     @model_validator(mode='after')
     def roster(self):
         if len(set(self.studentIds))!=len(self.studentIds):raise ValueError('Ученики повторяются.')
