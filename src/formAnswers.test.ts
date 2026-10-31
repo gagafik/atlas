@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { choiceClosed, keepTyped, limitsFor } from "./formAnswers";
+import {
+  choiceClosed,
+  holdsChoice,
+  keepTyped,
+  limitsFor,
+} from "./formAnswers";
 describe("keepTyped", () => {
   const ids = ["a", "b", "c"];
   it("keeps only values changed since the answer was loaded", () => {
@@ -55,5 +60,19 @@ describe("choiceClosed", () => {
     expect(choiceClosed(0, true)).toBe(false);
     expect(choiceClosed(2, false)).toBe(false);
     expect(choiceClosed(undefined, false)).toBe(false);
+  });
+});
+
+describe("holdsChoice", () => {
+  it("recognises a choice named by the held answer, single or multiple", () => {
+    expect(holdsChoice({ q: "A" }, "q", "A")).toBe(true);
+    expect(holdsChoice({ q: "A" }, "q", "B")).toBe(false);
+    expect(holdsChoice({ q: ["A", "C"] }, "q", "C")).toBe(true);
+    expect(holdsChoice({ q: ["A", "C"] }, "q", "B")).toBe(false);
+  });
+  it("holds nothing without a held answer or for another question", () => {
+    expect(holdsChoice(undefined, "q", "A")).toBe(false);
+    expect(holdsChoice({}, "q", "A")).toBe(false);
+    expect(holdsChoice({ other: "A" }, "q", "A")).toBe(false);
   });
 });

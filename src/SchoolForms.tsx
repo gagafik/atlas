@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Account, type Role } from "./auth";
-import { choiceClosed, keepTyped, limitsFor } from "./formAnswers";
+import {
+  choiceClosed,
+  holdsChoice,
+  keepTyped,
+  limitsFor,
+} from "./formAnswers";
 import "./SchoolForms.css";
 
 type Question = {
@@ -65,6 +70,8 @@ type Answer = {
   version: number;
   status: string;
   answers: Record<string, Value>;
+  // The version that holds the caller's seats: `answers` may carry a private correction instead.
+  heldAnswers?: Record<string, Value>;
   comment: string;
   updated: string | null;
   entityId: string;
@@ -128,8 +135,6 @@ const presets: Record<Preset, string> = {
   staff: "Сотрудники",
   saved: "Сохранённая группа",
 };
-// Answers in these states keep their seats; the server decides again when an answer is sent.
-const holding = ["submitted", "returned", "approved"];
 const statuses: Record<string, string> = {
   none: "Ждёт ответа",
   draft: "Черновик",
@@ -576,14 +581,9 @@ export default function SchoolForms({
   const anonymousDone =
     !!form?.definition.anonymous && answer?.status === "submitted";
   // Seats left of a limited choice; a choice stays open to the answer that already holds one of its seats.
-  const held = (q: Question, c: string) => {
-    const mine = answer?.answers[q.id];
-    return (
-      !!answer &&
-      holding.includes(answer.status) &&
-      (Array.isArray(mine) ? mine.includes(c) : mine === c)
-    );
-  };
+  // The held version comes from the server: a private correction typed over it holds nothing until it is sent.
+  const held = (q: Question, c: string) =>
+    holdsChoice(answer?.heldAnswers, q.id, c);
   const closed = (q: Question, c: string) =>
     choiceClosed(seats[q.id]?.[c], held(q, c));
   const seatNote = (q: Question, c: string) =>

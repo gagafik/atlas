@@ -538,8 +538,10 @@ class SchoolForms:
                 if form['definition'].get('anonymous'):
                     # The server cannot link a ballot to an answer, so the author sees only that they have answered.
                     voted=db.execute('SELECT 1 FROM school_form_ballots WHERE form_id=? AND user_id=? AND entity_id=?',(id,user['id'],entityId)).fetchone()
-                    return dict(answer=dict(id='',version=1 if voted else 0,status='submitted' if voted else 'draft',answers={},comment='',updated=None,entityId=entityId),history=[],formVersion=form['version'],accepting=accepting(form))
+                    return dict(answer=dict(id='',version=1 if voted else 0,status='submitted' if voted else 'draft',answers={},heldAnswers={},comment='',updated=None,entityId=entityId),history=[],formVersion=form['version'],accepting=accepting(form))
                 answer=self.answer(db,form,user,entityId)
+                # Seats belong to the version staff saw, not to the private correction shown below: the applicant's own seat must stay recognisable while they edit.
+                answer['heldAnswers']=answer['answers'] if answer['status'] in HOLDING else {}
                 # The applicant continues from their private correction; staff never receive it.
                 draft=answer.pop('draft',None);saved=answer.pop('draftUpdated',None);answer.pop('hidden',None)
                 if draft is not None: answer['answers']=draft;answer['updated']=saved or answer['updated']

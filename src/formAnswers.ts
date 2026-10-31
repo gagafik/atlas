@@ -33,3 +33,13 @@ export function limitsFor(
 export function choiceClosed(left: number | undefined, held: boolean) {
   return left === 0 && !held;
 }
+
+// A held answer names the choices whose seats it keeps: one value for a single choice, a list for several.
+export function holdsChoice(
+  held: Record<string, unknown> | undefined,
+  questionId: string,
+  choice: string,
+): boolean {
+  const value = held?.[questionId];
+  return Array.isArray(value) ? value.includes(choice) : value === choice;
+}

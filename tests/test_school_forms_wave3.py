@@ -272,6 +272,42 @@ def test_second_parent_of_same_child_does_not_take_another_seat(client):
     assert answer(dad,id,'s1').status_code==200
 
 
+def test_own_seat_survives_a_private_correction_and_stays_out_of_staff_results(client):
+    enable(client);parent(client,'ann','s1');parent(client,'bob','s2')
+    id=new(client,'application');configure(client,id,questions=FIRST_ONLY);form=publish(client,id);a=signed('ann');b=signed('bob')
+    mine=lambda who,entity:who.get(route(id,'/answer')+'&entityId='+entity).json()['answer']
+    assert mine(a,'s1')['heldAnswers']=={}
+    sent=answer(a,id,'s1',formVersion=form['version']);assert sent.status_code==200
+    assert mine(a,'s1')['heldAnswers']=={'q':'First'}
+    assert client.post(route(id,'/responses/'+sent.json()['id']+'/review'),json=review_body(client,id,sent.json()['version'],'returned','Fix')).status_code==200
+    # A correction of the last seat's option to another one is private: the applicant still holds the first option, staff still see it.
+    version=mine(a,'s1')['version'];assert answer(a,id,'s1',version=version,action='save',answers={'q':'Second'}).status_code==200
+    personal=mine(a,'s1');assert personal['answers']=={'q':'Second'} and personal['heldAnswers']=={'q':'First'}
+    assert client.get(route(id,'/seats')).json()=={'q':{'First':0}}
+    assert client.get(route(id,'/responses')).json()['items'][0]['answers']=={'q':'First'}
+    # The field belongs to the owner's own read: staff results and the form itself never carry it, and another family holds nothing.
+    assert 'heldAnswers' not in client.get(route(id,'/responses')).text and 'heldAnswers' not in client.get(route(id)).text and 'heldAnswers' not in b.get(route(id)).text
+    assert mine(b,'s2')['heldAnswers']=={}
+    # The server agrees with the screen: going back to the held option at full capacity is accepted, and a withdrawal holds nothing.
+    assert answer(a,id,'s1',version=personal['version'],answers={'q':'First'}).status_code==200
+    assert mine(a,'s1')['heldAnswers']=={'q':'First'}
+    assert answer(a,id,'s1',version=mine(a,'s1')['version'],action='withdraw').status_code==200 and mine(a,'s1')['heldAnswers']=={}
+
+
+def test_decided_application_seat_rules(client):
+    enable(client);parent(client,'ann','s1');parent(client,'bob','s2')
+    id=new(client,'application');configure(client,id,questions=FIRST_ONLY);form=publish(client,id);a=signed('ann');b=signed('bob')
+    decide=lambda sent,action:client.post(route(id,'/responses/'+sent['id']+'/review'),json=review_body(client,id,sent['version'],action,'x'))
+    # An approved application keeps its seat for the next cycle of the same applicant, and nobody else gets in.
+    first=answer(a,id,'s1',formVersion=form['version']).json();assert decide(first,'approved').status_code==200
+    assert answer(b,id,'s2').status_code==409
+    again=answer(a,id,'s1',version=2);assert again.status_code==200,again.text
+    # After a rejection the seat is free: another family takes it, and the rejected applicant competes like anyone else.
+    assert decide(again.json(),'rejected').status_code==200 and client.get(route(id,'/seats')).json()=={'q':{'First':1}}
+    assert answer(b,id,'s2').status_code==200
+    refused=answer(a,id,'s1',version=4);assert refused.status_code==409 and '«First»' in refused.json()['detail']
+
+
 def test_pending_list_keeps_drafts_private_and_follows_answers(client):
     enable(client);parent(client,'pa1','s1');parent(client,'pa1b','s1');parent(client,'pa2','s2');reviewer=create(client,role='staff')
     id=new(client);configure(client,id);assign(client,id,reviewer,'review');publish(client,id)
@@ -320,6 +356,18 @@ def test_reminder_reaches_only_pending_once_a_day(client,monkeypatch):
     assert count_notices(waiting['id'],'forms.reminder')==1
     assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close')).status_code==200
     assert remind(client,id).status_code==409 and pending(client,id)['canRemind'] is False
+
+
+def test_list_is_readable_but_not_remindable_before_opening_and_absent_for_standing_forms(client):
+    enable(client);waiting=parent(client,'waiting','s1')
+    soon=new(client);configure(client,soon,opensAt=(now()+timedelta(days=1)).isoformat());publish(client,soon)
+    state=pending(client,soon);assert state['applicable'] is True and state['pendingCount']==1 and state['canRemind'] is False
+    assert remind(client,soon).status_code==409
+    standing=new(client,'application');configure(client,standing,standing=True,questions=[dict(id='q',title='Reason',kind='text')]);publish(client,standing)
+    state=pending(client,standing)
+    assert state['applicable'] is False and state['items']==[] and state['pendingCount']==0 and state['audience']==0 and state['canRemind'] is False
+    refused=remind(client,standing);assert refused.status_code==409
+    assert count_notices(waiting['id'],'forms.reminder',unread=False)==0
 
 
 def test_reminder_names_only_the_unanswered_children(client):
