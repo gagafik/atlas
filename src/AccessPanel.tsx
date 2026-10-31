@@ -668,6 +668,7 @@ export default function AccessPanel({
                       "message.manager_recovered":
                         "Восстановлено управление обсуждением",
                       "message.channels_updated": "Изменены каналы сообщений",
+                      "school.sections_updated": "Изменены разделы школы",
                       "message.saved_group_saved":
                         "Сохранена группа получателей",
                       "message.saved_group_deleted":

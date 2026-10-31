@@ -16,7 +16,7 @@ from .journal import user_ids
 from .message_files import tables as file_tables
 from .message_channels import ALWAYS, CLOSED, DEFAULT_CHANNELS, load
 from .models import Model
-from .notifications import clip, encoded
+from .notifications import clip, encoded, late_opener
 from .portal_cache import PortalSnapshots
 from .resources import teacher_ids
 
@@ -450,6 +450,15 @@ class Messages:
         ids=[thread['studentId']] if thread['studentId'] else sorted(json.loads(member[1])) if own is not None else []
         return [dict(id=i,name=names[i]) for i in ids if i in names and (own is None or i in own)]
 
+    def notice(self,thread,author,directory,scopes=None):
+        """Who wrote and the conversation title the recipient already reads; never the message text."""
+        title=f"{author['name']}: «{thread['title']}»" if thread.get('title') else f"Сообщение от {author['name']}"
+        def target(user):
+            ids=(scopes or {}).get(user['id']) or ([thread['studentId']] if thread.get('studentId') else [])
+            kids=[i for i in ids if i in directory.students and (user['role'] not in FAMILY or i in user_ids(user,directory.workspace,'student'))]
+            return dict(module='messages',recordId=thread['id'],title=title,students=[dict(id=k,name=directory.students[k].name) for k in kids])
+        return target
+
     def previews(self,db,items):
         """Sender, date, text and attachment flag of the last post each account may read: a former participant sees no later one."""
         file_tables(db);ids=encoded([item['latestId'] for item in items])
@@ -473,6 +482,15 @@ class Messages:
         return [dict(studentId=sid,id=u['id'],name=u['name']) for sid,t in sorted(leaders.items()) for u in teachers if t in user_ids(u,directory.workspace,'teacher') and directory.start(user,u,sid)]
 
     def register(self,app,Workspace):
+        def open_thread(db,user,workspace,data,kids):
+            id=data.get('recordId');directory=Directory(self.snapshots.get(workspace).state,workspace)
+            try:directory.channels=load(db,workspace)
+            except sqlite3.OperationalError:pass
+            # Live link or kept history, the same answer as reading the thread.
+            self.readable(db,id,user,directory,self.thread_accounts(db,id,user))
+            return {}
+        late_opener('messages',open_thread)
+
         @app.get('/api/messages/options')
         def options(request:Request,workspace:Workspace='school'):
             user,directory=self.context(request,workspace)
@@ -530,7 +548,8 @@ class Messages:
                 self.files.bind(db,body.fileIds,user,workspace,body.draftId,id,post,new=True)
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
-                self.notifications.deliver(db,[u for u,_ in recipients],workspace,1,'message.received')
+                self.notifications.deliver(db,[u for u,_ in recipients],workspace,1,'message.received',topic=f'message:{workspace}:{id}',
+                    target=self.notice(dict(id=id,title=body.title,studentId=body.studentId),user,directory,{u['id']:ids for u,ids in recipients}))
                 self.access.record(db,'message.created',workspace,detail=id)
             return dict(id=id)
 
@@ -610,7 +629,7 @@ class Messages:
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
                 self.advance(db,id,post,live)
-                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received')
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received',topic=f'message:{workspace}:{id}',target=self.notice(thread,user,directory))
                 self.access.record(db,'message.replied',workspace,detail=id)
             return dict(id=id)
 
@@ -643,6 +662,8 @@ class Messages:
                     else: raise HTTPException(422,'Действие не подходит к этой переписке.')
                     if thread['status']==status: return dict(ok=True)
                     db.execute('UPDATE message_threads SET status=?,version=version+1 WHERE id=?',(status,id))
+                    # A withdrawn announcement loses its title for everyone: unread entries vanish, read ones keep no text and no link.
+                    if status=='withdrawn': self.notifications.retract(db,[r[0] for r in db.execute('SELECT user_id FROM message_members WHERE thread_id=?',(id,))],f'message:{workspace}:{id}')
                 self.access.record(db,'message.'+body.action,workspace,detail=id)
             return dict(ok=True)
 
@@ -666,6 +687,6 @@ class Messages:
                 db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))
                 live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
                 self.advance(db,id,post,live)
-                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version']+1,'message.received')
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version']+1,'message.received',topic=f'message:{workspace}:{id}',target=self.notice(thread,user,directory))
                 self.access.record(db,'message.participant_'+body.action,workspace,detail=id+' · '+body.userId)
             return dict(ok=True)

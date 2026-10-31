@@ -370,13 +370,18 @@ class AssessmentCalendar:
         db.execute('DELETE FROM assessment_requests WHERE user_id=? AND seq NOT IN (SELECT seq FROM assessment_requests WHERE user_id=? ORDER BY seq DESC LIMIT 100)',(user['id'],user['id']))
         return result
 
+    def describe(self,db,workspace,snap,row):
+        """(booking, type, subject, date) of the work as the calendar shows them; no topic and no note."""
+        booking=db.execute('SELECT day,subject_id,document FROM assessment_bookings WHERE workspace=? AND id=?',(workspace,row['id'])).fetchone()
+        data=json.loads(booking['document']);short,day=data.get('short',''),label(booking['day'])
+        subject=self.names(snap)['subject'].get(booking['subject_id'],data.get('subject',''))
+        return booking,short,subject,day
+
     def notify_family(self,db,workspace,snap,row,action):
         """Type, subject and date of the work; the topic and the note stay in the calendar. A move or cancellation blanks the older titles."""
         members=self.members(snap,row['group_id'])
         targets=self.notifications.granted_users(db,workspace,'student',members,['student','parent'])
-        booking=db.execute('SELECT day,subject_id,document FROM assessment_bookings WHERE workspace=? AND id=?',(workspace,row['id'])).fetchone()
-        data=json.loads(booking['document']);short,day=data.get('short',''),label(booking['day'])
-        subject=self.names(snap)['subject'].get(booking['subject_id'],data.get('subject',''))
+        booking,short,subject,day=self.describe(db,workspace,snap,row)
         title={'assessment.moved':f"Перенесена работа {short}: {subject}, теперь {day}",'assessment.changed':f"Изменён тип работы: {short}, {subject}, {day}",
                'assessment.cancelled':f"Отменена работа {short}: {subject}, {day}"}.get(action,f"{short}: {subject}, {day}")
         # A cancelled work is not open to families any more, so its entry has no link.
@@ -389,7 +394,9 @@ class AssessmentCalendar:
         ids={t for w in snap.state.workloads if w.groupId==row['group_id'] and w.subjectId==row['subject_id'] for t in teacher_ids(w)}
         if grant_ids(actor,workspace,'teacher')&ids:return
         targets=[u for u in self.notifications.granted_users(db,workspace,'teacher',ids,['teacher']) if u['id']!=actor['id']]
-        self.notifications.deliver(db,targets,workspace,row['version'],'assessment.staff_changed',topic=f"assessment:{workspace}:{row['id']}")
+        booking,short,subject,day=self.describe(db,workspace,snap,row)
+        self.notifications.deliver(db,targets,workspace,row['version'],'assessment.staff_changed',topic=f"assessment:{workspace}:{row['id']}",
+                                   target=dict(module='assessments',recordId=row['id'],day=booking['day'],title=f"Изменена работа {short}: {subject}, {day}"))
 
     def current(self,row,lesson):
         """The lesson row the work stands on and a note when the timetable no longer has it."""

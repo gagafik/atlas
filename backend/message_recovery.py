@@ -72,6 +72,6 @@ class MessageRecovery:
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
                 live = [u for u in accounts.values() if self.messages.member(db,thread,u,directory,accounts)]
                 self.messages.advance(db,id,post,live)
-                self.messages.notifications.deliver(db,live,workspace,thread['version']+1,'message.received')
+                self.messages.notifications.deliver(db,live,workspace,thread['version']+1,'message.received',topic=f'message:{workspace}:{id}',target=self.messages.notice(thread,user,directory))
                 self.access.record(db,'message.manager_recovered',workspace,detail=id+' · '+body.userId)
             return dict(ok=True)

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
-import { queueParams } from "./homeworkQueue";
+import { queueParams, queueSections, submissionTag } from "./homeworkQueue";
 
 interface Item {
   lessonKey: string;
@@ -44,6 +44,11 @@ const labels: Record<string, string> = {
   submitted: "На проверке",
   returned: "На доработке",
   accepted: "Принято",
+};
+const sectionTitles = {
+  past: "Прошедшие сроки",
+  next: "Ближайшие две недели",
+  all: "",
 };
 const initial = { start: "", end: "", filter: "", history: false, search: "" };
 const dateLabel = (value: string) => value.split("-").reverse().join(".");
@@ -266,71 +271,78 @@ export default function HomeworkQueuePanel({
                 : "Попробуйте другой статус, период или включите прежние уроки."}
             </p>
           )}
-          <div className="homework-queue-list">
-            {result.items.map((item) => (
-              <article
-                className="homework-queue-card"
-                key={item.lessonKey + ":" + item.studentId}
-              >
-                <div>
-                  <h3>{item.subject}</h3>
-                  <p>
-                    {item.student} · {item.group}
-                  </p>
-                </div>
-                <p className="homework-queue-preview">
-                  {item.preview}
-                  {item.preview.length === 240 ? "…" : ""}
-                </p>
-                <div className="homework-queue-tags">
-                  <span>
-                    {item.submission === "offline"
-                      ? item.status === "not_submitted"
-                        ? "Показать на уроке"
-                        : labels[item.status]
-                      : item.assignmentChanged
-                        ? "Условия изменены — нужна новая отправка"
-                        : labels[item.status]}
-                  </span>
-                  {item.submission === "offline" && (
-                    <span>Без онлайн-сдачи</span>
-                  )}
-                  {item.overdue && <span>Срок прошёл</span>}
-                  {item.deadlineClosed && <span>Приём закрыт</span>}
-                  {item.late && <span>Отправлено после срока</span>}
-                  {item.readOnly && <span>Прежний урок · только просмотр</span>}
-                </div>
-                <p>
-                  Срок:{" "}
-                  <strong>
-                    {item.dueDate ? dateLabel(item.dueDate) : "не указан"}
-                    {item.extended ? " · индивидуальный" : ""}
-                  </strong>{" "}
-                  · урок {dateLabel(item.lessonDate)}
-                </p>
-                {item.submittedAt && (
-                  <small>
-                    Отправлено:{" "}
-                    {new Date(item.submittedAt).toLocaleString("ru-RU", {
-                      timeZone: "Asia/Qyzylorda",
-                    })}
-                  </small>
+          {queueSections(result.items, result.schoolToday, result.window).map(
+            (section) => (
+              <section key={section.key} className="homework-queue-section">
+                {sectionTitles[section.key] && (
+                  <h3>{sectionTitles[section.key]}</h3>
                 )}
-                <button
-                  disabled={activity.busy}
-                  onClick={() => {
-                    if (canLeaveHomework()) setSelected(item);
-                  }}
-                >
-                  {item.canReview
-                    ? "Проверить работу"
-                    : item.canSubmit
-                      ? "Выполнить задание"
-                      : "Посмотреть работу"}
-                </button>
-              </article>
-            ))}
-          </div>
+                <div className="homework-queue-list">
+                  {section.items.map((item) => (
+                    <article
+                      className="homework-queue-card"
+                      key={item.lessonKey + ":" + item.studentId}
+                    >
+                      <div>
+                        <h3>{item.subject}</h3>
+                        <p>
+                          {item.student} · {item.group}
+                        </p>
+                      </div>
+                      <p className="homework-queue-preview">
+                        {item.preview}
+                        {item.preview.length === 240 ? "…" : ""}
+                      </p>
+                      <div className="homework-queue-tags">
+                        <span>
+                          {submissionTag(item, result.schoolToday, labels)}
+                        </span>
+                        {item.submission === "offline" && (
+                          <span>Без онлайн-сдачи</span>
+                        )}
+                        {item.overdue && <span>Срок прошёл</span>}
+                        {item.deadlineClosed && <span>Приём закрыт</span>}
+                        {item.late && <span>Отправлено после срока</span>}
+                        {item.readOnly && (
+                          <span>Прежний урок · только просмотр</span>
+                        )}
+                      </div>
+                      <p>
+                        Срок:{" "}
+                        <strong>
+                          {item.dueDate ? dateLabel(item.dueDate) : "не указан"}
+                          {item.extended ? " · индивидуальный" : ""}
+                        </strong>{" "}
+                        · урок {dateLabel(item.lessonDate)}
+                      </p>
+                      {item.submittedAt && (
+                        <small>
+                          Отправлено:{" "}
+                          {new Date(item.submittedAt).toLocaleString("ru-RU", {
+                            timeZone: "Asia/Qyzylorda",
+                          })}
+                        </small>
+                      )}
+                      <button
+                        disabled={activity.busy}
+                        onClick={() => {
+                          if (canLeaveHomework()) setSelected(item);
+                        }}
+                      >
+                        {item.canReview
+                          ? "Проверить работу"
+                          : item.canSubmit
+                            ? "Выполнить задание"
+                            : item.submission === "offline"
+                              ? "Посмотреть задание"
+                              : "Посмотреть работу"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ),
+          )}
         </>
       )}
       <div className="dated-toolbar">

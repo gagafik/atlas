@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import hashlib,json,sqlite3
 from fastapi import HTTPException
 from .access import now
-from .notifications import encoded,permission_key
+from .notifications import encoded,late_opener,permission_key,student_ids
 from .portal_cache import PortalSnapshots
 from .school_forms import enabled,grant_ids
 
@@ -117,7 +117,10 @@ class Clubs:
         ids=[id for id in set(students) if id in snap.entities['student'] and snap.entities['student'][id].active]
         targets=self.notifications.granted_users(db,club['workspace'],'student',ids,['parent','student']) if ids else []
         targets=[t for t in targets if t['id']!=u['id']]
-        self.notifications.deliver(db,targets,club['workspace'],club['version'],action)
+        text='изменилось занятие или посещение' if action=='clubs.session' else 'изменилась запись или информация'
+        # Club and children only; never session notes or a decision reason.
+        self.notifications.deliver(db,targets,club['workspace'],club['version'],action,
+            target=lambda t:dict(module='clubs',recordId=club['id'],students=[dict(id=i,name=snap.entities['student'][i].name) for i in ids if i in student_ids(t,club['workspace'])],title=f"Кружок «{club['data']['title']}»: {text}"))
     def public(self,db,u,snap,club):
         manager=self.manager(db,u,club)
         counts={r['status']:r['n'] for r in db.execute("SELECT status,count(*) n FROM club_members WHERE club_id=? AND status IN ('enrolled','waiting') GROUP BY status",(club['id'],))}
@@ -154,7 +157,12 @@ class Clubs:
             self.change_member(db,u,snap,club,r,'enrolled','Зачисление по порядку очереди.');promoted.append(r['id']);free-=1
             if manual:break
         return promoted
+    def open_club(self,db,u,workspace,data,kids):
+        db.row_factory=sqlite3.Row
+        self.visible(db,u,self.snapshots.get(workspace),self.club(db,workspace,data.get('recordId')))
+        return {}
     def register(self,app,Workspace):
+        late_opener('clubs',self.open_club)
         from .clubs_routes import register
         from .clubs_sessions import register as sessions
         register(self,app,Workspace);sessions(self,app,Workspace)

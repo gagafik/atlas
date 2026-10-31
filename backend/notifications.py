@@ -1,5 +1,6 @@
 """Transactional personal inbox. Titles are prepared per recipient at write time and only name what that recipient already sees."""
 from collections import defaultdict
+from contextlib import closing
 from datetime import date, datetime, time as daytime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -245,6 +246,15 @@ def open_timetable(db, user, workspace, data, kids):
 
 OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
                forms=open_forms, timetable=open_timetable, finals=open_finals, duty=lambda *args: {})
+LATE = set()
+
+
+def late_opener(module, fn):
+    """A module's own opener: it may read a snapshot, which takes the global lock, so it runs after the lock is released, on a read connection. It answers {} or raises 403/404."""
+    OPENERS[module] = fn
+    LATE.add(module)
+
+
 # Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
 NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
 
@@ -509,6 +519,12 @@ class Notifications:
                     # Read even when refused, so a dead entry cannot stay unread for ever.
                     db.execute('UPDATE notifications SET read_at=coalesce(read_at,?) WHERE id=? AND user_id=?', (now().isoformat(), id, user['id']))
                     data = json.loads(row[1]) if row[1] else {}
-                    if data.get('module') in OPENERS: result = navigation(db, user, row[0], data)
+                    if data.get('module') in OPENERS and data['module'] not in LATE: result = navigation(db, user, row[0], data)
+            if row and data.get('module') in LATE:
+                # Outside the lock: the opener may rebuild a snapshot, which takes that same non-reentrant lock.
+                with closing(self.access.read_connect()) as db:
+                    try: result = navigation(db, user, row[0], data)
+                    except HTTPException as exc:
+                        if exc.status_code not in (403, 404): raise
             if result is None: raise HTTPException(404, 'Запись больше недоступна.')
             return result

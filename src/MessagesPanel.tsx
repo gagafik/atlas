@@ -128,7 +128,14 @@ function useSearchDelay(value: string) {
   return ready;
 }
 
-export default function MessagesPanel({ workspace }: { workspace: string }) {
+export default function MessagesPanel({
+  workspace,
+  focusThread,
+}: {
+  workspace: string;
+  // Set by an opened notification: show this conversation.
+  focusThread?: string;
+}) {
   const [options, setOptions] = useState<Options | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -268,6 +275,12 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       alive.current = false;
     };
   }, [workspace]);
+  useEffect(() => {
+    if (!focusThread) return;
+    open(focusThread).catch((e) => {
+      if (alive.current) setError(e.message);
+    });
+  }, [focusThread]);
   // The inbox loads when it is shown and then refreshes by itself; while composing or reading nothing is replaced under the reader's hands.
   useEffect(() => {
     if (!options || composing || selected || showDrafts) return;

@@ -76,7 +76,8 @@ class MessageGroups:
         accounts = self.messages.thread_accounts(db, thread['id'], user)
         live = [u for u in accounts.values() if self.messages.member(db, thread, u, directory, accounts)]
         self.messages.advance(db, thread['id'], post, live)
-        self.messages.notifications.deliver(db, [u for u in live if u['id'] != user['id']], directory.workspace, thread['version']+1, 'message.received')
+        self.messages.notifications.deliver(db, [u for u in live if u['id'] != user['id']], directory.workspace, thread['version']+1, 'message.received',
+                                                topic=f"message:{directory.workspace}:{thread['id']}", target=self.messages.notice(thread, user, directory))
         self.access.record(db, action, directory.workspace, detail=thread['id'])
 
     def register(self, app, Workspace):

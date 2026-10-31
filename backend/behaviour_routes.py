@@ -37,6 +37,11 @@ def register(service,app,Workspace):
         pupil=snap.entities['student'].get(row['student_id'])
         return dict(id=row['id'],kind=kind or row['kind'],category=category,name=pupil.name if pupil else '')
 
+    def staff_target(row,category,snap,title):
+        """For the author or an administrator: the note, the pupil and a fixed phrase; never the text or a decision reason."""
+        n=note(row,category,snap)
+        return dict(module='behaviour_staff',recordId=n['id'],students=[dict(id=row['student_id'],name=n['name'])],title=title)
+
     @app.get('/api/behaviour/options')
     def options(request:Request,workspace:Workspace='school'):
         with service.context(request,workspace) as (db,user,snap):
@@ -95,7 +100,8 @@ def register(service,app,Workspace):
                 db.execute('''INSERT INTO behaviour_notes(id,batch,workspace,student_id,class_id,version,status,kind,category_id,day,author_id,author_name,created,updated,document,visible)
                               VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?)''',(id,batch,workspace,student,pupil.classId,status,category['kind'],category['id'],body.day.isoformat(),user['id'],user['name'],created,created,encoded(data),int(body.visible)))
                 service.history(db,workspace,user,id,'created','',data|dict(visible=body.visible,status=status))
-            if status=='pending':service.notify_admins(db,workspace,1,user['id'])
+            if status=='pending':service.notify_admins(db,workspace,1,user['id'],dict(module='behaviour_staff',recordId=ids[0],title=f"Ждёт согласования: {KINDS[category['kind']]} — {category['title']}",
+                                                                              students=[dict(id=s,name=snap.entities['student'][s].name) for s in body.studentIds]))
             return service.remember(db,user,body,key,dict(batch=batch,ids=ids,status=status))
 
     @app.get('/api/behaviour/lesson')
@@ -141,7 +147,7 @@ def register(service,app,Workspace):
             publish(db,workspace,row,user,version,data,snap)
             db.execute("UPDATE behaviour_notes SET version=?,updated=?,status='published',document=? WHERE id=?",(version,stamp(),encoded(data),id))
             service.history(db,workspace,user,id,'approved',body.reason.strip(),data)
-            service.notify_accounts(db,workspace,{row['author_id']},version,'behaviour.decided',user['id'])
+            service.notify_accounts(db,workspace,{row['author_id']},version,'behaviour.decided',user['id'],staff_target(row,data['category'],snap,f"Мера утверждена: {data['category']}"))
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.post('/api/behaviour/notes/{id}/reject')
@@ -154,7 +160,7 @@ def register(service,app,Workspace):
             data=row['data']|dict(decision=body.reason.strip());version=row['version']+1
             db.execute("UPDATE behaviour_notes SET version=?,updated=?,status='rejected',document=? WHERE id=?",(version,stamp(),encoded(data),id))
             service.history(db,workspace,user,id,'rejected',body.reason.strip(),data)
-            service.notify_accounts(db,workspace,{row['author_id']},version,'behaviour.decided',user['id'])
+            service.notify_accounts(db,workspace,{row['author_id']},version,'behaviour.decided',user['id'],staff_target(row,data['category'],snap,f"Мера отклонена: {data['category']}"))
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.get('/api/behaviour/summary')
@@ -257,7 +263,7 @@ def register(service,app,Workspace):
             if not row['data']['requireAck'] or row['ack_at']:raise HTTPException(409,'Подтверждение не требуется.')
             db.execute('UPDATE behaviour_notes SET version=version+1,updated=?,ack_at=?,ack_by=? WHERE id=?',(stamp(),stamp(),user['name'],id))
             service.history(db,workspace,user,id,'acknowledged','',dict(by=user['name']))
-            service.notify_accounts(db,workspace,{row['author_id']},row['version']+1,'behaviour.acknowledged')
+            service.notify_accounts(db,workspace,{row['author_id']},row['version']+1,'behaviour.acknowledged',target=staff_target(row,row['data']['category'],snap,f"Родитель ознакомился: {row['data']['category']}"))
             return service.public(service.note(db,workspace,id),snap)
 
     @app.get('/api/behaviour/notes/{id}/history')

@@ -111,7 +111,9 @@ class Quizzes:
             targets=self.journal.notifications.granted_users(db,ctx['workspace'],'student',students or [],['student','parent'])
             from .quiz_notices import deliver_family
             return deliver_family(self.journal.notifications,db,ctx,action,targets,set(students or []))
-        self.journal.notifications.deliver(db,targets,ctx['workspace'],ctx['quiz']['version'],action)
+        quiz=ctx['quiz'];title=(quiz['published'] or quiz['document'])['definition']['title']
+        # The quiz only: no pupil and no answers.
+        self.journal.notifications.deliver(db,targets,ctx['workspace'],quiz['version'],action,target=dict(module='quizzes',recordId=quiz['id'],title=f"Тест «{title}»: работа отправлена на проверку"))
 
     def log(self,db,ctx,action,document,attempt=None):
         created=now().isoformat();id=ctx['quiz']['id']

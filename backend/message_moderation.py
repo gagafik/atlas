@@ -12,7 +12,7 @@ from pydantic import Field
 
 from .access import now
 from .models import Model
-from .notifications import encoded
+from .notifications import encoded, late_opener
 from .message_files import root_for, tables as file_tables
 from .homework_files import file_path
 
@@ -29,6 +29,9 @@ class Decision(Model):
     postVersion: int = Field(ge=0)
     action: Literal['dismiss', 'hide', 'restore']
     note: str = Field(min_length=1, max_length=2000)
+
+
+MODERATED = dict(hide='Сообщение скрыто администратором', restore='Сообщение восстановлено', dismiss='Жалоба отклонена')
 
 
 class MessageModeration:
@@ -71,6 +74,11 @@ class MessageModeration:
         return result | self.state(db, row[2])
 
     def register(self, app, Workspace):
+        def open_report(db, user, workspace, data, kids):
+            # Only the administrator's queue holds reports; the reporter's own entry leads to the thread.
+            return {} if user['role'] == 'admin' and db.execute('SELECT 1 FROM message_reports WHERE id=? AND workspace=?', (data.get('recordId'), workspace)).fetchone() else None
+        late_opener('message_reports', open_report)
+
         @app.post('/api/messages/posts/{post_id}/report')
         def report(post_id: int, body: Report, request: Request, workspace: Workspace='school'):
             user, directory = self.messages.context(request, workspace)
@@ -101,7 +109,7 @@ class MessageModeration:
                 id = str(uuid4())
                 db.execute('INSERT INTO message_reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (id,workspace,post_id,user['id'],user['name'],now().isoformat(),body.reason,encoded(evidence),'open',1,'',None,None,body.requestId,signature))
                 admins = [self.access.public(r) for r in db.execute("SELECT * FROM accounts WHERE active=1 AND role='admin'")]
-                self.messages.notifications.deliver(db,admins,workspace,1,'message.reported')
+                self.messages.notifications.deliver(db,admins,workspace,1,'message.reported',target=dict(module='message_reports',recordId=id,title=f"Жалоба от {user['name']}"))
                 self.access.record(db,'message.reported',workspace,detail=id)
             return dict(id=id)
 
@@ -168,6 +176,7 @@ class MessageModeration:
                 db.execute('UPDATE message_reports SET status=?,version=version+1,note=?,reviewer_id=?,reviewed=? WHERE id=?',(status,body.note,user['id'],stamp,id))
                 db.execute('INSERT INTO message_report_decisions VALUES (?,?,?,?,?,?,?)',(user['id'],body.requestId,signature,id,stamp,body.action,body.note))
                 targets = self.messages.accounts(db,user_ids=[report['reporterId'],report['evidence']['authorId']])
-                self.messages.notifications.deliver(db,[u for u in targets.values() if directory.enabled(u)],workspace,report['version']+1,'message.moderated')
+                self.messages.notifications.deliver(db,[u for u in targets.values() if directory.enabled(u)],workspace,report['version']+1,'message.moderated',
+                    target=dict(module='messages',recordId=report['evidence']['threadId'],title=MODERATED[body.action]))
                 self.access.record(db,'message.moderation_'+body.action,workspace,detail=id)
             return dict(ok=True)

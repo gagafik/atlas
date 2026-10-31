@@ -10,11 +10,39 @@ from pydantic import Field, model_validator
 from .models import Model
 from .access import LOCAL, now
 from .journal import user_ids
-from .notifications import encoded
+from .notifications import encoded, late_opener
 from . import absence_codes
 
 LEGAL = ['mother','father','guardian']  # family-registry relationships that make a verified link a legal guardian
 DISABLED = 'Электронные записки для этого класса выключены. Свяжитесь с классным руководителем.'
+
+
+DECISIONS={'approved':'одобрено','rejected':'отклонено','withdrawn':'отозвано','revoked':'решение отменено'}
+
+
+def notice_period(row):
+    """dd.mm, or dd.mm–dd.mm for a longer span: the dates the note already shows everybody who may open it."""
+    start,end=row[10][:10],row[11][:10];first=f'{start[8:10]}.{start[5:7]}'
+    return first if start==end else f'{first}–{end[8:10]}.{end[5:7]}'
+
+
+def notice_title(action,row):
+    """Dates and the decision word; never the reason, the code, the files or the reviewer's comment."""
+    word=DECISIONS.get(row[9])
+    return f'Заявление об отсутствии, {notice_period(row)}: {word}' if action!='absence.submitted' and word else f'Заявление об отсутствии: {notice_period(row)}'
+
+
+def notice_target(title,own):
+    """Where an entry about these notes leads: the first one, the pupils they concern and a title."""
+    return dict(module='absences',recordId=own[0][0],students=[dict(id=i,name=n) for i,n in {r[3]:r[5] for r in own}.items()],title=title)
+
+
+def attendance_target(workspace,rows):
+    """Title only, no link: a guardian who may not see the note must not learn that one exists, only that attendance changed."""
+    def target(user):
+        mine={r[3]:r[5] for r in rows if r[3] in user_ids(user,workspace,'student')}
+        return dict(title='Изменились отметки посещаемости',students=[dict(id=i,name=n) for i,n in mine.items()])
+    return target
 
 
 def tables(db):
@@ -277,7 +305,7 @@ class Absences:
         users=[self.access.public(r) for r in db.execute(query,(row[2],encoded(sorted(review_ids|family))))]
         # Verified legal guardians have the full level, so they hear about the other guardian's note too.
         targets=[u for u in users if self.level(db,u,snapshot,workspace,row)=='full']
-        self.notifications.deliver(db,targets,workspace,row[8],action)
+        self.notifications.deliver(db,targets,workspace,row[8],action,topic=f'absence:{workspace}:{row[0]}',supersede=True,target=notice_target(notice_title(action,row),[row]))
 
     def decision_status(self,db,row,user,snap,workspace,version,action):
         if action=='withdraw':
@@ -305,11 +333,17 @@ class Absences:
                 SELECT 1 FROM json_each(a.permissions,'$.grants') g,json_each(g.value,'$.entityIds') s
                 WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')='student' AND s.value=?)""",(workspace,row[3])).fetchall()
             targets=[self.access.public(r) for r in candidates]
-            self.notifications.deliver(db,[u for u in targets if row[3] in user_ids(u,workspace,'student')],workspace,version,'journal.updated')
+            self.notifications.deliver(db,[u for u in targets if row[3] in user_ids(u,workspace,'student')],workspace,version,'journal.updated',target=attendance_target(workspace,[row]))
         self.access.record(db,'absence.'+status,workspace,detail=id)
         return changed
 
+    def open_notice(self,db,user,workspace,data,kids):
+        row=db.execute('SELECT * FROM absence_notices WHERE id=? AND workspace=?',(data.get('recordId'),workspace)).fetchone()
+        # Both levels open the panel; the panel itself shows only what the level allows.
+        return {} if row and self.level(db,user,self.snapshots.get(workspace),workspace,row) else None
+
     def register(self,app,Workspace):
+        late_opener('absences',self.open_notice)
         from .class_staff import register as register_staff
         register_staff(self,app,Workspace)
         from .absence_bulk import register

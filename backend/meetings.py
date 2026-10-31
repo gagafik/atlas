@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from .access import now
-from .notifications import encoded, permission_key
+from .notifications import encoded, late_opener, permission_key
 from .portal_cache import PortalSnapshots
 from .messages import Directory
 from .school_forms import grant_ids, enabled
@@ -285,7 +285,15 @@ class Meetings:
             if host and host['current']:recipients.append(host['user'])
             self.notifications.deliver(db,recipients,workspace,booking['version']+1,'meeting.cancelled',target=self.notice(booking['id'],event,document,booking['starts_at'],'Встреча отменена'))
 
+    def open_event(self,db,user,workspace,data,kids):
+        db.row_factory=sqlite3.Row
+        event=self.event(db,workspace,data.get('recordId'))
+        if event['status'] not in ['open','closed'] and user['role']!='admin':return None
+        self.require_event(db,event,user,self.snapshots.get(workspace),workspace)
+        return {}
+
     def register(self,app,Workspace):
+        late_opener('meeting_events',self.open_event)
         from .meeting_routes import register
         from .meeting_reschedule import register as register_reschedule
         from .meeting_reminders import MeetingReminders
