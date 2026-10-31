@@ -104,6 +104,9 @@ const titles: Record<string, string> = {
   "journal.updated": "Обновлён учебный журнал",
   "journal.coverage_reminder": "Не заполнен журнал урока",
   "journal.coverage_digest": "Недельная сводка незаполненных журналов",
+  "journal.attendance_corrected":
+    "Классный руководитель исправил отметки посещаемости",
+  "journal.attendance_confirmation": "День посещаемости ждёт подтверждения",
   "journal.finals_published": "Опубликованы итоговые оценки",
   "journal.finals_withdrawn": "Отозваны итоговые оценки",
   "journal.withdrawn": "Запись журнала скрыта",

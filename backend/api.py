@@ -414,6 +414,9 @@ journal_coverage.register(app, Workspace)
 from .journal_periods import JournalPeriods
 journal_periods = JournalPeriods(journal_coverage)
 journal_periods.register(app, Workspace)
+from .attendance_grid import AttendanceGrid
+attendance_grid = AttendanceGrid(journal_coverage)
+attendance_grid.register(app, Workspace)
 from .final_grades import FinalGrades
 final_grades = FinalGrades(journal_periods)
 final_grades.register(app, Workspace)

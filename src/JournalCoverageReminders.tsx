@@ -17,6 +17,10 @@ type Settings = {
   weeklyDigest: boolean;
   digestWeekday: number;
   since: string | null;
+  confirmationReminders: boolean;
+  confirmAfterDays: number;
+  // The day the confirmation reminders were switched on: the server's, never sent back.
+  confirmSince: string | null;
 };
 type Loaded = Settings & { lastRuns?: Run[]; today?: string };
 
@@ -60,8 +64,8 @@ export default function JournalCoverageReminders({
     setError("");
     setNotice("");
     try {
-      // since, the run list and today are the server's: the model refuses unknown fields, so they are not sent back.
-      const { since, lastRuns, today, ...value } = settings;
+      // since, confirmSince, the run list and today are the server's: the model refuses unknown fields, so they are not sent back.
+      const { since, confirmSince, lastRuns, today, ...value } = settings;
       const saved: Settings = await api(
         "journal/coverage/reminders",
         workspace,
@@ -170,6 +174,34 @@ export default function JournalCoverageReminders({
           ))}
         </select>
       </label>
+      <label className="check-line">
+        <input
+          type="checkbox"
+          checked={settings.confirmationReminders}
+          onChange={(e) => set({ confirmationReminders: e.target.checked })}
+        />
+        Напоминать классному руководителю о неподтверждённых днях посещаемости
+      </label>
+      {settings.confirmSince && settings.confirmationReminders && (
+        <p className="muted">
+          Дни посещаемости напоминаются с {ruDate(settings.confirmSince)}.
+        </p>
+      )}
+      <label className="field">
+        <span>Через сколько учебных дней после дня</span>
+        <input
+          type="number"
+          min={1}
+          max={10}
+          required
+          disabled={!settings.confirmationReminders}
+          value={settings.confirmAfterDays}
+          onChange={(e) => set({ confirmAfterDays: Number(e.target.value) })}
+        />
+        <small>
+          Сейчас: {schoolDays(settings.confirmAfterDays || 1)} после дня.
+        </small>
+      </label>
       <label className="field">
         <span>Причина изменения</span>
         <input
@@ -179,6 +211,13 @@ export default function JournalCoverageReminders({
           onChange={(e) => setReason(e.target.value)}
         />
       </label>
+      <p className="muted">
+        Напоминание о подтверждении приходит один раз на день и класс, без имён
+        учеников: классному руководителю, у которого не снято право «Сетка
+        посещаемости», пока день не подтверждён в сетке. Дни до включения не
+        напоминаются; класс без классного руководителя или его учётной записи
+        виден в запусках как пропущенный.
+      </p>
       <p className="muted">
         Одно напоминание на урок, учителю, который ведёт урок сейчас (с учётом
         замен). Отменённые уроки, закрытые периоды и уроки до включения не

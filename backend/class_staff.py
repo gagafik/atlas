@@ -12,8 +12,9 @@ from .models import Model
 from .journal import user_ids
 from .notifications import encoded
 
-Capability = Literal['absence_review','attendance_read','journal_coverage','behaviour_notes']
-CAPABILITIES = ['absence_review','attendance_read','journal_coverage','behaviour_notes']
+Capability = Literal['absence_review','attendance_read','journal_coverage','behaviour_notes','attendance_grid']
+# Appended last: the order is user-visible. attendance_grid edits and confirms the class grid; reading it is attendance_read.
+CAPABILITIES = ['absence_review','attendance_read','journal_coverage','behaviour_notes','attendance_grid']
 # Duties that the single legacy reviewer assignment granted before permissions were split.
 LEGACY = ['absence_review','attendance_read','journal_coverage']
 
@@ -87,8 +88,8 @@ def classes(db,user,snap,workspace,capability):
 
 class Assignment(Model):
     accountId:str=Field(min_length=1,max_length=100)
-    capabilities:list[Capability]=Field(default_factory=list,max_length=4)
-    revoked:list[Capability]=Field(default_factory=list,max_length=4)  # duties taken from the class teacher of this class
+    capabilities:list[Capability]=Field(default_factory=list,max_length=len(CAPABILITIES))
+    revoked:list[Capability]=Field(default_factory=list,max_length=len(CAPABILITIES))  # duties taken from the class teacher of this class
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.capabilities))!=len(self.capabilities) or len(set(self.revoked))!=len(self.revoked):raise ValueError('Полномочия не должны повторяться.')
