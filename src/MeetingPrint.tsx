@@ -1,4 +1,7 @@
+import { createPortal } from "react-dom";
+
 // The sheet that window.print() shows instead of the panel: a title, a line of context and one plain table.
+// It sits in document.body, not in the modal dialog: a dialog is fixed in the top layer, so anything inside it is cut to one page.
 export default function MeetingPrint({
   title,
   subtitle,
@@ -10,7 +13,7 @@ export default function MeetingPrint({
   head: string[];
   rows: string[][];
 }) {
-  return (
+  return createPortal(
     <section className="meeting-print" aria-label="Печать">
       <h2>{title}</h2>
       <p>{subtitle}</p>
@@ -32,6 +35,7 @@ export default function MeetingPrint({
           ))}
         </tbody>
       </table>
-    </section>
+    </section>,
+    document.body,
   );
 }

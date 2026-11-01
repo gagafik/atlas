@@ -310,32 +310,32 @@
   display: none;
 }
 
-/* Only while the panel is open: its stylesheet stays loaded after it closes and must not blank other prints. */
+/* Only while the panel is open: its stylesheet stays loaded after it closes and must not blank other prints.
+   The sheet is a child of body, outside the dialog: the dialog is a fixed top-layer box and would print one page.
+   The newest sheet wins if two were ever mounted. */
 @media print {
-  body:has(dialog.parent-meetings[open]) * {
-    visibility: hidden;
+  body:has(dialog.parent-meetings[open]) > :not(.meeting-print) {
+    display: none;
   }
-  .parent-meetings {
-    position: static;
-    max-height: none;
-    border: 0;
-    padding: 0;
-  }
-  body:has(dialog.parent-meetings[open]) .meeting-print,
-  body:has(dialog.parent-meetings[open]) .meeting-print * {
-    visibility: visible;
-  }
-  .meeting-print {
+  body:has(dialog.parent-meetings[open]) > .meeting-print {
     display: block;
-    position: fixed;
-    inset: 0;
+    position: static;
     background: #fff;
     color: #000;
-    padding: 16px;
+    padding: 0;
+  }
+  body:has(dialog.parent-meetings[open]) > .meeting-print:has(~ .meeting-print) {
+    display: none;
   }
   .meeting-print table {
     width: 100%;
     border-collapse: collapse;
+  }
+  .meeting-print thead {
+    display: table-header-group;
+  }
+  .meeting-print tr {
+    break-inside: avoid;
   }
   .meeting-print th,
   .meeting-print td {
