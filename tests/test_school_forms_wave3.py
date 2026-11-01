@@ -316,7 +316,7 @@ def test_decided_application_seat_rules(client):
     # After a rejection the seat is free: another family takes it, and the rejected applicant competes like anyone else.
     assert decide(again.json(),'rejected').status_code==200
     assert answer(b,id,'s2').status_code==200
-    assert answer(a,id,'s1',version=4).status_code==409
+    refused=answer(a,id,'s1',version=4);assert refused.status_code==409 and 'First' in refused.json()['detail']
 
 
 def test_pending_list_keeps_drafts_private_and_follows_answers(client):
@@ -365,6 +365,8 @@ def test_reminder_reaches_only_pending_once_a_day(client,monkeypatch):
         patch.setattr('backend.school_forms.now',lambda:future)
         assert remind(client,id).json()['reminded']==1
     assert count_notices(waiting['id'],'forms.reminder')==1
+    assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close')).status_code==200
+    assert remind(client,id).status_code==409 and pending(client,id)['canRemind'] is False
 
 
 def test_list_is_readable_but_not_remindable_before_opening_and_absent_for_standing_forms(client):
