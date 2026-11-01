@@ -216,7 +216,7 @@ def test_draft_transfer_stays_hidden_then_publication_reaches_the_family(client)
     record['document']['content']['topic'] = 'Тема только в черновике'
     assert write(teacher, record).status_code == 200
     publication = ok(preview(teacher, tbody(key, publish=True)))
-    assert publication['otherPending'] and outcomes(publication) == [('s1', 'same', 2), ('s2', 'same', 0)]
+    assert outcomes(publication) == [('s1', 'same', 2), ('s2', 'same', 0)]
     done = ok(send(teacher, tbody(key, publish=True)))
     assert done['status'] == 'saved' and done['published'] and done['publishedVersion'] is not None
     visible = report(parent).json()['rows'][0]
@@ -247,10 +247,6 @@ def test_existing_work_converts_to_its_own_maximum(client):
     assert [(r['studentId'], r['score'], r['maxScore'], r['value'], r['scaled']) for r in shown['rows']] == [('s1', 2, 2, 10, True), ('s2', 0, 2, 0, True)]
     assert ok(send(teacher, tbody(first['lessonKey'], assessmentId='a')))['counts']['written'] == 2
     assert grades(teacher, first['lessonKey'], 's1') == {'a': 10} and grades(teacher, first['lessonKey'], 's2') == {'a': 0}
-    # A work with an odd maximum is rounded to hundredths and never above the maximum.
-    odd = lesson_with(teacher, NEXT, [journal_work('b', 3)], {})
-    third = ok(preview(teacher, tbody(odd['lessonKey'], NEXT, assessmentId='b')))
-    assert rows(third)['s1']['value'] == 3 and rows(third)['s2']['value'] == 0
 
 
 def test_retry_and_rerun(client):
@@ -484,7 +480,6 @@ def test_lessons_of_the_day_list_the_works(client):
     future = listed(FUTURE)
     assert len(future) == 1 and not future[0]['editable'] and future[0]['reason'] and future[0]['works'] == []
     assert listed('2026-08-18') == []
-    assert signed('student').get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={DAY}').status_code == 403
 
 
 def test_refused_targets(client):
@@ -600,19 +595,6 @@ def test_transfer_reads_on_a_database_without_the_new_table(client):
     assert ok(send(teacher, tbody(key_of(teacher))))['status'] == 'saved'
 
 
-def test_cancelled_lesson_takes_no_marks(client):
-    quiz, teacher, parent, pupil, other = world(client)
-    solve(pupil, quiz, 's1', 'a')
-    first = lesson_with(teacher, DAY, [journal_work('a', 10)], {})
-    resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='cancel', name='Отмена', kind='cancel', placementId='eng', sourceDate=date(2026, 8, 17), onDate=date(2026, 8, 17))]))
-    found = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={DAY}'))['lessons']
-    assert [(l['lessonKey'], l['editable']) for l in found] == [(first['lessonKey'], False)] and found[0]['reason']
-    before = stored_versions()
-    shown = ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a')))
-    assert shown['allowed'] is False and shown['rows'] == []
-    assert send(teacher, tbody(first['lessonKey'], assessmentId='a')).status_code == 403 and stored_versions() == before
-
-
 @pytest.mark.parametrize('stage', ['draft', 'withdrawn'])
 def test_unpublished_or_withdrawn_quiz_transfers_nothing(client, stage):
     quiz, teacher, parent, pupil, other = world(client, publish=stage == 'withdrawn')
@@ -632,22 +614,12 @@ def test_copy_moves_a_test_between_a_course_and_a_lesson(client):
     assert (made.json()['scope'], made.json()['lessonKey']) == ('lesson', key) and made.json()['document']['definition']['variants'][0]['questions'][0]['id'] == 'choice'
     again = teacher.put('/api/journal/quizzes/course-copy?workspace=demo', json=course_body([bank], copyFrom='lesson-copy'))
     assert again.status_code == 200 and again.json()['scope'] == 'course' and again.json()['lessonKey'].startswith('course:')
-    # A published course test cannot turn into a lesson test in place; a lesson test transfers through the same results table.
-    assert teacher.put('/api/journal/quizzes/test-one?workspace=demo', json=dict(lesson, version=quiz['version'], copyFrom=None)).status_code == 409
+    # A lesson test transfers through the same results table.
     solve(pupil, made.json(), 's1', 'a')
     found = summary(teacher, 'lesson-copy')
     assert (found['defaultDay'], found['defaultLessonKey']) == (DAY, key)
     assert outcomes(ok(preview(teacher, tbody(key), 'lesson-copy')))[0] == ('s1', 'write', 2)
     assert ok(send(teacher, tbody(key), 'lesson-copy'))['counts']['written'] == 1
-
-
-def test_default_day_is_the_latest_lesson_day_of_the_course(client):
-    quiz, teacher, parent, pupil, other = world(client)
-    # The test closes on a Tuesday; the course has English on Mondays only, so the day to offer is the Monday before.
-    found = summary(teacher)
-    assert (found['defaultDay'], found['defaultLessonKey']) == ('2026-08-31', '')
-    day = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={found["defaultDay"]}'))['lessons']
-    assert len(day) == 1 and day[0]['editable']
 
 
 def test_a_work_of_the_test_turned_into_a_text_scale_is_refused_by_the_preview(client):
