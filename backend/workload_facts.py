@@ -1,9 +1,11 @@
 """Per-teacher lesson facts for dates: who taught, replaced, missed or has yet to teach.
 
 The one place that decides who taught a lesson on a date. A dated change beats a journal publication, and a
-publication beats the weekly template (and a closure recorded later). A publication counts only from the moment its lesson starts:
-a topic or homework posted ahead proves nothing. Pure apart from moment(): no database, no writes.
+publication beats the weekly template (and a closure recorded later). A publication shows the lesson was given only if it was made
+from the lesson's start on (its published_at, school time), and only once that start has come by the clock: a topic or homework posted
+ahead proves nothing, however long ago the bell rang. A republish after the bell counts from then. Pure apart from moment(): no database, no writes.
 """
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from .access import now
 from .calendar_ops import dates, resolve_day
@@ -26,13 +28,30 @@ def moment():
     return t.date(), t.strftime('%H:%M')
 
 
+def stamped(text):
+    """(school date, 'HH:MM') of a stored ISO instant; None when it is missing or unreadable."""
+    try: t = datetime.fromisoformat(text)
+    except (TypeError, ValueError): return None
+    t = (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone(ZONE)
+    return t.date(), t.strftime('%H:%M')
+
+
+def given(pub, day, clock):
+    """Whether a publication shows its lesson was given: made from the lesson's start on, and that start is not still ahead of the clock.
+    A publication with no readable time (an old entry) counts: nothing shows it was early."""
+    start = (day, pub['start'])
+    if clock is not None and start > clock: return False
+    made = stamped(pub.get('publishedAt'))
+    return made is None or made >= start
+
+
 def day_facts(view, ctx, day, clock, pubs):
-    """pubs: lesson key -> the publications dated this day. clock None treats every day as past."""
+    """pubs: lesson key -> the publications dated this day, each with publishedAt. clock None treats every day as past."""
     iso = day.isoformat()
     rows = [r for r in resolve_day(view, day, ctx)[0] if r['activity'] == 'lesson' and ctx.maps['groups'][r['groupId']].kind != 'staff']
     live = {r['id']: r for r in rows if r['status'] != 'cancelled'}
-    # A publication made before the lesson began (a topic or homework posted ahead) does not show that the lesson was given.
-    pubs = {k: p for k, p in pubs.items() if clock is None or (day, p['start']) <= clock}
+    # A publication made before the lesson began (a topic or homework posted ahead) does not show that the lesson was given, not even later.
+    pubs = {k: p for k, p in pubs.items() if given(p, day, clock)}
     keys = [key_for(r) for r in rows]
     # A dated change of subject makes a new key: the publication of that slot then belongs to the row of the same group at that time.
     left, taken = {k: p for k, p in pubs.items() if k not in keys}, {}

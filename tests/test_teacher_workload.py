@@ -20,11 +20,12 @@ def at(day, clock):
 
 @pytest.fixture
 def clock(monkeypatch):
-    """The school clock: late on a Monday after the first weeks, so those weeks are over; clock(day, 'HH:MM') moves it."""
+    """The school clock: late on a Monday after the first weeks, so those weeks are over; clock(day, 'HH:MM') moves it.
+    The journal reads it too, so a publication is stamped with the school time the test is at."""
     def set(day=TODAY, time='12:00'):
         monkeypatch.setattr(workload_facts, 'now', lambda: at(day, time))
         monkeypatch.setattr(timetable_history, 'today', lambda: day)
-        monkeypatch.setattr(journal, 'today', lambda: day)
+        monkeypatch.setattr(journal, 'now', lambda: at(day, time))
     set()
     return set
 
@@ -161,16 +162,67 @@ def test_a_topic_posted_ahead_does_not_make_the_lesson_taught(client, clock):
     stored(events=[Event(id='closed', name='Каникулы', kind='holiday', start=ahead, end=ahead, effect='cancel')])
     closed = figures(client, 't2', ahead, ahead)
     assert (closed['taught'], closed['minutes'], closed['confirmed'], closed['differs'], closed['planned']) == (0, 0, 0, 0, 0)
+    # The topic does not become proof once the bell has rung: the day is over and the closure still stands.
+    clock(ahead, '12:00')
+    over = figures(client, 't2', ahead, ahead)
+    assert (over['taught'], over['minutes'], over['confirmed'], over['differs'], over['planned'], over['missed'], over['upcoming']) == (0, 0, 0, 0, 0, 0, 0)
+    assert over['lessons'] == []
 
 
-def test_a_topic_posted_before_the_bell_counts_from_the_bell(client, clock):
+def test_a_topic_posted_ahead_leaves_the_absent_teacher_without_a_substitute_once_the_lesson_is_over(client, clock):
+    ahead = TODAY + timedelta(days=7)
+    publish_topic(client, ahead)
+    stored(absences=[TeacherAbsence(id='a', name='Командировка', teacherId='t2', start=ahead, end=ahead)])
+    clock(ahead, '12:00')
+    gone = figures(client, 't2', ahead, ahead)
+    assert (gone['taught'], gone['minutes'], gone['confirmed'], gone['uncovered'], gone['missed'], gone['missedAbsent']) == (0, 0, 0, 1, 1, 1)
+    assert gone['lessons'][0]['outcome'] == 'uncovered' and gone['lessons'][0]['confirmed'] is False
+    # The lesson is given and written up after the bell: that publication counts, from then on.
+    publish(client, ahead)
+    held = figures(client, 't2', ahead, ahead)
+    assert (held['taught'], held['minutes'], held['confirmed'], held['uncovered'], held['missed'], held['missedAbsent']) == (1, 40, 1, 0, 0, 0)
+
+
+def test_a_topic_posted_ahead_for_a_lesson_that_left_the_timetable_counts_nothing(client, clock):
+    ahead = TODAY + timedelta(days=7)
+    publish_topic(client, ahead)
+    stored(placements=[p for p in api.read('demo').placements if p.id != 'eng'])
+    clock(ahead, '12:00')
+    t2 = figures(client, 't2', ahead, ahead)
+    # Neither a planned lesson nor a journal-only one: the publication was made before the lesson could have taken place.
+    assert (t2['taught'], t2['journalOnly'], t2['confirmed'], t2['differs'], t2['planned'], t2['minutes']) == (0, 0, 0, 0, 0, 0)
+
+
+def test_a_topic_posted_before_the_bell_does_not_confirm_the_lesson_after_it(client, clock):
     clock(MON, '07:00')
     publish_topic(client, MON)
     early = figures(client, 't2', MON, MON)
     assert (early['upcoming'], early['taught'], early['confirmed']) == (1, 0, 0)
     clock(MON, '08:20')
     started = figures(client, 't2', MON, MON)
-    assert (started['upcoming'], started['taught'], started['confirmed'], started['plannedToDate']) == (0, 1, 1, 1)
+    assert (started['upcoming'], started['taught'], started['confirmed'], started['plannedToDate']) == (1, 0, 0, 0)
+    clock(MON, '09:30')
+    over = figures(client, 't2', MON, MON)
+    # Counted by the schedule, as if nothing had been published: the early topic confirms nothing, in the journal or against it.
+    assert (over['upcoming'], over['taught'], over['own'], over['journalOnly'], over['confirmed'], over['differs'], over['plannedToDate']) == (0, 1, 1, 0, 0, 0, 1)
+    assert over['lessons'][0]['confirmed'] is False
+    # Written up after the bell, the lesson is confirmed.
+    publish(client)
+    again = figures(client, 't2', MON, MON)
+    assert (again['taught'], again['confirmed'], again['own'], again['differs']) == (1, 1, 1, 0)
+
+
+def test_a_publication_counts_from_the_minute_the_lesson_starts(client, clock):
+    clock(MON, '08:19')
+    publish(client)
+    clock(MON, '08:30')
+    early = figures(client, 't2', MON, MON)
+    assert (early['upcoming'], early['taught'], early['confirmed']) == (1, 0, 0)
+    clock(MON, '08:20')
+    publish(client)
+    clock(MON, '08:30')
+    started = figures(client, 't2', MON, MON)
+    assert (started['upcoming'], started['taught'], started['confirmed']) == (0, 1, 1)
 
 
 def test_a_closure_added_after_the_journal_was_published_keeps_the_taught_lesson(client, clock):

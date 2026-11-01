@@ -16,8 +16,9 @@ SOURCE = 'dated_schedule_and_published_journals'
 ROWS = 100000
 UNKNOWN = 'Учитель вне текущего состава'
 PUBLISHED = '''SELECT DISTINCT d.lesson_key,json_extract(d.lesson,'$.date'),json_extract(d.lesson,'$.start'),json_extract(d.lesson,'$.end'),json_extract(d.lesson,'$.group'),
-    json_extract(d.lesson,'$.groupId'),json_extract(d.lesson,'$.subject'),json_extract(d.lesson,'$.teacherIds')
+    json_extract(d.lesson,'$.groupId'),json_extract(d.lesson,'$.subject'),json_extract(d.lesson,'$.teacherIds'),e.published_at
     FROM journal_coverage_teachers t CROSS JOIN journal_coverage_documents d ON d.workspace=t.workspace AND d.lesson_key=t.lesson_key
+    LEFT JOIN journal_entries e ON e.workspace=d.workspace AND e.lesson_key=d.lesson_key
     WHERE t.workspace=? AND t.day BETWEEN ? AND ?'''
 OUTCOMES = dict(taught='Проведён', merged='Присоединён к другому уроку', upcoming='Предстоит', moved='Перенесён', cancelled='Отменён', replaced='Заменён', uncovered='Без замены')
 SPLIT = tuple(k for k in KINDS if k != 'merge')  # what replacements are made of; a merged group is no replacement and has its own figure
@@ -81,9 +82,10 @@ class TeacherWorkload:
         return self.journal.reading(run)
 
     def published(self, user, snap, workspace, first, last):
-        """Lesson key -> the publication of the lesson with its date, time and teachers; every teacher, so own figures never differ from the administration's."""
+        """Lesson key -> the publication of the lesson with its date, time, teachers and the moment it was last published (publishedAt);
+        every teacher, so own figures never differ from the administration's."""
         rows = self.read(user, snap, workspace, lambda db: db.execute(PUBLISHED, (workspace, first.isoformat(), last.isoformat())).fetchall())
-        return {r[0]: dict(date=r[1], start=r[2], end=r[3], group=r[4], groupId=r[5], subject=r[6], teacherIds=json.loads(r[7])) for r in rows}
+        return {r[0]: dict(date=r[1], start=r[2], end=r[3], group=r[4], groupId=r[5], subject=r[6], teacherIds=json.loads(r[7]), publishedAt=r[8]) for r in rows}
 
     def calculate(self, user, snap, workspace, selected, first, last, weeks=False, lessons=False):
         """Rows per teacher: figures, and on demand weeks (every week of the period) and lessons."""
