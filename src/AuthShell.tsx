@@ -180,14 +180,33 @@ export default function AuthShell() {
   const [meetingsWorkspace, setMeetingsWorkspace] = useState<string | null>(
     null,
   );
+  const [meetingsSection, setMeetingsSection] = useState<string | undefined>();
   useEffect(() => {
-    const open = (event: Event) =>
+    const open = (event: Event) => {
+      setMeetingsSection((event as CustomEvent).detail?.section);
       setMeetingsWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
       );
+    };
     window.addEventListener("atlas-open-meetings", open);
     return () => window.removeEventListener("atlas-open-meetings", open);
   }, []);
+  // A pupil gets the consultations entry only while the school lets pupils book: the server answers 403 otherwise.
+  const [pupilConsultations, setPupilConsultations] = useState(false);
+  const pupilWorkspace = session?.user?.grants[0]?.workspace;
+  useEffect(() => {
+    if (session?.user?.role !== "student" || !pupilWorkspace) {
+      setPupilConsultations(false);
+      return;
+    }
+    let current = true;
+    api("meetings/options", pupilWorkspace)
+      .then(() => current && setPupilConsultations(true))
+      .catch(() => current && setPupilConsultations(false));
+    return () => {
+      current = false;
+    };
+  }, [session?.user?.id, session?.user?.version, pupilWorkspace]);
   useEffect(() => {
     const open = (event: Event) =>
       setFormsWorkspace((event as CustomEvent).detail?.workspace || "school");
@@ -548,8 +567,23 @@ export default function AuthShell() {
           {["admin", "editor", "teacher", "staff", "parent"].includes(
             session.user.role,
           ) && (
-            <button onClick={() => setMeetingsWorkspace("school")}>
-              Родительские встречи
+            <button
+              onClick={() => {
+                setMeetingsSection(undefined);
+                setMeetingsWorkspace("school");
+              }}
+            >
+              Встречи и консультации
+            </button>
+          )}
+          {pupilConsultations && pupilWorkspace && (
+            <button
+              onClick={() => {
+                setMeetingsSection("consultations");
+                setMeetingsWorkspace(pupilWorkspace);
+              }}
+            >
+              Консультации
             </button>
           )}
           {session.user.role === "admin" && (
@@ -837,6 +871,7 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={meetingsWorkspace}
+            initialSection={meetingsSection}
             onClose={() => setMeetingsWorkspace(null)}
           />
         </Suspense>

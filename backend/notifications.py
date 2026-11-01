@@ -232,7 +232,21 @@ def open_assessments(db, user, workspace, data, kids):
 def open_meetings(db, user, workspace, data, kids):
     row = db.execute('SELECT event_id,parent_id,student_id,host_id FROM meeting_bookings WHERE workspace=? AND id=?', (workspace, data.get('recordId'))).fetchone() if has_table(db, 'meeting_bookings') else None
     if not row: return None
-    return dict(eventId=row[0]) if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids else None
+    kind = db.execute("SELECT json_extract(document,'$.kind') FROM meeting_events WHERE id=?", (row[0],)).fetchone()
+    consultation = bool(kind and kind[0] == 'consultation')
+    # A guardian also opens a consultation that someone else of the family booked for their child.
+    if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids or consultation and user['role'] == 'parent' and row[2] in kids:
+        # Consultations have their own section of the panel; the entry of a parent meeting names none.
+        return dict(eventId=row[0], section='consultations') if consultation else dict(eventId=row[0])
+    return None
+
+
+def open_class_meetings(db, user, workspace, data, kids):
+    # The class teacher's panel re-checks the meeting server-side; a guardian opens it while a child of theirs is still invited.
+    key = data.get('recordId')
+    if not exists(db, 'class_meetings', 'SELECT 1 FROM class_meetings WHERE workspace=? AND id=?', (workspace, key)): return None
+    if user['role'] in ('admin', 'teacher'): return {}
+    return {} if user['role'] == 'parent' and any(exists(db, 'class_meeting_invitees', 'SELECT 1 FROM class_meeting_invitees WHERE meeting_id=? AND student_id=?', (key, kid)) for kid in kids) else None
 
 
 def open_forms(db, user, workspace, data, kids):
@@ -246,7 +260,7 @@ def open_timetable(db, user, workspace, data, kids):
     return {} if kids or user['role'] not in FAMILY else None
 
 
-OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
+OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings, class_meetings=open_class_meetings,
                forms=open_forms, timetable=open_timetable, finals=open_finals, duty=lambda *args: {})
 LATE = set()
 
@@ -275,7 +289,7 @@ def navigation(db, user, workspace, data):
     found = OPENERS[data['module']](db, user, workspace, data, kids)
     if found is None: return None
     return dict(module=data['module'], workspace=workspace, recordId=data.get('recordId'), studentId=kids[0] if kids else None,
-                day=data.get('day')) | {k: v for k, v in found.items() if k in ('formId', 'eventId')}
+                day=data.get('day')) | {k: v for k, v in found.items() if k in ('formId', 'eventId', 'section')}
 
 
 QUIET = r'^([01]\d|2[0-3]):[0-5]\d$'

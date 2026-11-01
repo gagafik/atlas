@@ -34,6 +34,7 @@ class MeetingReminders:
                 host=service.hosts(db,event,snap,workspace).get(booking['host_id'])
                 if owner:recipients.append(owner)
                 if host and host['current']:recipients.append(host['user'])
+                recipients+=service.family_others(db,event,booking['student_id'],{r['id'] for r in recipients},workspace)
             if recipients:service.notifications.deliver(db,recipients,workspace,booking['version'],'meeting.reminder',topic=f'meeting:{workspace}:{id}:reminder',
                                                         target=service.notice(id,event,json.loads(booking['document']),booking['starts_at'],'Скоро встреча'))
             db.execute('UPDATE meeting_reminders SET status=? WHERE booking_id=?',('sent' if recipients else 'skipped',id))

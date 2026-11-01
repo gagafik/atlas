@@ -7,6 +7,7 @@ from fastapi import HTTPException,Query,Request
 from pydantic import AwareDatetime,Field
 from typing import Literal
 from . import meetings
+from .meetings import FAMILY_ROLES
 from .meeting_models import Mutation,utc
 from .messages import Directory
 from .notifications import encoded,late_opener,permission_key
@@ -123,12 +124,13 @@ def booked(service,db,event,slot,user,student,snap,workspace,booking_id):
 
 def public(service,db,row,event,user,snap,workspace):
     owner,host,current=participants(service,db,row,event,snap,workspace)
-    if user['role']!='admin' and (row['parent_id']!=user['id'] or not owner):return None
+    manager=service.can_manage(db,event,user,snap,workspace)
+    if not manager and (row['parent_id']!=user['id'] or not owner):return None
     doc=json.loads(row['document']);active=row['status'] in ['waiting','offered'] and event['status'] in ['open','closed'] and event['definition']['endsAt']>utc(meetings.now())
     offered=active_offer(db,row,event);slot=db.execute('SELECT * FROM meeting_slots WHERE id=?',(row['slot_id'],)).fetchone() if row['slot_id'] else None
     return doc|dict(id=row['id'],version=row['version'],hostId=row['host_id'],studentId=row['student_id'],created=row['created'],status='expired' if row['status']=='offered' and not offered else row['status'],current=current,
-        canOffer=user['role']=='admin' and active and current and not offered,canAccept=user['role']=='parent' and offered and current and bool(slot and slot['status']=='open'),
-        canWithdraw=user['role']=='parent' and row['status'] in ['waiting','offered'],canManage=user['role']=='admin' and row['status'] in ['waiting','offered'],
+        canOffer=manager and active and current and not offered,canAccept=user['role'] in FAMILY_ROLES and offered and current and bool(slot and slot['status']=='open') and row['student_id'] in service.bookable_pupils(db,event,user,snap,workspace),
+        canWithdraw=user['role'] in FAMILY_ROLES and row['status'] in ['waiting','offered'],canManage=manager and row['status'] in ['waiting','offered'],
         offer=dict(slotId=slot['id'],slotVersion=slot['version'],startsAt=slot['starts_at'],endsAt=slot['ends_at'],expiresAt=row['expires_at']) if slot else None)
 
 
@@ -137,7 +139,7 @@ def register(service,app,Workspace):
         row=db.execute('SELECT * FROM meeting_waitlist WHERE id=? AND workspace=?',(id,workspace)).fetchone()
         if not row:raise HTTPException(404,'Заявка не найдена.')
         event=service.event(db,workspace,row['event_id'])
-        if user['role'] not in ['admin','parent'] or not public(service,db,row,event,user,snap,workspace):raise HTTPException(404,'Заявка недоступна.')
+        if not public(service,db,row,event,user,snap,workspace):raise HTTPException(404,'Заявка недоступна.')
         return row,event
 
     def open_entry(db,user,workspace,data,kids):
@@ -149,9 +151,10 @@ def register(service,app,Workspace):
     @app.get('/api/meetings/events/{id}/waitlist')
     def listing(id:str,request:Request,workspace:Workspace='school',after:int=Query(default=0,ge=0),limit:int=Query(default=30,ge=1,le=100)):
         with service.context(request,workspace) as (db,user,snap):
-            if user['role'] not in ['admin','parent']:raise HTTPException(403,'Очередь доступна семье и администрации.')
-            event=service.event(db,workspace,id);service.require_event(db,event,user,snap,workspace)
-            clause='' if user['role']=='admin' else ' AND parent_id=?';args=[] if user['role']=='admin' else [user['id']]
+            event=service.event(db,workspace,id);manager=service.can_manage(db,event,user,snap,workspace)
+            if not manager and user['role'] not in FAMILY_ROLES:raise HTTPException(403,'Очередь доступна семье, ведущему консультаций и администрации.')
+            service.require_event(db,event,user,snap,workspace)
+            clause='' if manager else ' AND parent_id=?';args=[] if manager else [user['id']]
             rows=db.execute('SELECT * FROM meeting_waitlist WHERE workspace=? AND event_id=? AND seq>?'+clause+' ORDER BY seq LIMIT ?',(workspace,id,after,*args,limit+1)).fetchall()
             items=[p for row in rows[:limit] if (p:=public(service,db,row,event,user,snap,workspace))]
             return dict(items=items,nextAfter=rows[limit-1]['seq'] if len(rows)>limit else None,eventVersion=event['version'])
@@ -159,14 +162,17 @@ def register(service,app,Workspace):
     @app.post('/api/meetings/events/{id}/waitlist')
     def join(id:str,body:Join,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
-            if user['role']!='parent' or body.studentId not in service.parent_pupils(user,snap,workspace):raise HTTPException(403,'Выберите своего ребёнка.')
-            event=service.event(db,workspace,id);host=service.hosts(db,event,snap,workspace).get(body.hostId)
+            if user['role'] not in FAMILY_ROLES:raise HTTPException(403,'Выберите своего ребёнка.')
+            event=service.event(db,workspace,id)
+            if body.studentId not in service.bookable_pupils(db,event,user,snap,workspace):raise HTTPException(403,'Выберите своего ребёнка.')
+            host=service.hosts(db,event,snap,workspace).get(body.hostId)
             if not host or body.studentId not in service.eligible_pupils(host,Directory(snap.state,workspace)):raise HTTPException(404,'Ведущий недоступен.')
             fingerprint,old=service.replay(db,user,body,'waitlist:'+id)
             if old:return old
             meetings.version(event,body.version)
             if not service.registration_open(event):raise HTTPException(409,'Приём заявок закрыт.')
-            if db.execute("SELECT 1 FROM meeting_bookings WHERE event_id=? AND host_id=? AND student_id=? AND status!='cancelled'",(id,body.hostId,body.studentId)).fetchone():raise HTTPException(409,'За ребёнка уже есть запись к этому ведущему.')
+            # In a series an old booking does not stop a new request; only a coming one does.
+            if db.execute("SELECT 1 FROM meeting_bookings WHERE event_id=? AND host_id=? AND student_id=? AND status!='cancelled'"+(' AND starts_at>?' if meetings.consultation(event) else ''),(id,body.hostId,body.studentId,*([utc(meetings.now())] if meetings.consultation(event) else []))).fetchone():raise HTTPException(409,'За ребёнка уже есть запись к этому ведущему.')
             previous=db.execute("SELECT * FROM meeting_waitlist WHERE event_id=? AND host_id=? AND student_id=? AND status IN ('waiting','offered')",(id,body.hostId,body.studentId)).fetchone()
             if previous:
                 if participants(service,db,previous,event,snap,workspace)[2]:raise HTTPException(409,'За ребёнка уже есть действующая заявка к этому ведущему.')
@@ -182,7 +188,8 @@ def register(service,app,Workspace):
     @app.post('/api/meetings/waitlist/{id}/offer')
     def offer(id:str,body:Offer,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
-            service.admin(user);row,event=access(db,workspace,id,user,snap)
+            if user['role'] in FAMILY_ROLES:raise HTTPException(403,'Предложение интервала делает ведущий консультаций или администрация.')
+            row,event=access(db,workspace,id,user,snap)
             owner,host,current=participants(service,db,row,event,snap,workspace)
             if not current:raise HTTPException(409,'Права семьи или ведущего изменились.')
             fingerprint,old=service.replay(db,user,body,'wait-offer:'+id)
@@ -205,8 +212,9 @@ def register(service,app,Workspace):
     def change(id:str,body:Change,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
             row,event=access(db,workspace,id,user,snap)
-            if (body.action in ['accept','decline','withdraw'])!=(user['role']=='parent'):raise HTTPException(403,'Это действие недоступно вашей роли.')
+            if (body.action in ['accept','decline','withdraw'])!=(user['role'] in FAMILY_ROLES):raise HTTPException(403,'Это действие недоступно вашей роли.')
             owner,host,current=participants(service,db,row,event,snap,workspace)
+            if body.action=='accept' and row['student_id'] not in service.bookable_pupils(db,event,user,snap,workspace):raise HTTPException(403,'Запись учеников на консультации выключена школой.')
             if body.action=='accept' and not current:raise HTTPException(409,'Права семьи или ведущего изменились.')
             fingerprint,old=service.replay(db,user,body,'wait-change:'+id)
             if old:return old
@@ -224,10 +232,10 @@ def register(service,app,Workspace):
                 update(db,row,user,'accepted','accepted',bookingId=result['id'],startsAt=slot['starts_at'],endsAt=slot['ends_at'])
                 return service.remember(db,user,body,fingerprint,dict(id=id,version=row['version']+1,status='accepted',bookingId=result['id']))
             if body.action in ['decline','revoke'] and row['status']!='offered':raise HTTPException(409,'Нет предложения для отклонения или отзыва.')
-            if user['role']=='admin' and not body.reason.strip():raise HTTPException(422,'Укажите причину.')
+            if user['role'] not in FAMILY_ROLES and not body.reason.strip():raise HTTPException(422,'Укажите причину.')
             status='waiting' if body.action in ['decline','revoke'] else 'withdrawn' if body.action=='withdraw' else 'cancelled'
             update(db,row,user,status,body.action,body.reason.strip())
-            if user['role']=='admin' and owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed',target=waitlist_notice(event,row,snap,'Изменилась заявка в очереди'))
+            if user['role'] not in FAMILY_ROLES and owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed',target=waitlist_notice(event,row,snap,'Изменилась заявка в очереди'))
             return service.remember(db,user,body,fingerprint,dict(id=id,version=row['version']+1,status=status))
 
     @app.get('/api/meetings/waitlist/{id}/history')

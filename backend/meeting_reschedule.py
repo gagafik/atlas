@@ -1,4 +1,4 @@
-"""Atomic administrator transfers of existing parent/teacher appointments."""
+"""Atomic transfers of existing parent/teacher appointments by an administrator, or by the host of their own consultation hours."""
 from datetime import date,datetime,timedelta
 import json
 from fastapi import HTTPException,Query,Request
@@ -6,6 +6,7 @@ from . import meetings
 from .meeting_models import Reschedule,utc
 from .meeting_availability import Occupancy,ZONE
 from .meeting_routes import cursor
+from .meeting_booking import occasion,pupil_conflict
 from .messages import Directory
 from .notifications import encoded
 
@@ -23,12 +24,15 @@ def movable(booking,event):
         raise HTTPException(409,'Перенос доступен только для предстоящей запланированной встречи действующего мероприятия.')
 
 
-def conflict(service,db,booking,target,snap,occupancy):
+def conflict(service,db,event,booking,target,snap,occupancy):
     if target['status']!='open' or datetime.fromisoformat(target['starts_at'])<=meetings.now():
         return 'Этот интервал закрыт или уже начался.'
     from .meeting_waitlist import hold
     if hold(service,db,target,snap,booking['workspace']):return 'Этот интервал предложен семье из очереди ожидания.'
     if problem:=service.slot_conflict(db,target,occupancy,target['id']):return problem
+    if problem:=pupil_conflict(event,target,booking['student_id'],snap):return problem
+    if db.execute("SELECT 1 FROM meeting_bookings WHERE event_id=? AND host_id=? AND student_id=? AND occasion=? AND id!=? AND status!='cancelled' LIMIT 1",(event['id'],booking['host_id'],booking['student_id'],occasion(event,target),booking['id'])).fetchone():
+        return 'У ребёнка уже есть запись к этому ведущему в этот день.'
     if db.execute("SELECT 1 FROM meeting_bookings WHERE slot_id=? AND status!='cancelled' LIMIT 1",(target['id'],)).fetchone():
         return 'Этот интервал уже занят.'
     for column in ['parent_id','student_id']:
@@ -42,8 +46,7 @@ def register(service,app,Workspace):
     def options(id:str,request:Request,workspace:Workspace='school',onDate:date|None=None,
                 after:str=Query(default='',max_length=150),limit:int=Query(default=60,ge=1,le=100)):
         with service.context(request,workspace) as (db,user,snap):
-            service.admin(user)
-            booking=service.booking(db,workspace,id);event=service.event(db,workspace,booking['event_id'])
+            booking=service.booking(db,workspace,id);event=service.event(db,workspace,booking['event_id']);service.manage(db,event,user,snap,workspace)
             participants(service,db,booking,event,snap,workspace);movable(booking,event)
             source=db.execute('SELECT * FROM meeting_slots WHERE id=?',(booking['slot_id'],)).fetchone()
             if not source or source['status']!='open':raise HTTPException(409,'Исходный интервал изменился. Обновите запись.')
@@ -56,7 +59,7 @@ def register(service,app,Workspace):
             rows=db.execute("SELECT * FROM meeting_slots WHERE event_id=? AND host_id=? AND id!=? AND starts_at>? AND status='open'"+clause+' ORDER BY starts_at,id LIMIT ?',(*params,limit+1)).fetchall()
             occupancy=Occupancy(snap);items=[]
             for target in rows[:limit]:
-                problem=conflict(service,db,booking,target,snap,occupancy)
+                problem=conflict(service,db,event,booking,target,snap,occupancy)
                 items.append(dict(id=target['id'],version=target['version'],startsAt=target['starts_at'],endsAt=target['ends_at'],available=not problem,reason=problem or ''))
             return dict(booking=service.booking_public(booking,event,user),eventVersion=event['version'],sourceSlotVersion=source['version'],
                         items=items,nextAfter=rows[limit-1]['starts_at']+'|'+rows[limit-1]['id'] if len(rows)>limit else None)
@@ -64,8 +67,7 @@ def register(service,app,Workspace):
     @app.post('/api/meetings/bookings/{id}/reschedule')
     def reschedule(id:str,body:Reschedule,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
-            service.admin(user)
-            booking=service.booking(db,workspace,id);event=service.event(db,workspace,booking['event_id'])
+            booking=service.booking(db,workspace,id);event=service.event(db,workspace,booking['event_id']);service.manage(db,event,user,snap,workspace)
             owner,host=participants(service,db,booking,event,snap,workspace)
             fingerprint,old=service.replay(db,user,body,'reschedule:'+id)
             if old:return old
@@ -77,12 +79,12 @@ def register(service,app,Workspace):
             if target['id']==source['id'] or target['event_id']!=event['id'] or target['host_id']!=booking['host_id']:
                 raise HTTPException(422,'Выберите другой интервал у того же ведущего в этом мероприятии.')
             meetings.version(source,body.sourceSlotVersion);meetings.version(target,body.targetSlotVersion)
-            if problem:=conflict(service,db,booking,target,snap,Occupancy(snap)):raise HTTPException(409,problem)
+            if problem:=conflict(service,db,event,booking,target,snap,Occupancy(snap)):raise HTTPException(409,problem)
             # No cancellation/recreation gap: every change commits or rolls back together.
             version=booking['version']+1;document=json.loads(booking['document'])
             document.update(rescheduleReason=body.reason,updated=utc(meetings.now()))
-            db.execute('UPDATE meeting_bookings SET slot_id=?,starts_at=?,ends_at=?,version=?,document=? WHERE id=?',
-                       (target['id'],target['starts_at'],target['ends_at'],version,encoded(document),id))
+            db.execute('UPDATE meeting_bookings SET slot_id=?,starts_at=?,ends_at=?,version=?,document=?,occasion=? WHERE id=?',
+                       (target['id'],target['starts_at'],target['ends_at'],version,encoded(document),occasion(event,target),id))
             db.execute('UPDATE meeting_slots SET version=version+1,status=?,reason=? WHERE id=?',
                        ('blocked' if body.blockSource else 'open',body.reason if body.blockSource else '',source['id']))
             db.execute('UPDATE meeting_slots SET version=version+1 WHERE id=?',(target['id'],))
@@ -97,4 +99,6 @@ def register(service,app,Workspace):
             # A transfer changes slots, not the event: the slot versions already invalidate open availability previews.
             result=service.note_event(db,event,user,'rescheduled',dict(bookingId=id,version=version,sourceBlocked=body.blockSource))
             service.notifications.deliver(db,[owner,host['user']],workspace,version,'meeting.rescheduled',target=service.notice(id,event,document,target['starts_at'],'Встреча перенесена'))
+            if others:=service.family_others(db,event,booking['student_id'],{owner['id'],host['accountId']},workspace):
+                service.notifications.deliver(db,others,workspace,version,'meeting.rescheduled',target=service.notice(id,event,document,target['starts_at'],'Встреча перенесена'))
             return service.remember(db,user,body,fingerprint,dict(id=id,version=version,status='scheduled',startsAt=target['starts_at'],endsAt=target['ends_at'],eventVersion=result['version']))
