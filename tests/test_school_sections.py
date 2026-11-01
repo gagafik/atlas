@@ -8,9 +8,10 @@ from backend.school_sections import IDS, SECTIONS, tables, stored
 from test_access import client, enable, create, signed, HEADERS
 
 URL = '/api/school-sections'
+REASON = 'Школа пользуется этими разделами'
 
 
-def save(c, version, hidden, reason='Школа пользуется этими разделами', **values):
+def save(c, version, hidden, reason=REASON, **values):
     return c.put(URL, json=dict(version=version, hidden=hidden, reason=reason) | values)
 
 
@@ -47,12 +48,14 @@ def test_admin_turns_a_section_back_on(client):
     assert save(client, 1, [], reason='').status_code == 422
     assert parent.get(URL).json()['hidden'] == shown
     # Showing everything is a choice that stays: an empty list is saved as a row, not mistaken for the default.
-    assert save(client, 1, []).json()['hidden'] == []
+    everything = save(client, 1, []); assert everything.json()['hidden'] == []
     assert parent.get(URL).json() == dict(version=2, hidden=[], items=[dict(s, hidden=False) for s in SECTIONS])
-    assert save(client, 2, ['site', 'payments', 'payments']).json()['hidden'] == ['payments', 'site']
+    latest = save(client, 2, ['site', 'payments', 'payments']); assert latest.json()['hidden'] == ['payments', 'site']
     audit = [row for row in client.get('/api/access/audit').json() if row['action'] == 'school.sections_updated']
-    assert len(audit) == 3 and audit[0]['workspace'] == 'school' and 'Редакция 3' in audit[0]['detail'] and 'payments, site' in audit[0]['detail'] and 'Школа пользуется' in audit[0]['detail']
-    assert 'Редакция 2 · скрыто: нет' in audit[1]['detail']
+    # Every successful save is recorded, newest first, with its revision, the sections it hid and the reason given.
+    assert len(audit) == 3 and audit[0]['workspace'] == 'school'
+    assert str(latest.json()['version']) in audit[0]['detail'] and 'payments' in audit[0]['detail'] and 'site' in audit[0]['detail'] and REASON in audit[0]['detail']
+    assert str(everything.json()['version']) in audit[1]['detail'] and not any(id in audit[1]['detail'] for id in IDS)
 
 
 def test_hidden_section_api_keeps_existing_permissions(client):

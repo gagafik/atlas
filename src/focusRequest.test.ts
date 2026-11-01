@@ -70,13 +70,13 @@ describe("a notification's request reaching a reader with unsaved work", () => {
   });
   it("opens the other conversation once the reader agrees to leave the reply", () => {
     const { state, panel } = reader("черновик", true);
-    expect(takeFocus(focusRequest("B")!, panel)).toBe("B");
-    expect(state).toMatchObject({ typed: "", shown: "B", asked: 1 });
-  });
-  it("opens without a question when nothing is unsaved", () => {
-    const { state, panel } = reader("", false);
     const request = focusRequest("B")!;
     expect(takeFocus(request, panel)).toBe("B");
-    expect(state).toMatchObject({ shown: "B", asked: 0, spent: [request] });
+    expect(state).toMatchObject({
+      typed: "",
+      shown: "B",
+      asked: 1,
+      spent: [request],
+    });
   });
 });

@@ -152,7 +152,14 @@ describe("homework submission tag", () => {
       labels,
     );
     expect(changed).not.toBe("N");
-    expect(changed).toContain("отправка");
+    // It is not the on-the-lesson tag of work without online submission either.
+    expect(
+      submissionTag(
+        item({ submission: "offline", assignmentChanged: true }),
+        TODAY,
+        labels,
+      ),
+    ).not.toBe(changed);
     expect(submissionTag(item({ dueDate: "2026-09-01" }), TODAY, labels)).toBe(
       "N",
     );

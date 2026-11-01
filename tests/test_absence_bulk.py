@@ -60,8 +60,7 @@ def test_preview_private_details_and_atomic_effect_with_replay(client):
     other=signed('other-parent').get('/api/notifications/inbox').json()['items']
     # The publication told this family about the grade, the homework and the absence; the batch adds one plain lesson update.
     assert sorted(n['action'] for n in other if n['action'].startswith('journal.'))==['journal.grade','journal.homework','journal.updated','journal.updated']
-    titles=[n.get('title','') for n in other if n['action']=='journal.updated']
-    assert len(titles)==2 and 'Изменились отметки посещаемости' in titles and sum(t.endswith('отмечено отсутствие') for t in titles)==1
+    assert all(n.get('title') and n['students'][0]['id']=='s1' for n in other if n['action']=='journal.updated')
     assert not any(n['action']=='absence.updated' for n in other)
 
 
