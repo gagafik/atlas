@@ -162,7 +162,8 @@ class MessageFeed:
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)', (user['id'], body.requestId, signature, f'{id}:{post}'))
                 author = self.messages.accounts(db, user_ids=[thread['authorId']]).get(thread['authorId'])
                 if author and author['id'] != user['id'] and directory.enabled(author):
-                    self.messages.notifications.deliver(db, [author], workspace, thread['version'], 'message.feed_reply')
+                    self.messages.notifications.deliver(db, [author], workspace, thread['version'], 'message.feed_reply', topic=f'message:{workspace}:{id}',
+                                                        target=dict(module='messages', recordId=id, title=f"Ответ от {user['name']}: «{thread['title']}»"))
                 self.access.record(db, 'message.feed_replied', workspace, detail=id)
             return dict(id=post, postId=root)
 

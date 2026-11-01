@@ -11,6 +11,7 @@ from .access import now
 from .models import Model
 from .notifications import encoded
 from .journal import user_ids
+from .absences import notice_title, notice_period, notice_target, attendance_target
 from . import absence_codes
 
 
@@ -57,16 +58,26 @@ def notify_batch(service,db,rows,snap):
             WHERE json_extract(g.value,'$.workspace')=? AND json_extract(g.value,'$.view')='student'
             AND s.value IN (SELECT value FROM json_each(?)))))""",
         (encoded(sorted(authors|reviewers)),journal_changed,workspace,encoded(sorted(students)))).fetchall()
-    private_targets=[];journal_targets=[]
+    private_targets=[];journal_targets=[];own={}
     for account in candidates:
         user=service.access.public(account);children=user_ids(user,workspace,'student')
-        if (user['role']=='admin' or user['role'] in ['teacher','staff'] and user['id'] in reviewers and any(service.can_review(db,user,snap,workspace,r[3]) for r in rows)
-            or user['role']=='parent' and any(service.level(db,user,snap,workspace,r)=='full' for r in rows)):
-            private_targets.append(user)
+        mine=(list(rows) if user['role']=='admin' else [r for r in rows if service.can_review(db,user,snap,workspace,r[3])] if user['role'] in ['teacher','staff'] and user['id'] in reviewers
+              else [r for r in rows if service.level(db,user,snap,workspace,r)=='full'] if user['role']=='parent' else [])
+        if mine:private_targets.append(user);own[user['id']]=mine
         if journal_changed and user['role'] in ['student','parent'] and students & children:journal_targets.append(user)
     version=max(r[8] for r in rows)
-    service.notifications.deliver(db,private_targets,workspace,version,'absence.updated')
-    if journal_changed:service.notifications.deliver(db,journal_targets,workspace,version,'journal.updated')
+    title=lambda mine:notice_title('absence.updated',mine[0]) if len(mine)==1 else f'Решения по заявлениям об отсутствии: {len(mine)}'
+    # As after a single decision, only the newest entry about a note stays readable: the older ones lose their text, the unread ones go.
+    owners={}
+    for uid,mine in own.items():
+        for r in mine:owners.setdefault(r[0],[]).append(uid)
+    for id,ids in owners.items():service.notifications.retract(db,ids,f'absence:{workspace}:{id}')
+    # An entry about one note carries its topic, so a later decision on that note replaces it; the count over several notes stays as the record of the batch.
+    by_note={}
+    for u in private_targets:by_note.setdefault(own[u['id']][0][0] if len(own[u['id']])==1 else None,[]).append(u)
+    for id,users in by_note.items():
+        service.notifications.deliver(db,users,workspace,version,'absence.updated',topic=f'absence:{workspace}:{id}' if id else None,supersede=bool(id),target=lambda u:notice_target(title(own[u['id']]),own[u['id']]))
+    if journal_changed:service.notifications.deliver(db,journal_targets,workspace,version,'journal.updated',target=attendance_target(workspace,rows))
 
 
 def notify_notes(service,db,rows,snap,actor):
@@ -76,15 +87,17 @@ def notify_notes(service,db,rows,snap,actor):
     reviewers=service.reviewer_ids(db,workspace,snap,classes)
     staff=db.execute("SELECT * FROM accounts WHERE active=1 AND (role='admin' OR id IN (SELECT value FROM json_each(?)))",(encoded(sorted(reviewers)),)).fetchall()
     family=service.notifications.granted_users(db,workspace,'student',students,['parent','student'])
-    recorded={};journal={}
+    recorded={};journal={};own={}
     for user in [service.access.public(r) for r in staff]+family:
         if user['id']==actor['id']:continue
-        levels={service.level(db,user,snap,workspace,r) for r in rows}
+        seen={r[0]:service.level(db,user,snap,workspace,r) for r in rows};levels=set(seen.values())
+        own[user['id']]=[r for r in rows if seen[r[0]]]
         if 'full' in levels:recorded[user['id']]=user
         # A pupil and every guardian with current access learn at least the summary and see the changed attendance.
         if user['role'] in ['parent','student'] and levels-{None}:recorded[user['id']]=user;journal[user['id']]=user
-    service.notifications.deliver(db,list(recorded.values()),workspace,1,'absence.recorded')
-    service.notifications.deliver(db,list(journal.values()),workspace,1,'journal.updated')
+    title=lambda mine:f'Школа внесла записку об отсутствии: {notice_period(mine[0])}' if len(mine)==1 else f'Школа внесла записки об отсутствии: {len(mine)}'
+    service.notifications.deliver(db,list(recorded.values()),workspace,1,'absence.recorded',target=lambda u:notice_target(title(own[u['id']]),own[u['id']]))
+    service.notifications.deliver(db,list(journal.values()),workspace,1,'journal.updated',target=attendance_target(workspace,rows))
 
 
 def register(service,app,Workspace):

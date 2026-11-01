@@ -4,12 +4,13 @@ import { roleNames, type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
 import { CHANGE_TYPES } from "./substitutions";
 import type { ChangeType } from "./types";
-import JournalPanel from "./JournalPanel";
+import JournalPanel, { type JournalFocus } from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
 import { unreadLabel } from "./messages";
@@ -81,14 +82,14 @@ export default function Portal({
 }) {
   const [section, setSectionValue] = useState("home");
   // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
-  const [journalFocus, setJournalFocus] = useState<
-      { studentId: string; day?: string; finalsPeriodId?: string } | undefined
-    >(),
+  const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
+    [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>(),
     [wantedRecord, setWantedRecord] = useState("");
   function setSection(value: string) {
     if (canLeaveHomework()) {
       setSectionValue(value);
       setJournalFocus(undefined);
+      setMessageFocus(undefined);
     }
   }
   const [spaces, setSpaces] = useState<Space[]>([]),
@@ -203,22 +204,34 @@ export default function Portal({
       "atlas-open-quizzes": "quizzes",
       "atlas-open-schedule": "schedule",
       "atlas-open-duties": "duties",
+      "atlas-open-messages": "messages",
+      "atlas-open-homework": "homework",
+      // A teacher reviews notes in the class workplace; the administrator finds them under the journal.
+      "atlas-open-absences":
+        session.user?.role === "teacher" ? "class-staff" : "journal",
     };
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
       if (!canLeaveHomework()) return;
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setSectionValue(sections[event.type]);
+      setMessageFocus(
+        focusRequest(
+          event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        ),
+      );
       setJournalFocus(
-        event.type === "atlas-open-journal" &&
-          detail.studentId &&
-          (detail.day || detail.finalsPeriodId)
-          ? {
-              studentId: detail.studentId,
-              day: detail.day,
-              finalsPeriodId: detail.finalsPeriodId,
-            }
-          : undefined,
+        event.type === "atlas-open-absences"
+          ? { panel: "absences" }
+          : event.type === "atlas-open-journal" &&
+              detail.studentId &&
+              (detail.day || detail.finalsPeriodId)
+            ? {
+                studentId: detail.studentId,
+                day: detail.day,
+                finalsPeriodId: detail.finalsPeriodId,
+              }
+            : undefined,
       );
       if (event.type === "atlas-open-schedule" && detail.studentId)
         setWantedRecord(JSON.stringify(["student", detail.studentId]));
@@ -229,7 +242,7 @@ export default function Portal({
       for (const name of Object.keys(sections))
         window.removeEventListener(name, open);
     };
-  }, []);
+  }, [session.user?.role]);
   function csv() {
     if (!result) return;
     const rows = [
@@ -453,7 +466,16 @@ export default function Portal({
               ))}
             </select>
           </label>
-          {workspace && <MessagesPanel key={workspace} workspace={workspace} />}
+          {workspace && (
+            <MessagesPanel
+              key={workspace}
+              workspace={workspace}
+              focusThread={messageFocus}
+              onFocusUsed={(r) =>
+                setMessageFocus((current) => spendFocus(current, r))
+              }
+            />
+          )}
         </>
       ) : section === "courses" ? (
         <>

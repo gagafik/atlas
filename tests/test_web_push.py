@@ -503,6 +503,19 @@ def test_payload_carries_only_category(client,push):
         assert private not in payload
 
 
+def test_message_title_stays_out_of_the_push_payload(client,push):
+    from test_messages import setup,url,payload
+    people=setup(client);teacher=signed('teacher');subscribe(teacher)
+    service,clock,calls=push
+    assert signed('parent').post(url(),json=payload(people['teacher']['id'])).status_code==200
+    assert teacher.get('/api/notifications/inbox').json()['items'][0]['title']
+    after_enqueue(clock)
+    assert service.process_one()
+    sent=calls[-1][3]
+    assert set(json.loads(sent))=={'type','category'} and json.loads(sent)['category']=='messages'
+    assert 'Вопрос по уроку' not in sent and 'Сотрудник' not in sent
+
+
 def test_push_label_follows_the_newest_unmuted_notice(client,push):
     family(client)
     parent=signed('parent');subscribe(parent)

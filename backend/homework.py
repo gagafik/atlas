@@ -18,7 +18,7 @@ from .access import now
 from .models import Model
 from .journal import staff_read, user_ids
 from .portal_cache import PortalSnapshots
-from .notifications import encoded
+from .notifications import encoded, late_opener
 from .resources import teacher_ids
 from . import homework_files as files
 from . import assignment_files as materials
@@ -118,6 +118,9 @@ def deadline_closed(content, instant=None):
 def status(document):
     sent=document.get('submitted')
     return sent['review']['decision'] if sent and sent.get('review') else 'submitted' if sent else 'not_submitted'
+
+
+NOTICES={'homework.submitted':'работа отправлена на проверку','homework.withdrawn':'ученик отозвал работу','homework.reviewed':'есть результат проверки','homework.deadline_changed':'изменён индивидуальный срок'}
 
 
 class Homework:
@@ -243,7 +246,19 @@ class Homework:
         role='teacher' if action in ['homework.submitted','homework.withdrawn'] else 'family'
         targets=self.journal.notifications.granted_users(db,ctx['workspace'],'teacher' if role=='teacher' else 'student',
             sorted(ctx['reviewers']) if role=='teacher' else [student],['teacher'] if role=='teacher' else ['parent','student'])
-        self.journal.notifications.deliver(db,targets,ctx['workspace'],version,action)
+        # Subject, date and what happened; never a comment, a grade or the answer.
+        lesson=ctx['published']['lesson'];pupil=ctx['roster'].get(student)
+        text=NOTICES.get(action,'изменилось задание')
+        self.journal.notifications.deliver(db,targets,ctx['workspace'],version,action,
+            target=dict(module='homework',recordId=ctx['key'],students=[dict(id=student,name=pupil['name'])] if pupil else [],
+                        title=f"{lesson['subject']}, {lesson['date'][8:10]}.{lesson['date'][5:7]}: {text}"))
+
+    def open_notice(self,db,user,workspace,data,kids):
+        record=db.execute('SELECT * FROM journal_entries WHERE workspace=? AND lesson_key=?',(workspace,data.get('recordId'))).fetchone()
+        if not record:return None
+        # The same authorization as the queue: raises 403/404 once the account has lost the lesson or the pupil.
+        self.resolved_context(user,self.snapshots.get(workspace),self.journal.unpack(record),workspace,data.get('recordId'),kids[0] if user['role'] in ('student','parent') and kids else None)
+        return {}
 
     def persist(self,db,ctx,version,document,action):
         db.execute('INSERT INTO homework_submissions VALUES (?,?,?,?,?) ON CONFLICT(workspace,lesson_key,student_id) DO UPDATE SET version=excluded.version,document=excluded.document',
@@ -263,6 +278,7 @@ class Homework:
             self.notify(db,ctx,ctx['student'],version,action)
 
     def register(self,app,Workspace):
+        late_opener('homework',self.open_notice)
         from .homework_queue import HomeworkQueue
         self.queue=HomeworkQueue(self)
         self.queue.register(app,Workspace)

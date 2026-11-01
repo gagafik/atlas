@@ -502,6 +502,8 @@ hall_screen.register(app, Workspace)
 from .registers import Registers
 registers = Registers(access, notifications, portal_stamp)
 registers.register(app, Workspace)
+from .school_sections import register as register_school_sections
+register_school_sections(app, access)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

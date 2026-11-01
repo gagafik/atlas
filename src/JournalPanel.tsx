@@ -164,13 +164,22 @@ function PublishedRows({
   );
 }
 
+// Set by an opened notification: one pupil's report for that day, the report card of a period, or the absence notes.
+export type JournalFocus =
+  | { studentId: string; day?: string; finalsPeriodId?: string; panel?: never }
+  | {
+      panel: "absences";
+      studentId?: never;
+      day?: never;
+      finalsPeriodId?: never;
+    };
+
 export default function JournalPanel({
   workspace,
   focus,
 }: {
   workspace: string;
-  // Set by an opened notification: show this pupil's report for that one day, or the report card of a period.
-  focus?: { studentId: string; day?: string; finalsPeriodId?: string };
+  focus?: JournalFocus;
 }) {
   const coverageOpened = useRef(false),
     editorPanel = useRef<HTMLElement | null>(null);
@@ -256,6 +265,12 @@ export default function JournalPanel({
     setStudent(focus.studentId);
     setStart(focus.day);
     setEnd(focus.day);
+  }, [options, focus]);
+  useEffect(() => {
+    if (focus?.panel !== "absences" || !options?.panels?.absences) return;
+    document
+      .getElementById("journal-panel-absences")
+      ?.scrollIntoView({ block: "start" });
   }, [options, focus]);
   useEffect(() => {
     if (!options || !day || mode !== "day") return;
@@ -582,7 +597,11 @@ export default function JournalPanel({
           />
         );
       case "absences":
-        return <AbsencePanel key={workspace} workspace={workspace} />;
+        return (
+          <div key={workspace} id="journal-panel-absences">
+            <AbsencePanel workspace={workspace} />
+          </div>
+        );
       case "periods":
         return (
           <JournalPeriodsPanel

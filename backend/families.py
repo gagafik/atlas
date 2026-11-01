@@ -213,6 +213,9 @@ class Families:
                 write_link(db,parent,workspace,student,pupil['name'] if pupil else student,body.version+1,doc,'family.updated',principal)
                 permissions=sync_account(db,parent,'parent',permissions,source='family.legacy_import',principal=principal)
                 db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(encoded(permissions),parent))
+                # A grant that stays does not keep titles of notes only a legal guardian may open.
+                from .absences import forget_titles
+                forget_titles(self.notifications,db,workspace,parent,student,doc)
                 # Other sessions keep their identity, but every request reads fresh grants.
                 if row[4]:
                     updated=self.access.public(db.execute('SELECT * FROM accounts WHERE id=?',(parent,)).fetchone())

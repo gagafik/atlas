@@ -85,7 +85,7 @@ def register(s,app,Workspace):
             db.execute('DELETE FROM club_access WHERE club_id=?',(id,))
             for a in assigned:db.execute('INSERT INTO club_access VALUES (?,?,?,?)',(id,a['id'],permission_key(a),a['name']))
             s.bump(db,c);s.history(db,u,c,id,'access',body.reason,dict(before=previous,after=[dict(user_id=a['id'],name=a['name']) for a in assigned]))
-            s.notifications.deliver(db,[a for a in assigned if a['id']!=u['id']],workspace,c['version'],'clubs.changed')
+            s.notifications.deliver(db,[a for a in assigned if a['id']!=u['id']],workspace,c['version'],'clubs.changed',target=dict(module='clubs',recordId=id,title=f"Кружок «{c['data']['title']}»: вы назначены ответственным"))
             return s.remember(db,u,body,key,s.public(db,u,snap,c))
 
     @app.post('/api/clubs/items/{id}/action')
