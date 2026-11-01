@@ -122,9 +122,14 @@ def reserve(db, form, answer, answers):
             if places.get(choice)==0: raise HTTPException(409,f'Места на вариант «{choice}» закончились. Выберите другой вариант.')
 
 
-def withheld(count):
+def people_answered(db, form_id):
+    """Accounts that cast a ballot. A parent answers once per child, so answers alone can come from fewer people."""
+    return db.execute('SELECT count(DISTINCT user_id) FROM school_form_ballots WHERE form_id=?',(form_id,)).fetchone()[0]
+
+
+def withheld(db, form_id):
     """Results of an anonymous survey stay closed until enough people have answered to hide each one."""
-    return count<ANONYMOUS_MIN
+    return people_answered(db,form_id)<ANONYMOUS_MIN
 
 
 def tally(definition, answers):
@@ -511,7 +516,7 @@ class SchoolForms:
                     if doc['closesAt'] and datetime.fromisoformat(doc['closesAt'])<=now(): raise HTTPException(422,'Срок ответа уже прошёл.')
                     recipients,users,current_hash,_=self.recipients(db,form,snap,workspace,user)
                     if not recipients: raise HTTPException(422,'В выбранной аудитории нет действующих аккаунтов.')
-                    if doc.get('anonymous') and len(recipients)<ANONYMOUS_MIN: raise HTTPException(422,f'Анонимный опрос нужен минимум для {ANONYMOUS_MIN} адресатов: иначе ответ можно угадать.')
+                    if doc.get('anonymous') and len(users)<ANONYMOUS_MIN: raise HTTPException(422,f'Анонимный опрос нужен минимум для {ANONYMOUS_MIN} человек: иначе ответ можно угадать.')
                     if current_hash!=body.audienceHash: raise HTTPException(409,'Аудитория изменилась. Повторите предварительную проверку.')
                     db.executemany('INSERT INTO school_form_recipients VALUES (?,?,?,?,?,?,?)',[(id,*r) for r in recipients])
                     form['status']='open'
@@ -593,8 +598,8 @@ class SchoolForms:
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require(db,form,user)
                 if form['definition'].get('anonymous'):
+                    if withheld(db,id): return dict(items=[],nextAfter=None,withheld=True,minimum=ANONYMOUS_MIN,count=people_answered(db,id))
                     count=db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]
-                    if withheld(count): return dict(items=[],nextAfter=None,withheld=True,minimum=ANONYMOUS_MIN,count=count)
                     # Random ids give an order that says nothing about when or by whom an answer was sent.
                     rows=db.execute('SELECT id,answers FROM school_form_anonymous WHERE form_id=? AND id>? ORDER BY id LIMIT ?',(id,after,limit+1)).fetchall()
                     return dict(items=[dict(id=row[0],answers=json.loads(row[1])) for row in rows[:limit]],nextAfter=rows[limit-1][0] if len(rows)>limit else None,withheld=False,count=count)
@@ -652,7 +657,7 @@ class SchoolForms:
                 form=self.form(db,workspace,id);self.require(db,form,user)
                 if form['definition'].get('anonymous'):
                     count=db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]
-                    if withheld(count): return dict(responses=count,questions=[],withheld=True)
+                    if withheld(db,id): return dict(responses=count,questions=[],withheld=True)
                     total,questions=tally(form['definition'],(json.loads(answers) for answers, in db.execute('SELECT answers FROM school_form_anonymous WHERE form_id=?',(id,))))
                 else:
                     total,questions=tally(form['definition'],(json.loads(document)['answers'] for document, in db.execute("SELECT document FROM school_form_answers WHERE form_id=? AND status NOT IN ('draft','withdrawn')",(id,))))
@@ -716,7 +721,7 @@ class SchoolForms:
         def export(id:str,request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
                 form=self.form(db,workspace,id);self.require(db,form,user);anonymous=bool(form['definition'].get('anonymous'))
-                if anonymous and withheld(db.execute('SELECT count(*) FROM school_form_anonymous WHERE form_id=?',(id,)).fetchone()[0]):
+                if anonymous and withheld(db,id):
                     raise HTTPException(409,f'Результаты анонимного опроса откроются, когда ответят не менее {ANONYMOUS_MIN} человек.')
                 output=tempfile.SpooledTemporaryFile(max_size=512*1024,mode='w+',encoding='utf-8',newline='')
                 writer=csv.writer(output);questions=form['definition']['questions']

@@ -162,7 +162,7 @@ const questionKinds: Record<Question["kind"], string> = {
   date: "Дата",
   number: "Число",
 };
-const ANONYMOUS_MIN = 5; // as on the server: fewest answers an anonymous survey shows
+const ANONYMOUS_MIN = 5; // as on the server: fewest people whose answers an anonymous survey shows
 const audienceText = (d: Definition) => {
   const a = d.audience,
     preset = a?.preset ?? "roles";
@@ -1282,8 +1282,8 @@ export default function SchoolForms({
                                 {definition.anonymous && (
                                   <p className="school-forms-notice">
                                     Ответы хранятся без имени и результаты
-                                    открываются после {ANONYMOUS_MIN} ответов,
-                                    адресатов должно быть не меньше. Лимита
+                                    открываются, когда ответят {ANONYMOUS_MIN}{" "}
+                                    человек, адресатов должно быть не меньше. Лимита
                                     мест, черновика и отзыва нет. Свободный
                                     текст может выдать автора: попросите не
                                     называть себя.
@@ -1318,7 +1318,8 @@ export default function SchoolForms({
                         {form.definition.anonymous && (
                           <p>
                             Анонимный опрос: ответы хранятся без имён,
-                            результаты откроются после {ANONYMOUS_MIN} ответов.
+                            результаты откроются, когда ответят {ANONYMOUS_MIN}{" "}
+                            человек.
                           </p>
                         )}
                         <p>
@@ -1861,9 +1862,9 @@ export default function SchoolForms({
                   </p>
                   {withheld && (
                     <p className="school-forms-notice">
-                      Результаты откроются после {withheld.minimum} ответов:
-                      сейчас {withheld.count}. Так ответ нельзя связать с
-                      человеком.
+                      Результаты откроются, когда ответят {withheld.minimum}{" "}
+                      человек: сейчас {withheld.count}. Так ответ нельзя связать
+                      с человеком.
                     </p>
                   )}
                   <div className="school-forms-toolbar">

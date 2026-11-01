@@ -464,6 +464,24 @@ def test_anonymous_results_open_at_minimum_and_pending_has_no_names(client):
     assert get(client,id)['counts']=={'submitted':ANONYMOUS_MIN}
 
 
+def test_anonymous_minimum_counts_people_not_children(client):
+    enable(client)
+    parent(client,'family','s1','s2');[parent(client,f'voter{i}','s1') for i in range(ANONYMOUS_MIN-2)]
+    small=new(client);configure(client,small,anonymous=True)
+    preview=client.get(route(small,'/preview')).json();assert preview['responses']==ANONYMOUS_MIN
+    refused=client.post(route(small,'/transition'),json=request(version=preview['version'],action='publish',audienceHash=preview['audienceHash']))
+    assert refused.status_code==422 and get(client,small)['status']=='draft'
+    parent(client,'last','s1')
+    id=new(client);configure(client,id,anonymous=True);publish(client,id)
+    family=signed('family')
+    assert answer(family,id,'s1').status_code==200 and answer(family,id,'s2').status_code==200
+    for i in range(ANONYMOUS_MIN-2):assert answer(signed(f'voter{i}'),id,'s1').status_code==200
+    page=client.get(route(id,'/responses')).json();assert page['withheld'] is True and page['items']==[] and page['count']==ANONYMOUS_MIN-1
+    assert client.get(route(id,'/summary')).json()['questions']==[] and client.get(route(id,'/export')).status_code==409
+    assert answer(signed('last'),id,'s1').status_code==200
+    assert len(client.get(route(id,'/responses')).json()['items'])==ANONYMOUS_MIN+1 and client.get(route(id,'/export')).status_code==200
+
+
 def test_anonymous_answer_is_final(client):
     admin=enable(client);people=[parent(client,f'voter{i}','s1') for i in range(ANONYMOUS_MIN)]
     id=new(client);configure(client,id,anonymous=True);publish(client,id);mine=signed('voter0')
