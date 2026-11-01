@@ -1,5 +1,6 @@
 """Titles and checked links for the modules that used to leave only a category: what the entry says, what it never says, and the answer once access is gone."""
 import json
+import re
 from uuid import uuid4
 
 from backend import api
@@ -128,7 +129,8 @@ def test_report_and_moderation_titles(client):
     assert open_notice(teacher, asked['id']).status_code == 404
     for user in (teacher, parent):
         [verdict] = items(user, 'message.moderated')
-        assert verdict['title']
+        # The outcome is told, and the verdict never names the person who reported the post.
+        assert 'скрыто' in verdict['title'] and 'Петрова Мария' not in verdict['title']
         text = user.get('/api/notifications/inbox').text
         assert 'Проверено администратором' not in text and 'Уникальный спорный текст' not in text
 
@@ -145,7 +147,7 @@ def test_absence_title_and_lost_access(client):
     for account in (parent, teacher): assert 'Личная причина' not in account.get('/api/notifications/inbox').text
     assert absences.decide(teacher, notice, 'approve', comment='Скрытый комментарий').status_code == 200
     [decided] = [i for i in items(parent, 'absence.updated') if 'title' in i]
-    assert dated() in decided['title'] and 'Скрытый комментарий' not in parent.get('/api/notifications/inbox').text
+    assert dated() in decided['title'] and 'одобрено' in decided['title'] and 'Скрытый комментарий' not in parent.get('/api/notifications/inbox').text
     opened = open_notice(parent, decided['id'])
     assert opened.status_code == 200 and opened.json() == dict(module='absences', workspace='demo', recordId=notice['id'], studentId='s1', day=None)
     # The reviewer is taken off the class: the entry stays, the record does not open any more.
@@ -192,6 +194,7 @@ def test_bulk_decision_supersedes_older_title(client):
     day = '2026-08-18'
     decided = bulk.apply(teacher, bulk.prepare(teacher, [notices[1]])).json()
     [bulk_granted] = absence_titles(parent, day); assert len(absence_titles(teacher, day)) == 1
+    assert 'одобрено' in bulk_granted
     assert absences.decide(teacher, decided['items'][0], 'revoke').status_code == 200
     for account in (parent, teacher):
         [only] = absence_titles(account, day)
@@ -239,7 +242,8 @@ def test_other_guardian_learns_only_attendance(client):
     assert absences.decide(teacher, notice).status_code == 200
     other = signed('other-parent')
     [seen] = items(other, 'journal.updated')
-    assert seen['title'] and 'link' not in seen and seen['students'][0]['id'] == 's1'
+    # The whole text is the guard: any other wording about the note could tell a guardian who may not see it that one exists.
+    assert seen['title'] == 'Изменились отметки посещаемости' and 'link' not in seen and seen['students'][0]['id'] == 's1'
     text = other.get('/api/notifications/inbox').text
     assert 'Личная причина' not in text and 'заявлен' not in text.lower()
     assert items(other, 'absence.updated') == [] and open_notice(other, seen['id']).status_code == 404
@@ -263,7 +267,7 @@ def test_absence_titles_close_when_guardian_status_goes(client, downgrade):
     notice = absences.send(parent); assert absences.decide(teacher, notice, 'reject').status_code == 200
     other = signed('other-parent')
     [before] = items(other, 'absence.updated')
-    assert dated() in before['title'] and before['link'] is True
+    assert dated() in before['title'] and 'отклонено' in before['title'] and before['link'] is True
     # The grant stays, only the legal status goes: the notice is no longer theirs to know about.
     save_link(client, account, **GUARDIAN | downgrade)
     other = signed('other-parent')
@@ -326,6 +330,7 @@ def test_waitlist_offer_title(client, monkeypatch):
     waits.offered(client, parent, eid, wid, reason='Секретная причина предложения')
     [offer] = items(parent, 'meeting.waitlist_offer')
     assert 'Встречи с родителями' in offer['title'] and offer['link'] is True and offer['students'][0]['id'] == 's1'
+    assert re.search(r'\d\d:\d\d', offer['title'])
     text = parent.get('/api/notifications/inbox').text
     assert 'Секретная причина' not in text and 'После 17:00' not in text
     opened = open_notice(parent, offer['id'])
@@ -471,7 +476,7 @@ def test_cancelled_work_keeps_the_teachers_link_but_not_the_familys(client, asse
     opened = open_notice(teacher, staff['id'])
     assert opened.status_code == 200 and opened.json() == dict(module='assessments', workspace='demo', recordId=work['id'], studentId=None, day='2026-08-17')
     [gone] = items(mother, 'assessment.cancelled')
-    assert 'Английский язык' in gone['title'] and dated(assessments.D17) in gone['title'] and 'link' not in gone
+    assert 'Английский язык' in gone['title'] and dated(assessments.D17) in gone['title'] and 'Отменена' in gone['title'] and 'link' not in gone
     assert open_notice(mother, gone['id']).status_code == 404
     assert 'Секретная причина' not in teacher.get('/api/notifications/inbox').text + mother.get('/api/notifications/inbox').text
 
@@ -489,7 +494,7 @@ def test_behaviour_staff_titles(client):
     rejected = client.post(behaviour.url(f'notes/{queued["id"]}/reject'), json=dict(version=queued['version'], reason='Скрытая причина отказа'))
     assert rejected.status_code == 200, rejected.text
     [verdict] = items(author, 'behaviour.decided')
-    assert queued['category'] in verdict['title'] and verdict['link'] is True and 'Скрытая причина' not in author.get('/api/notifications/inbox').text
+    assert queued['category'] in verdict['title'] and 'отклонена' in verdict['title'] and verdict['link'] is True and 'Скрытая причина' not in author.get('/api/notifications/inbox').text
     assert open_notice(author, verdict['id']).status_code == 200
     # The author no longer has the pupil in scope: the entry stays, the note does not open.
     current = behaviour.ok(client.get('/api/access/class-staff?workspace=demo'))
