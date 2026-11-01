@@ -9,6 +9,7 @@ from .notifications import encoded
 
 STAFF = {'admin', 'editor', 'teacher', 'staff', 'viewer'}
 ROLES = STAFF | {'student', 'parent'}
+ANONYMOUS_MIN = 5  # fewest addressees and answers for which an anonymous survey shows anything
 
 
 class Question(Model):
@@ -28,14 +29,31 @@ class Question(Model):
         return self
 
 
+class FormQuestion(Question):
+    """A question of a school form. Admissions reuse Question and gain no seat limits."""
+    limits: dict[str, int] = Field(default_factory=dict, max_length=20)
+
+    @model_validator(mode='after')
+    def seats(self):
+        if self.limits and (self.kind not in ['single', 'multiple'] or not set(self.limits) <= set(self.choices) or any(not 1 <= v <= 5000 for v in self.limits.values())):
+            raise ValueError('Лимит мест задаётся для существующих вариантов: от 1 до 5000.')
+        return self
+
+
 class Audience(Model):
     roles: list[Literal['admin','editor','teacher','staff','viewer','student','parent']] = Field(default_factory=list,max_length=7)
     classIds: list[str] = Field(default_factory=list,max_length=200)
+    # Presets are the audiences of announcements (message_audiences.py); 'roles' is the audience by roles and classes.
+    preset: Literal['roles','teachers','class_teachers','staff','saved'] = 'roles'
+    savedGroupId: str | None = Field(default=None,max_length=100)
 
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.roles)) != len(self.roles) or len(set(self.classIds)) != len(self.classIds):
             raise ValueError('Не повторяйте роли и классы.')
+        if self.preset != 'roles' and (self.roles or self.classIds): raise ValueError('Для этой аудитории роли и классы не выбираются.')
+        if self.preset == 'saved' and not self.savedGroupId: raise ValueError('Выберите сохранённую группу.')
+        if self.preset != 'saved' and self.savedGroupId: raise ValueError('Сохранённая группа относится только к одноимённой аудитории.')
         return self
 
 
@@ -43,15 +61,22 @@ class Definition(Model):
     title: str = Field(min_length=1,max_length=160)
     kind: Literal['form','survey','consent','application'] = 'form'
     description: str = Field(default='',max_length=6000)
-    questions: list[Question] = Field(default_factory=list,max_length=30)
+    questions: list[FormQuestion] = Field(default_factory=list,max_length=30)
     audience: Audience = Field(default_factory=Audience)
     opensAt: AwareDatetime | None = None
     closesAt: AwareDatetime | None = None
+    standing: bool = False  # accepts answers without a deadline from accounts that appear after publication
+    anonymous: bool = False  # a survey whose answers are stored without any link to the person
 
     @model_validator(mode='after')
     def valid(self):
         if len({q.id for q in self.questions}) != len(self.questions): raise ValueError('Вопросы должны иметь разные идентификаторы.')
         if self.opensAt and self.closesAt and self.opensAt >= self.closesAt: raise ValueError('Окончание должно быть позже начала.')
+        if self.anonymous and self.kind != 'survey': raise ValueError('Анонимным может быть только опрос.')
+        if self.anonymous and any(q.limits for q in self.questions): raise ValueError('В анонимном опросе нет лимита мест: он связал бы ответ с человеком.')
+        if self.anonymous and self.standing: raise ValueError('Анонимный опрос не может быть постоянным: ему нужен известный состав адресатов.')
+        if self.standing and self.closesAt: raise ValueError('Постоянная форма принимает ответы без срока.')
+        if self.standing and self.audience.preset != 'roles': raise ValueError('Постоянная форма адресуется по ролям и классам.')
         if len(encoded(self.model_dump(mode='json')).encode()) > 32000: raise ValueError('Форма слишком велика: сократите вопросы и варианты.')
         return self
 
@@ -83,6 +108,10 @@ class AccessChange(Mutation):
     def unique(self):
         if len({x.userId for x in self.collaborators}) != len(self.collaborators): raise ValueError('Не повторяйте сотрудников.')
         return self
+
+
+class Reminder(Model):
+    requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
 
 
 class Transition(Mutation):

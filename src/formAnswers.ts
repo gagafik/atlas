@@ -14,3 +14,41 @@ export function keepTyped<T>(
       result[id] = typed[id];
   return result;
 }
+
+// A seat limit belongs to a choice that still exists and holds a whole number of seats: renamed, removed or emptied choices lose theirs.
+export function limitsFor(
+  choices: string[],
+  limits: Record<string, number | null | undefined> | undefined,
+): Record<string, number> {
+  const kept = new Set(choices.map((c) => c.trim()).filter(Boolean));
+  return Object.fromEntries(
+    Object.entries(limits ?? {}).filter(
+      (entry): entry is [string, number] =>
+        kept.has(entry[0]) && Number.isInteger(entry[1]) && entry[1]! >= 1,
+    ),
+  );
+}
+
+// A choice with no seats left is closed, except for an answer that already holds one of them.
+export function choiceClosed(left: number | undefined, held: boolean) {
+  return left === 0 && !held;
+}
+
+// A checkbox of a full choice cannot be ticked, but a ticked one can always be cleared: a stale draft or a refused last seat must not lock the form.
+export function choiceLocked(
+  left: number | undefined,
+  held: boolean,
+  ticked: boolean,
+) {
+  return choiceClosed(left, held) && !ticked;
+}
+
+// A held answer names the choices whose seats it keeps: one value for a single choice, a list for several.
+export function holdsChoice(
+  held: Record<string, unknown> | undefined,
+  questionId: string,
+  choice: string,
+): boolean {
+  const value = held?.[questionId];
+  return Array.isArray(value) ? value.includes(choice) : value === choice;
+}
