@@ -595,6 +595,17 @@ def test_transfer_reads_on_a_database_without_the_new_table(client):
     assert ok(send(teacher, tbody(key_of(teacher))))['status'] == 'saved'
 
 
+def test_cancelled_lesson_takes_no_marks(client):
+    quiz, teacher, parent, pupil, other = world(client)
+    solve(pupil, quiz, 's1', 'a')
+    first = lesson_with(teacher, DAY, [journal_work('a', 10)], {})
+    resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='cancel', name='Отмена', kind='cancel', placementId='eng', sourceDate=date(2026, 8, 17), onDate=date(2026, 8, 17))]))
+    before = stored_versions()
+    shown = ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a')))
+    assert shown['allowed'] is False and shown['rows'] == []
+    assert send(teacher, tbody(first['lessonKey'], assessmentId='a')).status_code == 403 and stored_versions() == before
+
+
 @pytest.mark.parametrize('stage', ['draft', 'withdrawn'])
 def test_unpublished_or_withdrawn_quiz_transfers_nothing(client, stage):
     quiz, teacher, parent, pupil, other = world(client, publish=stage == 'withdrawn')
@@ -649,6 +660,7 @@ def test_a_work_of_the_test_turned_into_a_text_scale_is_refused_by_the_preview(c
 @pytest.mark.parametrize('kind', ['cancel', 'change'])
 def test_default_day_skips_a_day_the_teacher_cannot_enter_marks(client, kind):
     quiz, teacher, parent, pupil, other = world(client)
+    assert summary(teacher)['defaultDay'] == '2026-08-31'
     held = lambda day, id: DatedLesson(id=id, name='Изменение', kind=kind, placementId='eng', sourceDate=day, onDate=day, **(dict(teacherIds=['t1']) if kind == 'change' else {}))
     resave(lambda s: setattr(s, 'datedLessons', [held(date(2026, 8, 31), 'last')]))
     found = summary(teacher)
