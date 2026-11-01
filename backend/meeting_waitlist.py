@@ -1,6 +1,7 @@
 """Private waiting requests and time-limited, parent-confirmed slot offers."""
 from datetime import datetime
 import json
+import sqlite3
 from uuid import uuid4
 from fastapi import HTTPException,Query,Request
 from pydantic import AwareDatetime,Field
@@ -8,7 +9,8 @@ from typing import Literal
 from . import meetings
 from .meeting_models import Mutation,utc
 from .messages import Directory
-from .notifications import encoded,permission_key
+from .notifications import encoded,late_opener,permission_key
+from .meeting_availability import ZONE
 from .school_forms import enabled
 from .meeting_booking import check,insert
 
@@ -93,6 +95,13 @@ def update(db,row,user,status,action,reason='',**detail):
     history(db,row,user,action,dict(version=row['version']+1,reason=reason,**detail))
 
 
+def waitlist_notice(event,row,snap,text,local=None):
+    """Event, child and, for an offer, the time; never the parent's note or a reason."""
+    pupil=snap.entities['student'].get(row['student_id'])
+    return dict(module='meeting_waitlist',recordId=row['id'],students=[dict(id=row['student_id'],name=pupil.name if pupil else '')],
+                title=f"{text}: «{event['definition']['title']}»"+(f", {local:%d.%m %H:%M}" if local else ''))
+
+
 def cancel_for_event(service,db,event,user,snap,workspace,reason,slot_ids=None):
     clause=" AND status='offered' AND slot_id IN (SELECT value FROM json_each(?))" if slot_ids is not None else " AND status IN ('waiting','offered')"
     args=(event['id'],encoded(slot_ids)) if slot_ids is not None else (event['id'],)
@@ -100,7 +109,7 @@ def cancel_for_event(service,db,event,user,snap,workspace,reason,slot_ids=None):
     for row in rows:
         update(db,row,user,'waiting' if slot_ids is not None else 'cancelled','revoked' if slot_ids is not None else 'cancelled',reason)
         owner,_,_=participants(service,db,row,event,snap,workspace)
-        if owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed')
+        if owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed',target=waitlist_notice(event,row,snap,'Изменилась заявка в очереди'))
     return len(rows)
 
 
@@ -109,7 +118,7 @@ def booked(service,db,event,slot,user,student,snap,workspace,booking_id):
     if row:
         update(db,row,user,'fulfilled','booked','За ребёнка оформлена запись на встречу.',bookingId=booking_id if row['parent_id']==user['id'] else None)
         owner,_,_=participants(service,db,row,event,snap,workspace)
-        if owner and owner['id']!=user['id']:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed')
+        if owner and owner['id']!=user['id']:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed',target=waitlist_notice(event,row,snap,'Изменилась заявка в очереди'))
 
 
 def public(service,db,row,event,user,snap,workspace):
@@ -130,6 +139,12 @@ def register(service,app,Workspace):
         event=service.event(db,workspace,row['event_id'])
         if user['role'] not in ['admin','parent'] or not public(service,db,row,event,user,snap,workspace):raise HTTPException(404,'Заявка недоступна.')
         return row,event
+
+    def open_entry(db,user,workspace,data,kids):
+        db.row_factory=sqlite3.Row
+        access(db,workspace,data.get('recordId'),user,service.snapshots.get(workspace))
+        return {}
+    late_opener('meeting_waitlist',open_entry)
 
     @app.get('/api/meetings/events/{id}/waitlist')
     def listing(id:str,request:Request,workspace:Workspace='school',after:int=Query(default=0,ge=0),limit:int=Query(default=30,ge=1,le=100)):
@@ -183,7 +198,7 @@ def register(service,app,Workspace):
             db.execute("UPDATE meeting_waitlist SET status='offered',version=version+1,updated=?,slot_id=?,expires_at=?,document=? WHERE id=?",(utc(meetings.now()),slot['id'],utc(body.expiresAt),encoded(doc),id))
             db.execute('UPDATE meeting_slots SET version=version+1 WHERE id=?',(slot['id'],))
             history(db,row,user,'offered',dict(version=row['version']+1,startsAt=slot['starts_at'],endsAt=slot['ends_at'],expiresAt=utc(body.expiresAt),reason=body.reason))
-            service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_offer')
+            service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_offer',target=waitlist_notice(event,row,snap,'Предложено время',datetime.fromisoformat(slot['starts_at']).astimezone(ZONE)))
             return service.remember(db,user,body,fingerprint,dict(id=id,version=row['version']+1,status='offered'))
 
     @app.post('/api/meetings/waitlist/{id}')
@@ -212,7 +227,7 @@ def register(service,app,Workspace):
             if user['role']=='admin' and not body.reason.strip():raise HTTPException(422,'Укажите причину.')
             status='waiting' if body.action in ['decline','revoke'] else 'withdrawn' if body.action=='withdraw' else 'cancelled'
             update(db,row,user,status,body.action,body.reason.strip())
-            if user['role']=='admin' and owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed')
+            if user['role']=='admin' and owner:service.notifications.deliver(db,[owner],workspace,row['version']+1,'meeting.waitlist_changed',target=waitlist_notice(event,row,snap,'Изменилась заявка в очереди'))
             return service.remember(db,user,body,fingerprint,dict(id=id,version=row['version']+1,status=status))
 
     @app.get('/api/meetings/waitlist/{id}/history')

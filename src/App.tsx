@@ -14,12 +14,13 @@ import DatedSchedule from "./DatedSchedule";
 import CommitmentsPanel from "./CommitmentsPanel";
 import PublicationsPanel from "./PublicationsPanel";
 import AccessPanel from "./AccessPanel";
-import JournalPanel from "./JournalPanel";
+import JournalPanel, { type JournalFocus } from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
 import TeachingMaterialsPanel from "./TeachingMaterialsLoader";
 import CurriculumPanel from "./CurriculumLoader";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessagesPanel from "./MessagesPanel";
 import AssistantPanel from "./AssistantPanel";
 import TimetableAnnounce from "./TimetableAnnounce";
@@ -218,9 +219,44 @@ export default function App({
   const [state, setState] = useState<State | null>(null);
   const [report, setReport] = useState<Report>(EMPTY_REPORT);
   const [page, setPageValue] = useState<Page>("schedule");
+  // A notification can point the journal at the absence notes and the messages at one conversation.
+  const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
+    [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>();
   function setPage(value: Page) {
-    if (canLeaveHomework()) setPageValue(value);
+    if (canLeaveHomework()) {
+      setPageValue(value);
+      setJournalFocus(undefined);
+      setMessageFocus(undefined);
+    }
   }
+  useEffect(() => {
+    const pages: Record<string, Page> = {
+      "atlas-open-messages": "messages",
+      "atlas-open-absences": "journal",
+      "atlas-open-homework": "homework",
+    };
+    const open = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (!canLeaveHomework()) return;
+      if (detail.workspace) setWorkspaceValue(detail.workspace);
+      setPageValue(pages[event.type]);
+      setMessageFocus(
+        focusRequest(
+          event.type === "atlas-open-messages" ? detail.threadId : undefined,
+        ),
+      );
+      setJournalFocus(
+        event.type === "atlas-open-absences"
+          ? { panel: "absences" }
+          : undefined,
+      );
+    };
+    for (const name of Object.keys(pages)) window.addEventListener(name, open);
+    return () => {
+      for (const name of Object.keys(pages))
+        window.removeEventListener(name, open);
+    };
+  }, []);
   function setWorkspace(value: string) {
     if (canLeaveHomework()) setWorkspaceValue(value);
   }
@@ -1685,7 +1721,11 @@ export default function App({
             <CurriculumPanel key={workspace} workspace={workspace} />
           )}
           {page === "journal" && (
-            <JournalPanel key={workspace} workspace={workspace} />
+            <JournalPanel
+              key={workspace}
+              workspace={workspace}
+              focus={journalFocus}
+            />
           )}
           {page === "homework" && (
             <HomeworkQueuePanel key={workspace} workspace={workspace} />
@@ -1694,7 +1734,14 @@ export default function App({
             <QuizzesPanel key={workspace} workspace={workspace} />
           )}
           {page === "messages" && (
-            <MessagesPanel key={workspace} workspace={workspace} />
+            <MessagesPanel
+              key={workspace}
+              workspace={workspace}
+              focusThread={messageFocus}
+              onFocusUsed={(r) =>
+                setMessageFocus((current) => spendFocus(current, r))
+              }
+            />
           )}
           {page === "assistant" && (
             <AssistantPanel

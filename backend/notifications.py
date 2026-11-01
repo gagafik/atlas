@@ -1,5 +1,6 @@
 """Transactional personal inbox. Titles are prepared per recipient at write time and only name what that recipient already sees."""
 from collections import defaultdict
+from contextlib import closing
 from datetime import date, datetime, time as daytime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -247,6 +248,15 @@ def open_timetable(db, user, workspace, data, kids):
 
 OPENERS = dict(journal=open_journal, quizzes=open_quizzes, behaviour=open_behaviour, assessments=open_assessments, meetings=open_meetings,
                forms=open_forms, timetable=open_timetable, finals=open_finals, duty=lambda *args: {})
+LATE = set()
+
+
+def late_opener(module, fn):
+    """A module's own opener: it may read a snapshot, which takes the global lock, so it runs after the lock is released, on a read connection. It answers {} or raises 403/404."""
+    OPENERS[module] = fn
+    LATE.add(module)
+
+
 # Duty screens live in the teacher portal: the administrator and class-staff shells have no section to open.
 NO_DUTY_SCREEN = ('admin', 'editor', 'staff')
 
@@ -391,6 +401,16 @@ class Notifications:
         self.redact(db, user_ids, topic, topic)
         db.execute('DELETE FROM notifications WHERE user_id IN (SELECT value FROM json_each(?)) AND topic=? AND read_at IS NULL', (encoded(list(user_ids)), topic))
 
+    def redact_child(self, db, user_id, workspace, module, student, spare='0', values=()):
+        """Blank title, children and module of an account's entries of one module that name this child, apart from those the SQL condition `spare` (on the entry's target) keeps.
+
+        For a right that depends on more than the child's grant: a link that was shortened must not leave titles of records the account may no longer open.
+        """
+        self.tables(db)
+        db.execute("UPDATE notifications SET target=json_remove(target,'$.title','$.students','$.module') WHERE user_id=? AND workspace=? AND json_extract(target,'$.module')=? "
+                   "AND EXISTS(SELECT 1 FROM json_each(notifications.target,'$.students') s WHERE json_extract(s.value,'$.id')=?) AND NOT ("+spare+')',
+                   (user_id, workspace, module, student, *values))
+
     def deliver(self, db, users, workspace, revision, action, topic=None, target=None, supersede=False):
         """topic: at most one unread entry per user and topic; a newer event replaces it.
 
@@ -511,6 +531,12 @@ class Notifications:
                     # Read even when refused, so a dead entry cannot stay unread for ever.
                     db.execute('UPDATE notifications SET read_at=coalesce(read_at,?) WHERE id=? AND user_id=?', (now().isoformat(), id, user['id']))
                     data = json.loads(row[1]) if row[1] else {}
-                    if data.get('module') in OPENERS: result = navigation(db, user, row[0], data)
+                    if data.get('module') in OPENERS and data['module'] not in LATE: result = navigation(db, user, row[0], data)
+            if row and data.get('module') in LATE:
+                # Outside the lock: the opener may rebuild a snapshot, which takes that same non-reentrant lock.
+                with closing(self.access.read_connect()) as db:
+                    try: result = navigation(db, user, row[0], data)
+                    except HTTPException as exc:
+                        if exc.status_code not in (403, 404): raise
             if result is None: raise HTTPException(404, 'Запись больше недоступна.')
             return result

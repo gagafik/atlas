@@ -60,7 +60,7 @@ def test_preview_private_details_and_atomic_effect_with_replay(client):
     other=signed('other-parent').get('/api/notifications/inbox').json()['items']
     # The publication told this family about the grade, the homework and the absence; the batch adds one plain lesson update.
     assert sorted(n['action'] for n in other if n['action'].startswith('journal.'))==['journal.grade','journal.homework','journal.updated','journal.updated']
-    assert sorted(n.get('title','')[-len('отмечено отсутствие'):] for n in other if n['action']=='journal.updated')==['','отмечено отсутствие']
+    assert all(n.get('title') and n['students'][0]['id']=='s1' for n in other if n['action']=='journal.updated')
     assert not any(n['action']=='absence.updated' for n in other)
 
 
@@ -137,11 +137,11 @@ def test_notification_failure_rolls_back_whole_batch_and_can_retry(client,monkey
     _,_,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
     original=api.notifications.deliver;written=[]
     def fail(db,*args,**kwargs):
-        original(db,*args,**kwargs);written.append(db.execute('SELECT count(*) FROM notifications').fetchone()[0])
+        original(db,*args,**kwargs);written.append(db.execute("SELECT count(*) FROM notifications WHERE action='absence.updated'").fetchone()[0])
         raise RuntimeError('batch failed after a notification was written')
     before=counts();monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):apply(teacher,preview)
-    assert written and written[0]>before['notifications'] and counts()==before
+    assert written and written[0]>0 and counts()==before
     assert all(client.get(url('/'+n['id'])).json()['version']==1 for n in notices)
     monkeypatch.setattr(api.notifications,'deliver',original)
     assert apply(teacher,preview).status_code==200

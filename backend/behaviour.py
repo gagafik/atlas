@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import Field,model_validator
 from .access import now
 from .models import Model
-from .notifications import encoded,student_ids
+from .notifications import encoded,late_opener,student_ids
 from .portal_cache import PortalSnapshots
 from .school_forms import enabled,grant_ids
 
@@ -266,13 +266,18 @@ class Behaviour:
             return dict(recordId=note['id'],students=[dict(id=s,name=note.get('name') or '') for s in kids],title=title,**module)
         self.notifications.deliver(db,targets,workspace,version,action,topic=f"behaviour:{workspace}:{note['id']}",supersede=True,target=target)
 
-    def notify_accounts(self,db,workspace,ids,version,action,skip=None):
+    def notify_accounts(self,db,workspace,ids,version,action,skip=None,target=None):
         rows=[r for r in db.execute('SELECT * FROM accounts WHERE active=1 AND id IN (SELECT value FROM json_each(?))',(encoded(sorted(ids)),)) if r['id']!=skip]
-        self.notifications.deliver(db,[self.access.public(r) for r in rows],workspace,version,action)
+        self.notifications.deliver(db,[self.access.public(r) for r in rows],workspace,version,action,target=target)
 
-    def notify_admins(self,db,workspace,version,skip):
+    def notify_admins(self,db,workspace,version,skip,target=None):
         ids={r[0] for r in db.execute("SELECT id FROM accounts WHERE active=1 AND role='admin'")}
-        self.notify_accounts(db,workspace,ids,version,'behaviour.pending',skip)
+        self.notify_accounts(db,workspace,ids,version,'behaviour.pending',skip,target)
+
+    def open_staff(self,db,user,workspace,data,kids):
+        db.row_factory=sqlite3.Row
+        self.staff_note(db,user,self.snapshots.get(workspace),workspace,data.get('recordId'))
+        return {}
 
     def category(self,db,workspace,id):
         found=next((c for c in self.config(db,workspace)['categories'] if c['id']==id and c['active']),None)
@@ -297,6 +302,7 @@ class Behaviour:
         return clause,params
 
     def register(self,app,Workspace):
+        late_opener('behaviour_staff',self.open_staff)
         from .behaviour_routes import register
         register(self,app,Workspace)
 

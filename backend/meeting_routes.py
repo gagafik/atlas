@@ -148,7 +148,7 @@ def register(service,app,Workspace):
             if body.action in ['cancel','archive']:
                 meeting_waitlist.cancel_for_event(service,db,event,user,snap,workspace,body.reason or 'Мероприятие отправлено в архив.')
             result=service.save_event(db,event,user,body.action,dict(reason=body.reason))
-            if recipients:service.notifications.deliver(db,recipients,workspace,event['version'],'meeting.published')
+            if recipients:service.notifications.deliver(db,recipients,workspace,event['version'],'meeting.published',target=dict(module='meeting_events',recordId=event['id'],title=f"Открыта запись: «{event['definition']['title']}»"))
             return service.remember(db,user,body,fingerprint,result)
 
     @app.get('/api/meetings/events/{id}/slots')

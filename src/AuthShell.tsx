@@ -16,8 +16,10 @@ import InvitationForm from "./InvitationForm";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
 import { menuRoles } from "./assessmentCalendar";
+import { sectionVisible } from "./schoolSections";
 const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
+const SchoolSectionsPanel = lazy(() => import("./SchoolSectionsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
@@ -60,6 +62,9 @@ export default function AuthShell() {
     [recoveryPanel, setRecoveryPanel] = useState(false),
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false);
+  // Optional sections of the menu; null until the setting is loaded, and then they stay out of sight.
+  const [hiddenSections, setHiddenSections] = useState<string[] | null>(null),
+    [sectionsPanel, setSectionsPanel] = useState(false);
   const [formsWorkspace, setFormsWorkspace] = useState<string | null>(null);
   const [liveWorkspace, setLiveWorkspace] = useState<string | null>(null);
   const [libraryWorkspace, setLibraryWorkspace] = useState<string | null>(null);
@@ -187,6 +192,21 @@ export default function AuthShell() {
   }, []);
   const refreshSequence = useRef(0);
   useEffect(() => {
+    if (!session?.user) {
+      setHiddenSections(null);
+      return;
+    }
+    let live = true;
+    api("school-sections", "school")
+      .then((r) => {
+        if (live) setHiddenSections(r.hidden);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [session?.user?.id, session?.user?.version]);
+  useEffect(() => {
     setPasswordForm(false);
     setOldPassword("");
     setNewPassword("");
@@ -194,6 +214,7 @@ export default function AuthShell() {
     setInvitationForm(false);
     setRecoveryPanel(false);
     setOperationsPanel(false);
+    setSectionsPanel(false);
     setFormsWorkspace(null);
     setMeetingsWorkspace(null);
     setHallWorkspace(null);
@@ -440,12 +461,16 @@ export default function AuthShell() {
               Интерактивные занятия
             </button>
           )}
-          <button onClick={() => setLibraryWorkspace("school")}>
-            Библиотека и учебники
-          </button>
-          <button onClick={() => setLostFoundWorkspace("school")}>
-            Потерянные вещи
-          </button>
+          {sectionVisible(hiddenSections, "library") && (
+            <button onClick={() => setLibraryWorkspace("school")}>
+              Библиотека и учебники
+            </button>
+          )}
+          {sectionVisible(hiddenSections, "lost_found") && (
+            <button onClick={() => setLostFoundWorkspace("school")}>
+              Потерянные вещи
+            </button>
+          )}
           {session.user.role !== "editor" && (
             <button onClick={() => setBehaviourWorkspace("school")}>
               Похвалы и замечания
@@ -457,29 +482,36 @@ export default function AuthShell() {
             </button>
           )}
           <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
-          <button onClick={() => setCanteenWorkspace("school")}>
-            Столовая
-          </button>
+          {sectionVisible(hiddenSections, "canteen") && (
+            <button onClick={() => setCanteenWorkspace("school")}>
+              Столовая
+            </button>
+          )}
           {session.user.role !== "student" && (
             <button onClick={() => setHandoverWorkspace("school")}>
               Уход детей
             </button>
           )}
-          {session.user.role !== "student" && (
-            <button onClick={() => setPaymentsWorkspace("school")}>
-              Платежи
-            </button>
-          )}
+          {session.user.role !== "student" &&
+            sectionVisible(hiddenSections, "payments") && (
+              <button onClick={() => setPaymentsWorkspace("school")}>
+                Платежи
+              </button>
+            )}
           {["admin", "editor", "teacher", "staff"].includes(
             session.user.role,
           ) && (
             <>
-              <button onClick={() => setAdmissionsWorkspace("school")}>
-                Приём в школу
-              </button>
-              <button onClick={() => setSiteWorkspace("school")}>
-                Сайт школы
-              </button>
+              {sectionVisible(hiddenSections, "admissions") && (
+                <button onClick={() => setAdmissionsWorkspace("school")}>
+                  Приём в школу
+                </button>
+              )}
+              {sectionVisible(hiddenSections, "site") && (
+                <button onClick={() => setSiteWorkspace("school")}>
+                  Сайт школы
+                </button>
+              )}
             </>
           )}
           <button onClick={() => setDocumentsWorkspace("school")}>
@@ -512,6 +544,9 @@ export default function AuthShell() {
             <>
               <button onClick={() => setHallWorkspace("school")}>
                 Информационные экраны
+              </button>
+              <button onClick={() => setSectionsPanel(true)}>
+                Разделы школы
               </button>
               <button onClick={() => setOperationsPanel(true)}>
                 Состояние сервера
@@ -600,6 +635,15 @@ export default function AuthShell() {
           <OperationsPanel
             key={session.user.id + ":" + session.user.version}
             onClose={() => setOperationsPanel(false)}
+          />
+        </Suspense>
+      )}
+      {sectionsPanel && session.user?.role === "admin" && (
+        <Suspense fallback={<p role="status">Открываю разделы школы…</p>}>
+          <SchoolSectionsPanel
+            key={session.user.id + ":" + session.user.version}
+            onClose={() => setSectionsPanel(false)}
+            onChanged={setHiddenSections}
           />
         </Suspense>
       )}

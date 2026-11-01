@@ -74,6 +74,10 @@ describe("openEvent", () => {
       "atlas-open-journal",
       { workspace: "demo", studentId: "s1", finalsPeriodId: "r" },
     ]);
+    expect(openEvent(result("messages"))).toEqual([
+      "atlas-open-messages",
+      { workspace: "demo", threadId: "r" },
+    ]);
     const plain: [string, string][] = [
       ["quizzes", "atlas-open-quizzes"],
       ["duty", "atlas-open-duties"],
@@ -81,6 +85,14 @@ describe("openEvent", () => {
       ["assessments", "atlas-open-assessments"],
       ["meetings", "atlas-open-meetings"],
       ["forms", "atlas-open-forms"],
+      ["clubs", "atlas-open-clubs"],
+      ["meeting_events", "atlas-open-meetings"],
+      ["meeting_waitlist", "atlas-open-meetings"],
+      ["form_items", "atlas-open-forms"],
+      ["homework", "atlas-open-homework"],
+      ["absences", "atlas-open-absences"],
+      ["behaviour_staff", "atlas-open-behaviour"],
+      ["message_reports", "atlas-open-messages"],
     ];
     for (const [module, name] of plain)
       expect(openEvent(result(module))).toEqual([name, { workspace: "demo" }]);

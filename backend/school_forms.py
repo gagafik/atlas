@@ -16,7 +16,7 @@ from .access import WORKSPACES, now
 from .class_staff import led
 from .messages import Directory
 from .natural import natural
-from .notifications import ZONE, encoded, has_table, permission_key
+from .notifications import ZONE, encoded, has_table, late_opener, permission_key
 from .portal_cache import PortalSnapshots
 from .school_forms_models import (ANONYMOUS_MIN, STAFF, Audience, Definition, NewForm, EditForm, AccessChange,
                                   Transition, AnswerWrite, Review, Mutation, Reminder, validate_answers)
@@ -376,6 +376,12 @@ class SchoolForms:
         return dict(db.execute('SELECT id,document FROM school_form_answers WHERE form_id=? AND id IN (SELECT value FROM json_each(?))',(form_id,encoded(ids))))
 
     def register(self, app, Workspace):
+        def open_form(db, user, workspace, data, kids):
+            # Keyed by the form itself, unlike open_forms (an answer): staff with a role on it and recipients with a current context.
+            form=self.form(db,workspace,data.get('recordId'))
+            return {} if self.permission(db,form,user) or self.contexts(db,form,user,self.snapshots.get(workspace),workspace) else None
+        late_opener('form_items',open_form)
+
         @app.get('/api/forms/options')
         def options(request:Request,workspace:Workspace='school'):
             with self.context(request,workspace) as (db,user,snap):
@@ -490,7 +496,7 @@ class SchoolForms:
                 db.execute('DELETE FROM school_form_access WHERE form_id=?',(id,))
                 for item,candidate in zip(body.collaborators,recipients): db.execute('INSERT INTO school_form_access VALUES (?,?,?,?)',(id,item.userId,item.permission,permission_key(candidate)))
                 result=self.save_form(db,form,user,'access_changed')
-                self.notifications.deliver(db,recipients,workspace,form['version'],'forms.assigned')
+                self.notifications.deliver(db,recipients,workspace,form['version'],'forms.assigned',target=dict(module='form_items',recordId=form['id'],title=f"Назначена форма: «{form['definition']['title']}»"))
                 return self.remember(db,user,body,fingerprint,result)
 
         @app.get('/api/forms/items/{id}/preview')
@@ -508,7 +514,7 @@ class SchoolForms:
                 form=self.form(db,workspace,id);self.require(db,form,user,True)
                 fingerprint,old=self.replay(db,user,body,'transition:'+id)
                 if old: return old
-                version(form,body.version);doc=form['definition'];users=[]
+                version(form,body.version);doc=form['definition'];users=[];pupils={}
                 if body.action=='publish':
                     audience=doc['audience']
                     if form['status']!='draft' or not doc['questions'] or audience.get('preset','roles')=='roles' and not audience['roles']: raise HTTPException(422,'Для публикации заполните вопросы и аудиторию черновика.')
@@ -519,6 +525,8 @@ class SchoolForms:
                     if doc.get('anonymous') and len(users)<ANONYMOUS_MIN: raise HTTPException(422,f'Анонимный опрос нужен минимум для {ANONYMOUS_MIN} человек: иначе ответ можно угадать.')
                     if current_hash!=body.audienceHash: raise HTTPException(409,'Аудитория изменилась. Повторите предварительную проверку.')
                     db.executemany('INSERT INTO school_form_recipients VALUES (?,?,?,?,?,?,?)',[(id,*r) for r in recipients])
+                    for uid,entity,_,_,_,name in recipients:
+                        if entity: pupils.setdefault(uid,[]).append(dict(id=entity,name=name))
                     form['status']='open'
                 elif body.action=='close':
                     if form['status']!='open': raise HTTPException(409,'Форма уже закрыта или не опубликована.')
@@ -534,7 +542,8 @@ class SchoolForms:
                     if form['status']=='archived': raise HTTPException(409,'Форма уже в архиве.')
                     form['status']='archived'
                 result=self.save_form(db,form,user,body.action)
-                if body.action=='publish': self.notifications.deliver(db,users,workspace,form['version'],'forms.published')
+                if body.action=='publish': self.notifications.deliver(db,users,workspace,form['version'],'forms.published',
+                                                                       target=lambda u:dict(module='form_items',recordId=id,students=pupils.get(u['id'],[]),title=f"Новая форма: «{doc['title']}»"))
                 return self.remember(db,user,body,fingerprint,result)
 
         @app.get('/api/forms/items/{id}/answer')
@@ -590,7 +599,8 @@ class SchoolForms:
                 result=self.save_answer(db,form,user,answer,user['id'],body.action,private)
                 if body.action=='submit':
                     reviewers=[u for u in self.delegates(db,form,snap,workspace) if u['id']!=user['id']]
-                    self.notifications.deliver(db,reviewers,workspace,answer['version'],'forms.submitted',topic='forms.submitted:'+form['id'])
+                    self.notifications.deliver(db,reviewers,workspace,answer['version'],'forms.submitted',topic='forms.submitted:'+form['id'],
+                                               target=dict(module='form_items',recordId=form['id'],title=f"Новый ответ: «{form['definition']['title']}»"))
                 return self.remember(db,user,body,fingerprint,result)
 
         @app.get('/api/forms/items/{id}/responses')

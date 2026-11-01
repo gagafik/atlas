@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Role } from "./auth";
+import { takeFocus, type FocusRequest } from "./focusRequest";
 import MessageAttachments, { MessageFileList } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 import MessageChannels from "./MessageChannels";
@@ -128,7 +129,16 @@ function useSearchDelay(value: string) {
   return ready;
 }
 
-export default function MessagesPanel({ workspace }: { workspace: string }) {
+export default function MessagesPanel({
+  workspace,
+  focusThread,
+  onFocusUsed,
+}: {
+  workspace: string;
+  // Set by an opened notification: show this conversation. The request is reported as spent as soon as the panel takes it.
+  focusThread?: FocusRequest;
+  onFocusUsed?: (request: FocusRequest) => void;
+}) {
   const [options, setOptions] = useState<Options | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -268,6 +278,17 @@ export default function MessagesPanel({ workspace }: { workspace: string }) {
       alive.current = false;
     };
   }, [workspace]);
+  useEffect(() => {
+    if (!focusThread) return;
+    // An unsent reply or draft is asked about first, like every other way out of a conversation.
+    takeFocus(focusThread, {
+      spend: (r) => onFocusUsed?.(r),
+      leave,
+      open,
+    })?.catch((e) => {
+      if (alive.current) setError(e.message);
+    });
+  }, [focusThread]);
   // The inbox loads when it is shown and then refreshes by itself; while composing or reading nothing is replaced under the reader's hands.
   useEffect(() => {
     if (!options || composing || selected || showDrafts) return;
