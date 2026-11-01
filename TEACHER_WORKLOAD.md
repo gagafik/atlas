@@ -135,14 +135,11 @@
   время урока.
 
 Публикация, отличающаяся от расписания (другой учитель, отмена после публикации),
-в «Итогах замен» не видна вовсе; в отчёте она отмечена как «Расхождения». Тесты:
-`test_the_two_reports_differ_for_a_lesson_published_during_an_absence` и
-`test_the_two_reports_differ_for_a_lesson_published_before_it_ends`. Тема,
+в «Итогах замен» не видна вовсе; в отчёте она отмечена как «Расхождения». Тест:
+`test_only_the_workload_report_reads_the_journal`. Тема,
 опубликованная до начала урока, не подтверждает урок ни там, ни там, и после
 окончания урока тоже: он считается как без публикации
-(`test_a_topic_posted_ahead_does_not_make_the_lesson_taught`,
-`test_a_topic_posted_ahead_leaves_the_absent_teacher_without_a_substitute_once_the_lesson_is_over`,
-`test_a_topic_posted_before_the_bell_does_not_confirm_the_lesson_after_it`,
+(`test_a_topic_posted_ahead_counts_for_nothing_whatever_happens_to_the_lesson`,
 `test_a_publication_counts_from_the_minute_the_lesson_starts`).
 
 API (`backend/teacher_workload.py`, префикс `/api/staff-time/` уже пропускается
@@ -326,9 +323,10 @@ API (`backend/teacher_workload.py`, префикс `/api/staff-time/` уже п�
 Тесты: `tests/test_teacher_workload.py` (движок и отчёт через API, права, CSV, журнал
 действий, согласие и расхождение с «Итогами замен», уроки внесённого отсутствия на
 будущие даты, тема, опубликованная заранее (время публикации), смена предмета и учителя на дату,
-вышедший из состава учитель, отрицательная разница в CSV), `tests/test_absence_feed.py` (лента, уведомления, права, отмена заявки
+вышедший из состава учитель, отрицательная разница в CSV), `tests/test_absence_feed.py` (лента, уведомления, отмена заявки
 при отключённой или переназначенной записи),
-`tests/test_substitutions.py` (месячные итоги тем же движком),
+`tests/test_substitutions.py` (месячные итоги тем же движком; закрытый для учителей и семей
+доступ к ленте отсутствий проверяет `test_calendar_endpoints_reject_non_staff_accounts`),
 `tests/test_staff_time.py` (табель не меняет расписание), клиент —
 `src/workloadReport.test.ts` (недели, месяцы, часы, проверка введённого периода),
 `src/substitutions.test.ts` (CSV итогов замен).

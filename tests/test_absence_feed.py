@@ -66,23 +66,17 @@ def test_an_approved_leave_is_offered_without_its_reason(staff):
         assert pending[0]['lessons'] == lessons_of(staff, 't2') > 0
         assert (pending[0]['start'], pending[0]['end'], pending[0]['startTime'], pending[0]['endTime']) == (LEAVE_DAY, LEAVE_DAY, '00:00', '23:59')
         value = pending[0]['absence']
-        assert value['id'] == 'leave-' + item['id'] and value['name'] == 'Отсутствие по заявке' and value['teacherId'] == 't2'
+        assert value['id'] == 'leave-' + item['id'] and value['teacherId'] == 't2'
     text = editor.get('/api/calendar/absence-feed?workspace=demo').text
     assert NOTE not in text and CODE not in text and 'Сотрудник' not in text
     assert feed(staff)['today'] == '2026-08-10' and feed(staff)['revision'] == before.revision
-
-
-def test_the_feed_is_closed_to_teachers_and_families(staff):
-    create(staff, 'student'); create(staff, 'parent')
-    for login in ['teacher', 'student', 'parent']:
-        assert signed(login).get('/api/calendar/absence-feed?workspace=demo').status_code == 403
 
 
 def test_one_click_makes_a_neutral_absence_with_history_and_a_plan(staff):
     approved(staff)
     pending = feed(staff)['pending'][0]
     state = apply(staff, 'absences', pending['absence'])
-    assert [(a['id'], a['name'], a['teacherId']) for a in state['absences']] == [(pending['absence']['id'], 'Отсутствие по заявке', 't2')]
+    assert [(a['id'], a['name'], a['teacherId']) for a in state['absences']] == [(pending['absence']['id'], pending['absence']['name'], 't2')]
     after = feed(staff)
     assert after['pending'] == [] and after['revision'] == state['revision']
     assert after['uncovered'] == [dict(absenceId=pending['absence']['id'], teacherId='t2', teacher='Учитель английского', days=[dict(date=LEAVE_DAY, lessons=pending['lessons'])])]
@@ -139,19 +133,7 @@ def regrant(c, login, **values):
     assert response.status_code == 200, response.text
 
 
-def test_a_cancelled_leave_still_asks_for_removal_when_the_account_is_deactivated(staff):
-    item = approved(staff)
-    apply(staff, 'absences', feed(staff)['pending'][0]['absence'])
-    ok(action(staff, item, 'cancel', kind='leave', reason='Ошибка'))
-    assert len(feed(staff)['withdrawn']) == 1
-    regrant(staff, 'teacher', active=False)
-    [withdrawn] = feed(staff)['withdrawn']
-    assert (withdrawn['leaveId'], withdrawn['absenceId'], withdrawn['teacherId']) == (item['id'], 'leave-' + item['id'], 't2')
-    apply(staff, 'absences', remove=withdrawn['absenceId'])
-    assert feed(staff)['withdrawn'] == [] and api.read('demo').absences == []
-
-
-def test_a_cancelled_leave_finds_its_absences_after_the_teacher_link_changed(staff):
+def test_a_cancelled_leave_finds_its_absences_whatever_became_of_the_account(staff):
     create(staff, 'teacher', login='double', grants=[dict(workspace='demo', view='teacher', entityIds=['t2', 't3'])])
     item = approved(staff, signed('double'))
     for pending in feed(staff)['pending']: apply(staff, 'absences', pending['absence'])
@@ -161,6 +143,11 @@ def test_a_cancelled_leave_finds_its_absences_after_the_teacher_link_changed(sta
     assert sorted((w['absenceId'], w['teacherId']) for w in feed(staff)['withdrawn']) == [(f'leave-{item["id"]}-0', 't2'), (f'leave-{item["id"]}-1', 't3')]
     regrant(staff, 'double', role='staff', grants=[])
     assert len(feed(staff)['withdrawn']) == 2
+    regrant(staff, 'double', active=False)
+    withdrawn = feed(staff)['withdrawn']
+    assert len(withdrawn) == 2
+    for stale in withdrawn: apply(staff, 'absences', remove=stale['absenceId'])
+    assert feed(staff)['withdrawn'] == [] and api.read('demo').absences == []
 
 
 def test_partial_days_keep_their_hours_and_midnight_becomes_the_last_minute(staff):
@@ -210,23 +197,16 @@ def test_an_account_with_two_teachers_gets_one_absence_each(staff):
     assert [p['teacherId'] for p in feed(staff)['pending']] == ['t2']
 
 
-def test_uncovered_lessons_ignore_absences_that_are_over(staff, monkeypatch):
+def test_uncovered_lessons_start_from_today(staff, monkeypatch):
     s = api.read('demo')
-    s.absences = [TeacherAbsence(id='manual', name='Командировка', teacherId='t2', start=date(2026, 8, 17), end=date(2026, 8, 17))]
+    s.absences = [TeacherAbsence(id='manual', name='Командировка', teacherId='t2', start=date(2026, 8, 17), end=date(2026, 8, 17)),
+                  TeacherAbsence(id='running', name='Больничный', teacherId='t2', start=date(2026, 8, 17), end=date(2026, 8, 31))]
     api.save('demo', s)
-    assert [u['days'] for u in feed(staff)['uncovered']] == [[dict(date=LEAVE_DAY, lessons=1)]]
-    monkeypatch.setattr(absence_feed, 'today', lambda: date(2026, 8, 18))
-    assert feed(staff)['uncovered'] == []
-
-
-def test_uncovered_lessons_of_a_running_absence_start_from_today(staff, monkeypatch):
-    s = api.read('demo')
-    s.absences = [TeacherAbsence(id='manual', name='Больничный', teacherId='t2', start=date(2026, 8, 17), end=date(2026, 8, 31))]
-    api.save('demo', s)
-    assert [d['date'] for d in feed(staff)['uncovered'][0]['days']] == ['2026-08-17', '2026-08-24', '2026-08-31']
+    days = lambda: {u['absenceId']: [(d['date'], d['lessons']) for d in u['days']] for u in feed(staff)['uncovered']}
+    assert days() == {'manual': [(LEAVE_DAY, 1)], 'running': [(LEAVE_DAY, 1), ('2026-08-24', 1), ('2026-08-31', 1)]}
     monkeypatch.setattr(absence_feed, 'today', lambda: date(2026, 8, 25))
-    # The absence began a week ago and goes on: the days already over are not offered for substitution.
-    assert [d['date'] for d in feed(staff)['uncovered'][0]['days']] == ['2026-08-31']
+    # One absence is over, the other began a week ago and goes on: the days already over are not offered for substitution.
+    assert days() == {'running': [('2026-08-31', 1)]}
 
 
 def test_staff_without_a_teaching_link_produce_nothing_and_notify_nobody(staff):

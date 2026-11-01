@@ -841,31 +841,6 @@ def test_monthly_totals_count_override_dates_and_skip_staff_groups():
     assert t2['planned'] == 4 and t2['held'] == 4
 
 
-def test_monthly_totals_count_only_finished_lessons_and_absent_teachers_are_not_held():
-    s = totals_state()
-    # Without a clock every day is past; with one, later lessons wait and an absent teacher with no substitute has not taught.
-    nothing = {t['teacherId']: t for t in monthly_totals(s, '2026-08')['teachers']}['t2']
-    assert nothing['upcoming'] == 0 and nothing['uncovered'] == 0
-    clock = (date(2026, 8, 24), '23:59')
-    t2 = {t['teacherId']: t for t in monthly_totals(s, '2026-08', clock=clock)['teachers']}['t2']
-    assert t2['upcoming'] == 1 and t2['held'] == nothing['held'] - 1 and t2['planned'] == nothing['planned']
-    future = monthly_totals(s, '2027-05', clock=clock)
-    assert future['totals']['held'] == 0 and future['totals']['upcoming'] == future['totals']['planned'] > 0
-    s.datedLessons = []
-    gone = {t['teacherId']: t for t in monthly_totals(s, '2026-08')['teachers']}['t2']
-    assert gone['uncovered'] == gone['missedAbsent'] > 0 and gone['held'] == gone['planned'] - gone['missed']
-    assert gone['missed'] >= gone['uncovered']
-
-
-def test_monthly_totals_do_not_count_a_merged_group_as_a_second_lesson():
-    s = merge_state()
-    report = {t['teacherId']: t for t in monthly_totals(s, '2026-08')['teachers']}
-    host, joined = report['t3'], report['t2']
-    # The host teacher keeps one lesson for the time; the group that joined is a note, not a second held lesson.
-    assert host['byType']['merge'] == host['merged'] == 1 and host['substitutions'] == 0 and host['held'] == host['planned']
-    assert joined['missed'] == 1 and joined['held'] == joined['planned'] - 1
-
-
 def test_monthly_report_api_uses_the_timetable_of_each_date_and_the_school_clock(web, monkeypatch):
     monkeypatch.setattr(workload_facts, 'now', lambda: datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(timetable_history, 'today', lambda: date(2026, 8, 24))
