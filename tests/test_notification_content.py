@@ -759,6 +759,8 @@ def test_consultation_booking_reaches_the_pupil_and_guardians_but_parent_meeting
     meet.ok(consult.book(parent, series, consult.on_date(parent, series, consult.MONDAYS[1])[0]))
     (told,) = [i for i in items(pupil, 'meeting.booked') if i['id'] != own['id']]
     assert open_notice(pupil, told['id']).status_code == 404
+    # The other guardian is told the booked slot, not the start of the series, and opens the parent's booking.
+    assert open_notice(guardian, items(guardian, 'meeting.booked')[0]['id']).json()['day'] == consult.MONDAYS[1]
     # In a parent meeting no other guardian of the child is told, and a hand-made entry for one does not open the booking.
     id = meet.new(client, [meet.hosts(host)])
     meet.publish(client, id)

@@ -48,9 +48,9 @@ def test_dated_membership_follows_the_meeting_date(client,monkeypatch):
     with api.connect() as db:
         assert counts(db,p3['id'],'meeting.class_invited')==1 and counts(db,p1['id'],'meeting.class_changed')==1 and counts(db,p2['id'],'meeting.class_changed')==0
     assert {r['studentId'] for r in ok(get(client,'/'+id))['roster']}=={'s2','s3'}
-    # The guardian of the pupil who left no longer opens the invitation; the guardian of the newcomer does.
+    # The guardian of the pupil who left no longer opens the entry; the guardian of the newcomer and the one whose child stays still open their invitations.
     opens=lambda login,action:signed(login).post('/api/notifications/'+str(got(signed(login),action)[0]['id'])+'/open').status_code
-    assert opens('parent','meeting.class_changed')==404 and opens('par3','meeting.class_invited')==200
+    assert opens('parent','meeting.class_changed')==404 and opens('par3','meeting.class_invited')==200 and opens('par2','meeting.class_invited')==200
     clock(monkeypatch,datetime(2026,9,10,6,tzinfo=timezone.utc))
     resave(move(s2='c-demo-d'),date(2026,9,10))
     idle=ok(post(client,'/'+id+'/sync',version=2));assert idle['added']==0 and idle['removed']==0 and idle['version']==2
