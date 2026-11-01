@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { keepTyped } from "./formAnswers";
+import {
+  choiceClosed,
+  choiceLocked,
+  holdsChoice,
+  keepTyped,
+  limitsFor,
+} from "./formAnswers";
 describe("keepTyped", () => {
   const ids = ["a", "b", "c"];
   it("keeps only values changed since the answer was loaded", () => {
@@ -28,5 +34,58 @@ describe("keepTyped", () => {
       a: "fresh text",
     });
     expect(keepTyped({ a: "s" }, {}, {}, ["a"])).toEqual({ a: "s" });
+  });
+});
+
+describe("limitsFor", () => {
+  it("drops limits of removed choices and empty values and keeps the rest", () => {
+    expect(
+      limitsFor(["First", " Second ", ""], {
+        First: 3,
+        Second: 5,
+        Gone: 2,
+        Empty: null,
+      }),
+    ).toEqual({ First: 3, Second: 5 });
+    expect(
+      limitsFor(["First", "Second"], { First: undefined, Second: 0 }),
+    ).toEqual({});
+    expect(limitsFor(["First"], { First: 1.5 })).toEqual({});
+    expect(limitsFor(["First"], undefined)).toEqual({});
+  });
+});
+
+describe("choiceClosed", () => {
+  it("closes a full choice unless the answer already holds a seat", () => {
+    expect(choiceClosed(0, false)).toBe(true);
+    expect(choiceClosed(0, true)).toBe(false);
+    expect(choiceClosed(2, false)).toBe(false);
+    expect(choiceClosed(undefined, false)).toBe(false);
+  });
+});
+
+describe("choiceLocked", () => {
+  it("keeps a full choice closed for adding but always clearable once ticked", () => {
+    expect(choiceLocked(0, false, false)).toBe(true);
+    expect(choiceLocked(0, false, true)).toBe(false);
+  });
+  it("never locks a choice that has seats or whose seat the answer holds", () => {
+    expect(choiceLocked(0, true, false)).toBe(false);
+    expect(choiceLocked(3, false, false)).toBe(false);
+    expect(choiceLocked(undefined, false, false)).toBe(false);
+  });
+});
+
+describe("holdsChoice", () => {
+  it("recognises a choice named by the held answer, single or multiple", () => {
+    expect(holdsChoice({ q: "A" }, "q", "A")).toBe(true);
+    expect(holdsChoice({ q: "A" }, "q", "B")).toBe(false);
+    expect(holdsChoice({ q: ["A", "C"] }, "q", "C")).toBe(true);
+    expect(holdsChoice({ q: ["A", "C"] }, "q", "B")).toBe(false);
+  });
+  it("holds nothing without a held answer or for another question", () => {
+    expect(holdsChoice(undefined, "q", "A")).toBe(false);
+    expect(holdsChoice({}, "q", "A")).toBe(false);
+    expect(holdsChoice({ other: "A" }, "q", "A")).toBe(false);
   });
 });

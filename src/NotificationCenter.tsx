@@ -55,6 +55,7 @@ const titles: Record<string, string> = {
   "forms.published": "Опубликована школьная форма",
   "forms.submitted": "Новые ответы на школьную форму",
   "forms.reviewed": "Изменилось решение по заявке",
+  "forms.reminder": "Напоминание о школьной форме",
   "staff-time.submitted": "Табель или отсутствие ожидает проверки",
   "staff-time.changed": "Изменилось состояние записи в табеле",
   "library.issued": "В библиотеке оформлена выдача",

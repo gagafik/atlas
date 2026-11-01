@@ -143,6 +143,14 @@
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
+.school-form-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 14px;
+}
+.school-form-pending ul {
+  padding-left: 20px;
+}
 .school-form-collaborator {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
@@ -187,6 +195,7 @@
     overflow: auto;
   }
   .school-form-dates,
+  .school-form-limits,
   .school-form-collaborator {
     grid-template-columns: minmax(0, 1fr);
   }
