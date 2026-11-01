@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from .access import now
 from .notifications import encoded
 from .portal_cache import PortalSnapshots
-from .school_forms import enabled
+from .school_forms import enabled,grant_ids
 from .staff_time_models import WORK,minutes
 
 STAFF={'admin','editor','teacher','staff'}
@@ -127,6 +127,14 @@ class StaffTime:
         if review:people=[self.access.public(row) for row in db.execute("SELECT * FROM accounts WHERE role='admin' AND active=1")]
         else:people=[self.person(db,owner,snap,workspace)]
         self.notifications.deliver(db,[p for p in people if p and p['id']!=user['id']],workspace,version,action)
+
+    def notify_schedulers(self,db,user,snap,workspace,owner,version,action):
+        """A teacher's leave was approved or cancelled: those who keep the timetable learn that an absence may need entering. No names, no reason."""
+        person=self.person(db,owner,snap,workspace)
+        if not person or not (grant_ids(person,workspace,'teacher') & snap.entities['teacher'].keys()):return
+        people=[self.access.public(row) for row in db.execute("SELECT * FROM accounts WHERE active=1 AND role IN ('admin','editor')")]
+        people=[p for p in people if p['id']!=user['id'] and (p['role']=='admin' or workspace in p['workspaces'])]
+        self.notifications.deliver(db,people,workspace,version,'timetable.leave_approved' if action=='approve' else 'timetable.leave_cancelled')
 
     def day(self,db,workspace,id):
         row=db.execute('SELECT * FROM staff_time_days WHERE id=? AND workspace=?',(id,workspace)).fetchone()

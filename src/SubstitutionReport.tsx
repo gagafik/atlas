@@ -19,7 +19,7 @@ const currentMonth = (s: State) => {
     : today;
 };
 function Figures({ t }: { t: ReportTeacher }) {
-  const types = (["substitution", "merge", "self_study", "move"] as const)
+  const types = (["substitution", "self_study", "move"] as const)
     .filter((k) => t.byType[k])
     .map((k) => `${CHANGE_TYPES[k]}: ${t.byType[k]}`)
     .join(", ");
@@ -42,15 +42,25 @@ function Figures({ t }: { t: ReportTeacher }) {
         {types && <small>{types}</small>}
       </div>
       <div>
+        <dt>Присоединено</dt>
+        <dd>{t.merged ?? 0}</dd>
+        <small>объединение групп, часов не добавляет</small>
+      </div>
+      <div>
         <dt>Пропущено</dt>
         <dd>{t.missed}</dd>
         <small>
-          при отсутствии {t.missedAbsent}, отменено {t.cancelled}
+          при отсутствии {t.missedAbsent}, без замены {t.uncovered ?? 0},
+          отменено {t.cancelled}
         </small>
       </div>
       <div>
         <dt>Перенесено</dt>
         <dd>{t.moved}</dd>
+      </div>
+      <div>
+        <dt>Предстоит</dt>
+        <dd>{t.upcoming ?? 0}</dd>
       </div>
     </dl>
   );
@@ -185,8 +195,13 @@ export default function SubstitutionReport({
         </p>
       )}
       <p className="muted">
-        Проведено — по расписанию по датам с заменами; заполнение журнала не
-        учитывается. Перенесённый урок считается в дату проведения.
+        Проведено — только завершившиеся уроки по расписанию того дня, с
+        заменами и отменами; заполнение журнала не учитывается. Часы с
+        подтверждением журналом — в отчёте «Нагрузка учителей». Перенесённый
+        урок считается в дату проведения, группа, присоединённая к другому
+        уроку, часов не добавляет. Урок учителя с внесённым отсутствием и без
+        замены считается «Без замены» и «Пропущено» сразу, в том числе на
+        будущие даты.
       </p>
       {loading && <p role="status">Считаю итоги…</p>}
       {report && !loading && (

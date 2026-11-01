@@ -65,6 +65,8 @@ def add(target,source):
 
 def csv_response(rows):
     def safe(value):
+        # Only text can be taken for a formula: a number stays a number, a negative one included.
+        if isinstance(value,(int,float)):return str(value)
         text=str(value if value is not None else '')
         return "'"+text if text[:1] in ['\t','\r','\n'] or text.lstrip().startswith(('=','+','-','@')) else text
     stream=io.StringIO(newline='');writer=csv.writer(stream,delimiter=';')

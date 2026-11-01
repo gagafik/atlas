@@ -69,6 +69,9 @@ export interface ReportTeacher {
   missedAbsent: number;
   cancelled: number;
   moved: number;
+  merged?: number;
+  upcoming?: number;
+  uncovered?: number;
   byType: Record<string, number>;
 }
 export interface SubstitutionReportData {
@@ -132,10 +135,10 @@ const REPORT_HEADER = [
   "Свои уроки",
   "Замены за других",
   "Замена",
-  "Объединение",
   "Самостоятельная работа",
   "Перенос (с заменой)",
   "Дополнительные",
+  "Присоединено при объединении",
   "Пропущено",
   "Из них при отсутствии",
   "Отменено",
@@ -149,10 +152,10 @@ const reportLine = (name: string, t: ReportTeacher) =>
     t.own,
     t.substitutions,
     t.byType.substitution || 0,
-    t.byType.merge || 0,
     t.byType.self_study || 0,
     t.byType.move || 0,
     t.extra,
+    t.merged || 0,
     t.missed,
     t.missedAbsent,
     t.cancelled,

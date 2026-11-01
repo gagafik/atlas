@@ -364,7 +364,7 @@ register_courses(app, Workspace, require_revision, create_preview, solve_lock)
 from .calendar_ops import register_calendar
 register_calendar(app, Workspace, read, require_revision, create_preview)
 from .substitutions import register as register_substitutions
-register_substitutions(app, Workspace, read, require_revision, create_preview, save)
+register_substitutions(app, Workspace, read, require_revision, create_preview, save, lambda: DB)
 from .commitments import register_commitments
 register_commitments(app, Workspace, require_revision, create_preview, solve_lock)
 from .exporting import register_exports
@@ -455,6 +455,10 @@ meetings.register(app, Workspace)
 from .staff_time import StaffTime
 staff_time = StaffTime(access, notifications, portal_stamp)
 staff_time.register(app, Workspace)
+from .absence_feed import register as register_absence_feed
+register_absence_feed(app, Workspace, read, access)
+from .teacher_workload import TeacherWorkload
+TeacherWorkload(journal, access).register(app, Workspace)
 from .school_documents import SchoolDocuments
 school_documents = SchoolDocuments(access, notifications, portal_stamp)
 school_documents.register(app, Workspace)
