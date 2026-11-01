@@ -226,7 +226,7 @@ def test_an_absent_teacher_without_a_substitute_has_not_taught(client, clock):
     assert gone['lessons'][0]['outcome'] == 'uncovered' and gone['lessons'][0]['absent'] is True
     publish(client)
     held = figures(client, 't2', MON, MON)
-    assert (held['taught'], held['uncovered'], held['missed']) == (1, 0, 0)
+    assert (held['taught'], held['minutes'], held['confirmed'], held['differs'], held['uncovered'], held['missed']) == (1, 40, 1, 0, 0, 0)
 
 
 def test_a_merged_group_adds_no_second_lesson_for_the_same_time(client, clock):
@@ -348,8 +348,9 @@ def test_csv_views_match_the_report_protect_formulas_and_are_audited(client, clo
     weeks = rows_of(export('weeks').text)
     assert len(weeks) == 1 + len(school['teachers']) * 3
     one = client.get('/api/staff-time/workload', params=params | dict(teacherId='t3')).json()['teachers'][0]
-    # Every week row of every teacher carries the first and the last day of its week.
-    assert all({w['start'], w['end']} <= set(row) for row, w in zip(weeks[1:], one['weeks'] * len(school['teachers'])))
+    # Every week row of every teacher carries the first and the last day of its week, each under its own header.
+    first_day, last_day = weeks[0].index('Неделя с'), weeks[0].index('Неделя по')
+    assert all((row[first_day], row[last_day]) == (w['start'], w['end']) for row, w in zip(weeks[1:], one['weeks'] * len(school['teachers'])))
     lessons = rows_of(export('lessons', teacherId='t3').text)
     assert len(lessons) == 1 + len(one['lessons']) and lessons[1][7] == 'Проведён' and lessons[1][9] == 'Нет'
     everyone = rows_of(export('lessons').text)
@@ -507,6 +508,7 @@ def test_the_month_totals_and_the_workload_report_agree_when_nothing_is_publishe
         for t in body['teachers']:
             other = totals[t['teacherId']]
             assert {k: t[k] for k in SHARED} == {k: other[k] for k in SHARED} and t['taught'] == other['held']
+            assert t['byType'] == other['byType']
             for k in SHARED: seen[k] += t[k]
     # The comparison is not vacuous: every kind of fact is present.
     assert [k for k in SHARED if not seen[k]] == [], seen

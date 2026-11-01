@@ -72,6 +72,15 @@ def test_an_approved_leave_is_offered_without_its_reason(staff):
     assert feed(staff)['today'] == '2026-08-10' and feed(staff)['revision'] == before.revision
 
 
+def test_the_timetable_absence_is_named_alike_whatever_the_kind_of_leave(staff):
+    teacher = signed('teacher')
+    for code, day in [('sick', LEAVE_DAY), ('leave', '2026-08-24')]:
+        ok(approve_leave(staff, leave(teacher, own(teacher), start=day, end=day, code=code, note=NOTE)))
+    pending = feed(staff)['pending']
+    assert len(pending) == 2
+    assert pending[0]['absence']['name'] == pending[1]['absence']['name']
+
+
 def test_one_click_makes_a_neutral_absence_with_history_and_a_plan(staff):
     approved(staff)
     pending = feed(staff)['pending'][0]
