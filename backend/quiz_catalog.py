@@ -7,6 +7,7 @@ from fastapi import HTTPException, Query, Request
 from .access import now
 from .journal import user_ids
 from .notifications import encoded, permission_key
+from .quizzes import is_course
 from .resources import teacher_ids
 
 
@@ -58,7 +59,7 @@ def register(app,quizzes,Workspace):
                 if not history and not active:continue
                 definition=document['definition']
                 items.append(dict(id=r[0],version=r[1],status=r[2],released=bool(r[7]),title=definition['title'],closesAt=definition['closesAt'],opensAt=definition['opensAt'],
-                                  lessonDate=document['lesson']['date'],subject=document['lesson']['subject'],group=document['lesson']['group'],studentId=r[8] or None,student=r[9] or None,readOnly=not active))
+                                  lessonDate=document['lesson']['date'],subject=document['lesson']['subject'],group=document['lesson']['group'],course=is_course(document['lesson']),studentId=r[8] or None,student=r[9] or None,readOnly=not active))
                 if len(items)>=limit:break
             next_cursor=None
             if last and processed<len(rows):

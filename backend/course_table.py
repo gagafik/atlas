@@ -132,6 +132,23 @@ def pending(draft, old):
     return news(draft,old)
 
 
+def store_marks(journal, db, workspace, key, user, revision, version, draft, previous, publish, created):
+    """The one rule for writing marks: (updated or None, published). None means the draft equals what is stored, so nothing was written."""
+    old=previous['published'] if previous else None
+    if publish:
+        published=publication(draft,old)
+        try: Content.model_validate(published['content'])
+        except ValidationError as exc: raise HTTPException(422,plain(exc)) from None
+        if news(draft,old):
+            if old and signature(old['lesson'])!=signature(draft['lesson']): raise HTTPException(409,'Сначала обновите и опубликуйте состав и время урока в журнале.')
+            # Two ordinary revisions, as when a grade is posted from the homework panel: the publication, then the draft.
+            updated=journal.store_revision(db,workspace,key,user,revision,version,published,previous,publish=True,created=created)
+            if draft!=published: updated=journal.store_revision(db,workspace,key,user,revision,version+1,draft,updated,created=created)
+            return updated,True
+    if previous and draft==previous['document']: return None,False
+    return journal.store_revision(db,workspace,key,user,revision,version,draft,previous,created=created),False
+
+
 def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
     """The compact payload: lessons and works as columns, pupils as rows, marks by work index, totals by the family report's own maths."""
     led=scope['classes']
@@ -270,20 +287,9 @@ class CourseTable:
             else: grades.append(Grade(assessmentId=cell.assessmentId,score=cell.score,label=cell.label).model_dump(mode='json'))
         try: Content.model_validate(draft['content'])
         except ValidationError as exc: raise HTTPException(422,plain(exc)) from None
-        version=item.version+1
-        if publish:
-            published=publication(draft,old)
-            try: Content.model_validate(published['content'])
-            except ValidationError as exc: raise HTTPException(422,plain(exc)) from None
-            if news(draft,old):
-                if old and signature(old['lesson'])!=signature(draft['lesson']): raise HTTPException(409,'Сначала обновите и опубликуйте состав и время урока в журнале.')
-                # Two ordinary revisions, as when a grade is posted from the homework panel: the publication, then the draft.
-                updated=self.journal.store_revision(db,workspace,item.lessonKey,user,state.revision,version,published,previous,publish=True,created=created)
-                if draft!=published: updated=self.journal.store_revision(db,workspace,item.lessonKey,user,state.revision,version+1,draft,updated,created=created)
-                return 'saved',dict(lessonKey=item.lessonKey,version=updated['version'],publishedVersion=updated['publishedVersion'],cells=len(item.cells),published=True)
-        if draft==previous['document']: return 'unchanged',item.lessonKey
-        updated=self.journal.store_revision(db,workspace,item.lessonKey,user,state.revision,version,draft,previous,created=created)
-        return 'saved',dict(lessonKey=item.lessonKey,version=updated['version'],publishedVersion=updated['publishedVersion'],cells=len(item.cells),published=False)
+        updated,published=store_marks(self.journal,db,workspace,item.lessonKey,user,state.revision,item.version+1,draft,previous,publish,created)
+        if updated is None: return 'unchanged',item.lessonKey
+        return 'saved',dict(lessonKey=item.lessonKey,version=updated['version'],publishedVersion=updated['publishedVersion'],cells=len(item.cells),published=published)
 
     def register(self, app, Workspace):
         journal,snapshots=self.journal,self.snapshots

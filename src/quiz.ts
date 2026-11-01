@@ -53,6 +53,8 @@ export interface QuizDocument {
     date: string;
     subject: string;
     group: string;
+    groupId?: string;
+    subjectId?: string;
     students: { id: string; name: string; enrolled: boolean }[];
   };
   definition: QuizDefinition;
@@ -101,10 +103,16 @@ export interface Quiz {
   released: boolean;
   staff: boolean;
   canManage: boolean;
+  // A course test has no lesson: it is assigned to a group and a subject, and its results are transferred later.
+  scope: "lesson" | "course";
   lessonKey: string;
   lessonDate: string;
   subject: string;
   group: string;
+  // Staff only.
+  groupId?: string;
+  subjectId?: string;
+  canTransfer?: boolean;
   title: string;
   instructions: string;
   opensAt: string;

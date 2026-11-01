@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 from .access import now
 from .quiz_models import Version
 from .quiz_attempts import context, load
+from .quizzes import is_course
 from .homework_grading import HomeworkGrading, ReviewGrade
 
 
@@ -14,6 +15,7 @@ class PublishGrade(Version):
 def prepared(quizzes,request,workspace,id,attempt_id,project):
     ctx=context(quizzes,request,workspace,id,attempt_id)
     if not ctx['canReview']:raise HTTPException(403,'Оценку публикует действующий учитель ученика или администратор.')
+    if is_course((ctx['quiz']['published'] or ctx['quiz']['document'])['lesson']):raise HTTPException(409,'Результаты теста курса переносятся в журнал из таблицы результатов.')
     if not ctx['quiz']['released']:raise HTTPException(409,'Сначала откройте разбор теста, чтобы результат стал доступен семье.')
     def read(db):
         quizzes.recheck(db,ctx)
