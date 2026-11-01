@@ -527,6 +527,8 @@ export default function SchoolForms({
     }
     const selected = await api(`forms/items/${form.id}`, workspace);
     setForm(selected);
+    // A withdrawal frees a seat and a submission takes one: show the numbers that came with the form, not those from before the action.
+    setSeats(selected.seatsLeft || {});
     await loadAnswer(selected, entity);
     setNotice(
       action === "save"
@@ -1846,7 +1848,7 @@ export default function SchoolForms({
                 <>
                   <p>
                     {form.definition.standing
-                      ? `Постоянная форма: адресаты определяются в момент ответа, в списке — те, кто уже отвечал (${form.audienceCount ?? 0}).`
+                      ? "Постоянная форма: адресаты определяются в момент ответа."
                       : `Адресатов при публикации: ${form.audienceCount ?? 0}.`}{" "}
                     {form.definition.anonymous
                       ? "Опрос анонимный: ответы без имён, порядок ничего не говорит о времени и авторе."

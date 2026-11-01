@@ -50,7 +50,8 @@ def tables(db):
         seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,request_id TEXT,fingerprint TEXT,result TEXT,
         UNIQUE(user_id,request_id))''')
     db.execute('CREATE INDEX IF NOT EXISTS school_form_request_owner ON school_form_requests(user_id,seq)')
-    # Ballots and anonymous answers share only the form id, and carry no time or insertion order that could pair them.
+    # Ballots and anonymous answers share only the form id and carry no time column or ordering key, so no query pairs them.
+    # The database file still keeps the order of insertion in its page layout (and in WAL and backups): SCHOOL_FORMS.md states this limit.
     db.execute('CREATE TABLE IF NOT EXISTS school_form_ballots (form_id TEXT,user_id TEXT,entity_id TEXT,PRIMARY KEY(form_id,user_id,entity_id)) WITHOUT ROWID')
     db.execute('CREATE TABLE IF NOT EXISTS school_form_anonymous (id TEXT,form_id TEXT,answers TEXT,PRIMARY KEY(form_id,id)) WITHOUT ROWID')
     # One row per account, form and local day: the reminder is sent once however many people press the button. Created last: prepare() looks for it.
@@ -555,11 +556,6 @@ class SchoolForms:
                 if form['definition'].get('anonymous'): return self.anonymous_answer(db,form,user,body)
                 fingerprint,old=self.replay(db,user,body,'answer:'+id)
                 if old: return old
-                if form['definition'].get('standing'):
-                    # The audience is live, so the account joins the recipient rows with its first write: staff results list answers through them.
-                    db.execute('''INSERT INTO school_form_recipients(form_id,user_id,entity_id,permissions,role,name,entity_name) VALUES (?,?,?,?,?,?,?)
-                        ON CONFLICT(form_id,user_id,entity_id) DO UPDATE SET permissions=excluded.permissions,role=excluded.role,name=excluded.name,entity_name=excluded.entity_name''',
-                        (id,user['id'],body.entityId,permission_key(user),user['role'],user['name'],context['name'] if body.entityId else ''))
                 compatible(db,form,body.formVersion)
                 answer=self.answer(db,form,user,body.entityId)
                 # A returned application may be corrected after the deadline or a manual close: staff can still decide it.
@@ -573,7 +569,14 @@ class SchoolForms:
                 else:
                     if answer['status']=='submitted': raise HTTPException(409,'Сначала отзовите ответ или дождитесь возврата на исправление.')
                     validate_answers(form['definition'],body.answers,body.action=='submit')
-                    if body.action=='submit': reserve(db,form,answer,body.answers)
+                    if body.action=='submit':
+                        reserve(db,form,answer,body.answers)
+                        if form['definition'].get('standing'):
+                            # The audience is live, so the account joins the recipient rows with its first submission: staff results list answers through them.
+                            # A draft leaves no row, or the audience count would show staff that somebody started one.
+                            db.execute('''INSERT INTO school_form_recipients(form_id,user_id,entity_id,permissions,role,name,entity_name) VALUES (?,?,?,?,?,?,?)
+                                ON CONFLICT(form_id,user_id,entity_id) DO UPDATE SET permissions=excluded.permissions,role=excluded.role,name=excluded.name,entity_name=excluded.entity_name''',
+                                (id,user['id'],body.entityId,permission_key(user),user['role'],user['name'],context['name'] if body.entityId else ''))
                     # A decided application is archived in history; a new submission starts the next cycle.
                     if body.action=='submit': answer.pop('draft',None);answer['answers']=body.answers;answer['status']='submitted';answer['comment']=''
                     # An unsent correction stays private; staff keep the version they reviewed.

@@ -129,6 +129,23 @@ def test_standing_form_accepts_family_added_after_publish(client):
     assert signed('after').get(route(other)).status_code==404
 
 
+def test_standing_draft_leaves_no_trace_for_staff(client):
+    enable(client);create(client,role='parent');id=new(client,'application')
+    configure(client,id,standing=True,questions=[dict(id='q',title='Reason',kind='text')]);publish(client,id)
+    before=get(client,id)['audienceCount'];parent(client,'later','s2');parent(client,'drafter','s3');mine=signed('later')
+    saved=answer(mine,id,'s2',action='save',answers={'q':'secret draft'});assert saved.status_code==200,saved.text
+    seen=get(client,id);assert seen['audienceCount']==before and seen['counts']=={}
+    assert mine.get(route(id,'/answer')+'&entityId=s2').json()['answer']['answers']=={'q':'secret draft'}
+    assert client.get(route(id,'/responses')).json()['items']==[]
+    # The first submission is what puts the account on the list; the answer is then visible to staff.
+    assert answer(mine,id,'s2',version=1,answers={'q':'sent'}).status_code==200
+    assert get(client,id)['audienceCount']==before+1 and client.get(route(id,'/responses')).json()['items'][0]['answers']=={'q':'sent'}
+    # Somebody who only kept a draft is not on the list, so a closed form is no longer theirs.
+    assert answer(signed('drafter'),id,'s3',action='save',answers={'q':'unsent'}).status_code==200
+    assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close')).status_code==200
+    assert signed('drafter').get(route(id)).status_code==404 and mine.get(route(id)).status_code==200
+
+
 def test_standing_form_closes_and_respects_audience(client):
     enable(client);create(client,role='parent');create(client,role='student')
     id=new(client,'application')
@@ -465,6 +482,24 @@ def test_anonymous_answer_is_final(client):
         assert db.execute('SELECT count(*) FROM school_form_answers').fetchone()[0]==0 and db.execute('SELECT count(*) FROM school_form_history WHERE answer_id!=?',('',)).fetchone()[0]==0
         assert db.execute('SELECT count(*) FROM school_form_anonymous').fetchone()[0]==1
         assert 'Second' not in ' '.join(str(r) for r in db.execute('SELECT * FROM school_form_requests'))
+
+
+def test_anonymous_ballot_keeps_the_guards_of_named_answers(client):
+    enable(client);[parent(client,f'voter{i}','s1') for i in range(ANONYMOUS_MIN+1)]
+    questions=[dict(id='q',title='Choose',kind='single',required=True,choices=['First','Second']),dict(id='note',title='Note',kind='text')]
+    id=new(client);configure(client,id,anonymous=True,questions=questions);publish(client,id);mine=signed('voter0');version=get(client,id)['version']
+    # A refusal writes nothing: the same account can still cast its ballot afterwards.
+    assert answer(mine,id,'s1',answers={'note':'x'}).status_code==422
+    assert answer(mine,id,'s1',answers={'q':'Third'}).status_code==422
+    assert answer(mine,id,'s1',formVersion=version+99).status_code==409
+    with closing(sqlite3.connect(api.DB)) as db:assert db.execute('SELECT count(*) FROM school_form_ballots').fetchone()[0]==0
+    for i in range(ANONYMOUS_MIN):
+        sent=answer(signed(f'voter{i}'),id,'s1',answers={'q':'First','note':'=SUM(1,2)' if i==0 else 'plain'});assert sent.status_code==200,sent.text
+    # Spreadsheet formulas are neutralised in the anonymous CSV as in the named one.
+    assert "'=SUM(1,2)" in client.get(route(id,'/export')).text
+    assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close')).status_code==200
+    late=answer(signed(f'voter{ANONYMOUS_MIN}'),id,'s1');assert late.status_code==409,late.text
+    assert client.get(route(id,'/summary')).json()['responses']==ANONYMOUS_MIN
 
 
 def test_manager_publishes_a_preset_audience_but_not_a_saved_group(client):
