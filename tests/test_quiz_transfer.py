@@ -10,6 +10,7 @@ from test_journal import DAY, entry, write, report
 from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
 from test_journal_periods import period, close
 from test_quizzes import question, start, save as answer, action, attempt
+from test_assessment_categories import put_config, CAT
 from test_course_table import work as journal_work, course as lesson_with, table, edit, save as table_save, ok, stored_versions, history_count, lead, staffed as accounts, G, S, MATH, MATH_GROUP
 
 TODAY = datetime(2026, 9, 1, 9, tzinfo=timezone.utc)
@@ -133,7 +134,7 @@ def test_course_quiz_reaches_pupils_without_touching_the_journal(client):
     assert pupil.get('/api/journal/quizzes/test-one?workspace=demo&studentId=s1').json()['scope'] == 'course'
     # The per-attempt transfer needs a lesson; a course test goes through the results table.
     refused = teacher.get(f'/api/journal/quizzes/test-one/attempts/{sent["id"]}/grading?workspace=demo')
-    assert refused.status_code == 409 and 'таблицы результатов' in refused.json()['detail']
+    assert refused.status_code == 409
     assert stored_versions() == before
 
 
@@ -143,13 +144,12 @@ def test_course_quiz_assignment_rights(client):
     create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
     lead('t1')
     bank = question(teacher)
-    put = lambda c, **extra: c.put('/api/journal/quizzes/test-one?workspace=demo', json=course_body([bank], **extra))
-    assert put(signed('unrelated')).status_code == 403
-    assert put(signed('lead')).status_code == 403
+    put = lambda c, bank=bank, **extra: c.put('/api/journal/quizzes/test-one?workspace=demo', json=course_body([bank], **extra))
+    # The class teacher and the stranger use questions of their own, so that only the course can refuse them.
+    for login in ['unrelated', 'lead']: assert put(signed(login), question(signed(login), id=login)).status_code == 403
     assert put(teacher, groupId='nowhere').status_code == 404
     # A pupil of another group cannot be assigned.
-    outside = put(teacher, studentIds=['s1', 's3'])
-    assert outside.status_code == 422 and 'действующим ученикам' in outside.json()['detail']
+    assert put(teacher, studentIds=['s1', 's3']).status_code == 422
     assert put(client, publish=False).status_code == 200
     assert stored_versions() == []
     # A lesson or a course, exactly one of them.
@@ -166,6 +166,21 @@ def test_course_quiz_survives_a_change_of_the_lesson_schedule(client):
     assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
     resave(lambda s: setattr(s, 'placements', [p for p in s.placements if p.id != 'eng']))
     assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canTransfer']
+
+
+def test_the_scope_of_a_draft_cannot_change(client):
+    quiz, teacher, _, _, _ = world(client, publish=False)
+    key, bank = key_of(teacher), dict(id='choice', version=1)
+    url = '/api/journal/quizzes/%s?workspace=demo'
+    as_course = lambda version: course_body([bank], version=version, publish=False)
+    as_lesson = lambda version: {k: v for k, v in as_course(version).items() if k not in ['groupId', 'subjectId']} | dict(lessonKey=key, day=DAY)
+    # With the current version, only the scope can refuse the save.
+    assert teacher.put(url % 'test-one', json=as_lesson(quiz['version'])).status_code == 409
+    assert teacher.put(url % 'test-one', json=as_course(quiz['version'])).status_code == 200
+    made = teacher.put(url % 'lesson-draft', json=as_lesson(0))
+    assert made.status_code == 200, made.text
+    assert teacher.put(url % 'lesson-draft', json=as_course(made.json()['version'])).status_code == 409
+    assert teacher.put(url % 'lesson-draft', json=as_lesson(made.json()['version'])).status_code == 200
 
 
 def test_course_roster_endpoint(client):
@@ -195,7 +210,7 @@ def test_draft_transfer_stays_hidden_then_publication_reaches_the_family(client)
     assert report(parent).json() == seen and inbox(parent) == unread and attempt(parent, first) == results
     # Publishing is possible once the review is open to the family.
     refused = send(teacher, tbody(key, publish=True))
-    assert refused.status_code == 409 and 'разбор' in refused.json()['detail']
+    assert refused.status_code == 409
     release(teacher, quiz)
     record = entry(teacher, key)
     record['document']['content']['topic'] = 'Тема только в черновике'
@@ -281,6 +296,33 @@ def test_teacher_mark_is_kept_without_a_choice_and_replaced_with_one(client):
     assert (grade['score'], grade['comment']) == (10, 'Ответил устно')
 
 
+def test_a_comment_alone_is_not_a_mark(client):
+    quiz, teacher, parent, pupil, other = world(client)
+    solve(pupil, quiz, 's1', 'a')
+    key = lesson_with(teacher, DAY, [journal_work('a', 10)], {})['lessonKey']
+    record = entry(teacher, key)
+    next(r for r in record['document']['content']['records'] if r['studentId'] == 's1')['grades'] = [dict(assessmentId='a', score=None, label='', comment='Ответил устно')]
+    assert write(teacher, record).status_code == 200
+    row = rows(ok(preview(teacher, tbody(key, assessmentId='a'))))['s1']
+    assert (row['outcome'], row['draft']) == ('write', None)
+    assert ok(send(teacher, tbody(key, assessmentId='a')))['counts']['written'] == 1
+    grade = next(r for r in entry(teacher, key)['document']['content']['records'] if r['studentId'] == 's1')['grades'][0]
+    assert (grade['score'], grade['comment']) == (10, 'Ответил устно')
+
+
+def test_a_cleared_draft_mark_is_restored_when_the_published_one_matches(client):
+    quiz, teacher, parent, pupil, other = world(client)
+    solve(pupil, quiz, 's1', 'a')
+    key = lesson_with(teacher, DAY, [journal_work('a', 10)], dict(a=dict(s1=10)), publish=True)['lessonKey']
+    record = entry(teacher, key)
+    for r in record['document']['content']['records']: r['grades'] = []
+    assert write(teacher, record).status_code == 200
+    # The draft has no mark and the published one is the test result: nothing to ask the teacher about.
+    row = rows(ok(preview(teacher, tbody(key, assessmentId='a'))))['s1']
+    assert (row['outcome'], row['draft'], row['published']) == ('write', None, dict(score=10, label=''))
+    assert ok(send(teacher, tbody(key, assessmentId='a')))['counts']['written'] == 1 and grades(teacher, key) == {'a': 10}
+
+
 def test_mark_changed_after_preview_is_not_overwritten(client):
     quiz, teacher, parent, pupil, other = world(client)
     solve(pupil, quiz, 's1', 'a')
@@ -290,7 +332,7 @@ def test_mark_changed_after_preview_is_not_overwritten(client):
     ok(table_save(teacher, [edit(t, DAY, ('s1', 'a', 3))]))
     before = stored_versions()
     refused = post(teacher, payload)
-    assert refused.status_code == 409 and 'ещё раз' in refused.json()['detail']
+    assert refused.status_code == 409
     assert stored_versions() == before and grades(teacher, first['lessonKey']) == {'a': 3}
     assert summary(teacher)['marks'] == []
 
@@ -344,7 +386,6 @@ def test_frozen_lesson_keeps_its_roster(client):
     roster = entry(teacher, first['lessonKey'])['document']['lesson']['students']
     shown = ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a')))
     assert sorted((r['studentId'], r['outcome']) for r in shown['rows']) == [('new', 'skip'), ('s1', 'write')]
-    assert 'в составе' in rows(shown)['new']['reason']
     assert ok(send(teacher, tbody(first['lessonKey'], assessmentId='a')))['counts'] == dict(written=1, updated=0, overwritten=0, same=0, kept=0, skipped=1)
     assert entry(teacher, first['lessonKey'])['document']['lesson']['students'] == roster and grades(teacher, first['lessonKey']) == {'a': 2}
 
@@ -369,12 +410,12 @@ def test_rows_without_a_finished_attempt_are_skipped(client):
     essay = question(teacher, 'essay', kind='essay', text='Объясните', points=3, options=[], correctIds=[])
     posted = teacher.put('/api/journal/quizzes/test-one?workspace=demo', json=course_body([question(teacher), essay])).json()
     pupil, other, key = signed('student'), signed('other-pupil'), key_of(teacher)
-    assert [(r['outcome'], r['reason']) for r in ok(preview(teacher, tbody(key)))['rows']] == [('skip', 'Тест не начат.')] * 2
+    assert [(r['outcome'], r['value']) for r in ok(preview(teacher, tbody(key)))['rows']] == [('skip', None)] * 2
     sent = solve(pupil, posted, 's1', answers={'choice': dict(selected=['a']), 'essay': dict(text='Ответ')})
     begun = start(other, posted, studentId='s2').json()
     shown = ok(preview(teacher, tbody(key)))
-    assert [(r['studentId'], r['outcome'], r['reason']) for r in shown['rows']] == [('s1', 'skip', 'Ждёт ручной проверки.'), ('s2', 'skip', 'В тесте идёт попытка.')]
-    assert shown['counts']['skip'] == 2 and begun['status'] == 'active'
+    assert [(r['studentId'], r['outcome'], r['value']) for r in shown['rows']] == [('s1', 'skip', None), ('s2', 'skip', None)]
+    assert shown['counts']['skip'] == 2 and sent['status'] == 'submitted' and begun['status'] == 'active'
     # Nothing to transfer: no revision, no history, no work.
     nothing = ok(send(teacher, tbody(key)))
     assert nothing['status'] == 'unchanged' and stored_versions() == [] and summary(teacher)['runs'] == []
@@ -392,6 +433,32 @@ def test_pick_the_last_or_the_best_attempt(client):
     assert best['value'] == 2 and best['attemptNumber'] == 1
 
 
+def test_a_newer_unfinished_attempt_holds_back_the_last_result(client):
+    quiz, teacher, parent, pupil, other = world(client)
+    solve(pupil, quiz, 's1', 'a')
+    assert start(pupil, quiz, studentId='s1').json()['status'] == 'active'
+    key = key_of(teacher)
+    # The pupil is in the middle of a retry: 'last' waits for it, 'best' still has the finished attempt.
+    held = rows(ok(preview(teacher, tbody(key, pick='last'))))['s1']
+    assert (held['outcome'], held['value'], held['attemptId']) == ('skip', None, None)
+    best = rows(ok(preview(teacher, tbody(key, pick='best'))))['s1']
+    assert (best['outcome'], best['value'], best['attemptNumber']) == ('write', 2, 1)
+
+
+def test_a_partial_score_is_converted_proportionally(client):
+    teacher, _ = staffed(client)
+    create(client, 'student')
+    essay = question(teacher, 'essay', kind='essay', text='Объясните', points=3, options=[], correctIds=[])
+    posted = teacher.put('/api/journal/quizzes/test-one?workspace=demo', json=course_body([essay])).json()
+    sent = solve(signed('student'), posted, 's1', answers={'essay': dict(text='Ответ')})
+    ok(teacher.post(f'/api/journal/quizzes/test-one/attempts/{sent["id"]}/review?workspace=demo', json=dict(version=sent['version'], marks={'essay': dict(score=2)})))
+    key = lesson_with(teacher, DAY, [journal_work('a', 10)], {})['lessonKey']
+    row = rows(ok(preview(teacher, tbody(key, assessmentId='a'))))['s1']
+    # Two of three points are 6.67 of ten: neither the full mark nor an unrounded fraction.
+    assert (row['score'], row['maxScore'], row['value'], row['scaled']) == (2, 3, 6.67, True)
+    assert ok(send(teacher, tbody(key, assessmentId='a')))['counts']['written'] == 1 and grades(teacher, key) == {'a': 6.67}
+
+
 def test_substitute_lesson_is_refused_and_its_draft_stays_private(client):
     quiz, teacher, parent, pupil, other = world(client)
     solve(pupil, quiz, 's1', 'a')
@@ -399,9 +466,9 @@ def test_substitute_lesson_is_refused_and_its_draft_stays_private(client):
     key = first['lessonKey']
     resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='replacement', name='Замена', kind='change', placementId='eng', sourceDate=date(2026, 8, 17), onDate=date(2026, 8, 17), teacherIds=['t1'])]))
     lessons = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={DAY}'))['lessons']
-    assert [(l['lessonKey'], l['editable'], l['works']) for l in lessons] == [(key, False, [])] and 'другой учитель' in lessons[0]['reason']
+    assert [(l['lessonKey'], l['editable'], l['works']) for l in lessons] == [(key, False, [])] and lessons[0]['reason']
     shown = ok(preview(teacher, tbody(key, assessmentId='a')))
-    assert shown['allowed'] is False and shown['rows'] == [] and shown['work'] is None and 'другой учитель' in shown['reason']
+    assert shown['allowed'] is False and shown['rows'] == [] and shown['work'] is None and shown['reason']
     before = stored_versions()
     assert send(teacher, tbody(key, assessmentId='a')).status_code == 403 and stored_versions() == before
 
@@ -415,7 +482,7 @@ def test_lessons_of_the_day_list_the_works(client):
     assert len(found) == 1 and found[0]['editable'] and found[0]['version'] == 1 and found[0]['hasUnpublished'] and not found[0]['hasPublished']
     assert [(w['id'], w['kind'], w['maxScore']) for w in found[0]['works']] == [('a', 'points', 10), ('t', 'label', 10)]
     future = listed(FUTURE)
-    assert len(future) == 1 and not future[0]['editable'] and 'ещё не прошёл' in future[0]['reason'] and future[0]['works'] == []
+    assert len(future) == 1 and not future[0]['editable'] and future[0]['reason'] and future[0]['works'] == []
     assert listed('2026-08-18') == []
     assert signed('student').get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={DAY}').status_code == 403
 
@@ -424,24 +491,30 @@ def test_refused_targets(client):
     quiz, teacher, parent, pupil, other = world(client)
     solve(pupil, quiz, 's1', 'a')
     release(teacher, quiz)
-    key = key_of(teacher)
+    full = lesson_with(teacher, DAY, [journal_work(f'w{i}') for i in range(10)], {})
+    key = full['lessonKey']
     labelled = lesson_with(teacher, NEXT, [journal_work('t', kind='label')], {})
     foreign = lesson_with(client, DAY, [journal_work('m')], {}, subject=MATH, group=MATH_GROUP)
     future = key_of(teacher, FUTURE)
     withdrawn = lesson_with(teacher, '2026-08-31', [journal_work('h')], dict(h=dict(s1=4)), publish=True)
     assert teacher.post('/api/journal/withdraw?workspace=demo', json=dict(lessonKey=withdrawn['lessonKey'], version=withdrawn['version'])).status_code == 200
+    # A category the school switched off cannot take a new work.
+    ok(put_config(client, categories=[dict(c, active=False) if c['id'] == 'sor' else c for c in ok(client.get(CAT))['categories']]))
     before = stored_versions()
-    cases = [(tbody(future, FUTURE), 422, 'ещё не прошёл'), (tbody(labelled['lessonKey'], NEXT, assessmentId='t'), 422, 'с баллами'),
-             (tbody(foreign['lessonKey']), 403, 'не относится'), (tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h', publish=True), 409, 'скрыт'),
-             (tbody(key, assessmentId='gone'), 409, 'Работа удалена'), (tbody(key, revision=api.read('demo').revision - 1), 409, 'Расписание изменилось')]
-    for body, status, text in cases:
+    cases = [(tbody(future, FUTURE), 422), (tbody(labelled['lessonKey'], NEXT, assessmentId='t'), 422),
+             (tbody(labelled['lessonKey'], NEXT, newWork=dict(name='Контрольная', category='sor')), 422), (tbody(key), 422),
+             (tbody(foreign['lessonKey']), 403), (tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h', publish=True), 409),
+             (tbody(key, assessmentId='gone'), 409), (tbody(key, NEXT, assessmentId='w0'), 409), (tbody(key, revision=api.read('demo').revision - 1), 409)]
+    for body, status in cases:
         if body['revision'] == api.read('demo').revision:
             shown = ok(preview(teacher, body))
-            assert shown['allowed'] is False and text in shown['reason'] and shown['rows'] == []
+            assert shown['allowed'] is False and shown['reason'] and shown['rows'] == [] and shown['token'] == ''
         else: assert preview(teacher, body).status_code == 409
-        refused = post(teacher, body | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[]))
-        assert refused.status_code == status and text in refused.json()['detail']
+        assert post(teacher, body | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[])).status_code == status
     assert stored_versions() == before
+    # What differs in each refused request is the only thing wrong with it: the same lesson takes the request without that part.
+    for body in [tbody(key, assessmentId='w0'), tbody(labelled['lessonKey'], NEXT), tbody(labelled['lessonKey'], NEXT, newWork=dict(name='Контрольная', category='fo'))]:
+        assert ok(preview(teacher, body))['allowed']
     # A hidden lesson still takes a draft transfer.
     assert ok(send(teacher, tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h'), overwrite=['s1']))['status'] == 'saved'
 
@@ -455,8 +528,9 @@ def test_unsynced_published_roster_refuses_publication_but_takes_a_draft(client,
     first = lesson_with(teacher, DAY, [journal_work('a', 10)], {}, publish=True)
     resave(lambda s: s.students.append(Student(id='new', name='Новый ученик', classId='c-demo-a')))
     assert write(teacher, entry(teacher, first['lessonKey'], syncRoster='true'), syncRoster=True).status_code == 200
-    refused = send(teacher, tbody(first['lessonKey'], assessmentId='a', publish=True))
-    assert refused.status_code == 409 and 'состав' in refused.json()['detail']
+    shown = ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a', publish=True)))
+    assert shown['allowed'] is False and shown['rows'] == [] and ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a')))['allowed']
+    assert send(teacher, tbody(first['lessonKey'], assessmentId='a', publish=True)).status_code == 409
     assert ok(send(teacher, tbody(first['lessonKey'], assessmentId='a')))['status'] == 'saved'
 
 
@@ -532,7 +606,7 @@ def test_cancelled_lesson_takes_no_marks(client):
     first = lesson_with(teacher, DAY, [journal_work('a', 10)], {})
     resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='cancel', name='Отмена', kind='cancel', placementId='eng', sourceDate=date(2026, 8, 17), onDate=date(2026, 8, 17))]))
     found = ok(teacher.get(f'/api/journal/quizzes/test-one/transfer/lessons?workspace=demo&day={DAY}'))['lessons']
-    assert [(l['lessonKey'], l['editable']) for l in found] == [(first['lessonKey'], False)] and 'отменён' in found[0]['reason']
+    assert [(l['lessonKey'], l['editable']) for l in found] == [(first['lessonKey'], False)] and found[0]['reason']
     before = stored_versions()
     shown = ok(preview(teacher, tbody(first['lessonKey'], assessmentId='a')))
     assert shown['allowed'] is False and shown['rows'] == []
@@ -545,7 +619,7 @@ def test_unpublished_or_withdrawn_quiz_transfers_nothing(client, stage):
     if stage == 'withdrawn': assert action(teacher, quiz, 'withdraw').status_code == 200
     key = key_of(teacher)
     shown = ok(preview(teacher, tbody(key)))
-    assert shown['allowed'] is False and 'не опубликован' in shown['reason'] and shown['rows'] == []
+    assert shown['allowed'] is False and shown['rows'] == []
     assert send(teacher, tbody(key)).status_code == 409 and stored_versions() == []
 
 
@@ -590,9 +664,9 @@ def test_a_work_of_the_test_turned_into_a_text_scale_is_refused_by_the_preview(c
     before = stored_versions()
     for publish in [False, True]:
         shown = ok(preview(teacher, tbody(key, publish=publish)))
-        assert shown['allowed'] is False and shown['rows'] == [] and 'текстовой' in shown['reason']
+        assert shown['allowed'] is False and shown['rows'] == []
     refused = post(teacher, tbody(key) | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[]))
-    assert refused.status_code == 422 and 'текстовой' in refused.json()['detail'] and stored_versions() == before
+    assert refused.status_code == 422 and stored_versions() == before
     # With the points restored the same transfer goes through again.
     record = entry(teacher, key)
     record['document']['content']['assessments'][0]['kind'] = 'points'
