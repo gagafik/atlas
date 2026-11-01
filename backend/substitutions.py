@@ -8,7 +8,9 @@ from fastapi import HTTPException
 from pydantic import Field
 from .models import Model, State, DatedLesson, SubstitutionWeights
 from .resources import teacher_ids
-from .calendar_ops import TYPES, DayContext, day_report, resolve_day, dates, change_type, staffing_check, plain
+from .calendar_ops import TYPES, DayContext, day_report, resolve_day, change_type, staffing_check, plain
+from .timetable_history import History, Stale, load
+from .workload_facts import KINDS, add, blank, moment, period_facts
 
 # Substitutions, merges and self-study take a lesson from its planned teacher and count against fairness.
 COUNTED = {'substitution', 'merge', 'self_study'}
@@ -261,47 +263,27 @@ def plan_candidate(state, body):
     return State.model_validate(candidate.model_dump())
 
 
-def monthly_totals(state, month, teacher_id=None):
-    """Per teacher: lessons by timetable, held, taken over by type, missed, cancelled, moved."""
+REPORT_FIELDS = ['planned', 'held', 'own', 'substitutions', 'extra', 'missed', 'missedAbsent', 'cancelled', 'moved', 'merged', 'upcoming', 'uncovered']
+
+
+def monthly_totals(state, month, teacher_id=None, history=None, clock=None):
+    """Per teacher: lessons by the timetable of each date, held (finished only), taken over by type, missed, cancelled, moved.
+
+    clock is (school date, 'HH:MM'): later lessons are «upcoming». Without it every day counts as past. The journal is not used."""
     if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month): raise ValueError('Укажите месяц в формате ГГГГ-ММ.')
     first, last = month_bounds(date(int(month[:4]), int(month[5:]), 1))
     first, last = max(first, state.settings.yearStart), min(last, state.settings.yearEnd)
     if first > last: raise ValueError('Месяц вне учебного года.')
-    people = {t.id: t for t in state.teachers}
-    if teacher_id is not None and teacher_id not in people: raise ValueError('Учитель не найден.')
-    fields = ['planned', 'held', 'own', 'substitutions', 'extra', 'missed', 'missedAbsent', 'cancelled', 'moved']
-    kinds = ['substitution', 'merge', 'self_study', 'move']
-    totals = {t: {**dict.fromkeys(fields, 0), 'byType': dict.fromkeys(kinds, 0)} for t in people}
-    ctx = DayContext(state)
-    for day in dates(first, last):
-        for r in resolve_day(state, day, ctx)[0]:
-            if r['activity'] != 'lesson' or ctx.maps['groups'][r['groupId']].kind == 'staff': continue
-            active = r['status'] != 'cancelled'
-            # A calendar closure is neither planned nor missed.
-            closed = not active and (not r['changeId'] or bool(r['excludedClassIds']) and not r['classIds'])
-            if r['placementId'] and r['sourceDate'] == r['date'] and not closed:
-                for t in r['originalTeacherIds']:
-                    total = totals[t]; total['planned'] += 1
-                    if active and t in r['teacherIds']: continue
-                    if r.get('movedTo'): total['moved'] += 1; continue
-                    total['missed'] += 1
-                    if not active and r['changeId']: total['cancelled'] += 1
-                    if any(a.teacherId == t and a.start <= day <= a.end and a.startTime < r['end'] and r['start'] < a.endTime for a in state.absences): total['missedAbsent'] += 1
-            if not active: continue
-            for t in r['teacherIds']:
-                total = totals[t]
-                if not r['placementId']: total['extra'] += 1
-                elif t in r['originalTeacherIds']: total['own'] += 1
-                else:
-                    total['substitutions'] += 1
-                    kind = r['changeType'] or 'substitution'
-                    total['byType'][kind] = total['byType'].get(kind, 0) + 1
-    for total in totals.values(): total['held'] = total['own'] + total['substitutions'] + total['extra']
-    chosen = [t for t in people if t == teacher_id] if teacher_id else [t for t in people if any(v for k, v in totals[t].items() if k != 'byType')]
-    teachers = sorted((dict(teacherId=t, name=people[t].name, **totals[t]) for t in chosen), key=lambda x: (x['name'], x['teacherId']))
-    summary = {**dict.fromkeys(fields, 0), 'byType': dict.fromkeys(kinds, 0)}
+    names = {t.id: t.name for t in state.teachers}
+    if teacher_id is not None and teacher_id not in names: raise ValueError('Учитель не найден.')
+    totals = defaultdict(blank)
+    for fact in period_facts(history or History(state), first, last, clock, {}, names): add(totals[fact['teacherId']], fact)
+    chosen = [teacher_id] if teacher_id else [t for t in totals if any(v for k, v in totals[t].items() if k != 'byType')]
+    teachers = [dict(teacherId=t, name=names.get(t, 'Учитель вне текущего состава'), **{k: totals[t]['taught' if k == 'held' else k] for k in REPORT_FIELDS}, byType=dict(totals[t]['byType'])) for t in chosen]
+    teachers.sort(key=lambda x: (x['name'], x['teacherId']))
+    summary = {**dict.fromkeys(REPORT_FIELDS, 0), 'byType': dict.fromkeys(KINDS, 0)}
     for item in teachers:
-        for k in fields: summary[k] += item[k]
+        for k in REPORT_FIELDS: summary[k] += item[k]
         for k, v in item['byType'].items(): summary['byType'][k] = summary['byType'].get(k, 0) + v
     return dict(revision=state.revision, month=month, first=first.isoformat(), last=last.isoformat(), teachers=teachers, totals=summary)
 
@@ -311,7 +293,7 @@ class WeightsRequest(Model):
     weights: SubstitutionWeights
 
 
-def register(app, Workspace, read, require_revision, create_preview, save):
+def register(app, Workspace, read, require_revision, create_preview, save, database):
     @app.put('/api/calendar/substitution-weights')
     def weights(body: WeightsRequest, workspace: Workspace = 'school'):
         state = require_revision(workspace, body.revision)
@@ -333,5 +315,8 @@ def register(app, Workspace, read, require_revision, create_preview, save):
 
     @app.get('/api/calendar/substitution-report')
     def report(month: str, teacherId: str | None = None, workspace: Workspace = 'school'):
-        try: return monthly_totals(read(workspace), month, teacherId)
+        state = read(workspace)
+        try: history = load(database(), workspace, state)
+        except Stale: raise HTTPException(409, 'Расписание изменилось. Обновите страницу.')
+        try: return monthly_totals(state, month, teacherId, history, moment())
         except ValueError as exc: raise HTTPException(422, str(exc))

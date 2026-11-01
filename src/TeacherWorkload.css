@@ -1,0 +1,187 @@
+.teacher-workload {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: 90dvh;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  padding: 24px;
+  background: var(--surface, #fff);
+  color: var(--text, #1e293b);
+}
+.teacher-workload::backdrop {
+  background: #0f172a88;
+}
+.teacher-workload header {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.teacher-workload h2,
+.teacher-workload h3,
+.teacher-workload h4 {
+  margin: 0 0 8px;
+}
+.teacher-workload header p,
+.teacher-workload .muted {
+  color: #526078;
+}
+.teacher-workload p {
+  overflow-wrap: anywhere;
+}
+.teacher-workload label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.teacher-workload input,
+.teacher-workload select {
+  font: inherit;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px;
+  border: 1px solid #b8c5d4;
+  border-radius: 6px;
+  box-sizing: border-box;
+  background: #fff;
+  color: #1e293b;
+}
+.teacher-workload button,
+.workload-actions a {
+  min-height: 40px;
+  white-space: normal;
+}
+.workload-controls,
+.workload-actions {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.workload-controls label {
+  flex: 1 1 150px;
+}
+.workload-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.workload-actions a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border: 1px solid #b8c5d4;
+  border-radius: 7px;
+  color: inherit;
+  text-decoration: none;
+}
+.workload-error {
+  padding: 12px;
+  background: #fff0f0;
+  color: #9b2525;
+}
+.workload-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0;
+  padding: 16px;
+  background: #edf4ff;
+  border-radius: 8px;
+}
+.workload-figures dt {
+  font-size: 12px;
+  color: #526078;
+}
+.workload-figures dd {
+  margin: 0;
+  font-weight: 700;
+  font-size: 20px;
+}
+.workload-figures small {
+  display: block;
+  font-weight: 400;
+  color: #526078;
+  overflow-wrap: anywhere;
+}
+.workload-table {
+  overflow-x: auto;
+  margin: 12px 0;
+}
+.workload-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.workload-table th,
+.workload-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #d2dce8;
+  vertical-align: top;
+}
+.workload-table thead th {
+  font-size: 13px;
+  color: #526078;
+}
+.workload-table tfoot th,
+.workload-table tfoot td {
+  font-weight: 700;
+}
+.workload-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  min-height: 0;
+  font: inherit;
+  font-weight: 700;
+  color: #2463eb;
+  text-align: left;
+  text-decoration: underline;
+}
+.workload-lessons {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0;
+}
+.workload-lessons ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workload-lessons li {
+  padding: 8px 0;
+  border-bottom: 1px solid #d2dce8;
+  overflow-wrap: anywhere;
+}
+.workload-lessons small {
+  display: block;
+  color: #526078;
+}
+.teacher-workload :focus-visible {
+  outline: 3px solid #2463eb;
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .teacher-workload {
+    width: calc(100vw - 16px);
+    max-height: 96dvh;
+    padding: 14px;
+  }
+  .teacher-workload header {
+    gap: 8px;
+  }
+  .teacher-workload h2 {
+    font-size: 22px;
+  }
+  .workload-controls label {
+    flex-basis: 100%;
+  }
+  .workload-presets,
+  .workload-actions > * {
+    flex: 1 1 140px;
+  }
+  .workload-figures {
+    padding: 12px;
+  }
+}

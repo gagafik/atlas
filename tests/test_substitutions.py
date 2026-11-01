@@ -1,7 +1,7 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
-from backend import api
+from backend import api, timetable_history, workload_facts
 from backend.models import State, Placement, Teacher, DatedLesson, TeacherAbsence, ScheduleDay, Event, Commitment, TimetableRule, SubstitutionWeights
 from backend.models import TeachingPeriod, Cycles, Named
 from backend.cycles import pattern_on
@@ -555,13 +555,15 @@ def test_calendar_endpoints_reject_non_staff_accounts(client):
              ('post', '/api/calendar/day-plan', dict(revision=revision, day='2026-08-17', teacherId='t2')),
              ('post', '/api/calendar/day-plan/preview', dict(revision=revision, day='2026-08-17', teacherId='t2', assignments=[dict(rowId='x', action='cancel')])),
              ('post', '/api/calendar/substitutes', dict(revision=revision, day='2026-08-17', rowId='x')),
-             ('get', '/api/calendar/substitution-report?month=2026-08', None)]
+             ('get', '/api/calendar/substitution-report?month=2026-08', None),
+             ('get', '/api/calendar/absence-feed', None)]
     for login in ['teacher', 'student', 'parent']:
         user = signed(login)
         for method, path, body in calls:
             response = getattr(user, method)(path + ('&' if '?' in path else '?') + 'workspace=demo', **({'json': body} if body else {}))
             assert response.status_code == 403, (login, path, response.status_code)
     assert client.get('/api/calendar/substitution-report?workspace=demo&month=2026-08').status_code == 200
+    assert client.get('/api/calendar/absence-feed?workspace=demo').status_code == 200
 
 
 # ---- S4: types in portal, publications and the editor --------------------------------------------
@@ -839,7 +841,25 @@ def test_monthly_totals_count_override_dates_and_skip_staff_groups():
     assert t2['planned'] == 4 and t2['held'] == 4
 
 
-def test_monthly_report_api(web):
+def test_monthly_report_api_uses_the_timetable_of_each_date_and_the_school_clock(web, monkeypatch):
+    monkeypatch.setattr(workload_facts, 'now', lambda: datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(timetable_history, 'today', lambda: date(2026, 8, 24))
+    stored(ranked())
+    report = lambda: {t['teacherId']: t for t in web.get('/api/calendar/substitution-report?workspace=demo&month=2026-08').json()['teachers']}
+    before = report()['t2']
+    assert before['planned'] == before['held'] + before['uncovered'] + before['upcoming'] and before['uncovered'] > 0 and before['upcoming'] > 0
+    s = api.read('demo')
+    s.workloads[0].teacherId = 't5'
+    api.save('demo', s, effective=date(2026, 8, 24))
+    after = report()
+    # Lessons of the days before the change stay with the teacher who had them.
+    assert 0 < after['t2']['planned'] < before['planned']
+    assert after['t5']['planned'] == before['planned'] - after['t2']['planned'] and after['t5']['upcoming'] > 0
+    assert after['t2']['uncovered'] == before['uncovered']
+
+
+def test_monthly_report_api(web, monkeypatch):
+    monkeypatch.setattr(workload_facts, 'now', lambda: datetime(2026, 9, 14, 7, 0, tzinfo=timezone.utc))
     stored(totals_state())
     response = web.get('/api/calendar/substitution-report?workspace=demo&month=2026-08')
     assert response.status_code == 200 and response.json()['totals']['substitutions'] == 2

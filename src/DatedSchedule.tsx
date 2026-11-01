@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import ChangePreview, { type Preview } from "./ChangePreview";
 import { DateField, Multi } from "./DatedFields";
+import AbsenceFeed from "./AbsenceFeed";
 import SubstitutionPlan from "./SubstitutionPlan";
 import SubstitutionReport from "./SubstitutionReport";
 import ScheduleDays from "./ScheduleDays";
@@ -1157,6 +1158,25 @@ export default function DatedSchedule({
       )}
       {tab === "absences" && (
         <div className="dated-records">
+          <AbsenceFeed
+            workspace={workspace}
+            revision={s.revision}
+            busy={busy}
+            onAdd={(value) => {
+              reset();
+              void check("absences", value);
+            }}
+            onRemove={(id) => {
+              reset();
+              void check("absences", undefined, id);
+            }}
+            onPlan={(date, teacherId) => {
+              reset();
+              setDay(date);
+              setPlanTeacher(teacherId);
+              setTab("plan");
+            }}
+          />
           {!(s.absences || []).length && <p>Отсутствия пока не внесены.</p>}
           {(s.absences || [])
             .slice()

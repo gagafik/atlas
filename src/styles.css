@@ -3490,6 +3490,10 @@ main {
 .dated-records article > div {
   flex: 1 1 240px;
 }
+.dated-records h3 {
+  margin: 8px 0 0;
+  font-size: 16px;
+}
 .dated-substitutes {
   border-top: 1px solid #dce3de;
   padding-top: 12px;

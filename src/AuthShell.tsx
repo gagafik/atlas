@@ -23,6 +23,7 @@ const SchoolSectionsPanel = lazy(() => import("./SchoolSectionsPanel"));
 const SchoolForms = lazy(() => import("./SchoolForms"));
 const ParentMeetings = lazy(() => import("./ParentMeetings"));
 const StaffTime = lazy(() => import("./StaffTime"));
+const TeacherWorkload = lazy(() => import("./TeacherWorkload"));
 const SchoolLibrary = lazy(() => import("./SchoolLibrary"));
 const LostFound = lazy(() => import("./LostFound"));
 const BehaviourNotes = lazy(() => import("./BehaviourNotes"));
@@ -155,6 +156,9 @@ export default function AuthShell() {
     window.addEventListener("atlas-open-staff-time", open);
     return () => window.removeEventListener("atlas-open-staff-time", open);
   }, []);
+  const [workloadWorkspace, setWorkloadWorkspace] = useState<string | null>(
+    null,
+  );
   const [hallWorkspace, setHallWorkspace] = useState<string | null>(null);
   useEffect(() => {
     const open = (event: Event) =>
@@ -219,6 +223,7 @@ export default function AuthShell() {
     setMeetingsWorkspace(null);
     setHallWorkspace(null);
     setStaffTimeWorkspace(null);
+    setWorkloadWorkspace(null);
     setRegistersWorkspace(null);
     setDocumentsWorkspace(null);
     setLibraryWorkspace(null);
@@ -524,6 +529,13 @@ export default function AuthShell() {
               Табель и отсутствия
             </button>
           )}
+          {["admin", "teacher"].includes(session.user.role) && (
+            <button onClick={() => setWorkloadWorkspace("school")}>
+              {session.user.role === "admin"
+                ? "Нагрузка учителей"
+                : "Моя нагрузка"}
+            </button>
+          )}
           {["admin", "editor", "teacher", "staff", "parent"].includes(
             session.user.role,
           ) && (
@@ -788,6 +800,18 @@ export default function AuthShell() {
               user={session.user}
               initialWorkspace={staffTimeWorkspace}
               onClose={() => setStaffTimeWorkspace(null)}
+            />
+          </Suspense>
+        )}
+      {workloadWorkspace &&
+        session.user &&
+        ["admin", "teacher"].includes(session.user.role) && (
+          <Suspense fallback={<p role="status">Открываю нагрузку…</p>}>
+            <TeacherWorkload
+              key={session.user.id + ":" + session.user.version}
+              user={session.user}
+              initialWorkspace={workloadWorkspace}
+              onClose={() => setWorkloadWorkspace(null)}
             />
           </Suspense>
         )}
