@@ -5,7 +5,9 @@ import { csvCell, download } from "./utils";
 import QuizBankPanel from "./QuizBankPanel";
 import QuizBuilder from "./QuizBuilder";
 import QuizAttemptPanel from "./QuizAttemptPanel";
+import QuizTransferPanel from "./QuizTransferPanel";
 import { quizStatuses, schoolDate, type Activity, type Quiz } from "./quiz";
+import { reviewedScore, type TransferSummary } from "./quizTransfer";
 
 interface Item {
   id: string;
@@ -13,6 +15,7 @@ interface Item {
   title: string;
   subject: string;
   group: string;
+  course: boolean;
   status: string;
   opensAt: string;
   closesAt: string;
@@ -45,6 +48,8 @@ function Detail({
     [reason, setReason] = useState(""),
     [epoch, setEpoch] = useState(0),
     [selected, setSelected] = useState("");
+  const [summary, setSummary] = useState<TransferSummary | null>(null),
+    [transferOpen, setTransferOpen] = useState(false);
   const [activity, setActivity] = useState<Activity>({
     dirty: false,
     busy: false,
@@ -87,6 +92,25 @@ function Detail({
       live = false;
     };
   }, [workspace, endpoint, studentId, epoch]);
+  // What was transferred to the journal, for the results table; only those who manage the test read it.
+  const manages = !!quiz?.staff && !!quiz.canManage;
+  useEffect(() => {
+    if (!manages) {
+      setSummary(null);
+      return;
+    }
+    let live = true;
+    api(endpoint + "/transfer", workspace)
+      .then((r: TransferSummary) => {
+        if (live) setSummary(r);
+      })
+      .catch(() => {
+        if (live) setSummary(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace, endpoint, manages, epoch]);
   async function run(fn: () => Promise<void>) {
     if (busy || activity.busy) return;
     setBusy(true);
@@ -191,7 +215,9 @@ function Detail({
         <>
           <h2>{quiz.title}</h2>
           <p>
-            {quiz.subject} · {quiz.group} · {quizStatuses[quiz.status]}
+            {quiz.subject} · {quiz.group}
+            {quiz.scope === "course" ? " · весь курс" : ""} ·{" "}
+            {quizStatuses[quiz.status]}
             {quiz.released ? " · разбор открыт" : ""}
           </p>
           <p className="journal-text">{quiz.instructions}</p>
@@ -219,7 +245,33 @@ function Detail({
                     Скачать результаты CSV
                   </button>
                 )}
+                {quiz.canTransfer &&
+                  summary &&
+                  quiz.status !== "draft" &&
+                  quiz.status !== "withdrawn" && (
+                    <button
+                      className="primary"
+                      aria-pressed={transferOpen}
+                      disabled={busy}
+                      onClick={() => setTransferOpen((v) => !v)}
+                    >
+                      Перенести в журнал
+                    </button>
+                  )}
               </div>
+              {transferOpen && quiz.canTransfer && summary && (
+                <QuizTransferPanel
+                  workspace={workspace}
+                  quiz={quiz}
+                  summary={summary}
+                  onActivity={setActivity}
+                  onChanged={() => {
+                    setEpoch((v) => v + 1);
+                    onChanged();
+                  }}
+                  onClose={() => setTransferOpen(false)}
+                />
+              )}
               {quiz.canManage && quiz.status !== "withdrawn" && (
                 <fieldset className="access-fields" disabled={busy}>
                   <label className="field">
@@ -277,41 +329,85 @@ function Detail({
                 </fieldset>
               )}
               {quiz.students && (
-                <div className="quiz-cards">
-                  {quiz.students.map((pupil) => (
-                    <article className="quiz-card" key={pupil.id}>
-                      <h3>{pupil.name}</h3>
-                      <p>
-                        {quiz.document?.definition.variants.find(
-                          (v) => v.id === pupil.variant,
-                        )?.name || pupil.variant}
-                        {!pupil.enrolled ? " · прежний состав" : ""}
-                      </p>
-                      {!pupil.attempts.length && <p>Тест ещё не начат.</p>}
-                      {pupil.attempts.map((a) => (
-                        <button
-                          key={a.id}
-                          disabled={busy}
-                          onClick={() => {
-                            if (
-                              !reason ||
-                              window.confirm(
-                                "Сбросить несохранённую причину действия?",
-                              )
-                            ) {
-                              setReason("");
-                              setSelected(a.id);
-                            }
-                          }}
-                        >
-                          Попытка {a.number} · {quizStatuses[a.status]}
-                          {a.score !== null && a.score !== undefined
-                            ? ` · ${a.score}/${a.maxScore}`
-                            : ""}
-                        </button>
-                      ))}
-                    </article>
-                  ))}
+                <div className="quiz-results">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Ученик</th>
+                        <th scope="col">Вариант</th>
+                        <th scope="col">Попытки</th>
+                        <th scope="col">Баллы</th>
+                        <th scope="col">В журнале</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {quiz.students.map((pupil) => {
+                        const reviewed = reviewedScore(pupil.attempts),
+                          mark = summary?.marks.find(
+                            (m) => m.studentId === pupil.id,
+                          );
+                        return (
+                          <tr key={pupil.id}>
+                            <th scope="row">
+                              {pupil.name}
+                              {!pupil.enrolled ? " · прежний состав" : ""}
+                            </th>
+                            <td>
+                              {quiz.document?.definition.variants.find(
+                                (v) => v.id === pupil.variant,
+                              )?.name || pupil.variant}
+                            </td>
+                            <td>
+                              {!pupil.attempts.length && "Тест ещё не начат."}
+                              {pupil.attempts.map((a) => (
+                                <button
+                                  key={a.id}
+                                  disabled={busy}
+                                  onClick={() => {
+                                    if (
+                                      !reason ||
+                                      window.confirm(
+                                        "Сбросить несохранённую причину действия?",
+                                      )
+                                    ) {
+                                      setReason("");
+                                      setSelected(a.id);
+                                    }
+                                  }}
+                                >
+                                  Попытка {a.number} · {quizStatuses[a.status]}
+                                  {a.score !== null && a.score !== undefined
+                                    ? ` · ${a.score}/${a.maxScore}`
+                                    : ""}
+                                </button>
+                              ))}
+                            </td>
+                            <td>
+                              {reviewed
+                                ? `${reviewed.score}/${reviewed.maxScore}`
+                                : "—"}
+                            </td>
+                            <td>
+                              {mark ? (
+                                <>
+                                  {mark.value} ·{" "}
+                                  {mark.day.split("-").reverse().join(".")}
+                                  <small>
+                                    {mark.work} · {mark.actor}
+                                    {mark.stale
+                                      ? " · устарело: результат теста изменился"
+                                      : ""}
+                                  </small>
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </>
@@ -538,8 +634,8 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
       ) : (
         <>
           <p className="info-line">
-            Тесты по вашим урокам. Таймер работает по серверному времени, а
-            результаты и разбор открывает учитель после проверки.
+            Тесты по вашим урокам и курсам. Таймер работает по серверному
+            времени, а результаты и разбор открывает учитель после проверки.
           </p>
           <form
             className="dated-toolbar"
@@ -591,6 +687,7 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
                 <h2>{item.title}</h2>
                 <p>
                   {item.subject} · {item.group}
+                  {item.course ? " · весь курс" : ""}
                   {item.student ? ` · ${item.student}` : ""}
                 </p>
                 <strong>

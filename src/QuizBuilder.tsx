@@ -9,6 +9,7 @@ import {
   type QuizDefinition,
 } from "./quiz";
 import type { JournalEntry } from "./journal";
+import type { CourseItem, CourseList } from "./courseTable";
 import { useAssessmentCategories } from "./assessmentCategories";
 
 const schoolInput = (value: string) =>
@@ -61,10 +62,29 @@ export default function QuizBuilder({
   const categories = useAssessmentCategories(workspace);
   const [opens, setOpens] = useState(() => schoolInput(definition.opensAt)),
     [closes, setCloses] = useState(() => schoolInput(definition.closesAt));
+  const [scope, setScope] = useState<"lesson" | "course">(
+    initial?.scope ?? "lesson",
+  );
   const [day, setDay] = useState(
-      initial?.lessonDate || schoolInput(new Date().toISOString()).slice(0, 10),
+      initial?.scope === "lesson" && initial.lessonDate
+        ? initial.lessonDate
+        : schoolInput(new Date().toISOString()).slice(0, 10),
     ),
-    [lessonKey, setLessonKey] = useState(initial?.lessonKey || "");
+    [lessonKey, setLessonKey] = useState(
+      initial?.scope === "lesson" ? initial.lessonKey : "",
+    );
+  // Course mode: the courses the account teaches (or all, for the administrator), the chosen one and its pupils now.
+  const [courses, setCourses] = useState<CourseItem[] | null>(null),
+    [course, setCourse] = useState(
+      initial?.scope === "course"
+        ? `${initial.groupId}|${initial.subjectId}`
+        : "",
+    ),
+    [roster, setRoster] = useState<{
+      revision: number;
+      students: { id: string; name: string }[];
+    } | null>(null),
+    [loadingCourse, setLoadingCourse] = useState(false);
   const [lessons, setLessons] = useState<
       {
         lessonKey: string;
@@ -96,8 +116,12 @@ export default function QuizBuilder({
     }),
     [epoch, setEpoch] = useState(0);
   const alive = useRef(true),
-    loadedLesson = useRef(initial?.lessonKey || "");
-  const busy = saving || loadingDays || loadingLesson;
+    loadedLesson = useRef(
+      initial?.scope === "course"
+        ? `${initial.groupId}|${initial.subjectId}`
+        : initial?.lessonKey || "",
+    );
+  const busy = saving || loadingDays || loadingLesson || loadingCourse;
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -109,6 +133,66 @@ export default function QuizBuilder({
     return () => onActivity({ dirty: false, busy: false });
   }, [dirty, busy, pickerActivity.busy, onActivity]);
   useEffect(() => {
+    if (scope !== "course" || courses) return;
+    let live = true;
+    api("journal/course-table/courses", workspace)
+      .then((r: CourseList) => {
+        if (live)
+          setCourses(r.courses.filter((c) => c.canEdit || c.kind === "admin"));
+      })
+      .catch((e) => {
+        if (live) setError(e.message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace, scope, courses]);
+  useEffect(() => {
+    if (scope !== "course" || !course) {
+      setRoster(null);
+      setLoadingCourse(false);
+      return;
+    }
+    const [groupId, subjectId] = course.split("|");
+    let live = true;
+    setLoadingCourse(true);
+    setRoster(null);
+    api(
+      `journal/quiz-courses?${new URLSearchParams({ groupId, subjectId })}`,
+      workspace,
+    )
+      .then((r) => {
+        if (!live) return;
+        setRoster(r);
+        const ids: string[] = r.students.map((s: any) => s.id);
+        if (loadedLesson.current !== course) {
+          setStudents(ids);
+          setAssignments({});
+        } else {
+          setStudents((old) => old.filter((id) => ids.includes(id)));
+          setAssignments((old) =>
+            Object.fromEntries(
+              Object.entries(old).filter(([id]) => ids.includes(id)),
+            ),
+          );
+        }
+        loadedLesson.current = course;
+      })
+      .catch((e) => {
+        if (live) setError(e.message);
+      })
+      .finally(() => {
+        if (live) setLoadingCourse(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace, scope, course, epoch]);
+  useEffect(() => {
+    if (scope !== "lesson") {
+      setLoadingDays(false);
+      return;
+    }
     let live = true;
     setLoadingDays(true);
     setError("");
@@ -130,9 +214,9 @@ export default function QuizBuilder({
     return () => {
       live = false;
     };
-  }, [workspace, day, epoch]);
+  }, [workspace, scope, day, epoch]);
   useEffect(() => {
-    if (!lessonKey) {
+    if (scope !== "lesson" || !lessonKey) {
       setRecord(null);
       setLoadingLesson(false);
       return;
@@ -169,7 +253,16 @@ export default function QuizBuilder({
     return () => {
       live = false;
     };
-  }, [workspace, lessonKey, day, epoch]);
+  }, [workspace, scope, lessonKey, day, epoch]);
+  function changeScope(value: "lesson" | "course") {
+    if (value === scope) return;
+    setScope(value);
+    setStudents([]);
+    setAssignments({});
+    loadedLesson.current = "";
+    setError("");
+    setDirty(true);
+  }
   function patch(value: Partial<QuizDefinition>) {
     setDefinition((old) => ({ ...old, ...value }));
     setDirty(true);
@@ -199,8 +292,10 @@ export default function QuizBuilder({
     });
     setError("");
   }
+  const ready =
+    scope === "course" ? !!roster : !!record?.writable && !record.needsSync;
   async function save(publish: boolean) {
-    if (busy || pickerActivity.busy || !record) return;
+    if (busy || pickerActivity.busy || !ready) return;
     setBusy(true);
     setError("");
     try {
@@ -210,9 +305,13 @@ export default function QuizBuilder({
         "PUT",
         {
           version: initial && !copy ? initial.version : 0,
-          revision: record.revision,
-          lessonKey,
-          day,
+          revision: scope === "course" ? roster!.revision : record!.revision,
+          ...(scope === "course"
+            ? {
+                groupId: course.split("|")[0],
+                subjectId: course.split("|")[1],
+              }
+            : { lessonKey, day }),
           definition: {
             ...definition,
             opensAt: opens,
@@ -242,8 +341,11 @@ export default function QuizBuilder({
     }
   }
   const variant = definition.variants.find((v) => v.id === selected)!;
-  const available =
-    record?.document.lesson.students.filter((s) => s.enrolled !== false) || [];
+  const available: { id: string; name: string }[] =
+    scope === "course"
+      ? roster?.students || []
+      : record?.document.lesson.students.filter((s) => s.enrolled !== false) ||
+        [];
   return (
     <section className="quiz-builder">
       <h2>
@@ -254,8 +356,9 @@ export default function QuizBuilder({
             : "Новый тест"}
       </h2>
       <p className="info-line">
-        Сначала выберите урок, состав и вопросы. После публикации вопросы,
-        варианты и условия фиксируются; изменить их можно в новой копии теста.
+        Сначала выберите урок или курс, состав и вопросы. После публикации
+        вопросы, варианты и условия фиксируются; изменить их можно в новой копии
+        теста.
       </p>
       {error && (
         <p role="alert" className="error-banner">
@@ -272,52 +375,119 @@ export default function QuizBuilder({
           className="access-fields"
           disabled={busy || pickerActivity.busy}
         >
-          <div className="quiz-grid">
-            <label className="field">
-              <span>Дата урока для теста</span>
+          <fieldset className="quiz-roster" disabled={!!initial && !copy}>
+            <legend>Что проверяет тест</legend>
+            <label className="check-line">
               <input
-                type="date"
-                required
-                value={day}
-                disabled={!!initial && !copy}
-                onChange={(e) => {
-                  setDay(e.target.value);
-                  setLessonKey("");
-                  setStudents([]);
-                  setDirty(true);
-                }}
+                type="radio"
+                name="quiz-scope"
+                checked={scope === "lesson"}
+                onChange={() => changeScope("lesson")}
               />
+              Урок
             </label>
-            <label className="field">
-              <span>Урок теста</span>
-              <select
-                value={lessonKey}
-                required
-                disabled={!!initial && !copy}
-                onChange={(e) => {
-                  setLessonKey(e.target.value);
-                  setDirty(true);
-                }}
-              >
-                <option value="">Выберите урок</option>
-                {lessons.map((l) => (
-                  <option key={l.lessonKey} value={l.lessonKey}>
-                    {l.lesson.start} · {l.lesson.subject} · {l.lesson.group}
-                  </option>
-                ))}
-              </select>
+            <label className="check-line">
+              <input
+                type="radio"
+                name="quiz-scope"
+                checked={scope === "course"}
+                onChange={() => changeScope("course")}
+              />
+              Весь курс
             </label>
-          </div>
-          {!lessons.length && (
-            <p>На эту дату доступных уроков нет. Выберите учебный день.</p>
-          )}
-          <button type="button" onClick={() => setEpoch((v) => v + 1)}>
-            Обновить урок и состав
-          </button>
-          {record && (!record.writable || record.needsSync) && (
-            <p className="error-banner">
-              Сначала обновите состав урока или откройте его период в журнале.
-            </p>
+            {scope === "course" && (
+              <p className="muted">
+                Тест курса не привязан к уроку. Ученики проходят его в срок
+                теста, а результат вы потом переносите в выбранный урок из
+                таблицы результатов.
+              </p>
+            )}
+          </fieldset>
+          {scope === "course" ? (
+            <>
+              <label className="field">
+                <span>Курс теста</span>
+                <select
+                  value={course}
+                  required
+                  disabled={!!initial && !copy}
+                  onChange={(e) => {
+                    setCourse(e.target.value);
+                    setDirty(true);
+                  }}
+                >
+                  <option value="">Выберите курс</option>
+                  {(courses ?? []).map((c) => (
+                    <option
+                      key={`${c.groupId}|${c.subjectId}`}
+                      value={`${c.groupId}|${c.subjectId}`}
+                    >
+                      {c.group} · {c.subject}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {courses && !courses.length && (
+                <p>
+                  Тест курса назначает учитель курса по нагрузке или
+                  администратор. У вашей учётной записи курсов нет.
+                </p>
+              )}
+              <button type="button" onClick={() => setEpoch((v) => v + 1)}>
+                Обновить состав курса
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="quiz-grid">
+                <label className="field">
+                  <span>Дата урока для теста</span>
+                  <input
+                    type="date"
+                    required
+                    value={day}
+                    disabled={!!initial && !copy}
+                    onChange={(e) => {
+                      setDay(e.target.value);
+                      setLessonKey("");
+                      setStudents([]);
+                      setDirty(true);
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  <span>Урок теста</span>
+                  <select
+                    value={lessonKey}
+                    required
+                    disabled={!!initial && !copy}
+                    onChange={(e) => {
+                      setLessonKey(e.target.value);
+                      setDirty(true);
+                    }}
+                  >
+                    <option value="">Выберите урок</option>
+                    {lessons.map((l) => (
+                      <option key={l.lessonKey} value={l.lessonKey}>
+                        {l.lesson.start} · {l.lesson.subject} · {l.lesson.group}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {!lessons.length && (
+                <p>На эту дату доступных уроков нет. Выберите учебный день.</p>
+              )}
+              <button type="button" onClick={() => setEpoch((v) => v + 1)}>
+                Обновить урок и состав
+              </button>
+              {record && (!record.writable || record.needsSync) && (
+                <p className="error-banner">
+                  Сначала обновите состав урока или откройте его период в
+                  журнале.
+                </p>
+              )}
+            </>
           )}
           <label className="field">
             <span>Название теста</span>
@@ -564,7 +734,7 @@ export default function QuizBuilder({
                   setDirty(true);
                 }}
               >
-                Выбрать весь урок
+                {scope === "course" ? "Выбрать всех" : "Выбрать весь урок"}
               </button>
               <button
                 type="button"
@@ -634,8 +804,7 @@ export default function QuizBuilder({
               type="submit"
               className="primary"
               disabled={
-                !record?.writable ||
-                record.needsSync ||
+                !ready ||
                 !students.length ||
                 definition.variants.some((v) => !v.questions.length)
               }
@@ -645,8 +814,7 @@ export default function QuizBuilder({
             <button
               type="button"
               disabled={
-                !record?.writable ||
-                record.needsSync ||
+                !ready ||
                 !students.length ||
                 !definition.title.trim() ||
                 definition.variants.some((v) => !v.questions.length)

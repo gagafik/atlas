@@ -1,0 +1,77 @@
+.quiz-transfer {
+  min-width: 0;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--line, #dce3e9);
+  border-radius: 12px;
+}
+.quiz-transfer h3 {
+  margin: 0 0 8px;
+}
+.quiz-transfer .field,
+.quiz-transfer select,
+.quiz-transfer input {
+  min-width: 0;
+  max-width: 100%;
+}
+.quiz-transfer-closed {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+.quiz-transfer-rows {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.quiz-transfer-rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #dce3e9);
+  border-radius: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.quiz-transfer-rows li[data-outcome="conflict"] {
+  border-color: #d9a441;
+  background: #fff8e8;
+}
+.quiz-transfer-rows li[data-outcome="skip"] {
+  color: var(--muted, #5b6672);
+}
+.quiz-transfer-rows .check-line {
+  margin: 0;
+}
+/* Only this box scrolls, so a wide results table never widens the page. */
+.quiz-results {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 14px 0;
+  border: 1px solid var(--line, #dce3e9);
+  border-radius: 10px;
+}
+.quiz-results table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+.quiz-results th,
+.quiz-results td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line, #dce3e9);
+  text-align: left;
+  vertical-align: top;
+}
+.quiz-results td button {
+  margin: 0 6px 6px 0;
+  white-space: normal;
+}
+.quiz-results small {
+  display: block;
+  color: var(--muted, #5b6672);
+}

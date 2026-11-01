@@ -4,7 +4,7 @@ import sqlite3
 MISSING_TABLES = {
     'quiz_files', 'quiz_file_links',
     'accounts', 'quizzes', 'quiz_questions', 'quiz_members', 'quiz_attempts',
-    'quiz_history', 'quiz_catalog_versions', 'journal_entries', 'journal_periods',
+    'quiz_history', 'quiz_catalog_versions', 'quiz_transfer_marks', 'journal_entries', 'journal_periods',
 }
 
 

@@ -32,6 +32,11 @@ def tables(db):
         action TEXT,document TEXT)''')
     db.execute('CREATE INDEX IF NOT EXISTS quiz_history_target ON quiz_history(workspace,quiz_id,attempt_id,id)')
     db.execute('CREATE TABLE IF NOT EXISTS quiz_catalog_versions(workspace TEXT PRIMARY KEY,version INTEGER)')
+    # What a bulk transfer wrote into the journal, so that its own earlier mark is told from a teacher's.
+    db.execute('''CREATE TABLE IF NOT EXISTS quiz_transfer_marks (
+        workspace TEXT,quiz_id TEXT,lesson_key TEXT,assessment_id TEXT,student_id TEXT,attempt_id TEXT,source_score REAL,value REAL,actor TEXT,created TEXT,day TEXT,work TEXT,
+        PRIMARY KEY(workspace,quiz_id,lesson_key,assessment_id,student_id))''')
+    db.execute('CREATE INDEX IF NOT EXISTS quiz_transfer_student ON quiz_transfer_marks(workspace,quiz_id,student_id)')
 
 
 def unpack(row):

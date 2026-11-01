@@ -1,11 +1,13 @@
-"""Lesson-scoped online tests with immutable published questions and attempt clocks."""
+"""Lesson- or course-scoped online tests with immutable published questions and attempt clocks."""
 from copy import deepcopy
 from collections import OrderedDict
 from datetime import datetime, timedelta
+import hashlib
 import json
 import secrets
 from uuid import uuid4
 from threading import RLock
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, Query, Request
 
@@ -25,6 +27,29 @@ def course_teachers(state,lesson):
 def group_pupils(snap,group):
     g=snap.entities['group'].get(group)
     return {p.id for p in snap.state.students if p.active and g and (p.classId in g.classIds if g.kind=='whole' else p.id in g.studentIds)}
+
+
+def is_course(lesson):
+    """A course test carries a group and a subject instead of a lesson; its snapshot is marked by this source key."""
+    return lesson.get('sourceKey', '').startswith('course:')
+
+
+def course_key(group, subject):
+    """The key a course test stores in place of a lesson key: it can never equal a journal key (64 hex characters)."""
+    return 'course:' + hashlib.sha256(encoded([group, subject]).encode()).hexdigest()
+
+
+def course_lesson(snap, workspace, user, group, subject, opens):
+    """The snapshot of a course test: the group's active pupils now, no lesson and no journal entry. Only a course teacher or the administrator assigns it."""
+    from .course_table import course_scope
+    from .natural import natural
+    if course_scope(user, snap, workspace, group, subject)['kind'] not in ['course', 'admin']:raise HTTPException(403, 'Тест курса назначает учитель курса или администратор.')
+    students, classes, teachers = snap.entities['student'], snap.entities['class_'], snap.entities['teacher']
+    ids = sorted(course_teachers(snap.state, dict(groupId=group, subjectId=subject)))
+    pupils = sorted((students[id] for id in group_pupils(snap, group)), key=lambda p: (natural(p.name), p.id))
+    return dict(date=opens.astimezone(ZoneInfo('Asia/Qyzylorda')).date().isoformat(), start='', end='', subjectId=subject, subject=next(x.name for x in snap.state.subjects if x.id == subject),
+                groupId=group, group=snap.entities['group'][group].name, teacherIds=ids, teachers=[teachers[id].name for id in ids if id in teachers], rooms=[], status='course', rosterComplete=True,
+                sourceKey=course_key(group, subject), students=[dict(id=p.id, name=p.name, classId=p.classId, className=classes[p.classId].name if p.classId in classes else '', enrolled=True) for p in pupils])
 
 
 class Quizzes:
@@ -67,7 +92,8 @@ class Quizzes:
     def resolve(self,user,snap,quiz,student=None):
         workspace=quiz['workspace'];staff=user['role'] in ['admin','teacher']
         document=quiz['published'] or quiz['document'];lesson=document['lesson']
-        current=snap.current_lesson(lesson)
+        # A course test has no lesson: its pupils are the current group, as for a lesson that is gone.
+        current=None if is_course(lesson) else snap.current_lesson(lesson)
         # Management follows concrete links (owner, course teacher, admin); today's occurrence of the lesson, a substitution or a cancellation do not matter.
         owner=user['role']=='teacher' and quiz.get('ownerId')==user['id']
         course=user['role']=='teacher' and bool(user_ids(user,workspace,'teacher') & course_teachers(snap.state,lesson))
@@ -83,7 +109,8 @@ class Quizzes:
         pupils=set(current['studentIds'])&snap.active if current else group_pupils(snap,lesson['groupId'])
         enrolled=bool(student is not None and student in document['studentIds'] and student in pupils)
         return dict(user=user,staff=staff,workspace=workspace,quiz=quiz,student=student,current=current,state=snap.state,revision=snap.state.revision,
-                    canReview=bool(staff and manage),canAnswer=bool(user['role']=='student' and enrolled),enrolled=enrolled,groupPupils=pupils,key=quiz['lessonKey'])
+                    canReview=bool(staff and manage),canAnswer=bool(user['role']=='student' and enrolled),enrolled=enrolled,groupPupils=pupils,key=quiz['lessonKey'],
+                    canTransfer=bool(staff and (user['role']=='admin' or course)),snap=snap)
 
     def context(self,request,workspace,id,student=None,attempt_id=None):
         user=self.journal.scope(request,workspace);snap=self.snapshots.get(workspace)
@@ -175,9 +202,10 @@ class Quizzes:
         quiz=ctx['quiz'];document=quiz['published'] or quiz['document'];definition=document['definition']
         result=dict(id=quiz['id'],version=quiz['version'],status=quiz['status'],released=quiz['released'],staff=ctx['staff'],canManage=ctx['canReview'],
                     lessonKey=quiz['lessonKey'],lessonDate=document['lesson']['date'],subject=document['lesson']['subject'],group=document['lesson']['group'],
+                    scope='course' if is_course(document['lesson']) else 'lesson',
                     title=definition['title'],instructions=definition['instructions'],opensAt=definition['opensAt'],closesAt=definition['closesAt'],
                     timeLimitMinutes=definition['timeLimitMinutes'],maxAttempts=definition['maxAttempts'],serverNow=now().isoformat())
-        if ctx['staff']:result.update(document=quiz['document'],revision=ctx['revision'])
+        if ctx['staff']:result.update(document=quiz['document'],revision=ctx['revision'],groupId=document['lesson']['groupId'],subjectId=document['lesson']['subjectId'],canTransfer=ctx['canTransfer'])
         if ctx['student']:
             rows=db.execute('SELECT id,number,status,started,deadline,submitted,score,max_score FROM quiz_attempts WHERE workspace=? AND quiz_id=? AND student_id=? ORDER BY number DESC',
                         (ctx['workspace'],quiz['id'],ctx['student'])).fetchall()
@@ -225,25 +253,33 @@ class Quizzes:
         from .quiz_attempts import register as register_attempts
         from .quiz_catalog import register as register_catalog
         from .quiz_grading import register as register_grading
-        register_bank(app,self,Workspace);register_exchange(app,self,Workspace);register_catalog(app,self,Workspace);register_attempts(app,self,Workspace);register_grading(app,self,Workspace)
+        from .quiz_transfer import register as register_transfer
+        register_bank(app,self,Workspace);register_exchange(app,self,Workspace);register_catalog(app,self,Workspace);register_attempts(app,self,Workspace);register_grading(app,self,Workspace);register_transfer(app,self,Workspace)
 
         @app.put('/api/journal/quizzes/{id}')
         def save(id:str,body:models.QuizWrite,request:Request,workspace:Workspace='school'):
             if len(id)>80 or not id:raise HTTPException(422,'Неверный идентификатор теста.')
             user=self.journal.scope(request,workspace,staff=True);snap=self.snapshots.get(workspace)
-            record=self.journal.entry(snap.state,workspace,user,body.lessonKey,body.day)
-            if not record['writable'] or record['needsSync']:raise HTTPException(409,'Сначала обновите состав урока и откройте его период в журнале.')
-            if body.revision!=snap.state.revision or record['currentDate']!=body.day.isoformat():raise HTTPException(409,'Урок изменился. Обновите список.')
-            if not snap.state.settings.yearStart<=body.day<=snap.state.settings.yearEnd:raise HTTPException(422,'Урок вне учебного года.')
-            lesson=record['document']['lesson'];pupils={s['id'] for s in lesson['students'] if s.get('enrolled',True)}
+            key=body.lessonKey or course_key(body.groupId,body.subjectId)
+            if body.lessonKey:
+                record=self.journal.entry(snap.state,workspace,user,body.lessonKey,body.day)
+                if not record['writable'] or record['needsSync']:raise HTTPException(409,'Сначала обновите состав урока и откройте его период в журнале.')
+                if body.revision!=snap.state.revision or record['currentDate']!=body.day.isoformat():raise HTTPException(409,'Урок изменился. Обновите список.')
+                if not snap.state.settings.yearStart<=body.day<=snap.state.settings.yearEnd:raise HTTPException(422,'Урок вне учебного года.')
+                lesson=record['document']['lesson'];pupils={s['id'] for s in lesson['students'] if s.get('enrolled',True)}
+            else:
+                # A course test writes nothing in the journal: no lesson and no period lock; the group's pupils now are the roster.
+                lesson=course_lesson(snap,workspace,user,body.groupId,body.subjectId,body.definition.opensAt)
+                if body.revision!=snap.state.revision:raise HTTPException(409,'Расписание изменилось.')
+                pupils=group_pupils(snap,body.groupId)
             if set(body.studentIds)-pupils:raise HTTPException(422,'Тест можно назначить только действующим ученикам урока.')
             with self.access.lock,self.access.connect() as db:
                 self.tables(db);db.execute('BEGIN IMMEDIATE');self.journal.recheck_account(db,user)
                 if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(body.revision,):raise HTTPException(409,'Расписание изменилось.')
-                require_open(db,workspace,lesson)
+                if body.lessonKey:require_open(db,workspace,lesson)
                 row=db.execute('SELECT * FROM quizzes WHERE workspace=? AND id=?',(workspace,id)).fetchone();old=store.unpack(row) if row else None
                 if body.version!=(old['version'] if old else 0):raise HTTPException(409,'Тест уже изменён. Обновите его.')
-                if old and (old['lessonKey']!=body.lessonKey or old['status']!='draft'):
+                if old and (old['lessonKey']!=key or old['status']!='draft'):
                     raise HTTPException(409,'Опубликованный тест сохраняет свои условия. Для изменений создайте копию.')
                 if body.publish and body.definition.closesAt<=now():raise HTTPException(422,'Нельзя опубликовать тест с истёкшим сроком.')
                 previous=old['document'] if old else None
@@ -266,7 +302,7 @@ class Quizzes:
                 document=dict(lesson=lesson,definition=definition,studentIds=body.studentIds,variantsByStudent=assignments)
                 version=body.version+1;created=now().isoformat();status='published' if body.publish else 'draft'
                 summary=dict(lesson={k:v for k,v in lesson.items() if k!='students'},definition={k:v for k,v in definition.items() if k!='variants'},studentIds=[])
-                values=(workspace,id,version,old['ownerId'] if old else user['id'],created,status,body.definition.closesAt.isoformat(),body.lessonKey,encoded(document),encoded(document) if body.publish else None,0,encoded(summary))
+                values=(workspace,id,version,old['ownerId'] if old else user['id'],created,status,body.definition.closesAt.isoformat(),key,encoded(document),encoded(document) if body.publish else None,0,encoded(summary))
                 db.execute('INSERT INTO quizzes VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,id) DO UPDATE SET version=excluded.version,updated=excluded.updated,status=excluded.status,closes=excluded.closes,document=excluded.document,published_document=excluded.published_document,summary=excluded.summary',values)
                 db.execute('DELETE FROM quiz_members WHERE workspace=? AND quiz_id=?',(workspace,id))
                 if body.publish:
