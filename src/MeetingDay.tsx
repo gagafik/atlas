@@ -2,59 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import MeetingPrint from "./MeetingPrint";
 import type { DayView, Options } from "./meetings";
-import { addDays, clockTime, labels, shortDate, todaySchool } from "./meetings";
-
-type Row = {
-  key: string;
-  start: string;
-  end: string;
-  kind: string;
-  title: string;
-  detail: string;
-  place: string;
-  warning: string;
-};
-
-// One chronological list for the date: timetable lessons, consultation and parent-meeting slots, class meetings.
-function rowsOf(view: DayView): Row[] {
-  const rows: Row[] = [
-    ...view.lessons.map((l, i) => ({
-      key: "lesson" + i,
-      start: l.start,
-      end: l.end,
-      kind: l.activity === "lesson" ? "Урок" : "Занятость",
-      title: [l.subject, l.group].filter(Boolean).join(" · "),
-      detail: l.status === "cancelled" ? "Отменён" : "",
-      place: l.rooms.join(", "),
-      warning: "",
-    })),
-    ...view.slots.map((s) => ({
-      key: "slot" + s.id,
-      start: clockTime(s.startsAt),
-      end: clockTime(s.endsAt),
-      kind: s.kind === "consultation" ? "Консультация" : "Родительская встреча",
-      title: s.eventTitle,
-      detail: s.booking
-        ? `${s.booking.studentName} · ${s.booking.parentName}`
-        : labels[s.status] || s.status,
-      place: s.roomName || s.location,
-      warning: s.conflict || "",
-    })),
-    ...view.classMeetings.map((m) => ({
-      key: "class" + m.id,
-      start: clockTime(m.startsAt),
-      end: clockTime(m.endsAt),
-      kind: "Собрание класса",
-      title: m.title,
-      detail: `${m.classNames.join(", ")} · приглашено: ${m.pupils}`,
-      place: m.place,
-      warning: "",
-    })),
-  ];
-  return rows.sort(
-    (a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end),
-  );
-}
+import { addDays, dayRows, shortDate, todaySchool } from "./meetings";
 
 export default function MeetingDay({
   workspace,
@@ -96,7 +44,7 @@ export default function MeetingDay({
       ++sequence.current;
     };
   }, [workspace, date, hostId]);
-  const rows = view ? rowsOf(view) : [];
+  const rows = view ? dayRows(view) : [];
   return (
     <section className="meeting-day" aria-label="День ведущего">
       <div className="meeting-toolbar">

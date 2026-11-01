@@ -48,6 +48,9 @@ def test_dated_membership_follows_the_meeting_date(client,monkeypatch):
     with api.connect() as db:
         assert counts(db,p3['id'],'meeting.class_invited')==1 and counts(db,p1['id'],'meeting.class_changed')==1 and counts(db,p2['id'],'meeting.class_changed')==0
     assert {r['studentId'] for r in ok(get(client,'/'+id))['roster']}=={'s2','s3'}
+    # The guardian of the pupil who left no longer opens the invitation; the guardian of the newcomer does.
+    opens=lambda login,action:signed(login).post('/api/notifications/'+str(got(signed(login),action)[0]['id'])+'/open').status_code
+    assert opens('parent','meeting.class_changed')==404 and opens('par3','meeting.class_invited')==200 and opens('par2','meeting.class_invited')==200
     clock(monkeypatch,datetime(2026,9,10,6,tzinfo=timezone.utc))
     resave(move(s2='c-demo-d'),date(2026,9,10))
     idle=ok(post(client,'/'+id+'/sync',version=2));assert idle['added']==0 and idle['removed']==0 and idle['version']==2
@@ -135,3 +138,16 @@ def test_create_rolls_back_when_notification_fails(client,monkeypatch):
     with api.connect() as db:assert db.execute('SELECT count(*) FROM class_meetings').fetchone()[0]==0 and db.execute('SELECT count(*) FROM class_meeting_invitees').fetchone()[0]==0
     monkeypatch.setattr(api.notifications,'deliver',original)
     assert post(client,**form(MONDAYS[0],'13:00','14:00')).status_code==200
+
+
+def test_meeting_follows_a_replaced_class_teacher_in_the_day_view_and_in_conflicts(client,monkeypatch):
+    clock(monkeypatch,BASE-timedelta(days=2));enable(client);create(client,'teacher');create(client,'teacher',login='physics',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
+    lead('t2');old,new=signed('teacher'),signed('physics')
+    meeting=ok(post(old,**form(MONDAYS[0],'10:30','11:00')))['id']
+    shown=lambda c:[m['id'] for m in ok(c.get('/api/meetings/day',params=dict(workspace='demo',onDate=MONDAYS[0])))['classMeetings']]
+    # Consultation hours 10:00-11:30 of a teacher: how many slots remain depends on whether the class meeting is theirs.
+    free=lambda c,teacher:ok(preview(c,teacherId=teacher,roomId=None,location='Кабинет',startDate=MONDAYS[0],endDate=MONDAYS[0],startTime='10:00',endTime='11:30'))['slotCount']
+    before=dict(t1=free(new,'t1'),t2=free(old,'t2'));assert shown(old)==[meeting] and shown(new)==[]
+    lead('t1')
+    assert shown(old)==[] and shown(new)==[meeting]
+    assert free(new,'t1')<before['t1'] and free(old,'t2')>before['t2']

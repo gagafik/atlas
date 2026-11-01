@@ -231,10 +231,13 @@ def open_assessments(db, user, workspace, data, kids):
 def open_meetings(db, user, workspace, data, kids):
     row = db.execute('SELECT event_id,parent_id,student_id,host_id FROM meeting_bookings WHERE workspace=? AND id=?', (workspace, data.get('recordId'))).fetchone() if has_table(db, 'meeting_bookings') else None
     if not row: return None
-    if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids: return dict(eventId=row[0])
+    kind = db.execute("SELECT json_extract(document,'$.kind') FROM meeting_events WHERE id=?", (row[0],)).fetchone()
+    consultation = bool(kind and kind[0] == 'consultation')
     # A guardian also opens a consultation that someone else of the family booked for their child.
-    consultation = db.execute("SELECT json_extract(document,'$.kind') FROM meeting_events WHERE id=?", (row[0],)).fetchone()
-    return dict(eventId=row[0]) if user['role'] == 'parent' and row[2] in kids and consultation and consultation[0] == 'consultation' else None
+    if user['role'] == 'admin' or row[3] == user['id'] or row[1] == user['id'] and row[2] in kids or consultation and user['role'] == 'parent' and row[2] in kids:
+        # Consultations have their own section of the panel; the entry of a parent meeting names none.
+        return dict(eventId=row[0], section='consultations') if consultation else dict(eventId=row[0])
+    return None
 
 
 def open_class_meetings(db, user, workspace, data, kids):
@@ -274,7 +277,7 @@ def navigation(db, user, workspace, data):
     found = OPENERS[data['module']](db, user, workspace, data, kids)
     if found is None: return None
     return dict(module=data['module'], workspace=workspace, recordId=data.get('recordId'), studentId=kids[0] if kids else None,
-                day=data.get('day')) | {k: v for k, v in found.items() if k in ('formId', 'eventId')}
+                day=data.get('day')) | {k: v for k, v in found.items() if k in ('formId', 'eventId', 'section')}
 
 
 QUIET = r'^([01]\d|2[0-3]):[0-5]\d$'

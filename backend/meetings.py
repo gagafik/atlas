@@ -233,8 +233,9 @@ class Meetings:
             if not value:continue
             row=db.execute(f"SELECT 1 FROM meeting_slots s JOIN meeting_events e ON e.id=s.event_id WHERE s.workspace=? AND s.{column}=? AND s.status='open' AND e.status NOT IN ('cancelled','archived') AND s.starts_at<? AND s.ends_at>? AND s.id!=? LIMIT 1",(slot['workspace'],value,slot['ends_at'],slot['starts_at'],ignore or '')).fetchone()
             if row:return 'Ведущий или кабинет занят другим интервалом встреч.'
-        owners=[(clause,value) for clause,value in [('c.room_id=?',slot['room_id']),("EXISTS(SELECT 1 FROM json_each(c.teacher_ids) WHERE value=?)",slot['teacher_id'])] if value]
-        if owners and db.execute("SELECT 1 FROM class_meetings c WHERE c.workspace=? AND c.status='scheduled' AND c.starts_at<? AND c.ends_at>? AND c.id!=? AND ("+' OR '.join(c for c,_ in owners)+') LIMIT 1',(slot['workspace'],slot['ends_at'],slot['starts_at'],ignore_class,*(v for _,v in owners))).fetchone():return 'На это время назначено собрание класса.'
+        # Class teachers are read from the classes now, not from the teachers stored when the meeting was planned.
+        for room,classes in (db.execute("SELECT room_id,class_ids FROM class_meetings WHERE workspace=? AND status='scheduled' AND starts_at<? AND ends_at>? AND id!=?",(slot['workspace'],slot['ends_at'],slot['starts_at'],ignore_class)) if slot['room_id'] or slot['teacher_id'] else ()):
+            if slot['room_id'] and room==slot['room_id'] or slot['teacher_id'] and slot['teacher_id'] in occupancy.leaders(json.loads(classes)):return 'На это время назначено собрание класса.'
         return None
 
     def availability(self,db,event,body,snap,workspace):
@@ -311,11 +312,15 @@ class Meetings:
         host=self.hosts(db,event,snap,workspace).get(user['id'])
         return bool(booking['host_id']==user['id'] and host and host['current'])
 
+    def markable(self,booking,event):
+        """A started meeting that was not cancelled. It stays markable when its event is cancelled: that leaves only meetings which took place."""
+        return booking['status']!='cancelled' and event['status']!='archived' and now()>=datetime.fromisoformat(booking['starts_at'])
+
     def booking_public(self,booking,event,user):
         doc=json.loads(booking['document'])
         own_series=consultation(event) and booking['host_id']==user['id']
         doc['canReschedule']=(user['role']=='admin' or own_series) and booking['status']=='scheduled' and event['status'] in ['open','closed'] and now()<datetime.fromisoformat(booking['starts_at'])
-        return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or own_series or user['role'] in FAMILY_ROLES and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role'] not in FAMILY_ROLES and booking['status']!='cancelled' and event['status'] not in ['cancelled','archived'] and now()>=datetime.fromisoformat(booking['starts_at']))
+        return doc|dict(id=booking['id'],eventId=event['id'],eventTitle=event['definition']['title'],status=booking['status'],version=booking['version'],startsAt=booking['starts_at'],endsAt=booking['ends_at'],canCancel=booking['status']=='scheduled' and (user['role']=='admin' or own_series or user['role'] in FAMILY_ROLES and now()<datetime.fromisoformat(booking['starts_at'])-timedelta(minutes=event['definition']['cancelMinutes'])),canMark=user['role'] not in FAMILY_ROLES and self.markable(booking,event))
 
     def notice(self,booking_id,event,document,starts_at,prefix):
         """Notification target of a booking: event, local time, host and child. The parent's note and any reason stay in the booking."""

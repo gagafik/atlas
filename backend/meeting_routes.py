@@ -161,8 +161,10 @@ def register(service,app,Workspace):
                 event['status']='closed'
             elif body.action=='cancel':
                 if event['status'] in ['cancelled','archived'] or not body.reason:raise HTTPException(422,'Укажите причину отмены действующего мероприятия.')
-                for row in db.execute("SELECT * FROM meeting_bookings WHERE event_id=? AND status='scheduled'",(id,)).fetchall():service.cancel_booking(db,dict(row),event,user,snap,workspace,body.reason)
-                db.execute("UPDATE meeting_slots SET status='blocked',version=version+1,reason=? WHERE event_id=?",(body.reason,id));event['status']='cancelled'
+                # Meetings that already started took place: they keep their record, their outcome can still be marked, and nobody is told they were cancelled.
+                instant=utc(now())
+                for row in db.execute("SELECT * FROM meeting_bookings WHERE event_id=? AND status='scheduled' AND starts_at>?",(id,instant)).fetchall():service.cancel_booking(db,dict(row),event,user,snap,workspace,body.reason)
+                db.execute("UPDATE meeting_slots SET status='blocked',version=version+1,reason=? WHERE event_id=? AND starts_at>?",(body.reason,id,instant));event['status']='cancelled'
             else:
                 if event['status']=='archived':raise HTTPException(409,'Мероприятие уже в архиве.')
                 if db.execute("SELECT 1 FROM meeting_bookings WHERE event_id=? AND status='scheduled' AND ends_at>? LIMIT 1",(id,utc(now()))).fetchone():raise HTTPException(409,'Сначала отмените предстоящие встречи или дождитесь их окончания.')
@@ -254,7 +256,7 @@ def register(service,app,Workspace):
                 status='cancelled'
             else:
                 if user['role'] in FAMILY_ROLES:raise HTTPException(403,'Итог встречи отмечает ведущий или администрация.')
-                if booking['status']=='cancelled' or event['status'] in ['cancelled','archived'] or now()<datetime.fromisoformat(booking['starts_at']):raise HTTPException(409,'Итог доступен только для начавшейся действующей встречи.')
+                if not service.markable(booking,event):raise HTTPException(409,'Итог доступен только для начавшейся действующей встречи.')
                 document=json.loads(booking['document']);document['updated']=utc(now())
                 db.execute('UPDATE meeting_bookings SET status=?,version=version+1,document=? WHERE id=?',(body.action,encoded(document),id))
                 if body.action!='scheduled':db.execute("UPDATE meeting_reminders SET status='skipped' WHERE booking_id=? AND status='pending'",(id,))

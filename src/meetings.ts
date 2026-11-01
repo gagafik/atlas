@@ -150,7 +150,8 @@ export type DayView = {
     end: string;
     subject: string;
     group: string;
-    rooms: string[];
+    // Rooms come from the timetable as one text, "301, 302".
+    rooms: string;
     status: string;
     activity: string;
   }[];
@@ -292,6 +293,56 @@ export function groupByDay<T extends { startsAt: string }>(
     else groups.push([day, [item]]);
   }
   return groups;
+}
+export type DayRow = {
+  key: string;
+  start: string;
+  end: string;
+  kind: string;
+  title: string;
+  detail: string;
+  place: string;
+  warning: string;
+};
+// One chronological list for the date: timetable lessons, consultation and parent-meeting slots, class meetings.
+export function dayRows(view: DayView): DayRow[] {
+  const rows: DayRow[] = [
+    ...view.lessons.map((l, i) => ({
+      key: "lesson" + i,
+      start: l.start,
+      end: l.end,
+      kind: l.activity === "lesson" ? "Урок" : "Занятость",
+      title: [l.subject, l.group].filter(Boolean).join(" · "),
+      detail: l.status === "cancelled" ? "Отменён" : "",
+      place: l.rooms,
+      warning: "",
+    })),
+    ...view.slots.map((s) => ({
+      key: "slot" + s.id,
+      start: clockTime(s.startsAt),
+      end: clockTime(s.endsAt),
+      kind: s.kind === "consultation" ? "Консультация" : "Родительская встреча",
+      title: s.eventTitle,
+      detail: s.booking
+        ? `${s.booking.studentName} · ${s.booking.parentName}`
+        : labels[s.status] || s.status,
+      place: s.roomName || s.location,
+      warning: s.conflict || "",
+    })),
+    ...view.classMeetings.map((m) => ({
+      key: "class" + m.id,
+      start: clockTime(m.startsAt),
+      end: clockTime(m.endsAt),
+      kind: "Собрание класса",
+      title: m.title,
+      detail: `${m.classNames.join(", ")} · приглашено: ${m.pupils}`,
+      place: m.place,
+      warning: "",
+    })),
+  ];
+  return rows.sort(
+    (a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end),
+  );
 }
 export function blankDefinition(): Definition {
   const day = schoolInput(

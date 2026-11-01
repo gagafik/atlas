@@ -84,7 +84,7 @@ def register(service,app,Workspace):
             host=host_of(service,db,user,body,snap,workspace);fingerprint,old=service.replay(db,user,body,'consultations:'+workspace)
             if old:return old
             if db.execute("SELECT count(*) FROM meeting_events e JOIN meeting_hosts h ON h.event_id=e.id WHERE e.workspace=? AND e.status IN ('open','closed') AND json_extract(e.document,'$.kind')='consultation' AND h.account_id=?",(workspace,host['accountId'])).fetchone()[0]>=MAX_OWN_SERIES:
-                raise HTTPException(422,f'У ведущего может быть не более {MAX_OWN_SERIES} действующих серий консультаций. Закройте или отправьте в архив старые.')
+                raise HTTPException(422,f'У ведущего может быть не более {MAX_OWN_SERIES} действующих серий консультаций. Закрытые серии тоже считаются: отправьте старые в архив или отмените их.')
             if db.execute(f"SELECT count(*) FROM meeting_events WHERE workspace=? AND status IN ('open','closed') AND {KIND}",(workspace,)).fetchone()[0]>=MAX_SERIES:
                 raise HTTPException(422,f'В школе может быть не более {MAX_SERIES} действующих серий консультаций.')
             slots,skipped,past,key=candidates(service,db,body,host,prefill if prefill.snap is snap else Occupancy(snap),workspace)
@@ -164,17 +164,21 @@ def register(service,app,Workspace):
             for slot in rows:
                 if slot['event_id'] not in events:events[slot['event_id']]=service.event(db,workspace,slot['event_id'])
                 event=events[slot['event_id']];host=service.hosts(db,event,snap,workspace).get(target['id'])
+                # As in the agenda routes: a host whose link ended sees nothing of the event any more; an administrator still does.
+                if user['role']!='admin' and not (host and host['current']):continue
                 booking=db.execute("SELECT * FROM meeting_bookings WHERE slot_id=? AND status!='cancelled'",(slot['id'],)).fetchone()
                 result=dict(id=slot['id'],eventId=event['id'],eventTitle=event['definition']['title'],kind='consultation' if meetings.consultation(event) else 'meeting',startsAt=slot['starts_at'],endsAt=slot['ends_at'],
                             status='blocked' if slot['status']=='blocked' else 'occupied' if booking else 'past' if datetime.fromisoformat(slot['starts_at'])<=meetings.now() else 'available',
                             location=host['location'] if host else '',roomName=snap.entities['room'][slot['room_id']].name if slot['room_id'] in snap.entities['room'] else '')
-                if booking:
+                if booking and service.booking_access(db,booking,event,user,snap,workspace):
                     result['booking']=service.booking_public(booking,event,user)
                     # A lesson, absence or closure added after the booking shows here.
                     result['conflict']=service.slot_conflict(db,slot,occupancy,slot['id']) if slot['status']=='open' else None
                 slots.append(result)
             gatherings=[]
-            for meeting in db.execute("SELECT * FROM class_meetings WHERE workspace=? AND status='scheduled' AND starts_at>=? AND starts_at<? AND EXISTS (SELECT 1 FROM json_each(teacher_ids) WHERE value IN (SELECT value FROM json_each(?))) ORDER BY starts_at,id",(workspace,utc(begin),utc(begin+timedelta(days=1)),encoded(teachers))):
+            # The class teachers now, not those stored when the meeting was planned.
+            for meeting in db.execute("SELECT * FROM class_meetings WHERE workspace=? AND status='scheduled' AND starts_at>=? AND starts_at<? ORDER BY starts_at,id",(workspace,utc(begin),utc(begin+timedelta(days=1)))).fetchall():
+                if not set(teachers) & occupancy.leaders(json.loads(meeting['class_ids'])):continue
                 document=json.loads(meeting['document'])
                 gatherings.append(dict(id=meeting['id'],title=document['title'],startsAt=meeting['starts_at'],endsAt=meeting['ends_at'],place=document['roomName'] or document['location'],classNames=document['classNames'],
                                        pupils=db.execute('SELECT count(*) FROM class_meeting_invitees WHERE meeting_id=?',(meeting['id'],)).fetchone()[0]))

@@ -39,3 +39,8 @@ class Occupancy:
         classes={c.id for c in self.snap.state.classes};covered=set()
         for e in found:covered|=set(e.classIds) if e.classIds else classes
         return found[0].name if found and classes<=covered else None
+
+    def leaders(self,class_ids):
+        """Class teachers of these classes now, so a class meeting follows a replaced class teacher."""
+        ids=set(class_ids)
+        return {c.classTeacherId for c in self.snap.state.classes if c.id in ids and c.classTeacherId}

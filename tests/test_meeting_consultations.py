@@ -1,14 +1,14 @@
 """Consultation hours: teacher series, pupil switch, one booking per day, teacher self-service and the day view."""
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date,datetime,timedelta
+from datetime import date,datetime,timedelta,timezone
 import sqlite3
 from zoneinfo import ZoneInfo
 import pytest
-from backend import api,meetings,meeting_routes,meeting_reminders
+from backend import api,meetings,meeting_routes,meeting_reminders,meeting_consultations
 from backend.models import Commitment,Event,TeacherAbsence
 from seeding import insert_row,read_row
 from test_access import client,enable,create,signed
-from test_meetings import BASE,request,path,ok,event as detail,publish as publish_meeting,setup as setup_meeting,new as new_meeting
+from test_meetings import BASE,request,path,ok,event as detail,publish as publish_meeting,setup as setup_meeting,new as new_meeting,regrant
 from test_meeting_waitlist import queue,join,offered,change
 from test_absence_school import lead
 
@@ -28,9 +28,11 @@ def get(c,part,**params):return c.get('/api/meetings/'+part,params=dict(workspac
 def series(**kw):
     return dict(requestId=request()['requestId'],teacherId='t2',title='Консультации',startDate=MONDAYS[0],endDate=MONDAYS[-1],weekdays=[0],startTime='08:00',endTime='09:30',slotMinutes=15,roomId='r0')|kw
 def preview(c,**kw):return c.post(path('consultations/preview'),json=series(**kw))
-def create_series(c,**kw):
+def try_series(c,**kw):
     body=series(**kw);found=ok(c.post(path('consultations/preview'),json=body))
-    return ok(c.post(path('consultations'),json=body|dict(previewHash=found['previewHash'])))
+    return c.post(path('consultations'),json=body|dict(previewHash=found['previewHash']))
+def create_series(c,**kw):return ok(try_series(c,**kw))
+def act(c,id,action,**kw):return c.post(path('events/'+id+'/transition'),json=request(version=detail(c,id)['version'],action=action,**kw))
 def switch(c,on,version=0,reason='Решение школы'):return c.put(path('settings'),json=request(version=version,pupilBooking=on,reason=reason))
 def slots(c,id):return ok(get(c,'events/'+id+'/slots',limit=100))['items']
 def local(value):return datetime.fromisoformat(value).astimezone(ZONE)
@@ -250,7 +252,7 @@ def test_day_view_combines_lessons_slots_and_class_meetings(client,monkeypatch):
     parents=new_meeting(client,[dict(accountId=teacher['id'],teacherId='t2',location='301')]);publish_meeting(client,parents)
     meeting=ok(client.post(path('class-meetings'),json=request(title='Собрание 10А',classIds=['c-demo-a'],startsAt=datetime(2027,4,5,13,0,tzinfo=ZONE).isoformat(),endsAt=datetime(2027,4,5,14,0,tzinfo=ZONE).isoformat(),location='Актовый зал')))
     view=ok(day_view(tc,MONDAYS[0]))
-    assert view['lessons'] and {s['kind'] for s in view['slots']}=={'consultation','meeting'}
+    assert view['lessons'] and all(isinstance(l['rooms'],str) for l in view['lessons']) and {s['kind'] for s in view['slots']}=={'consultation','meeting'}
     booked=next(s for s in view['slots'] if s['kind']=='consultation' and s['status']=='occupied')
     assert booked['booking']['studentName'].startswith('Ученик 1') and booked['conflict'] is None
     assert len([s for s in view['slots'] if s['kind']=='meeting'])==12
@@ -259,3 +261,135 @@ def test_day_view_combines_lessons_slots_and_class_meetings(client,monkeypatch):
     assert ok(day_view(client,MONDAYS[0],hostId=teacher['id']))['hostName']==teacher['name'] and day_view(signed('parent'),MONDAYS[0]).status_code==403
     ok(tc.post(path('events/'+id+'/transition'),json=request(version=detail(tc,id)['version'],action='cancel',reason='Отмена')))
     assert {s['kind'] for s in ok(day_view(tc,MONDAYS[0]))['slots']}=={'meeting'}
+
+
+def test_first_request_after_an_update_migrates_a_school_database(client,monkeypatch):
+    prepared(client,monkeypatch);ok(client.get(path('options')))
+    # Bring the tables back to the shape an existing school has: it already carries the waiting-list marker but nothing newer.
+    with api.access.lock,api.connect() as db:
+        db.execute('DROP INDEX meeting_booked_child_occasion');db.execute('ALTER TABLE meeting_bookings DROP COLUMN occasion')
+        db.execute("CREATE UNIQUE INDEX meeting_booked_child ON meeting_bookings(event_id,host_id,student_id) WHERE status!='cancelled'")
+        for table in ['meeting_settings','class_meetings','class_meeting_invitees']:db.execute('DROP TABLE '+table)
+    ok(client.get(path('options')))
+    with api.connect() as db:
+        assert 'occasion' in {r[1] for r in db.execute('PRAGMA table_info(meeting_bookings)')}
+        names={r[1] for r in db.execute('PRAGMA index_list(meeting_bookings)')};assert 'meeting_booked_child_occasion' in names and 'meeting_booked_child' not in names
+    made=create_series(signed('teacher'));assert ok(book(signed('parent'),made['id'],on_date(signed('parent'),made['id'],MONDAYS[0])[0]))['status']=='scheduled'
+
+
+def test_series_caps_count_closed_series_and_free_up_by_archive_or_cancel(client,monkeypatch):
+    prepared(client,monkeypatch);other_teacher(client)
+    monkeypatch.setattr(meeting_consultations,'MAX_OWN_SERIES',2);monkeypatch.setattr(meeting_consultations,'MAX_SERIES',3)
+    teacher,math=signed('teacher'),signed('math');week=lambda n:dict(startDate=MONDAYS[n],endDate=MONDAYS[n])
+    a=create_series(teacher,**week(0))['id'];b=create_series(teacher,**week(1))['id']
+    assert try_series(teacher,**week(2)).status_code==422
+    # Closing a series stops bookings but it still counts; archiving frees the place.
+    ok(act(teacher,a,'close'));assert try_series(teacher,**week(2)).status_code==422
+    mine=dict(teacherId='t0',roomId='r1');create_series(math,**mine,**week(0))
+    assert try_series(math,**mine,**week(1)).status_code==422
+    ok(act(teacher,a,'archive'));ok(try_series(teacher,**week(2)))
+    assert try_series(math,**mine,**week(1)).status_code==422
+    ok(act(teacher,b,'cancel',reason='Не веду'));ok(try_series(math,**mine,**week(1)))
+
+
+def test_series_slot_cap_refuses_a_window_with_too_many_slots(client,monkeypatch):
+    prepared(client,monkeypatch);teacher=signed('teacher');monkeypatch.setattr(meeting_consultations,'MAX_SLOTS',3)
+    after_school=dict(startDate=MONDAYS[0],endDate=MONDAYS[0],roomId=None,location='Кабинет',startTime='17:00')
+    assert preview(teacher,**after_school,endTime='19:00').status_code==422
+    with api.connect() as db:assert db.execute('SELECT count(*) FROM meeting_events').fetchone()[0]==0
+    assert create_series(teacher,**after_school,endTime='17:45')['slots']==3
+
+
+def test_series_do_not_count_toward_the_hundred_event_limit(client,monkeypatch):
+    teacher,_,_=prepared(client,monkeypatch);made=create_series(signed('teacher'))
+    def parent_event():
+        definition=dict(title='Встречи',startsAt=BASE.isoformat(),endsAt=(BASE+timedelta(hours=2)).isoformat(),hosts=[dict(accountId=teacher['id'],teacherId='t2',location='301')])
+        return client.post(path('events'),json=request(definition=definition))
+    with api.connect() as db:
+        base=read_row(db,'meeting_events',id=made['id']);base.pop('seq')
+        for number in range(100):insert_row(db,'meeting_events',base,id=f'series{number}')
+    first=ok(parent_event())['id']
+    with api.connect() as db:
+        base=read_row(db,'meeting_events',id=first);base.pop('seq')
+        for number in range(99):insert_row(db,'meeting_events',base,id=f'parent{number}')
+    assert parent_event().status_code==422
+    listed=ok(client.get(path('events')+'&limit=50'))['items'];assert len(listed)==50 and all(i['title']=='Встречи' for i in listed)
+
+
+def test_class_only_closure_stops_the_pupils_of_that_class_but_not_the_series(client,monkeypatch):
+    prepared(client,monkeypatch);parent=signed('parent')
+    state=api.read('demo')
+    state.events=[Event(id='a',name='Карантин 10А',start=date(2027,4,12),end=date(2027,4,12),kind='holiday',effect='cancel',classIds=['c-demo-a']),
+                  Event(id='d',name='Карантин 10Д',start=date(2027,4,19),end=date(2027,4,19),kind='holiday',effect='cancel',classIds=['c-demo-d'])]
+    api.save('demo',state);id=create_series(signed('teacher'))['id']
+    assert on_date(parent,id,MONDAYS[1]) and on_date(parent,id,MONDAYS[2])
+    assert book(parent,id,on_date(parent,id,MONDAYS[1])[0]).status_code==409
+    state=api.read('demo');state.events=state.events[1:];api.save('demo',state)
+    # With the closure of the pupil's class gone the same booking goes through, and another class's closure never stood in the way.
+    assert ok(book(parent,id,on_date(parent,id,MONDAYS[1])[0]))['status']=='scheduled'
+    assert ok(book(parent,id,on_date(parent,id,MONDAYS[2])[0]))['status']=='scheduled'
+
+
+def test_family_list_drops_a_series_once_it_is_over(client,monkeypatch):
+    prepared(client,monkeypatch);teacher=signed('teacher');parent=signed('parent');id=create_series(teacher,endDate=MONDAYS[1])['id']
+    assert [i['id'] for i in ok(get(parent,'consultations'))['items']]==[id]
+    monkeypatch.setattr(meetings,'now',lambda:datetime(2027,4,13,tzinfo=timezone.utc))
+    assert ok(get(parent,'consultations'))['items']==[] and [i['id'] for i in ok(get(teacher,'consultations'))['items']]==[id]
+
+
+def test_old_booking_does_not_stop_a_new_waitlist_request_in_a_series(client,monkeypatch):
+    prepared(client,monkeypatch);teacher=signed('teacher');parent=signed('parent');id=create_series(teacher)['id'];host=detail(teacher,id)['hosts'][0]['accountId']
+    ok(book(parent,id,on_date(parent,id,MONDAYS[0])[0]))
+    assert join(parent,id,host).status_code==409
+    monkeypatch.setattr(meetings,'now',lambda:datetime(2027,4,6,tzinfo=timezone.utc))
+    assert ok(join(parent,id,host))['status']=='waiting'
+
+
+def test_reminder_reaches_booker_host_pupil_and_guardians_of_a_consultation_only(client,monkeypatch):
+    host,_,_=prepared(client,monkeypatch);other_family(client,'guardian','s1');ok(switch(client,True))
+    teacher,parent,pupil,guardian=signed('teacher'),signed('parent'),signed('student'),signed('guardian')
+    series_id=create_series(teacher)['id'];ok(book(parent,series_id,on_date(parent,series_id,MONDAYS[0])[0]))
+    # An hour before the consultation (08:00 school time), then before the parent meeting at 17:00.
+    monkeypatch.setattr(meeting_reminders,'now',lambda:datetime(2027,4,5,2,30,tzinfo=timezone.utc))
+    assert api.meetings.reminders.process_one()
+    assert [len(got(account,'meeting.reminder')) for account in [teacher,parent,pupil,guardian]]==[1,1,1,1]
+    meeting=new_meeting(client,[dict(accountId=host['id'],teacherId='t2',location='301')]);publish_meeting(client,meeting)
+    private=ok(book(parent,meeting,ok(teacher.get(path('events/'+meeting+'/slots')))['items'][0]))
+    monkeypatch.setattr(meeting_reminders,'now',lambda:BASE-timedelta(minutes=30))
+    assert api.meetings.reminders.process_one()
+    assert [len(got(account,'meeting.reminder')) for account in [teacher,parent,pupil,guardian]]==[2,2,1,1] and private['status']=='scheduled'
+
+
+def test_host_whose_link_ended_loses_control_and_the_day_view(client,monkeypatch):
+    account,_,_=prepared(client,monkeypatch);other_family(client,'second','s2');teacher=signed('teacher');parent=signed('parent')
+    id=create_series(teacher,endDate=MONDAYS[1])['id'];host=detail(teacher,id)['hosts'][0]['accountId']
+    first,later=on_date(parent,id,MONDAYS[0]),on_date(parent,id,MONDAYS[1])
+    booking=ok(book(parent,id,first[0],note='Личный вопрос'))['id'];wid=ok(join(signed('second'),id,host,student='s2'))['id']
+    own=lambda c,**kw:[s for s in ok(day_view(c,MONDAYS[0],**kw))['slots'] if s['status']=='occupied']
+    assert own(teacher)[0]['booking']['note']=='Личный вопрос'
+    current=next(b for b in bookings(teacher,id) if b['id']==booking);source=next(s for s in slots(teacher,id) if s['startsAt']==current['startsAt']);version=detail(teacher,id)['version']
+    # The account is linked to another teacher now: nothing of the series is theirs any more, and the day view hides it too.
+    regrant(account['id'],['t0'],'teacher')
+    block=request(version=version,action='block',hostIds=[host],startsAt=datetime(2027,4,6,0,0,tzinfo=ZONE).isoformat(),endsAt=datetime(2027,4,6,23,59,tzinfo=ZONE).isoformat(),reason='x')
+    assert teacher.post(path('events/'+id+'/availability/preview'),json=block).status_code==403
+    assert teacher.post(path('events/'+id+'/transition'),json=request(version=version,action='cancel',reason='x')).status_code==403
+    assert teacher.post(path('bookings/'+booking+'/reschedule'),json=request(version=current['version'],eventVersion=version,sourceSlotVersion=source['version'],targetSlotId=later[0]['id'],targetSlotVersion=later[0]['version'],reason='x')).status_code==403
+    assert teacher.post(path('waitlist/'+wid+'/offer'),json=request(version=1,eventVersion=version,slotId=later[1]['id'],slotVersion=later[1]['version'],expiresAt=BASE.isoformat())).status_code==404
+    assert own(teacher)==[] and bookings(teacher,id)==[]
+    # The administrator still sees the series on the host's day, with the booking, and it is still open.
+    assert own(client,hostId=account['id'])[0]['booking']['note']=='Личный вопрос'
+    with api.connect() as db:assert db.execute("SELECT status FROM meeting_events WHERE id=?",(id,)).fetchone()[0]=='open'
+
+
+def test_cancelling_a_series_leaves_meetings_that_already_took_place(client,monkeypatch):
+    prepared(client,monkeypatch);other_family(client,'guardian','s1');ok(switch(client,True))
+    teacher,parent,pupil,guardian=signed('teacher'),signed('parent'),signed('student'),signed('guardian')
+    id=create_series(teacher,endDate=MONDAYS[1])['id']
+    held=ok(book(parent,id,on_date(parent,id,MONDAYS[0])[0]));ahead=ok(book(parent,id,on_date(parent,id,MONDAYS[1])[0]))
+    # The first consultation is over and nobody marked it.
+    for module in [meetings,meeting_routes]:monkeypatch.setattr(module,'now',lambda:datetime(2027,4,8,tzinfo=timezone.utc))
+    ok(act(teacher,id,'cancel',reason='Меняю день приёма'))
+    assert {b['id']:b['status'] for b in bookings(teacher,id)}=={held['id']:'scheduled',ahead['id']:'cancelled'}
+    assert [len(got(account,'meeting.cancelled')) for account in [parent,pupil,guardian]]==[1,1,1]
+    assert {s['status'] for s in on_date(teacher,id,MONDAYS[0])}>={'occupied'} and {s['status'] for s in on_date(teacher,id,MONDAYS[1])}=={'blocked'}
+    assert ok(teacher.post(path('bookings/'+held['id']),json=request(version=1,action='attended')))['status']=='attended'

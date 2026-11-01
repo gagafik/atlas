@@ -31,6 +31,8 @@ export interface OpenResult {
   day?: string | null;
   formId?: string;
   eventId?: string;
+  // Meetings: the section of the panel the record belongs to (a consultation is not a parent meeting).
+  section?: string;
 }
 // The only text a background push may show; the payload carries a category id and nothing else.
 export const PUSH_LABELS: Record<string, string> = {
@@ -112,5 +114,7 @@ export function openEvent(
     detail.finalsPeriodId = result.recordId;
   } else if (result.module === "timetable") detail.studentId = result.studentId;
   else if (result.module === "class_meetings") detail.section = "class";
+  else if (result.module === "meetings" && result.section)
+    detail.section = result.section;
   return [EVENTS[result.module], detail];
 }

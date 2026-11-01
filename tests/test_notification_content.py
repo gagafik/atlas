@@ -751,6 +751,8 @@ def test_consultation_booking_reaches_the_pupil_and_guardians_but_parent_meeting
     assert booked['title'].startswith('Запись на встречу: «Консультации», 05.04 08:00, ') and booked['students'] == [dict(id='s1', name=pupil_name('s1'))]
     opened = open_notice(guardian, booked['id'])
     assert opened.status_code == 200 and opened.json()['eventId'] == series and opened.json()['recordId'] == booking
+    # The panel opens on the consultations section, where the booking is listed.
+    assert opened.json()['section'] == 'consultations' and open_notice(signed('parent'), items(signed('parent'), 'meeting.booked')[0]['id']).json()['section'] == 'consultations'
     assert open_notice(pupil, items(pupil, 'meeting.booked')[0]['id']).json()['eventId'] == series
     # A booking made by the parent still shows to the pupil by title, but the pupil is not its author and cannot open it.
     meet.ok(consult.book(parent, series, consult.on_date(parent, series, consult.MONDAYS[1])[0]))
