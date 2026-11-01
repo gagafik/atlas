@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Account } from "./auth";
+import ClassMeetings from "./ClassMeetings";
+import ConsultationForm from "./ConsultationForm";
+import MeetingDay from "./MeetingDay";
 import MeetingEditor from "./MeetingEditor";
 import MeetingReschedule from "./MeetingReschedule";
 import MeetingWaitlist from "./MeetingWaitlist";
@@ -10,16 +13,20 @@ import {
   displayTime,
   groupByDay,
   labels,
+  patternText,
   schoolInput,
   schoolISO,
+  todaySchool,
 } from "./meetings";
 import type {
   Booking,
   Definition,
   EventItem,
   MeetingEvent,
+  MineBooking,
   Options,
   Preview,
+  Section,
   Slot,
 } from "./meetings";
 import "./ParentMeetings.css";
@@ -32,15 +39,43 @@ const dayHeading = (day: string) =>
     month: "long",
   }).format(new Date(day + "T12:00:00+05:00"));
 
+// What each role may open. A pupil only books consultations; staff without a class see events and their day.
+const sectionsOf: Record<string, Section[]> = {
+  admin: ["events", "consultations", "class", "day"],
+  teacher: ["events", "consultations", "class", "day"],
+  parent: ["events", "consultations", "class"],
+  student: ["consultations"],
+};
+const sectionNames: Record<Section, string> = {
+  events: "Родительские встречи",
+  consultations: "Консультации",
+  class: "Собрания классов",
+  day: "День ведущего",
+};
+const blankOptions: Options = {
+  canManage: false,
+  pupilBooking: false,
+  students: [],
+  hosts: [],
+  rooms: [],
+  classes: [],
+  ownTeachers: [],
+  classMeeting: { canCreate: false, classes: [], parallels: [] },
+};
+
 export default function ParentMeetings({
   user,
   initialWorkspace,
+  initialSection,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
+  initialSection?: string;
   onClose: () => void;
 }) {
+  const sections = sectionsOf[user.role] || (["events", "day"] as Section[]);
+  const family = user.role === "parent" || user.role === "student";
   const spaces =
     user.role === "admin"
       ? ["school", "demo"]
@@ -54,19 +89,21 @@ export default function ParentMeetings({
   );
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
+    optionsSequence = useRef(0),
     replay = useRef({ key: "", id: "" });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const [options, setOptions] = useState<Options>({
-    canManage: false,
-    students: [],
-    hosts: [],
-    rooms: [],
-    classes: [],
-  });
+  const [options, setOptions] = useState<Options>(blankOptions);
+  const [section, setSection] = useState<Section>(
+    sections.includes(initialSection as Section)
+      ? (initialSection as Section)
+      : sections[0],
+  );
   const [items, setItems] = useState<EventItem[]>([]),
-    [next, setNext] = useState<number | null>(null);
+    [next, setNext] = useState<number | null>(null),
+    [mineList, setMineList] = useState<MineBooking[]>([]),
+    [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<MeetingEvent | null>(null),
     [draft, setDraft] = useState<Definition | null>(null),
     [dirty, setDirty] = useState(false);
@@ -79,8 +116,9 @@ export default function ParentMeetings({
     [day, setDay] = useState(""),
     [student, setStudent] = useState(""),
     [pastToo, setPastToo] = useState(false);
-  // Parents and hosts see all upcoming meetings of the event; administrators browse by day.
-  const mine = !options.canManage;
+  // The administrator, and a teacher on their own consultations, browse by day; families and other hosts see all upcoming meetings of the event.
+  const manages = selected?.canManage ?? options.canManage;
+  const mine = !manages;
   const [picked, setPicked] = useState<Slot | null>(null),
     [note, setNote] = useState("");
   const [action, setAction] = useState("generate"),
@@ -108,6 +146,7 @@ export default function ParentMeetings({
     !(dirty || note) ||
     window.confirm("Есть несохранённые изменения. Продолжить без сохранения?");
   function clear() {
+    setCreating(false);
     setQueueOpen(false);
     setTransfer(null);
     setSelected(null);
@@ -145,13 +184,18 @@ export default function ParentMeetings({
     replay.current = { key: "", id: "" };
     return result;
   }
+  // Consultation series have their own list; the school's parent events are never mixed with them.
+  const listPath =
+    section === "consultations" ? "meetings/consultations" : "meetings/events";
   async function list(before?: number) {
     const r = await api(
-      "meetings/events" + (before ? `?before=${before}` : ""),
+      listPath + (before ? `?before=${before}` : ""),
       workspace,
     );
     setItems((old) => (before ? [...old, ...r.items] : r.items));
     setNext(r.nextBefore);
+    if (section === "consultations" && family && !before)
+      setMineList((await api("meetings/consultations/mine", workspace)).items);
   }
   async function loadSlots(
     event: MeetingEvent,
@@ -177,7 +221,9 @@ export default function ParentMeetings({
     after?: string,
     past = pastToo,
   ) {
-    const range: Record<string, string> = mine
+    const range: Record<string, string> = !(
+      event.canManage ?? options.canManage
+    )
       ? past
         ? {}
         : { fromDate: schoolInput(new Date().toISOString()).slice(0, 10) }
@@ -197,28 +243,34 @@ export default function ParentMeetings({
     const e: MeetingEvent = await api(`meetings/events/${id}`, workspace);
     setSelected(e);
     setDraft(null);
+    setCreating(false);
     setDirty(false);
     setPicked(null);
     setNote("");
     setPreview(null);
     setHistory({});
-    const date =
+    // A series runs for months: open it on today, or on its first day when it has not begun.
+    const first = schoolInput(e.definition.startsAt).slice(0, 10),
+      last = e.definition.pattern?.endDate || first,
+      date =
         newDate ??
-        (keep ? day : schoolInput(e.definition.startsAt).slice(0, 10)),
+        (keep
+          ? day
+          : e.definition.kind === "consultation"
+            ? todaySchool() > last
+              ? last
+              : todaySchool() < first
+                ? first
+                : todaySchool()
+            : first),
       host = keep && e.hosts.some((h) => h.accountId === hostId) ? hostId : "";
     setDay(date);
     setHostId(host);
     setHostIds(e.hosts.filter((h) => h.current).map((h) => h.accountId));
     if (!keep) {
-      setTab(
-        options.canManage
-          ? "manage"
-          : user.role === "parent"
-            ? "slots"
-            : "agenda",
-      );
-      setFrom("17:00");
-      setTo("19:00");
+      setTab(e.canManage ? "manage" : family ? "slots" : "agenda");
+      setFrom(e.definition.pattern?.startTime || "17:00");
+      setTo(e.definition.pattern?.endTime || "19:00");
       setReason("");
     }
     await Promise.all([loadSlots(e, host, date), loadBookings(e, date)]);
@@ -234,28 +286,41 @@ export default function ParentMeetings({
     return () => previous?.focus();
   }, []);
   useEffect(() => {
+    const n = ++optionsSequence.current;
+    setOptions(blankOptions);
+    api("meetings/options", workspace)
+      .then((o) => {
+        if (n !== optionsSequence.current) return;
+        setOptions(o);
+        setStudent(o.students[0]?.id || "");
+      })
+      .catch((e) => {
+        if (n === optionsSequence.current) setError(e.message);
+      });
+    return () => {
+      ++optionsSequence.current;
+    };
+  }, [workspace]);
+  useEffect(() => {
     const n = ++sequence.current;
     clear();
     setItems([]);
-    setOptions({
-      canManage: false,
-      students: [],
-      hosts: [],
-      rooms: [],
-      classes: [],
-    });
-    setBusy(true);
+    setMineList([]);
     setError("");
+    setNotice("");
+    if (section !== "events" && section !== "consultations") return;
+    setBusy(true);
     Promise.all([
-      api("meetings/options", workspace),
-      api("meetings/events", workspace),
+      api(listPath, workspace),
+      section === "consultations" && family
+        ? api("meetings/consultations/mine", workspace)
+        : { items: [] },
     ])
-      .then(([o, r]) => {
+      .then(([r, mineBookings]) => {
         if (n !== sequence.current) return;
-        setOptions(o);
-        setStudent(o.students[0]?.id || "");
         setItems(r.items);
         setNext(r.nextBefore);
+        setMineList(mineBookings.items);
       })
       .catch((e) => {
         if (n === sequence.current) setError(e.message);
@@ -266,7 +331,7 @@ export default function ParentMeetings({
     return () => {
       ++sequence.current;
     };
-  }, [workspace]);
+  }, [workspace, section]);
   useEffect(() => {
     setPreview(null);
   }, [action, day, from, to, reason, hostIds]);
@@ -324,7 +389,7 @@ export default function ParentMeetings({
   async function changeBooking(b: Booking, action: string) {
     let reason = "";
     if (action === "cancel") {
-      if (options.canManage) {
+      if (manages) {
         const value = window.prompt("Причина отмены встречи:");
         if (!value?.trim()) return;
         reason = value.trim();
@@ -353,6 +418,34 @@ export default function ParentMeetings({
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  // The administrator's switch: may pupils book consultations themselves. It asks for a reason and is kept in the audit log.
+  async function setPupilBooking(on: boolean) {
+    const answer = window.prompt(
+      on
+        ? "Разрешить ученикам самим записываться на консультации? Укажите причину решения."
+        : "Запретить ученикам новые записи? Уже созданные записи сохранятся. Укажите причину.",
+    );
+    if (!answer?.trim()) return;
+    await mutate(
+      "settings",
+      {
+        version: options.settingsVersion || 0,
+        pupilBooking: on,
+        reason: answer.trim(),
+      },
+      "PUT",
+    );
+    setOptions({
+      ...options,
+      pupilBooking: on,
+      settingsVersion: (options.settingsVersion || 0) + 1,
+    });
+    setNotice(
+      on
+        ? "Ученики могут записываться на консультации."
+        : "Ученики больше не создают новые записи.",
+    );
+  }
   const eligible =
     selected?.hosts.find((h) => h.accountId === picked?.hostId)?.studentIds ||
     [];
@@ -368,7 +461,7 @@ export default function ParentMeetings({
     >
       <header>
         <div>
-          <h2 id="meeting-title">Родительские встречи</h2>
+          <h2 id="meeting-title">Встречи и консультации</h2>
           <p>Время школы · Кызылорда, UTC+5</p>
         </div>
         <button
@@ -409,7 +502,7 @@ export default function ParentMeetings({
         >
           Обновить
         </button>
-        {options.canManage && (
+        {options.canManage && section === "events" && (
           <button
             disabled={busy}
             onClick={() => {
@@ -422,7 +515,59 @@ export default function ParentMeetings({
             Новое мероприятие
           </button>
         )}
+        {(user.role === "teacher" || user.role === "admin") &&
+          section === "consultations" && (
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (mayLeave()) {
+                  clear();
+                  setCreating(true);
+                }
+              }}
+            >
+              Новые часы консультаций
+            </button>
+          )}
       </div>
+      {sections.length > 1 && (
+        <nav className="meeting-toolbar" aria-label="Разделы">
+          {sections.map((name) => (
+            <button
+              key={name}
+              disabled={busy}
+              aria-pressed={section === name}
+              onClick={() => {
+                if (name !== section && mayLeave()) {
+                  setDirty(false);
+                  setSection(name);
+                }
+              }}
+            >
+              {sectionNames[name]}
+            </button>
+          ))}
+        </nav>
+      )}
+      {section === "consultations" && user.role === "admin" && (
+        <label className="meeting-switch">
+          <span>
+            <input
+              type="checkbox"
+              disabled={busy}
+              checked={options.pupilBooking}
+              onChange={(e) =>
+                void run(() => setPupilBooking(e.target.checked))
+              }
+            />{" "}
+            Ученики записываются сами
+          </span>
+          <small>
+            Родители записывают детей всегда. Ученик видит только свои
+            консультации и записывает только себя.
+          </small>
+        </label>
+      )}
       {error && (
         <p role="alert" className="meeting-error">
           {error}
@@ -434,9 +579,80 @@ export default function ParentMeetings({
         </p>
       )}
       {busy && <p role="status">Загружаю…</p>}
-      <div className="meeting-layout">
-        <aside aria-label="Мероприятия">
-          <h3>Даты встреч</h3>
+      {section === "consultations" && family && (
+        <section className="meeting-mine" aria-label="Записи моих детей">
+          <h3>Записи моих детей</h3>
+          {mineList.map((b) => (
+            <article key={b.id}>
+              <h4>
+                {displayTime(b.startsAt)}–{clockTime(b.endsAt)} · {b.hostName}
+              </h4>
+              <p>
+                {b.studentName} · {b.roomName || b.location} ·{" "}
+                {labels[b.status]}
+                {b.byPupil ? " · записался ученик" : ""}
+                {!b.ownBooking ? ` · записал(а): ${b.bookedBy}` : ""}
+              </p>
+              {b.note && <p>Комментарий: {b.note}</p>}
+              {b.reason && <p>Причина отмены: {b.reason}</p>}
+              {b.canCancel && (
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      if (
+                        !window.confirm(
+                          "Отменить вашу запись? Интервал снова станет доступен.",
+                        )
+                      )
+                        return;
+                      await mutate(`bookings/${b.id}`, {
+                        version: b.version,
+                        action: "cancel",
+                        reason: "",
+                      });
+                      await refreshed("Запись отменена.");
+                    })
+                  }
+                >
+                  Отменить запись
+                </button>
+              )}
+            </article>
+          ))}
+          {!mineList.length && !busy && <p>Записей пока нет.</p>}
+        </section>
+      )}
+      {section === "class" && (
+        <ClassMeetings
+          key={workspace}
+          workspace={workspace}
+          family={family}
+          admin={user.role === "admin"}
+          options={options}
+          onDirty={setDirty}
+        />
+      )}
+      {section === "day" && (
+        <MeetingDay
+          key={workspace}
+          workspace={workspace}
+          admin={user.role === "admin"}
+          options={options}
+        />
+      )}
+      <div
+        className="meeting-layout"
+        hidden={section !== "events" && section !== "consultations"}
+      >
+        <aside
+          aria-label={
+            section === "consultations" ? "Часы консультаций" : "Мероприятия"
+          }
+        >
+          <h3>
+            {section === "consultations" ? "Часы консультаций" : "Даты встреч"}
+          </h3>
           {items.map((e) => (
             <button
               disabled={busy}
@@ -447,11 +663,20 @@ export default function ParentMeetings({
               }}
             >
               <strong>{e.title}</strong>
-              <span>{displayTime(e.startsAt)}</span>
+              {e.hostName && <span>{e.hostName}</span>}
+              <span>
+                {e.pattern ? patternText(e.pattern) : displayTime(e.startsAt)}
+              </span>
               <small>{labels[e.status]}</small>
             </button>
           ))}
-          {!items.length && !busy && <p>Доступных мероприятий пока нет.</p>}
+          {!items.length && !busy && (
+            <p>
+              {section === "consultations"
+                ? "Часов консультаций пока нет."
+                : "Доступных мероприятий пока нет."}
+            </p>
+          )}
           {next && (
             <button disabled={busy} onClick={() => void run(() => list(next))}>
               Ещё мероприятия
@@ -459,6 +684,25 @@ export default function ParentMeetings({
           )}
         </aside>
         <main>
+          {creating && (
+            <ConsultationForm
+              workspace={workspace}
+              admin={user.role === "admin"}
+              options={options}
+              onDirty={setDirty}
+              onCancel={() => setCreating(false)}
+              onDone={(id) =>
+                void run(async () => {
+                  setCreating(false);
+                  await list();
+                  await open(id);
+                  setNotice(
+                    "Часы консультаций созданы. Семьи увидят их в списке и смогут записаться.",
+                  );
+                })
+              }
+            />
+          )}
           {draft && (
             <form
               onSubmit={(e) => {
@@ -515,9 +759,10 @@ export default function ParentMeetings({
               <h3>{selected.definition.title}</h3>
               <p>{selected.definition.description}</p>
               <p>
-                {displayTime(selected.definition.startsAt)} —{" "}
-                {displayTime(selected.definition.endsAt)} ·{" "}
-                {labels[selected.status]}
+                {selected.definition.pattern
+                  ? patternText(selected.definition.pattern)
+                  : `${displayTime(selected.definition.startsAt)} — ${displayTime(selected.definition.endsAt)}`}{" "}
+                · {labels[selected.status]}
               </p>
               <p>
                 Встреча {selected.definition.slotMinutes} мин. Самостоятельная
@@ -527,7 +772,7 @@ export default function ParentMeetings({
                   ? `Напоминание за ${selected.definition.reminderMinutes} мин.`
                   : "Напоминания отключены."}
               </p>
-              {(options.canManage || user.role === "parent") && (
+              {(manages || family) && (
                 <button
                   disabled={busy}
                   onClick={() => {
@@ -539,11 +784,7 @@ export default function ParentMeetings({
               )}
               <nav className="meeting-toolbar" aria-label="Разделы встреч">
                 {(
-                  [
-                    "slots",
-                    "agenda",
-                    ...(options.canManage ? ["manage"] : []),
-                  ] as const
+                  ["slots", "agenda", ...(manages ? ["manage"] : [])] as const
                 ).map((t) => (
                   <button
                     disabled={busy}
@@ -560,7 +801,7 @@ export default function ParentMeetings({
                     {t === "slots"
                       ? "Свободное время"
                       : t === "agenda"
-                        ? options.canManage
+                        ? manages
                           ? "Все записи"
                           : "Мои встречи"
                         : "Управление"}
@@ -638,7 +879,7 @@ export default function ParentMeetings({
                   </label>
                 )}
               </div>
-              {tab === "manage" && options.canManage && (
+              {tab === "manage" && manages && (
                 <>
                   <div className="meeting-toolbar">
                     {selected.status === "draft" && (
@@ -699,7 +940,9 @@ export default function ParentMeetings({
                         disabled={busy}
                         onClick={() => void run(() => transition("cancel"))}
                       >
-                        Отменить мероприятие
+                        {selected.definition.kind === "consultation"
+                          ? "Отменить все консультации"
+                          : "Отменить мероприятие"}
                       </button>
                     )}
                     {selected.status !== "archived" && (
@@ -712,9 +955,10 @@ export default function ParentMeetings({
                     )}
                   </div>
                   <p>
-                    Интервалами управляет администрация. Чтобы учитель пришёл
-                    позже или ушёл раньше, отключите соответствующее время. Для
-                    нескольких дней повторите действие по каждому дню.
+                    {options.canManage
+                      ? "Интервалами управляет администрация. Чтобы учитель пришёл позже или ушёл раньше, отключите соответствующее время. "
+                      : "Чтобы отменить консультации за день или часть дня, отключите это время и укажите причину: записавшиеся семьи получат уведомление. "}
+                    Для нескольких дней повторите действие по каждому дню.
                   </p>
                   {selected.hosts.some((h) => !h.current) && (
                     <p className="meeting-error">
@@ -908,7 +1152,7 @@ export default function ParentMeetings({
                           {picked.roomName || picked.location}
                         </p>
                         <label>
-                          Ребёнок
+                          {user.role === "student" ? "Ученик" : "Ребёнок"}
                           <select
                             required
                             value={eligible.includes(student) ? student : ""}
@@ -968,7 +1212,7 @@ export default function ParentMeetings({
                         )}
                         {s.conflict && <p>{s.conflict}</p>}
                         {s.reason && <p>{s.reason}</p>}
-                        {user.role === "parent" &&
+                        {family &&
                           s.status === "available" &&
                           selected.registrationOpen && (
                             <button
@@ -1011,7 +1255,7 @@ export default function ParentMeetings({
               )}
               {tab === "agenda" && (
                 <>
-                  {user.role !== "parent" && (
+                  {!family && (
                     <button disabled={busy} onClick={() => void run(download)}>
                       Скачать список за все дни (CSV)
                     </button>
@@ -1049,7 +1293,7 @@ export default function ParentMeetings({
                               </p>
                             )}
                             <div className="meeting-toolbar">
-                              {options.canManage && b.canReschedule && (
+                              {manages && b.canReschedule && (
                                 <button
                                   disabled={
                                     busy || b.parentAccessCurrent === false
@@ -1153,10 +1397,11 @@ export default function ParentMeetings({
               )}
             </>
           )}
-          {!selected && !draft && (
+          {!selected && !draft && !creating && (
             <p>
-              Выберите мероприятие школы. Здесь можно записаться к учителю и
-              посмотреть свои встречи.
+              {section === "consultations"
+                ? "Выберите часы консультаций учителя. Здесь можно записаться и посмотреть свои записи."
+                : "Выберите мероприятие школы. Здесь можно записаться к учителю и посмотреть свои встречи."}
             </p>
           )}
         </main>
@@ -1166,7 +1411,7 @@ export default function ParentMeetings({
           key={workspace + selected.id}
           workspace={workspace}
           eventId={selected.id}
-          admin={options.canManage}
+          admin={manages}
           students={options.students}
           onClose={() => {
             setQueueOpen(false);

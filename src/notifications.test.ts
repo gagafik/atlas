@@ -96,6 +96,17 @@ describe("openEvent", () => {
     ];
     for (const [module, name] of plain)
       expect(openEvent(result(module))).toEqual([name, { workspace: "demo" }]);
+    expect(openEvent(result("class_meetings"))).toEqual([
+      "atlas-open-meetings",
+      { workspace: "demo", section: "class" },
+    ]);
+    // The server names the section of a consultation booking; a parent meeting has none.
+    expect(
+      openEvent({ ...result("meetings"), section: "consultations" }),
+    ).toEqual([
+      "atlas-open-meetings",
+      { workspace: "demo", section: "consultations" },
+    ]);
   });
   it("answers null for an unknown module, including prototype names", () => {
     expect(openEvent(result("unknown"))).toBeNull();
