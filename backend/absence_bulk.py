@@ -67,7 +67,16 @@ def notify_batch(service,db,rows,snap):
         if journal_changed and user['role'] in ['student','parent'] and students & children:journal_targets.append(user)
     version=max(r[8] for r in rows)
     title=lambda mine:notice_title('absence.updated',mine[0]) if len(mine)==1 else f'Решения по заявлениям об отсутствии: {len(mine)}'
-    service.notifications.deliver(db,private_targets,workspace,version,'absence.updated',target=lambda u:notice_target(title(own[u['id']]),own[u['id']]))
+    # As after a single decision, only the newest entry about a note stays readable: the older ones lose their text, the unread ones go.
+    owners={}
+    for uid,mine in own.items():
+        for r in mine:owners.setdefault(r[0],[]).append(uid)
+    for id,ids in owners.items():service.notifications.retract(db,ids,f'absence:{workspace}:{id}')
+    # An entry about one note carries its topic, so a later decision on that note replaces it; the count over several notes stays as the record of the batch.
+    by_note={}
+    for u in private_targets:by_note.setdefault(own[u['id']][0][0] if len(own[u['id']])==1 else None,[]).append(u)
+    for id,users in by_note.items():
+        service.notifications.deliver(db,users,workspace,version,'absence.updated',topic=f'absence:{workspace}:{id}' if id else None,supersede=bool(id),target=lambda u:notice_target(title(own[u['id']]),own[u['id']]))
     if journal_changed:service.notifications.deliver(db,journal_targets,workspace,version,'journal.updated',target=attendance_target(workspace,rows))
 
 

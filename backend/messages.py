@@ -450,11 +450,15 @@ class Messages:
         ids=[thread['studentId']] if thread['studentId'] else sorted(json.loads(member[1])) if own is not None else []
         return [dict(id=i,name=names[i]) for i in ids if i in names and (own is None or i in own)]
 
-    def notice(self,thread,author,directory,scopes=None):
-        """Who wrote and the conversation title the recipient already reads; never the message text."""
+    def notice(self,db,thread,author,directory,scopes=None):
+        """Who wrote and the conversation title the recipient already reads; never the message text.
+
+        The children are the recipient's own scope in the conversation (a class group has no pupil of its own), then the pupil of the thread.
+        """
         title=f"{author['name']}: «{thread['title']}»" if thread.get('title') else f"Сообщение от {author['name']}"
+        if scopes is None:scopes={uid:json.loads(scope) for uid,scope in db.execute('SELECT user_id,scope_students FROM message_members WHERE thread_id=? AND scope_students IS NOT NULL',(thread['id'],))}
         def target(user):
-            ids=(scopes or {}).get(user['id']) or ([thread['studentId']] if thread.get('studentId') else [])
+            ids=scopes.get(user['id']) or ([thread['studentId']] if thread.get('studentId') else [])
             kids=[i for i in ids if i in directory.students and (user['role'] not in FAMILY or i in user_ids(user,directory.workspace,'student'))]
             return dict(module='messages',recordId=thread['id'],title=title,students=[dict(id=k,name=directory.students[k].name) for k in kids])
         return target
@@ -549,7 +553,7 @@ class Messages:
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
                 self.notifications.deliver(db,[u for u,_ in recipients],workspace,1,'message.received',topic=f'message:{workspace}:{id}',
-                    target=self.notice(dict(id=id,title=body.title,studentId=body.studentId),user,directory,{u['id']:ids for u,ids in recipients}))
+                    target=self.notice(db,dict(id=id,title=body.title,studentId=body.studentId),user,directory,{u['id']:ids for u,ids in recipients}))
                 self.access.record(db,'message.created',workspace,detail=id)
             return dict(id=id)
 
@@ -629,7 +633,7 @@ class Messages:
                 db.execute('UPDATE message_members SET read_id=? WHERE thread_id=? AND user_id=?',(post,id,user['id']))
                 db.execute('INSERT INTO message_requests VALUES (?,?,?,?)',(user['id'],body.requestId,signature,id))
                 self.advance(db,id,post,live)
-                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received',topic=f'message:{workspace}:{id}',target=self.notice(thread,user,directory))
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version'],'message.received',topic=f'message:{workspace}:{id}',target=self.notice(db,thread,user,directory))
                 self.access.record(db,'message.replied',workspace,detail=id)
             return dict(id=id)
 
@@ -687,6 +691,6 @@ class Messages:
                 db.execute('UPDATE message_threads SET version=version+1 WHERE id=?',(id,))
                 live=[u for u in accounts.values() if self.member(db,thread,u,directory,accounts)]
                 self.advance(db,id,post,live)
-                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version']+1,'message.received',topic=f'message:{workspace}:{id}',target=self.notice(thread,user,directory))
+                self.notifications.deliver(db,[u for u in live if u['id']!=user['id']],workspace,thread['version']+1,'message.received',topic=f'message:{workspace}:{id}',target=self.notice(db,thread,user,directory))
                 self.access.record(db,'message.participant_'+body.action,workspace,detail=id+' · '+body.userId)
             return dict(ok=True)

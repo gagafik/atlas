@@ -8,6 +8,8 @@ from test_access import client, enable, create, signed
 from test_messages import url, detail, payload
 from test_message_feed import announce
 from test_message_moderation import seed, report, decision, case
+from test_message_files_groups import group
+from test_message_channels import matrix
 import test_absences as absences
 import test_absence_bulk as bulk
 import test_absence_school as school
@@ -179,6 +181,45 @@ def test_bulk_and_school_note_titles(client):
         assert decided['title'] == 'Решения по заявлениям об отсутствии: 2' and 'Проверены все выбранные' not in account.get('/api/notifications/inbox').text
         opened = open_notice(account, decided['id'])
         assert opened.status_code == 200 and opened.json()['recordId'] == notices[0]['id']
+
+
+def absence_titles(account, day=DAY):
+    return [i['title'] for i in inbox(account)['items'] if i['action'].startswith('absence.') and 'title' in i and dated(day) in i['title']]
+
+
+def test_bulk_decision_supersedes_older_title(client):
+    _, _, parent, teacher = absences.setup(client)
+    notices = bulk.two(parent)
+    # A single approval, then a bulk revoke: the stale «одобрено» does not stay beside the new decision.
+    approved = absences.decide(teacher, notices[0]); assert approved.status_code == 200
+    assert bulk.apply(teacher, bulk.prepare(teacher, [approved.json()], action='revoke')).status_code == 200
+    for account in (parent, teacher):
+        [only] = absence_titles(account)
+        assert 'решение отменено' in only
+    # A bulk approval, then a single revoke of the same note.
+    day = '2026-08-18'
+    decided = bulk.apply(teacher, bulk.prepare(teacher, [notices[1]])).json()
+    for account in (parent, teacher):
+        [only] = absence_titles(account, day)
+        assert 'одобрено' in only
+    assert absences.decide(teacher, decided['items'][0], 'revoke').status_code == 200
+    for account in (parent, teacher):
+        [only] = absence_titles(account, day)
+        assert 'решение отменено' in only
+
+
+def test_bulk_decision_replaces_the_notes_own_entries(client):
+    _, _, parent, teacher = absences.setup(client)
+    notices = bulk.two(parent)
+    mine = lambda account: [i['title'] for i in inbox(account)['items'] if i['action'].startswith('absence.') and 'title' in i]
+    assert len(mine(parent)) == len(mine(teacher)) == 2
+    decided = bulk.apply(teacher, bulk.prepare(teacher, notices)).json()
+    # The two «Заявление об отсутствии: …» entries give way to the one summary.
+    for account in (parent, teacher): assert mine(account) == ['Решения по заявлениям об отсутствии: 2']
+    # The summary is the record of the whole batch: a later decision on one note adds its own entry and does not wipe it.
+    assert absences.decide(teacher, decided['items'][0], 'revoke').status_code == 200
+    for account in (parent, teacher):
+        assert sorted(mine(account)) == sorted(['Решения по заявлениям об отсутствии: 2', f'Заявление об отсутствии, {dated()}: решение отменено'])
 
 
 def test_school_note_titles(client):
@@ -460,3 +501,80 @@ def test_behaviour_staff_titles(client):
         if w.teacherId == 't1': w.teacherId = 't0'
     api.save('demo', state)
     assert open_notice(author, verdict['id']).status_code == 404
+
+
+def test_class_group_reply_keeps_the_child(client):
+    people = named(client); teacher = signed('teacher'); parent = signed('parent')
+    id = group(teacher)
+    [first] = items(parent, 'message.received')
+    assert first['students'][0]['id'] == 's1' and first['link'] is True
+    # A class group has no pupil of its own: the reply entry still names the recipient's child, so it closes with the grant.
+    reply = teacher.post(url('threads/' + id + '/reply'), json=dict(requestId=str(uuid4()), version=1, text='Ещё один вопрос классу.'))
+    assert reply.status_code == 200, reply.text
+    [unread] = [i for i in items(parent, 'message.received') if not i['read']]
+    assert unread['students'][0]['id'] == 's1' and unread['link'] is True and 'Ещё один вопрос' not in parent.get('/api/notifications/inbox').text
+    restrict(client, people['parent'], grants=[dict(workspace='demo', view='student', entityIds=['s2'])])
+    parent = signed('parent')
+    [shut] = items(parent, 'message.received')
+    assert shut['restricted'] is True and 'title' not in shut and open_notice(parent, shut['id']).status_code == 404
+
+
+def test_peer_parent_notice_names_no_foreign_pupil(client):
+    people = named(client); parent = signed('parent'); other = signed('other'); teacher = signed('teacher')
+    matrix(client, add=['parent_class_parents'])
+    child = next(s.name for s in api.read('demo').students if s.id == 's1')
+    sent = parent.post(url(), json=payload(people['other']['id'])); assert sent.status_code == 200, sent.text
+    id = sent.json()['id']
+    # The thread is about the sender's child: the other family still gets a title and a link, but no pupil that is not theirs.
+    [entry] = items(other, 'message.received')
+    assert 'Иванова Анна' in entry['title'] and entry['link'] is True and 'students' not in entry and 'restricted' not in entry
+    assert child not in other.get('/api/notifications/inbox').text
+    opened = open_notice(other, entry['id'])
+    assert opened.status_code == 200 and opened.json() == dict(module='messages', workspace='demo', recordId=id, studentId=None, day=None)
+    # The same in a group the sender started about their child.
+    made = parent.post(url(), json=dict(requestId=str(uuid4()), kind='group', title='Класс', text='Вопрос всем.', studentId='s1', recipientIds=[people['other']['id'], people['teacher']['id']]))
+    assert made.status_code == 200, made.text
+    reply = teacher.post(url('threads/' + made.json()['id'] + '/reply'), json=dict(requestId=str(uuid4()), version=1, text='Ответ классу.')); assert reply.status_code == 200, reply.text
+    [unread] = [i for i in items(other, 'message.received') if not i['read'] and 'Класс' in i.get('title', '')]
+    assert unread['link'] is True and all(s['id'] != 's1' for s in unread.get('students', [])) and child not in other.get('/api/notifications/inbox').text
+    assert open_notice(other, unread['id']).status_code == 200
+
+
+# The tests below keep every generic layer open (the owner, the module, the children of the entry) by turning the family account into a staff one,
+# so that only the module's own opener can refuse.
+STAFF = dict(role='teacher', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+
+
+def test_message_opener_refuses_a_conversation_of_the_other_kind_of_account(client):
+    people = named(client); teacher = signed('teacher'); parent = signed('parent')
+    assert teacher.post(url(), json=payload(people['parent']['id'])).status_code == 200
+    [entry] = items(parent, 'message.received'); assert entry['link'] is True
+    restrict(client, people['parent'], **STAFF)
+    staff = signed('parent')
+    [same] = items(staff, 'message.received')
+    assert same['link'] is True and same['students'][0]['id'] == 's1'
+    assert open_notice(staff, same['id']).status_code == 404 and read(staff, same['id']) is True
+
+
+def test_report_opener_refuses_a_demoted_administrator(client):
+    _, _, teacher, thread, post, _ = seed(client)
+    second = create(client, 'admin', login='second-admin', name='Второй администратор')
+    made = report(teacher, post); assert made.status_code == 200, made.text
+    boss = signed('second-admin')
+    [asked] = items(boss, 'message.reported')
+    assert asked['link'] is True and open_notice(boss, asked['id']).status_code == 200
+    restrict(client, second, **STAFF)
+    boss = signed('second-admin')
+    [same] = items(boss, 'message.reported')
+    assert same['link'] is True and open_notice(boss, same['id']).status_code == 404 and read(boss, same['id']) is True
+
+
+def test_waitlist_opener_refuses_an_account_that_left_the_family_role(client, monkeypatch):
+    eid, teacher_account, parent_account, parent, wid = waits.prepared(client, monkeypatch)
+    waits.offered(client, parent, eid, wid)
+    [offer] = items(parent, 'meeting.waitlist_offer')
+    assert open_notice(parent, offer['id']).status_code == 200
+    restrict(client, parent_account, **STAFF)
+    staff = signed('parent')
+    [same] = items(staff, 'meeting.waitlist_offer')
+    assert same['link'] is True and open_notice(staff, same['id']).status_code == 404 and read(staff, same['id']) is True

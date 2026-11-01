@@ -138,11 +138,11 @@ def test_notification_failure_rolls_back_whole_batch_and_can_retry(client,monkey
     _,_,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
     original=api.notifications.deliver;written=[]
     def fail(db,*args,**kwargs):
-        original(db,*args,**kwargs);written.append(db.execute('SELECT count(*) FROM notifications').fetchone()[0])
+        original(db,*args,**kwargs);written.append(db.execute("SELECT count(*) FROM notifications WHERE action='absence.updated'").fetchone()[0])
         raise RuntimeError('batch failed after a notification was written')
     before=counts();monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):apply(teacher,preview)
-    assert written and written[0]>before['notifications'] and counts()==before
+    assert written and written[0]>0 and counts()==before
     assert all(client.get(url('/'+n['id'])).json()['version']==1 for n in notices)
     monkeypatch.setattr(api.notifications,'deliver',original)
     assert apply(teacher,preview).status_code==200
