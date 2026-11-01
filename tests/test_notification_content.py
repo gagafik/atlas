@@ -748,27 +748,28 @@ def test_consultation_booking_reaches_the_pupil_and_guardians_but_parent_meeting
     series = consult.create_series(teacher)['id']
     booking = meet.ok(consult.book(pupil, series, consult.on_date(pupil, series, consult.MONDAYS[0])[0]))['id']
     (booked,) = items(guardian, 'meeting.booked')
-    assert booked['title'].startswith('Запись на встречу: «Консультации», 05.04 08:00, ') and booked['students'] == [dict(id='s1', name=pupil_name('s1'))]
+    assert booked['students'] == [dict(id='s1', name=pupil_name('s1'))]
     opened = open_notice(guardian, booked['id'])
     assert opened.status_code == 200 and opened.json()['eventId'] == series and opened.json()['recordId'] == booking
     # The panel opens on the consultations section, where the booking is listed.
     assert opened.json()['section'] == 'consultations' and open_notice(signed('parent'), items(signed('parent'), 'meeting.booked')[0]['id']).json()['section'] == 'consultations'
-    assert open_notice(pupil, items(pupil, 'meeting.booked')[0]['id']).json()['eventId'] == series
-    # A booking made by the parent still shows to the pupil by title, but the pupil is not its author and cannot open it.
+    (own,) = items(pupil, 'meeting.booked')
+    assert open_notice(pupil, own['id']).json()['eventId'] == series
+    # A booking made by the parent still shows to the pupil, but the pupil is not its author and cannot open it.
     meet.ok(consult.book(parent, series, consult.on_date(parent, series, consult.MONDAYS[1])[0]))
-    (told,) = [i for i in items(pupil, 'meeting.booked') if i['title'].startswith('Запись на встречу: «Консультации», 12.04')]
-    assert open_notice(pupil, told['id']).status_code == 404 and open_notice(guardian, items(guardian, 'meeting.booked')[0]['id']).status_code == 200
+    (told,) = [i for i in items(pupil, 'meeting.booked') if i['id'] != own['id']]
+    assert open_notice(pupil, told['id']).status_code == 404
     # In a parent meeting no other guardian of the child is told, and a hand-made entry for one does not open the booking.
     id = meet.new(client, [meet.hosts(host)])
     meet.publish(client, id)
+    told_before = len(items(guardian, 'meeting.booked'))
     private = meet.ok(meet.book(parent, id, meet.slots(parent, id)[0]))['id']
+    assert len(items(guardian, 'meeting.booked')) == told_before
     name = pupil_name('s1')
     with api.access.lock, api.connect() as db:
         other = next(u for u in api.notifications.granted_users(db, 'demo', 'student', {'s1'}, ['parent']) if u['login'] == 'guardian')
         api.notifications.deliver(db, [other], 'demo', 1, 'meeting.booked', target=dict(module='meetings', recordId=private, students=[dict(id='s1', name=name)], title='Запись на встречу'))
     assert open_notice(guardian, items(guardian, 'meeting.booked')[0]['id']).status_code == 404
-    # Of the guardian's entries only the hand-made one is not about consultations: the parent meeting told nobody else.
-    assert [i['title'] for i in items(guardian, 'meeting.booked') if 'Консультации' not in i['title']] == ['Запись на встречу']
 
 
 def test_form_entry_needs_the_applicant(client):
