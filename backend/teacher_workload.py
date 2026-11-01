@@ -20,9 +20,10 @@ PUBLISHED = '''SELECT DISTINCT d.lesson_key,json_extract(d.lesson,'$.date'),json
     FROM journal_coverage_teachers t CROSS JOIN journal_coverage_documents d ON d.workspace=t.workspace AND d.lesson_key=t.lesson_key
     WHERE t.workspace=? AND t.day BETWEEN ? AND ?'''
 OUTCOMES = dict(taught='Проведён', merged='Присоединён к другому уроку', upcoming='Предстоит', moved='Перенесён', cancelled='Отменён', replaced='Заменён', uncovered='Без замены')
+SPLIT = tuple(k for k in KINDS if k != 'merge')  # what replacements are made of; a merged group is no replacement and has its own figure
 LABELS = dict(own='Свой урок', extra='Дополнительный урок', journal='По журналу вне расписания', substitution='Замена', merge='Объединение', self_study='Самостоятельная работа', move='Перенос')
 TEACHER_COLUMNS = ['Учитель', 'Начало', 'Конец', 'По расписанию', 'По расписанию на дату', 'Проведено уроков', 'Часы', 'Минуты', 'Свои', 'Замены',
-                   *['Из них: ' + LABELS[k].lower() for k in KINDS], 'Дополнительные', 'По журналу вне расписания', 'Присоединено при объединении', 'Пропущено',
+                   *['Из них: ' + LABELS[k].lower() for k in SPLIT], 'Дополнительные', 'По журналу вне расписания', 'Присоединено при объединении', 'Пропущено',
                    'При отсутствии', 'Без замены', 'Отменено', 'Перенесено', 'Предстоит', 'Подтверждено журналом', 'Расхождения', 'Разница с расписанием']
 
 
@@ -45,7 +46,7 @@ def combine(items):
 def numbers(item, first, last):
     """The figure columns of the teachers and weeks views."""
     return [first, last, item['planned'], item['plannedToDate'], item['taught'], hours(item['minutes']), item['minutes'], item['own'], item['substitutions'],
-            *[item['byType'].get(k, 0) for k in KINDS], item['extra'], item['journalOnly'], item['merged'], item['missed'], item['missedAbsent'], item['uncovered'],
+            *[item['byType'].get(k, 0) for k in SPLIT], item['extra'], item['journalOnly'], item['merged'], item['missed'], item['missedAbsent'], item['uncovered'],
             item['cancelled'], item['moved'], item['upcoming'], item['confirmed'], item['differs'], item['delta']]
 
 
@@ -58,9 +59,8 @@ class TeacherWorkload:
         user = request.state.user or LOCAL
         if user['role'] not in ['admin', 'teacher']: raise HTTPException(403, 'Отчёт о нагрузке доступен администрации и самому учителю.')
         snap = self.journal.snapshots.get(workspace)
-        if user['role'] == 'admin':
-            if teacher_id and teacher_id not in snap.entities['teacher']: raise HTTPException(404, 'Учитель не найден или недоступен.')
-            return user, snap, {teacher_id} if teacher_id else None
+        # An administrator may also open a teacher who has left the roster, if the period still holds his lessons (checked once they are counted).
+        if user['role'] == 'admin': return user, snap, {teacher_id} if teacher_id else None
         own = user_ids(user, workspace, 'teacher') & set(snap.entities['teacher'])
         if not own: raise HTTPException(403, 'Нет назначения преподавателем.')
         if teacher_id and teacher_id not in own: raise HTTPException(404, 'Учитель не найден или недоступен.')
@@ -99,6 +99,7 @@ class TeacherWorkload:
                 count += 1
                 if count > ROWS: raise HTTPException(422, 'Более 100 000 уроков: сократите период выгрузки.')
                 listed[t].append({k: f[k] for k in ['date', 'start', 'end', 'group', 'subject', 'minutes', 'outcome', 'kind', 'confirmed', 'differs', 'absent']})
+        if selected is not None and any(t not in totals and t not in snap.entities['teacher'] for t in selected): raise HTTPException(404, 'Учитель не найден или недоступен.')
         chosen = sorted(selected) if selected is not None else [t for t in totals if any(v for k, v in totals[t].items() if k != 'byType')]
         starts = [monday(first) + timedelta(days=7 * i) for i in range((monday(last) - monday(first)).days // 7 + 1)]
         result = []

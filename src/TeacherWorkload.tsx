@@ -151,6 +151,7 @@ export default function TeacherWorkload({
   const [start, setStart] = useState(""),
     [end, setEnd] = useState(""),
     [teacherId, setTeacherId] = useState(""),
+    [former, setFormer] = useState<{ id: string; name: string } | null>(null),
     [view, setView] = useState<string>("teachers");
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
@@ -168,6 +169,7 @@ export default function TeacherWorkload({
     setReport(null);
     setError("");
     setTeacherId("");
+    setFormer(null);
     api("staff-time/workload/options", workspace)
       .then((o: WorkloadOptions) => {
         if (!live) return;
@@ -239,7 +241,15 @@ export default function TeacherWorkload({
     ? `${admin ? "Нагрузка" : "Моя нагрузка"}: ${report!.teachers.map((t) => t.name).join(", ")}`
     : title;
   const exportUrl = `/api/staff-time/workload/export?workspace=${encodeURIComponent(workspace)}&start=${start}&end=${end}&teacherId=${encodeURIComponent(teacherId)}&view=${view}`;
-  const pick = (t: WorkloadTeacher) => setTeacherId(t.teacherId);
+  // A teacher who has left the roster still has a row for the periods he taught in; the select offers him while he is open.
+  const pick = (t: WorkloadTeacher) => {
+    setTeacherId(t.teacherId);
+    setFormer(
+      options?.teachers.some((x) => x.id === t.teacherId)
+        ? null
+        : { id: t.teacherId, name: t.name },
+    );
+  };
   return (
     <dialog
       ref={dialog}
@@ -284,7 +294,10 @@ export default function TeacherWorkload({
             Учитель
             <select
               value={teacherId}
-              onChange={(e) => setTeacherId(e.target.value)}
+              onChange={(e) => {
+                setTeacherId(e.target.value);
+                if (e.target.value !== former?.id) setFormer(null);
+              }}
             >
               <option value="">
                 {options.canSeeAll ? "Все учителя" : "Все мои"}
@@ -294,6 +307,9 @@ export default function TeacherWorkload({
                   {t.name}
                 </option>
               ))}
+              {former && (
+                <option value={former.id}>{former.name} (вне состава)</option>
+              )}
             </select>
           </label>
         )}

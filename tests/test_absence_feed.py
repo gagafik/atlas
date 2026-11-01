@@ -97,6 +97,11 @@ def test_one_click_makes_a_neutral_absence_with_history_and_a_plan(staff):
     edited.absences = [a.model_copy(update=dict(end=date(2026, 8, 18))) for a in edited.absences]
     api.save('demo', edited)
     assert feed(staff)['pending'] == []
+    # Even cut short, so that it no longer covers the leave, it is still the absence of that leave and is not offered a second time.
+    edited = api.read('demo')
+    edited.absences = [a.model_copy(update=dict(endTime='09:00')) for a in edited.absences]
+    api.save('demo', edited)
+    assert feed(staff)['pending'] == []
 
 
 def test_a_replaced_lesson_is_no_longer_uncovered(staff):
@@ -214,6 +219,16 @@ def test_uncovered_lessons_ignore_absences_that_are_over(staff, monkeypatch):
     assert feed(staff)['uncovered'] == []
 
 
+def test_uncovered_lessons_of_a_running_absence_start_from_today(staff, monkeypatch):
+    s = api.read('demo')
+    s.absences = [TeacherAbsence(id='manual', name='Больничный', teacherId='t2', start=date(2026, 8, 17), end=date(2026, 8, 31))]
+    api.save('demo', s)
+    assert [d['date'] for d in feed(staff)['uncovered'][0]['days']] == ['2026-08-17', '2026-08-24', '2026-08-31']
+    monkeypatch.setattr(absence_feed, 'today', lambda: date(2026, 8, 25))
+    # The absence began a week ago and goes on: the days already over are not offered for substitution.
+    assert [d['date'] for d in feed(staff)['uncovered'][0]['days']] == ['2026-08-31']
+
+
 def test_staff_without_a_teaching_link_produce_nothing_and_notify_nobody(staff):
     create(staff, 'staff', name='Секретарь')
     item = leave(signed('staff'), own(signed('staff')), start=LEAVE_DAY, end=LEAVE_DAY)
@@ -234,6 +249,16 @@ def test_schedulers_hear_of_a_teachers_leave_without_names_or_reasons(staff):
     # The administrator who decided is not told about their own decision; the teacher gets the ordinary staff-time notice.
     assert not [n for n in inbox(staff) if n['action'].startswith('timetable.leave')]
     assert 'staff-time.changed' in [n['action'] for n in inbox(signed('teacher'))] and not [n for n in inbox(signed('teacher')) if n['action'].startswith('timetable.leave')]
+
+
+def test_only_active_schedulers_of_the_workspace_are_told(staff):
+    create(staff, 'editor', login='away'); create(staff, 'editor', login='other', workspaces=['school'])
+    regrant(staff, 'away', active=False)
+    approved(staff)
+    # Switched on again afterwards, the account that was off at the time still has nothing; an editor of another workspace never does.
+    regrant(staff, 'away', active=True)
+    for login in ['away', 'other']: assert not [n for n in inbox(signed(login)) if n['action'].startswith('timetable.leave')], login
+    assert [n['action'] for n in inbox(signed('editor')) if n['action'].startswith('timetable.leave')] == ['timetable.leave_approved']
 
 
 def test_a_database_that_never_saw_a_leave_has_an_empty_feed(client):

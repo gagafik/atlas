@@ -19,7 +19,7 @@ const currentMonth = (s: State) => {
     : today;
 };
 function Figures({ t }: { t: ReportTeacher }) {
-  const types = (["substitution", "merge", "self_study", "move"] as const)
+  const types = (["substitution", "self_study", "move"] as const)
     .filter((k) => t.byType[k])
     .map((k) => `${CHANGE_TYPES[k]}: ${t.byType[k]}`)
     .join(", ");
@@ -40,6 +40,11 @@ function Figures({ t }: { t: ReportTeacher }) {
         <dt>Замены за других</dt>
         <dd>{t.substitutions}</dd>
         {types && <small>{types}</small>}
+      </div>
+      <div>
+        <dt>Присоединено</dt>
+        <dd>{t.merged ?? 0}</dd>
+        <small>объединение групп, часов не добавляет</small>
       </div>
       <div>
         <dt>Пропущено</dt>

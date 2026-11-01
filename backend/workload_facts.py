@@ -1,7 +1,8 @@
 """Per-teacher lesson facts for dates: who taught, replaced, missed or has yet to teach.
 
 The one place that decides who taught a lesson on a date. A dated change beats a journal publication, and a
-publication beats the weekly template (and a closure recorded later). Pure apart from moment(): no database, no writes.
+publication beats the weekly template (and a closure recorded later). A publication counts only from the moment its lesson starts:
+a topic or homework posted ahead proves nothing. Pure apart from moment(): no database, no writes.
 """
 from zoneinfo import ZoneInfo
 from .access import now
@@ -25,23 +26,29 @@ def moment():
     return t.date(), t.strftime('%H:%M')
 
 
-def day_facts(view, ctx, day, clock, published, pubs):
-    """published: lesson key -> publication; pubs: the publications dated this day. clock None treats every day as past."""
+def day_facts(view, ctx, day, clock, pubs):
+    """pubs: lesson key -> the publications dated this day. clock None treats every day as past."""
     iso = day.isoformat()
     rows = [r for r in resolve_day(view, day, ctx)[0] if r['activity'] == 'lesson' and ctx.maps['groups'][r['groupId']].kind != 'staff']
     live = {r['id']: r for r in rows if r['status'] != 'cancelled'}
+    # A publication made before the lesson began (a topic or homework posted ahead) does not show that the lesson was given.
+    pubs = {k: p for k, p in pubs.items() if clock is None or (day, p['start']) <= clock}
+    keys = [key_for(r) for r in rows]
+    # A dated change of subject makes a new key: the publication of that slot then belongs to the row of the same group at that time.
+    left, taken = {k: p for k, p in pubs.items() if k not in keys}, {}
+    for r, key in zip(rows, keys):
+        if key in pubs: continue
+        match = next((k for k, p in left.items() if p['groupId'] == r['groupId'] and p['start'] < r['end'] and r['start'] < p['end']), None)
+        if match: taken[key] = left.pop(match)
     gone = [a for a in view.absences if a.start <= day <= a.end]
-    facts, seen = [], set()
+    facts = []
     def absent(t, start, end): return any(a.teacherId == t and a.startTime < end and start < a.endTime for a in gone)
     def fact(t, group, subject, start, end, outcome, kind, planned, past, pub, differs):
         return dict(teacherId=t, date=iso, start=start, end=end, minutes=minutes(end) - minutes(start), group=group, subject=subject, outcome=outcome,
                     kind=kind, planned=planned, past=past or bool(pub), confirmed=bool(pub), differs=differs, absent=absent(t, start, end))
-    for r in rows:
-        key = key_for(r)
-        seen.add(key)
-        pub = published.get(key)
-        # A publication of another date (after a move) does not confirm this row.
-        if pub and pub['date'] != iso: pub = None
+    for r, key in zip(rows, keys):
+        # A publication of another date (after a move) is not among this day's: it does not confirm this row.
+        pub = pubs.get(key) or taken.get(key)
         active, moved = r['status'] != 'cancelled', bool(r.get('movedTo'))
         # A calendar closure is neither planned nor missed.
         closed = not active and (not r['changeId'] or bool(r['excludedClassIds']) and not r['classIds'])
@@ -60,12 +67,13 @@ def day_facts(view, ctx, day, clock, published, pubs):
             elif not pub and not past: outcome, kind = 'upcoming', None
             else:
                 outcome = 'taught'
+                # A merge whose host no longer has this teacher was not merged: it is a replacement like any other.
                 kind = ('extra' if not r['placementId'] else 'own' if t in r['originalTeacherIds'] else
-                        (r['changeType'] or 'substitution') if r['changeId'] else 'journal')
+                        (r['changeType'] if r['changeType'] and r['changeType'] != 'merge' else 'substitution') if r['changeId'] else 'journal')
             facts.append(fact(t, r['group'], r['subject'], start, end, outcome, kind, planned, past, pub, differs))
-    for key, pub in pubs.items():
+    for pub in left.values():
         group = ctx.maps['groups'].get(pub['groupId'])
-        if key in seen or group and group.kind == 'staff': continue
+        if group and group.kind == 'staff': continue
         for t in pub['teacherIds']:
             # A dated subject change makes a new key: the old publication must not count the same time twice.
             if any(f['teacherId'] == t and f['outcome'] in ('taught', 'merged') and f['start'] < pub['end'] and pub['start'] < f['end'] for f in facts): continue
@@ -83,7 +91,7 @@ def period_facts(history, first, last, clock, published, names):
         # Duties and meetings are not lessons: the resolved day skips their costly rows.
         if index not in calendars: calendars[index] = view.model_copy(update=dict(commitments=[]))
         names.update({t.id: t.name for t in view.teachers})
-        yield from day_facts(calendars[index], ctx, day, clock, published, by_day.get(day.isoformat(), {}))
+        yield from day_facts(calendars[index], ctx, day, clock, by_day.get(day.isoformat(), {}))
 
 
 def add(total, f):

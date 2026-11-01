@@ -65,6 +65,20 @@ describe("monthly report CSV", () => {
     );
     expect(lines[2].startsWith('"Итого";')).toBe(true);
   });
+  it("keeps merged groups out of the replacements they are not part of", () => {
+    const data = report("Иванова");
+    data.teachers[0] = { ...data.teachers[0], ...totals({ merged: 2 }) };
+    const [header, line] = reportCsv(data)
+      .slice(1)
+      .split("\r\n")
+      .map((row) => row.split(";").map((cell) => cell.replace(/^"|"$/g, "")));
+    const at = (name: string) => Number(line[header.indexOf(name)]);
+    expect(at("Присоединено при объединении")).toBe(2);
+    const parts = ["Замена", "Самостоятельная работа", "Перенос (с заменой)"];
+    expect(parts.reduce((sum, name) => sum + at(name), 0)).toBe(
+      at("Замены за других"),
+    );
+  });
   it("protects names that Excel would evaluate as formulas", () => {
     expect(reportCsv(report("=HYPERLINK(1)"))).toContain('"\'=HYPERLINK(1)"');
   });

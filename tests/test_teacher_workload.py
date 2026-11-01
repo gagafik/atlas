@@ -57,6 +57,15 @@ def publish(client, day=MON):
     assert response.status_code == 200, response.text
 
 
+def publish_topic(client, day):
+    """What a teacher may post ahead of a lesson: the topic and homework, with nobody marked."""
+    record = entry(client, lesson(client, day=day.isoformat())['lessonKey'], day=day.isoformat())
+    record['document']['content']['topic'], record['document']['content']['homework'] = 'Тема', 'Параграф 4'
+    for pupil in record['document']['content']['records']: pupil.update(attendance='unmarked', lateMinutes=0, grades=[])
+    response = write(client, record, publish=True)
+    assert response.status_code == 200, response.text
+
+
 def the(items, teacher):
     return next(t for t in items if t['teacherId'] == teacher)
 
@@ -137,6 +146,39 @@ def test_only_finished_lessons_count_as_taught(client, clock):
     publish(client)
     published = figures(client, 't2', MON, MON)
     assert (published['upcoming'], published['taught'], published['confirmed']) == (0, 1, 1)
+    # The schedule planned that lesson too, so the publication closes no gap and opens none.
+    assert (published['plannedToDate'], published['delta']) == (1, 0)
+
+
+def test_a_topic_posted_ahead_does_not_make_the_lesson_taught(client, clock):
+    ahead = TODAY + timedelta(days=7)
+    before = figures(client, 't2', ahead, ahead)
+    publish_topic(client, ahead)
+    posted = figures(client, 't2', ahead, ahead)
+    assert (posted['upcoming'], posted['taught'], posted['plannedToDate'], posted['confirmed'], posted['minutes']) == (1, 0, 0, 0, 0)
+    assert posted == before and posted['lessons'][0]['outcome'] == 'upcoming'
+    # A closure added afterwards leaves nothing to count: the lesson was never given.
+    stored(events=[Event(id='closed', name='Каникулы', kind='holiday', start=ahead, end=ahead, effect='cancel')])
+    closed = figures(client, 't2', ahead, ahead)
+    assert (closed['taught'], closed['minutes'], closed['confirmed'], closed['differs'], closed['planned']) == (0, 0, 0, 0, 0)
+
+
+def test_a_topic_posted_before_the_bell_counts_from_the_bell(client, clock):
+    clock(MON, '07:00')
+    publish_topic(client, MON)
+    early = figures(client, 't2', MON, MON)
+    assert (early['upcoming'], early['taught'], early['confirmed']) == (1, 0, 0)
+    clock(MON, '08:20')
+    started = figures(client, 't2', MON, MON)
+    assert (started['upcoming'], started['taught'], started['confirmed'], started['plannedToDate']) == (0, 1, 1, 1)
+
+
+def test_a_closure_added_after_the_journal_was_published_keeps_the_taught_lesson(client, clock):
+    publish(client)
+    stored(events=[Event(id='closed', name='Каникулы', kind='holiday', start=MON, end=MON, effect='cancel')])
+    t2 = figures(client, 't2', MON, MON)
+    # The publication proves the lesson was given, though the calendar now closes the day: not planned, not missed, and flagged.
+    assert (t2['taught'], t2['differs'], t2['planned'], t2['missed'], t2['confirmed']) == (1, 1, 0, 0, 1)
 
 
 def test_an_absent_teacher_without_a_substitute_has_not_taught(client, clock):
@@ -158,6 +200,17 @@ def test_a_merged_group_adds_no_second_lesson_for_the_same_time(client, clock):
     assert (host['taught'], host['merged'], host['minutes']) == (1, 1, 40)
     assert host['byType']['merge'] == 1 and host['substitutions'] == 0
     assert (merged['planned'], merged['missed'], merged['taught']) == (1, 1, 0)
+
+
+def test_a_merge_whose_host_changed_is_an_ordinary_substitution(client, clock):
+    s = api.read('demo')
+    s.placements.append(Placement(id='hist', workloadId='w3', day=0, period=1, roomId='r2'))
+    s.datedLessons = [change(placement='hist', changeType='merge', mergeWith=f'{MON}:eng', teacherIds=['t2'], roomIds=['r0']), change(teacherIds=['t3'], changeType='substitution')]
+    api.save('demo', State.model_validate(s.model_dump()))
+    t2 = figures(client, 't2', MON, MON)
+    # The host no longer has this teacher, so nothing is merged: the lesson is a replacement, counted once among them.
+    assert (t2['taught'], t2['merged'], t2['substitutions'], t2['byType']['substitution'], t2['byType']['merge']) == (1, 0, 1, 1, 0)
+    assert sum(t2['byType'].values()) == t2['substitutions']
 
 
 def test_weeks_add_up_to_the_period_and_are_clipped_to_it(client, clock):
@@ -270,6 +323,32 @@ def test_csv_views_match_the_report_protect_formulas_and_are_audited(client, clo
     assert len(audited()) == 4
 
 
+def test_a_shortfall_against_the_schedule_is_a_number_in_the_csv(client, clock):
+    stored(datedLessons=[change(teacherIds=['t3'], changeType='substitution')])
+    params = dict(workspace='demo', start=str(MON), end=str(MON + timedelta(days=6)))
+    assert figures(client, 't2')['delta'] == -1
+    for view in ['teachers', 'weeks']:
+        table = rows_of(client.get('/api/staff-time/workload/export', params=params | dict(view=view)).text)
+        mine = next(r for r in table[1:] if r[0] == 'Учитель английского')
+        # A negative figure must stay a plain number, not text with a quote in front of it.
+        assert mine[table[0].index('Разница с расписанием')] == '-1'
+
+
+def test_the_breakdown_of_substitutions_in_the_csv_adds_up_to_them(client, clock):
+    s = api.read('demo')
+    s.placements.append(Placement(id='hist', workloadId='w3', day=0, period=1, roomId='r2'))
+    s.datedLessons = [change(placement='hist', changeType='merge', mergeWith=f'{MON}:eng', teacherIds=['t2'], roomIds=['r0']),
+                      change(date(2026, 8, 24), teacherIds=['t2'], placement='math', changeType='self_study')]
+    api.save('demo', State.model_validate(s.model_dump()))
+    params = dict(workspace='demo', start=str(MON), end=str(date(2026, 8, 31)))
+    table = rows_of(client.get('/api/staff-time/workload/export', params=params).text)
+    header, host = table[0], next(r for r in table[1:] if r[0] == 'Учитель английского')
+    cell = lambda name: int(host[header.index(name)])
+    parts = [name for name in header if name.startswith('Из них: ')]
+    assert 'Из них: объединение' not in parts and cell('Присоединено при объединении') == 1
+    assert cell('Замены') == sum(cell(name) for name in parts) == 1
+
+
 def test_local_mode_without_accounts_is_the_administrator(client, clock):
     assert report(client).status_code == 200
     assert client.get('/api/staff-time/workload/export', params=dict(workspace='demo', start=str(MON), end=str(MON))).status_code == 200
@@ -292,6 +371,23 @@ def test_a_teacher_renamed_later_keeps_the_current_name_in_every_period(client, 
     # A period wholly before the change is still reported under the name the teacher has now.
     assert figures(client, 't2', MON, date(2026, 8, 31))['name'] == 'Новая фамилия'
     assert figures(client, 't2', date(2026, 9, 7), date(2026, 9, 14))['name'] == 'Новая фамилия'
+
+
+def test_a_teacher_who_left_can_still_be_opened_for_the_period_he_taught(client, clock):
+    s = api.read('demo')
+    s.teachers = [t for t in s.teachers if t.id != 't2']
+    s.workloads = [w.model_copy(update=dict(teacherId='t3')) if w.teacherId == 't2' else w for w in s.workloads]
+    api.save('demo', State.model_validate(s.model_dump()), effective=date(2026, 9, 7))
+    august = (MON, date(2026, 8, 31))
+    assert 't2' in {t['teacherId'] for t in report(client, *august).json()['teachers']}
+    # The row of the school table leads somewhere: the weeks, the lessons and the export of that teacher.
+    gone = figures(client, 't2', *august)
+    assert gone['taught'] == 3 and len(gone['weeks']) == 3 and len(gone['lessons']) == 3
+    export = client.get('/api/staff-time/workload/export', params=dict(workspace='demo', start=str(MON), end='2026-08-31', teacherId='t2', view='lessons'))
+    assert export.status_code == 200 and len(rows_of(export.text)) == 4
+    # A teacher who is neither on the roster nor in the period, or never existed, is as good as missing.
+    assert report(client, date(2026, 9, 7), date(2026, 9, 14), teacherId='t2').status_code == 404
+    assert report(client, *august, teacherId='nobody').status_code == 404
 
 
 def test_a_moved_lesson_counts_once_on_the_day_it_was_given(client, clock):
@@ -329,11 +425,36 @@ def test_a_changed_subject_does_not_count_the_published_time_twice(client, clock
     assert (t2['taught'], t2['minutes'], t2['planned']) == (1, 40, 1)
 
 
+def test_a_dated_change_of_subject_and_teacher_credits_only_the_substitute(client, clock):
+    publish(client)
+    stored(datedLessons=[change(subjectId='sub3', teacherIds=['t3'], changeType='substitution')])
+    t2, t3 = figures(client, 't2', MON, MON), figures(client, 't3', MON, MON)
+    # The new subject gives the lesson another journal key, but the published time is still one slot: it is not credited to both.
+    assert (t2['taught'], t2['minutes'], t2['missed'], t2['planned']) == (0, 0, 1, 1)
+    assert [x['outcome'] for x in t2['lessons']] == ['replaced']
+    assert (t3['taught'], t3['minutes'], t3['substitutions']) == (1, 40, 1)
+    assert report(client, MON, MON).json()['totals']['taught'] == 2
+
+
+def test_an_undated_change_of_subject_and_teacher_keeps_the_published_lesson_with_who_taught_it(client, clock):
+    publish(client)
+    s = api.read('demo')
+    s.workloads[0].teacherId, s.workloads[0].subjectId = 't3', 'sub3'
+    api.save('demo', s)
+    end = date(2026, 8, 31)
+    t2, t3 = figures(client, 't2', MON, end), figures(client, 't3', MON, end)
+    # The same result as when only the teacher changes: the publication outranks the template, and the new owner is replaced for that day.
+    assert (t2['taught'], t2['journalOnly'], t2['confirmed'], t2['differs'], t2['planned']) == (1, 1, 1, 1, 0)
+    assert (t3['taught'], t3['own'], t3['planned'], t3['missed']) == (2, 2, 3, 1)
+
+
 def test_a_cancelled_lesson_that_was_published_is_not_taught_and_disagrees_with_the_journal(client, clock):
     publish(client)
     stored(datedLessons=[DatedLesson(id='cancel', name='Отмена', kind='cancel', placementId='eng', sourceDate=MON, onDate=MON)])
     t2 = figures(client, 't2', MON, MON)
     assert (t2['taught'], t2['cancelled'], t2['missed'], t2['differs'], t2['planned']) == (0, 1, 1, 1, 1)
+    # The journal cannot confirm a lesson the schedule no longer holds.
+    assert t2['confirmed'] == 0
 
 
 def test_staff_meetings_are_not_lessons(client, clock):
