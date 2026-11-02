@@ -16,7 +16,8 @@ export function demoPages() {
       handler(html) {
         return html
           .replace("/src/main.tsx", "/src/demo/main.ts")
-          .replace(/\s*<link rel="manifest"[^>]*>/, "");
+          .replace(/\s*<link rel="manifest"[^>]*>/, "")
+          .replace(/<title>[^<]*<\/title>/, "<title>Атлас · демо</title>");
       },
     },
     generateBundle() {

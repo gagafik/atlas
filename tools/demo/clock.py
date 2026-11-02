@@ -6,12 +6,14 @@ refuses any database that could hold real school data.
 import importlib
 import os
 import pkgutil
+import sqlite3
 import sys
-from datetime import datetime, timezone
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-_state = {'now': None}
+_state = {'now': None, 'tick': 0}
 
 
 def assert_safe_database():
@@ -29,10 +31,34 @@ def assert_safe_database():
 
 def set_time(iso):
     _state['now'] = datetime.fromisoformat(iso)
+    _state['tick'] = 0
 
 
 def frozen_now():
-    return _state['now'].astimezone(timezone.utc)
+    """The frozen instant, advanced by one microsecond per call.
+
+    Sessions are trimmed by `created`; a frozen clock that never moves would tie
+    them, and a new session could be trimmed away at once.
+    """
+    _state['tick'] += 1
+    return (_state['now'] + timedelta(microseconds=_state['tick'])).astimezone(timezone.utc)
+
+
+def forget_sessions():
+    """Drop the sessions of earlier runs of this temporary database.
+
+    A restarted clock begins again at the frozen instant, so a new session would look older than
+    the old ones and be trimmed away at once (only the ten newest sessions of an account stay).
+    """
+    path = assert_safe_database()
+    if not path.exists():
+        return
+    with closing(sqlite3.connect(path)) as db:
+        try:
+            db.execute('DELETE FROM sessions')
+            db.commit()
+        except sqlite3.OperationalError:
+            pass  # a database without accounts yet
 
 
 def install(iso):

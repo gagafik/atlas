@@ -19,6 +19,17 @@ const STYLE = `
 body{padding-top:var(--demo-bar,0px)}
 .sidebar,.modal-backdrop{top:var(--demo-bar,0px)!important}
 .modal{max-height:calc(100dvh - var(--demo-bar,0px) - 50px)}
+/* Dialogs live in the top layer and would cover the bar: start them below it. */
+dialog:modal{margin-top:calc(var(--demo-bar,0px) + 8px)!important;max-height:calc(100dvh - var(--demo-bar,0px) - 16px)!important}
+/* The administrator's top row holds a dozen account buttons: let it grow instead of overlapping the page. */
+.topbar{height:auto!important;min-height:65px;padding-top:8px!important;padding-bottom:8px!important}
+/* On a phone the account buttons (a dozen of them) become one row that scrolls sideways instead of a screen of buttons. */
+@media (max-width:650px){
+  .topbar,.topbar-right{min-width:0!important;max-width:100%}
+  .account-controls{flex-wrap:nowrap!important;justify-content:flex-start!important;overflow-x:auto;max-width:100%;min-width:0;padding-bottom:6px;scrollbar-width:thin}
+  .account-controls>*{flex:0 0 auto}
+  .account-controls button{white-space:nowrap}
+}
 `;
 
 export function mountBar(role: DemoRole): void {

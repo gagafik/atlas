@@ -26,6 +26,7 @@ export function showDemoToast(text: string): void {
 }
 
 function leavesDemo(url: URL): boolean {
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   if (url.origin !== window.location.origin) return false;
   return (
     isApiUrl(url, window.location.origin) ||

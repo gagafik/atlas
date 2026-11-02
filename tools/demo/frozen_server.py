@@ -22,6 +22,7 @@ def main():
     os.environ.update(TIMETABLE_DB=str(work / 'demo.db'), ATLAS_WEB_PUSH_ENABLED='0', ATLAS_BACKUP_DIR='')
     from tools.demo import clock
     clock.assert_safe_database()  # before anything is read and before the backend is imported
+    clock.forget_sessions()
     meta = json.loads((work / 'meta.json').read_text(encoding='utf-8'))
     clock.install(meta['now'])
     clock.install_school()

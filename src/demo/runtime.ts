@@ -86,6 +86,7 @@ export function createDemoFetch(
         return answer(postKey(url, bodyText, rule.anyBody));
       }
     }
+    log("[demo] write refused", method, url.pathname);
     return json(403, { detail: READ_ONLY_TEXT });
   };
 }

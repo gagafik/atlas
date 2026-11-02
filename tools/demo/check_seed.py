@@ -20,7 +20,7 @@ def main(argv=None):
     work = Path(parser.parse_args(argv).workdir).resolve()
     os.environ.update(TIMETABLE_DB=str(work / 'demo.db'), ATLAS_WEB_PUSH_ENABLED='0', ATLAS_BACKUP_DIR='')
     from . import clock
-    clock.assert_safe_database()
+    clock.forget_sessions()
     meta = json.loads((work / 'meta.json').read_text(encoding='utf-8'))
     from . import boot
     api = boot.boot(work, meta['now'])
