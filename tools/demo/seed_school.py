@@ -47,6 +47,16 @@ def school_days(first, last):
         day += timedelta(days=1)
 
 
+def due_day(day):
+    """Two school days after the lesson: a deadline never falls on a weekend."""
+    result, left = date.fromisoformat(day), 2
+    while left:
+        result += timedelta(days=1)
+        if result.weekday() < 5:
+            left -= 1
+    return result.isoformat()
+
+
 def rid():
     return str(uuid4())
 
@@ -67,6 +77,9 @@ class Seed(Stages, Social):
         self.ability = {}
         for index in range(60):
             self.ability[school.pupil_id(index)] = .45 + .5 * self.rng.random()
+        # The showcase pupil (the parent's and the pupil's own view) is a good, steady learner.
+        self.ability[school.SHOWCASE_PUPIL] = .86
+        self.absent_days = {}
         self.counts = dict(lessons=0, homework=0, reviewed=0)
         self.topic_counter = {}
         self.homework_lessons = {}
@@ -142,6 +155,7 @@ class Seed(Stages, Social):
             create('student', logins['pupils'][index], names.PUPILS[index], school.pupil_id(index), 'student')
         self.ok(self.admin.get('/api/forms/options'))
         self.log(f'{len(self.account_ids) + 1} accounts')
+        self.verify_families()
         periods = [('Первая четверть', CLOSE_FROM, CLOSE_TO), ('Вторая четверть', '2026-10-19', '2026-12-25')]
         self.periods = []
         for label, start, end in periods:
@@ -181,7 +195,7 @@ class Seed(Stages, Social):
         body['topic'] = topics[counter % len(topics)]
         number = 3 + counter
         body['homework'] = content.HOMEWORK[subject].format(n=number, a=number * 2, b=number * 2 + 3)
-        body['dueDate'] = (date.fromisoformat(day) + timedelta(days=2)).isoformat()
+        body['dueDate'] = due_day(day)
         category, name = self.category(day, group, subject, counter)
         body['assessments'] = [dict(id='w1', name=name, kind='points', maxScore=10, weight=1, category=category)]
         for record in body['records']:
@@ -192,14 +206,15 @@ class Seed(Stages, Social):
             record['lateMinutes'] = self.rng.choice([3, 5, 10]) if record['attendance'] == 'late' else 0
             if record['attendance'] == 'absent':
                 record['grades'] = []
+                self.absent_days.setdefault(student, []).append(day)
                 continue
             score = round(10 * (self.ability[student] + self.rng.uniform(-.18, .12)))
             record['grades'] = [dict(assessmentId='w1', score=max(3, min(10, score)), label='', comment='')]
         payload = dict(lessonKey=key, day=day, revision=entry['revision'], version=entry['version'], content=body, publish=publish)
         saved = self.ok(writer.put('/api/journal/entry', json=payload))
         self.counts['lessons'] += 1
-        if publish and day >= HOMEWORK_FROM and group == '7А' and subject in ('Математика', 'Русский язык') and writer_ids:
-            self.homework_lessons.setdefault(day, []).append((key, writer_ids[0]))
+        if publish and day >= HOMEWORK_FROM and group == '7А' and writer_ids:
+            self.homework_lessons.setdefault(day, []).append((key, school.course_teacher(0, subject)))
         return saved
 
     def category(self, day, group, subject, counter):
@@ -248,7 +263,7 @@ class Seed(Stages, Social):
         scale = self.ok(self.admin.get('/api/final-grades/options'))['scales'][0]
         left_open = {('c3', 'b6'), ('c3', 'b7')}  # a teacher has not proposed yet
         proposed = 0
-        for index in range(12):
+        for index in range(school.TEACHER_COUNT):
             client = self.teacher(f't{index}')
             rows = [r for r in self.sheet_rows(client) if r['status'] == 'draft' and (r['classId'], r['subjectId']) not in left_open]
             for start in range(0, len(rows), 100):
@@ -329,7 +344,7 @@ def run(self, stop=''):
         if day == QUIZ_DAYS['release']:
             self.course_test_release(day)
         if day == '2026-10-28':
-            self.substitute(day, [f't{i}' for i in range(1, 12)], 'Курсы повышения квалификации')
+            self.substitute(day, [f't{i}' for i in range(1, school.TEACHER_COUNT)], 'Курсы повышения квалификации')
         self.homework_round(day)
         # Gaps that the coverage report should show: lessons never written, and a draft left unpublished.
         self.fill(day, skip=.0, leave=(2, 7) if day == '2026-10-21' else (4,) if day == LAST_FULL_DAY else (),
@@ -338,6 +353,8 @@ def run(self, stop=''):
             self.course_test_transfer(day)
         self.behaviour_notes(day)
     self.log(f'period 2 written: {self.counts}')
+    self.at(LAST_FULL_DAY, '18:55')
+    self.absence_notes()
     self.at(LAST_FULL_DAY, '19:00')
     self.messages()
     self.parents_form()
@@ -347,9 +364,10 @@ def run(self, stop=''):
     self.assessment_bookings()
     if stop == 'social':
         return
-    self.substitute('2026-11-02', [f't{i}' for i in range(1, 12)], 'Болезнь')
+    self.substitute('2026-11-02', [f't{i}' for i in range(1, school.TEACHER_COUNT)], 'Болезнь')
     self.fill('2026-11-02', until='11:30', leave=(3, 8))
     self.at('2026-11-02', '11:30')
+    self.mark_read()
 
 
 Seed.run = run

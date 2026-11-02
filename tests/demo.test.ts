@@ -86,3 +86,19 @@ describe("snapshot scrubbing", () => {
     expect(() => scrubSnapshot(snapshot(body), "someone")).toThrow(/leak/);
   });
 });
+
+// The capture asks for the details of lists by dates and months: the helpers must not drift over month and year ends.
+describe("capture date helpers", () => {
+  it("lists the days of a window and skips weekends on request", async () => {
+    const { daysBetween } = await import("../tools/demo/fanout.mjs");
+    expect(daysBetween("2026-10-30", "2026-11-03")).toEqual(["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"]);
+    expect(daysBetween("2026-10-30", "2026-11-03", { schoolOnly: true })).toEqual(["2026-10-30", "2026-11-02", "2026-11-03"]);
+  });
+
+  it("gives the first and last day of any month", async () => {
+    const { monthRange } = await import("../tools/demo/fanout.mjs");
+    expect(monthRange(2026, 11)).toEqual(["2026-11-01", "2026-11-30"]);
+    expect(monthRange(2026, 12)).toEqual(["2026-12-01", "2026-12-31"]);
+    expect(monthRange(2028, 2)).toEqual(["2028-02-01", "2028-02-29"]);
+  });
+});

@@ -20,19 +20,23 @@ SHOWCASE_TEACHER = 't0'
 SUBJECTS = [
     ('Математика', '#dceae2'), ('Русский язык', '#e4e0f3'), ('Английский язык', '#f6e5ce'),
     ('История', '#dce9f4'), ('Физика', '#f3dede'), ('Биология', '#e0f3e6'),
-    ('География', '#f3f0d8'), ('Информатика', '#e6e6e6'),
+    ('География', '#f3f0d8'), ('Информатика', '#e6e6e6'), ('Казахский язык', '#f0e1ec'), ('Физкультура', '#e1eef5'),
 ]
-HOURS = [5, 4, 3, 2, 3, 2, 2, 2]  # lessons per week, in SUBJECTS order
-# Teacher index for each subject in the 7th and the 8th grade.
+HOURS = [5, 4, 3, 2, 3, 2, 2, 2, 3, 2]  # lessons per week, in SUBJECTS order
+TEACHER_COUNT = 14
+# Teacher index for each subject in the 7th and the 8th grade (Kazakh and physical education are shared).
 TEACHER_OF = {
-    0: [0, 1, 2, 3, 4, 5, 6, 7],
-    1: [8, 9, 10, 11, 4, 5, 6, 7],
+    0: [0, 1, 2, 3, 4, 5, 6, 7, 12, 13],
+    1: [8, 9, 10, 11, 4, 5, 6, 7, 12, 13],
 }
 CLASS_TEACHERS = {0: 't0', 1: 't1', 2: 't8', 3: 't9'}
 ROOMS = [('Кабинет 101', 28), ('Кабинет 102', 28), ('Кабинет 103', 28), ('Кабинет 104', 28),
          ('Кабинет 201', 24), ('Кабинет 202', 24), ('Кабинет 203', 24), ('Кабинет 204', 24),
-         ('Кабинет информатики', 16), ('Кабинет физики', 20)]
-SPECIAL_ROOM = {7: 'r8', 4: 'r9'}  # Информатика, Физика
+         ('Кабинет информатики', 16), ('Кабинет физики', 20), ('Спортивный зал', 40)]
+SPECIAL_ROOM = {7: 'r8', 4: 'r9', 9: 'r10'}  # Информатика, Физика, Физкультура
+
+
+assert len(names.TEACHERS) == TEACHER_COUNT
 
 
 def pupil_id(index):
@@ -48,10 +52,16 @@ def logins():
     """Account logins by role; passwords are generated at seed time."""
     return {
         'admin': 'demo-admin',
-        'teachers': [f'demo-teacher-{i + 1:02d}' for i in range(12)],
+        'teachers': [f'demo-teacher-{i + 1:02d}' for i in range(TEACHER_COUNT)],
         'parents': [f'demo-parent-{i + 1:02d}' for i in range(PUPILS_PER_CLASS)],
         'pupils': [f'demo-pupil-{i + 1:02d}' for i in range(PUPILS_PER_CLASS)],
     }
+
+
+def course_teacher(class_index, subject_name):
+    """The teacher the timetable gives a class for a subject (a substitute is not the teacher of the course)."""
+    subject_index = [name for name, _ in SUBJECTS].index(subject_name)
+    return f't{TEACHER_OF[class_index // 2][subject_index]}'
 
 
 def workload_id(class_index, subject_index):

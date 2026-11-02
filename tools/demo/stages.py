@@ -51,7 +51,10 @@ class Stages:
             return
         self.at(day, '16:00')
         for key, teacher_id in pending:
-            for index in self.rng.sample(range(10), self.rng.randint(6, 9)):
+            chosen = set(self.rng.sample(range(10), self.rng.randint(6, 9)))
+            # The showcase pupil does nearly every task; the others fill the teacher's queue.
+            (chosen.add if self.rng.random() < .92 else chosen.discard)(int(school.SHOWCASE_PUPIL[1:]))
+            for index in sorted(chosen):
                 client, sid = self.pupil(index), school.pupil_id(index)
                 url = f'/api/journal/homework/{key}'
                 current = self.ok(client.get(url, params=dict(studentId=sid)))
@@ -63,10 +66,11 @@ class Stages:
         self.at(day, '17:00')
         waiting, self.homework_waiting = self.homework_waiting, []
         for key, teacher_id, sid, version, assignment, sent_on in waiting:
-            if sent_on == day or self.rng.random() < .4:
+            showcase = sid == school.SHOWCASE_PUPIL
+            if sent_on == day or (not showcase and self.rng.random() < .4):
                 self.homework_waiting.append((key, teacher_id, sid, version, assignment, sent_on))
                 continue
-            returned = self.rng.random() < .12
+            returned = self.rng.random() < .12 and not showcase
             self.ok(self.teacher(teacher_id).post(f'/api/journal/homework/{key}/review', json=dict(
                 studentId=sid, version=version, assignment=assignment, decision='returned' if returned else 'accepted',
                 comment=content.RETURN_COMMENT if returned else self.rng.choice(content.REVIEW_COMMENTS))))

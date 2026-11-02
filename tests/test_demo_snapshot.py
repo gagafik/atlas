@@ -1,7 +1,10 @@
 """The committed demo snapshots (tools/demo/snapshot) go to a public site: they must stay invented and safe."""
+import gzip
 import json
 import re
+from datetime import date
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 
@@ -16,12 +19,22 @@ LEAKS = [re.compile(pattern, re.I) for pattern in [
     r'sb_secret_[A-Za-z0-9_-]{25,}', r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----', r'gagaf',
 ]]
 DENIED = re.compile(r'^(GET|POST|PUT) /(api/access/(operations|audit|invitations|push)|api/auth/recovery|api/publications|api/hall|hall-api/|admissions-api/|api/diagnostics)')
-PER_ROLE_BYTES = 2_621_440
-TOTAL_BYTES = 8 * 1024 * 1024
+# Administrator screens that read a denied route get an empty list, never the real answer.
+EMPTY_STUBS = re.compile(r'^GET /api/access/(audit|invitations(/batches)?)$')
+# Raw size is only the cost of parsing; what a visitor downloads is the gzip size (Pages compresses JSON).
+PER_ROLE_BYTES = 6 * 1024 * 1024
+TOTAL_BYTES = 12 * 1024 * 1024
+PER_ROLE_GZIP_BYTES = 1024 * 1024
 
 
 def load(role):
     return json.loads((SNAPSHOTS / f'{role}.json').read_text(encoding='utf-8'))
+
+
+def get_key(path, **params):
+    """The key the browser runtime and the capture derive for a GET (workspace left out, parameters sorted)."""
+    query = urlencode(sorted(params.items()))
+    return f'GET {path}' + (f'?{query}' if query else '')
 
 
 def strings(value, secretish=False, path=''):
@@ -61,9 +74,12 @@ def test_session_is_the_role_with_one_workspace_and_no_setup(role):
 def test_snapshot_never_holds_operations_audit_or_public_link_routes(role):
     snapshot = load(role)
     assert snapshot['capturedAt'] == school.DEMO_NOW
-    for key in snapshot['entries']:
+    for key, entry in snapshot['entries'].items():
         assert key.startswith(('GET /', 'POST /')), key
-        assert not DENIED.search(key), key
+        if EMPTY_STUBS.match(key):
+            assert entry['b'] in ([], {'items': [], 'nextBefore': None}), key
+        else:
+            assert not DENIED.search(key), key
         assert 'workspace=' not in key, key
 
 
@@ -91,3 +107,89 @@ def test_snapshot_size_stays_within_the_budget():
     sizes = [(SNAPSHOTS / f'{role}.json').stat().st_size for role in ROLES]
     assert all(size <= PER_ROLE_BYTES for size in sizes), sizes
     assert sum(sizes) <= TOTAL_BYTES, sizes
+    zipped = [len(gzip.compress((SNAPSHOTS / f'{role}.json').read_bytes())) for role in ROLES]
+    assert all(size <= PER_ROLE_GZIP_BYTES for size in zipped), zipped
+
+
+# The tests below keep the snapshot usable: every list the demo shows has the details behind its items.
+# A missing key makes the viewer meet an error banner after the first click.
+
+def entries_of(role):
+    return load(role)['entries']
+
+
+def lists_under(entries, path):
+    """The answers of one route (any query), not of the routes below it."""
+    path = path.rstrip('?')
+    return [entry['b'] for key, entry in entries.items() if key[4:].split('?')[0] == path and key.startswith('GET ') and entry['s'] == 200]
+
+
+def test_every_lesson_of_the_staff_days_can_be_opened():
+    for role, days in [('admin', ['2026-10-21', '2026-10-30', '2026-11-02']), ('teacher', ['2026-10-06', '2026-10-21', '2026-10-30', '2026-11-02'])]:
+        entries = entries_of(role)
+        for day in days:
+            lessons = entries[get_key('/api/journal/day', day=day)]['b']['lessons']
+            assert lessons, (role, day)
+            for lesson in (row for row in lessons if not row['archived']):
+                for path, params in [
+                    ('/api/journal/entry', dict(day=day, lessonKey=lesson['lessonKey'], syncRoster='false')),
+                    ('/api/journal/curriculum/lesson', dict(day=day, lessonKey=lesson['lessonKey'])),
+                    ('/api/behaviour/lesson', dict(day=day, lessonKey=lesson['lessonKey'])),
+                ]:
+                    assert get_key(path, **params) in entries, (role, day, path)
+
+
+@pytest.mark.parametrize('role', ROLES)
+def test_every_message_thread_of_the_lists_can_be_opened(role):
+    entries = entries_of(role)
+    ids = {item['id'] for body in lists_under(entries, '/api/messages/threads?') for item in body['items']}
+    assert ids, role
+    for thread in ids:
+        assert get_key(f'/api/messages/threads/{thread}') in entries, (role, thread)
+
+
+@pytest.mark.parametrize('role', ['admin', 'teacher'])
+def test_every_course_of_the_picker_has_its_tables(role):
+    entries = entries_of(role)
+    picker = entries[get_key('/api/journal/course-table/courses')]['b']
+    assert picker['courses'] and picker['periods']
+    for course in picker['courses']:
+        for period in picker['periods']:
+            key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'])
+            assert key in entries, (role, course['group'], course['subject'], period['name'])
+
+
+@pytest.mark.parametrize('role', ['parent', 'student'])
+def test_every_homework_of_the_journal_can_be_opened(role):
+    entries = entries_of(role)
+    rows = [row for body in lists_under(entries, '/api/journal/report') for row in body['rows'] if row['content'].get('homework')]
+    assert len(rows) > 20, role
+    for row in rows:
+        assert get_key(f'/api/journal/homework/{row["lessonKey"]}', studentId=school.SHOWCASE_PUPIL) in entries, (role, row['lessonKey'])
+
+
+def test_the_forms_of_the_administrator_show_their_results():
+    entries = entries_of('admin')
+    forms = [item for body in lists_under(entries, '/api/forms/items') for item in body['items']]
+    assert forms
+    for form in forms:
+        assert get_key(f'/api/forms/items/{form["id"]}/responses', limit='20') in entries, form['id']
+        assert get_key(f'/api/forms/items/{form["id"]}/pending', limit='50', offset='0') in entries, form['id']
+
+
+def test_the_final_sheet_and_the_consultations_are_there():
+    entries = entries_of('admin')
+    book = entries[get_key('/api/final-grades/options')]['b']['books'][0]['id']
+    assert get_key(f'/api/final-grades/books/{book}/matrix') in entries
+    assert get_key(f'/api/final-grades/books/{book}', classId='', subjectId='', status='all', offset='0') in entries
+    assert get_key('/api/meetings/consultations') in entries and get_key('/api/meetings/class-meetings') in entries
+
+
+def test_the_showcase_pupil_is_a_good_learner_and_deadlines_avoid_weekends():
+    parent = entries_of('parent')
+    rows = [row for body in lists_under(parent, '/api/journal/report') for row in body['rows']]
+    marks = [grade['score'] / 10 for row in rows for grade in row['record']['grades']]
+    assert marks and sum(marks) / len(marks) >= .7, 'the pupil the parent and the pupil see has no good marks'
+    for body in lists_under(parent, '/api/journal/homework-queue'):
+        for item in body['items']:
+            assert not item['dueDate'] or date.fromisoformat(item['dueDate']).weekday() < 5, item['dueDate']

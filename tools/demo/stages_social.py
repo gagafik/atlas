@@ -35,7 +35,7 @@ class Social:
         # Announcements: one from the teacher to the class, one from the administrator to all families (with a confirmation).
         self.ok(self.teacher('t0').post('/api/messages/threads', json=dict(
             requestId=rid(), kind='announcement', title='Экскурсия в музей', text='В пятницу класс едет в краеведческий музей. Сбор у школы в 9:00.',
-            groupIds=['gc0'], roles=['parent'])))
+            groupIds=['gc0'], roles=['parent', 'student'])))
         self.ok(self.admin.post('/api/messages/threads', json=dict(
             requestId=rid(), kind='announcement', title='Родительские собрания в ноябре', requireAck=True,
             text='Собрания классов пройдут 5 и 6 ноября в актовом зале. Просим подтвердить, что вы прочитали это сообщение.',
@@ -85,6 +85,54 @@ class Social:
         self.ok(self.teacher('t0').post('/api/meetings/class-meetings', json=dict(
             requestId=rid(), title='Родительское собрание 7А', classIds=['c0'], startsAt=f'2026-11-05T17:00:00{self.tz}',
             endsAt=f'2026-11-05T18:00:00{self.tz}', location='Актовый зал')))
+
+    def verify_families(self):
+        """The school records who each guardian is, so the family screens show a verified relationship."""
+        items = self.ok(self.admin.get('/api/access/families'))['items']
+        done = 0
+        for item in items:
+            if item['verified']:
+                continue
+            relation = 'mother' if self.guardian_is_mother(item['parentName']) else 'father'
+            self.ok(self.admin.put(f'/api/access/families/{item["parentId"]}/{item["studentId"]}', json=dict(
+                version=item['version'], accountVersion=item['accountVersion'], relationship=relation, verified=True,
+                evidence='Данные из заявления о приёме (вымышленный пример)', status='active', reason='Сверено школой')))
+            done += 1
+        self.log(f'{done} family links verified')
+
+    @staticmethod
+    def guardian_is_mother(name):
+        return name.split()[0].endswith('а')
+
+    def absence_notes(self):
+        """Parents explain some absences of the second period; the class teacher accepts most of them."""
+        sent = []
+        for index in range(school.PUPILS_PER_CLASS):
+            sid = school.pupil_id(index)
+            days = [d for d in self.absent_days.get(sid, []) if d >= '2026-10-19']
+            if not days or len(sent) >= 6:
+                continue
+            note = self.ok(self.parent(index).post('/api/journal/absences', json=dict(
+                requestId=rid(), studentId=sid, startDate=days[0], endDate=days[0],
+                reason='Был на приёме у врача, справка у классного руководителя.', fileIds=[])))
+            sent.append(note)
+        for number, note in enumerate(sent):
+            if number == len(sent) - 1:
+                break  # the last one waits for a decision
+            action = 'reject' if number == len(sent) - 2 else 'approve'
+            self.ok(self.teacher('t0').post(f'/api/journal/absences/{note["id"]}/decision', json=dict(
+                requestId=rid(), version=note['version'], action=action,
+                comment='Принято.' if action == 'approve' else 'Нужна справка, пожалуйста, принесите её в школу.')))
+        self.log(f'{len(sent)} absence notes sent')
+
+    def mark_read(self):
+        """Everybody has read the old news; only the latest few entries stay unread."""
+        logins = school.logins()
+        people = [('demo-admin', self.admin)] + [(login, self.as_(login)) for key in ('teachers', 'parents', 'pupils') for login in logins[key]]
+        for login, client in people:
+            items = self.ok(client.get('/api/notifications/inbox'))['items']
+            if len(items) > 3:
+                self.ok(client.post('/api/notifications/read', json=dict(throughId=items[3]['id'], read=True)))
 
     def behaviour_notes(self, day):
         notes = self.behaviour_plan.get(day, [])

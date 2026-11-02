@@ -15,7 +15,7 @@ export interface DemoSnapshot {
 
 const API_PREFIXES = ["/api/", "/hall-api/", "/admissions-api/", "/published"];
 export const MISSING_TEXT =
-  "В демо сохранены не все дни и фильтры. Вернитесь к предыдущему выбору.";
+  "В демо нет данных для этого выбора: сохранены не все дни, фильтры и разделы. Вернитесь к предыдущему выбору.";
 export const READ_ONLY_TEXT = "Это демо: изменения не сохраняются.";
 
 export function isApiUrl(url: URL, origin: string): boolean {

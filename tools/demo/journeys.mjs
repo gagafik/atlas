@@ -61,11 +61,20 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       for (const label of labels) if (!(await kit.click(label))) return false;
       return true;
     },
+    // The select whose label starts with `selectLabel`.
+    selectOf(selectLabel) {
+      const own = new RegExp(`^\\s*${escape(selectLabel)}`);
+      const exact = page.locator("label").filter({ has: page.locator("span").filter({ hasText: own }) }).locator("select").filter({ visible: true }).first();
+      return exact.or(page.locator("label").filter({ hasText: own }).locator("select").filter({ visible: true }).first()).first();
+    },
+    async optionTexts(selectLabel) {
+      const field = kit.selectOf(selectLabel);
+      if (!(await field.count())) return [];
+      return (await field.locator("option").allInnerTexts()).map((text) => text.trim());
+    },
     // Choose option `which` (an index, a text or a pattern) in the select whose label starts with `selectLabel`.
     async choose(selectLabel, which) {
-      const own = new RegExp(`^\\s*${escape(selectLabel)}`);
-      let field = page.locator("label").filter({ has: page.locator("span").filter({ hasText: own }) }).locator("select").filter({ visible: true }).first();
-      if (!(await field.count())) field = page.locator("label").filter({ hasText: own }).locator("select").filter({ visible: true }).first();
+      const field = kit.selectOf(selectLabel);
       if (!(await field.count())) return miss(`no select: ${selectLabel}`);
       if (typeof which === "number") await field.selectOption({ index: which }, { timeout: 3000 }).catch(() => miss(`option ${which} of ${selectLabel}`));
       else {
@@ -75,6 +84,37 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
         await field.selectOption({ label: match.trim() }, { timeout: 3000 }).catch(() => miss(`option ${which} of ${selectLabel}`));
       }
       await settle();
+    },
+    // Every option of a select in turn (the first `max`), each followed by `then(text, index)`.
+    async eachOption(selectLabel, then, { from = 0, max = 12 } = {}) {
+      const texts = await kit.optionTexts(selectLabel);
+      if (!texts.length) return miss(`no select: ${selectLabel}`);
+      for (let index = from; index < Math.min(texts.length, from + max); index += 1) {
+        await kit.choose(selectLabel, index);
+        await then?.(texts[index], index);
+      }
+    },
+    // A date field by the start of its label.
+    async setDate(label, iso) {
+      const own = new RegExp(`^\\s*${escape(label)}`);
+      const field = page.locator("label").filter({ has: page.locator("span").filter({ hasText: own }) }).locator("input").filter({ visible: true }).first();
+      if (!(await field.count())) return miss(`no date field: ${label}`);
+      await field.fill(iso, { timeout: 3000 }).catch(() => miss(`date ${iso} of ${label}`));
+      await settle();
+    },
+    // Every visible button whose name matches (the first `max`), each followed by `then(index)`.
+    async eachButton(pattern, then, { max = 40 } = {}) {
+      const items = page.getByRole("button", { name: pattern });
+      const total = Math.min(await items.count(), max);
+      for (let index = 0; index < total; index += 1) {
+        const target = items.nth(index);
+        if (!(await target.isVisible().catch(() => false))) continue;
+        await target.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+        await target.click({ timeout: 3000, noWaitAfter: true }).catch((error) => log(`click failed: ${pattern}: ${error.message.split(String.fromCharCode(10))[0]}`));
+        await settle();
+        await then?.(index);
+      }
+      return total;
     },
     // The text is on the page (a journey step that shows something).
     async see(text) {
@@ -97,12 +137,45 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
 
 // What the presentation shows, per role. Labels are the visible texts of the app.
 const JOURNAL = "Учебный журнал";
+// The tab, with the number of unread threads when there are some (not "Сообщения о происшествиях").
+const MESSAGES = /^Сообщения(\s·\s\d+)?$/;
 const DAY_LESSON = /Математика 7А/;
+const CLASSES = ["7А", "7Б", "8А", "8Б"];
 
 async function lessonScreens(kit, name) {
   // The lesson of the day: attendance and marks, then back to the list.
   await kit.path(JOURNAL, DAY_LESSON);
   await kit.snap(`${name}-lesson`);
+}
+
+// Coverage of the journals and the attendance summary (administrator and teacher).
+async function controlScreens(kit, { classes = CLASSES } = {}) {
+  await kit.click("Проверить заполнение");
+  await kit.snap("coverage");
+  for (const state of ["Все состояния", "Заполнен", "Нет публикации", "Журнал не создан"]) {
+    await kit.choose("Состояние журнала", state);
+    await kit.click("Проверить заполнение");
+  }
+  await kit.choose("Состояние журнала", "Все состояния");
+  await kit.click("Сводка по классам");
+  await kit.snap("coverage-classes");
+}
+
+async function attendanceSummary(kit) {
+  await kit.click("Показать сводку");
+  await kit.eachOption("Класс сводки", () => kit.click("Показать сводку"), { max: 6 });
+  await kit.snap("attendance");
+}
+
+// The family's homework: the queue of the next two weeks, the whole year, every filter.
+async function homeworkQueue(kit, { filterLabel }) {
+  await kit.path("Домашние задания");
+  await kit.click("Весь учебный год", { optional: true });
+  await kit.snap("homework-year");
+  if (filterLabel) {
+    await kit.eachOption(filterLabel, () => kit.click("Применить фильтры"), { max: 6 });
+    await kit.choose(filterLabel, 0);
+  }
 }
 
 export const journeys = {
@@ -116,26 +189,15 @@ export const journeys = {
     await kit.click("Класс", { optional: true });
     // Journal control: coverage, attendance, the final table, course table, periods.
     await kit.path(JOURNAL, "Контроль заполнения журналов");
-    await kit.click("Проверить заполнение");
-    await kit.snap("coverage");
-    for (const state of ["Все состояния", "Заполнен", "Нет публикации", "Журнал не создан"]) {
-      await kit.choose("Состояние журнала", state);
-      await kit.click("Проверить заполнение");
-    }
-    await kit.choose("Состояние журнала", "Все состояния");
-    await kit.click("Сводка по классам");
-    await kit.snap("coverage-classes");
+    await controlScreens(kit);
     await kit.path(JOURNAL, "Сводная посещаемость");
-    await kit.click("Показать сводку");
-    for (const className of ["7А", "7Б", "8А", "8Б"]) {
-      await kit.choose("Класс сводки", className);
-      await kit.click("Показать сводку");
-    }
-    await kit.snap("attendance");
+    await attendanceSummary(kit);
     await kit.path(JOURNAL, "Сетка посещаемости класса");
     await kit.path(JOURNAL, "Итоговые оценки и табели");
+    await kit.click("Открыть готовую ведомость");
+    await kit.snap("final-grades-sheet");
     await kit.choose("Период", "Первая четверть");
-    for (const className of ["7А", "7Б", "8А", "8Б"]) await kit.choose("Класс", className);
+    for (const className of CLASSES) await kit.choose("Класс", className);
     await kit.choose("Класс", "7А");
     await kit.snap("final-grades");
     await kit.choose("Ученик для табеля", 1);
@@ -144,7 +206,7 @@ export const journeys = {
     await kit.path(JOURNAL, "Учебные периоды и закрытие журналов");
     await kit.snap("periods");
     await kit.path(JOURNAL, "Таблица курса");
-    for (const course of [/Математика/, /Русский язык/]) await kit.choose("Курс", course);
+    for (const course of [/7А · Математика/, /8Б · Физика/]) await kit.choose("Курс", course);
     await kit.snap("course-table");
     await kit.path(JOURNAL, DAY_LESSON);
     await kit.snap("lesson");
@@ -154,16 +216,28 @@ export const journeys = {
     await kit.path("Замены и даты", "Замена на день");
     await kit.snap("substitutions");
     for (const tab of ["Занятия на дату", "Отсутствия учителей", "Все изменения", "Итоги замен"]) await kit.click(tab);
-    await kit.path("Сообщения");
+    await kit.path(MESSAGES);
     await kit.click(/Родительские собрания/);
     await kit.snap("messages");
+    await kit.path(MESSAGES, /Педагогический совет/);
     await kit.path("Формы и опросы");
     await kit.click(/Согласие на экскурсию/);
+    await kit.click("Результаты");
     await kit.snap("forms");
     await kit.path("Табель и отсутствия");
-    await kit.path("Встречи и консультации");
+    await kit.path("Встречи и консультации", "Консультации");
+    await kit.click(/Консультации по математике/);
+    await kit.snap("consultations");
+    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.snap("class-meetings");
+    await kit.path("Журналы регистрации");
+    await kit.path("Пользователи и доступ");
     await kit.path("Домашние задания");
     await kit.path("Контрольные и тесты");
+    await kit.path("Учебная нагрузка");
+    await kit.path("Классы и группы");
+    await kit.path("Учителя");
+    await kit.path("Учебный календарь");
   },
 
   async teacher(kit) {
@@ -174,16 +248,23 @@ export const journeys = {
     await lessonScreens(kit, "teacher");
     await kit.path(JOURNAL, /Математика 7Б/);
     await kit.path(JOURNAL, "Таблица курса");
-    for (const course of [/7А · Математика/, /7Б · Математика/]) await kit.choose("Курс", course);
+    await kit.eachOption("Курс", null, { from: 1, max: 12 });
+    await kit.choose("Курс", /7А · Математика/);
     await kit.snap("course-table");
+    await kit.path(JOURNAL, "Итоговые оценки и табели");
+    await kit.click("Открыть готовую ведомость", { optional: true });
+    await kit.path("Работа с классами", "Отсутствия и объяснительные");
+    await kit.click("Сводная посещаемость");
+    await attendanceSummary(kit);
+    await kit.click("Контроль заполнения журналов");
+    await controlScreens(kit);
+    await kit.click("Сетка посещаемости класса");
+    await kit.click("Мои полномочия по классам");
     await kit.path("Домашние задания");
     await kit.click("Проверить работу");
     await kit.snap("homework-review");
     await kit.close();
-    for (const status of [1, 2, 3, 4]) {
-      await kit.choose("Статус работы", status);
-      await kit.click("Применить фильтры");
-    }
+    await kit.eachOption("Статус работы", () => kit.click("Применить фильтры"), { max: 6 });
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.snap("test-results");
@@ -195,11 +276,15 @@ export const journeys = {
     await kit.click("День ведущего", { optional: true });
     await kit.snap("host-day");
     await kit.close();
-    await kit.path(/^Сообщения/);
+    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.snap("class-meetings");
+    await kit.path(MESSAGES);
+    await kit.click(/Вопрос по домашнему заданию/);
     await kit.snap("messages");
     await kit.path("Похвалы и замечания");
     await kit.path("Календарь контрольных");
     await kit.path("Моя нагрузка");
+    await kit.path("Расписание");
   },
 
   async parent(kit) {
@@ -213,7 +298,7 @@ export const journeys = {
     await kit.close();
     await kit.click("Итоговые оценки и табели", { optional: true });
     await kit.click("Отсутствия и объяснительные", { optional: true });
-    await kit.path("Домашние задания");
+    await homeworkQueue(kit, {});
     await kit.click("Посмотреть работу");
     await kit.snap("homework");
     await kit.close();
@@ -228,15 +313,18 @@ export const journeys = {
     await kit.path("Встречи и консультации", "Собрания классов");
     await kit.snap("class-meetings");
     await kit.close();
-    await kit.path("Сообщения");
+    await kit.path(MESSAGES);
     await kit.click(/Вопрос по домашнему заданию/);
     await kit.snap("messages");
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.close();
+    await kit.path("Календарь контрольных");
+    await kit.snap("assessment-calendar");
     await kit.path("Мои дети и доступ");
     await kit.path("Формы и опросы");
     await kit.path("Похвалы и замечания");
+    await kit.path("Выбор курсов");
   },
 
   async student(kit) {
@@ -247,7 +335,7 @@ export const journeys = {
     await kit.path("Расписание");
     await kit.choose("Режим просмотра", "Неделя");
     await kit.snap("timetable");
-    await kit.path("Домашние задания");
+    await homeworkQueue(kit, {});
     await kit.click("Выполнить задание");
     await kit.snap("homework");
     await kit.close();
@@ -257,6 +345,82 @@ export const journeys = {
     await kit.click("Открыть тест");
     await kit.snap("test");
     await kit.close();
-    await kit.path("Сообщения");
+    await kit.path("Календарь контрольных");
+    await kit.path(MESSAGES);
+    await kit.click(/Вопрос по домашнему заданию/, { optional: true });
+    await kit.path("Выбор курсов");
+  },
+};
+
+// Tours open every item of the lists the journeys only sample: all lesson cards of
+// several days, all courses, all message threads, all homework works. verify.mjs
+// runs them over the built demo; a snapshot miss on the way is a problem. The
+// capture does not click them (it asks the backend for the same details).
+const LESSON_CARD = /^\d\d:\d\d–\d\d:\d\d · /;
+
+async function lessonCards(kit, days) {
+  for (const day of days) {
+    await kit.path(JOURNAL);
+    await kit.setDate("Дата журнала", day);
+    await kit.eachButton(LESSON_CARD, null, { max: 40 });
+  }
+}
+
+async function everyThread(kit, back) {
+  await kit.path(MESSAGES);
+  const total = await kit.eachButton(/\d\d\.\d\d, \d\d:\d\d/, () => kit.click(back, { optional: true }), { max: 12 });
+  if (!total) await kit.eachButton(/Открыть|Ответить/, null, { max: 6 });
+}
+
+export const tours = {
+  async admin(kit) {
+    await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-21"]);
+    await kit.path(JOURNAL, "Таблица курса");
+    await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 60 });
+    await kit.eachOption("Курс", null, { from: 1, max: 60 });
+    await kit.path(JOURNAL, "Итоговые оценки и табели");
+    await kit.click("Открыть готовую ведомость");
+    await kit.eachOption("Ученик для табеля", () => kit.click("Показать табель"), { from: 1, max: 20 });
+    await everyThread(kit, "Входящие");
+    await kit.path("Формы и опросы");
+    await kit.eachButton(/Согласие на экскурсию/, () => kit.click("Результаты", { optional: true }), { max: 3 });
+    await kit.path("Встречи и консультации", "Консультации");
+    await kit.eachButton(/Консультации по математике/, null, { max: 3 });
+    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.path("Журналы регистрации");
+    await kit.path("Пользователи и доступ");
+  },
+
+  async teacher(kit) {
+    await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-29", "2026-10-21", "2026-10-06"]);
+    await kit.path(JOURNAL, "Таблица курса");
+    await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 20 });
+    await kit.eachOption("Курс", null, { from: 1, max: 20 });
+    await everyThread(kit, "Входящие");
+    await kit.path("Домашние задания");
+    await kit.eachButton("Проверить работу", () => kit.close(), { max: 12 });
+    await kit.path("Работа с классами", "Отсутствия и объяснительные");
+    await kit.click("Сводная посещаемость");
+    await kit.path("Календарь контрольных");
+    await kit.eachButton(/^[←→]$/, null, { max: 8 });
+  },
+
+  async parent(kit) {
+    await kit.path(JOURNAL);
+    await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
+    await homeworkQueue(kit, {});
+    await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
+    await everyThread(kit, "Входящие");
+    await kit.path("Календарь контрольных");
+    await kit.eachButton(/^[←→]$/, null, { max: 8 });
+  },
+
+  async student(kit) {
+    await kit.path(JOURNAL);
+    await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
+    await homeworkQueue(kit, {});
+    await kit.eachButton(/Выполнить задание|Посмотреть работу/, () => kit.close(), { max: 40 });
+    await kit.path("Календарь контрольных");
+    await kit.eachButton(/^[←→]$/, null, { max: 8 });
   },
 };

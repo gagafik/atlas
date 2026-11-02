@@ -80,6 +80,17 @@ def main(argv=None):
     check('substitution appears on the demo day', 'substitution' in json.dumps(calendar))
     inbox = get('parent', '/api/notifications/inbox')
     check('parent inbox is not empty', len(inbox['items']) > 0, str(len(inbox['items'])))
+    unread = {role: get(role, '/api/notifications/inbox')['unread'] for role in meta['roles']}
+    check('only the latest notifications are unread', all(count <= 3 for count in unread.values()), str(unread))
+    names_of_subjects = {subject['name'] for subject in state['subjects']}
+    check('Kazakh language and physical education are taught', {'Казахский язык', 'Физкультура'} <= names_of_subjects)
+    absences = get(admin, '/api/journal/absences', status='all')
+    states = {item['status'] for item in absences['items']}
+    check('absence notes exist in several states', len(absences['items']) >= 5 and len(states) >= 2, str(sorted(states)))
+    families = get(admin, '/api/access/families')['items']
+    check('guardian relationships are verified', families and all(item['verified'] for item in families), str(len(families)))
+    pupil_threads = get('student', '/api/messages/threads')['items']
+    check('the pupil has a class announcement to read', len(pupil_threads) > 0, str(len(pupil_threads)))
     pupil_quizzes = clients['student'].get('/api/journal/quizzes', params=dict(studentId=meta['showcase']['pupilId']))
     check('pupil can read the course tests', pupil_quizzes.status_code == 200, str(pupil_quizzes.status_code))
     api.shutdown_gradebook_jobs()

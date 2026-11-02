@@ -3,8 +3,12 @@ import react from "@vitejs/plugin-react";
 import { pwa } from "./tools/pwa.mjs";
 export default defineConfig(async ({ mode }) => {
   if (mode === "demo") {
-    // Imported lazily: the Docker frontend stage copies only tools/pwa.mjs.
-    const { demoPages } = await import("./tools/demo/vite-plugin.mjs");
+    // The Docker frontend stage copies only tools/pwa.mjs, so the demo plugin
+    // must not be visible to the bundler of this config (esbuild resolves even
+    // a literal dynamic import). A file URL built at run time is resolved only
+    // here, in the demo build, relative to this file.
+    const pluginUrl = new URL("./tools/demo/vite-plugin.mjs", import.meta.url).href;
+    const { demoPages } = await import(/* @vite-ignore */ pluginUrl);
     return {
       base: "/atlas/",
       plugins: [react(), demoPages()],

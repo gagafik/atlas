@@ -33,6 +33,17 @@ export const DENY = [
   /^\/published/,
 ];
 
+// Screens of the administrator that read denied paths get an empty list instead of
+// an error: the real answers (invitations, access audit) are never captured.
+export const DENY_STUBS = [
+  { pattern: /^\/api\/access\/audit$/, body: [] },
+  { pattern: /^\/api\/access\/invitations(\/batches)?$/, body: { items: [], nextBefore: null } },
+];
+
+export function denyStub(pathname) {
+  return DENY_STUBS.find((stub) => stub.pattern.test(pathname));
+}
+
 export function isApiPath(pathname) {
   return API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }

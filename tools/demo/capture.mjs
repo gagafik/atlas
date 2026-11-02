@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { launch, newContext, guardPage, trackActivity, waitQuiet, signIn, VIEWPORTS } from "./browser-kit.mjs";
 import { createKit, journeys } from "./journeys.mjs";
 import { getKey, postKey } from "./request-key.mjs";
-import { READ_POSTS, SILENT, isApiPath, isDenied, isSilent, readPostRule } from "./read-requests.mjs";
+import { READ_POSTS, SILENT, denyStub, isApiPath, isDenied, isSilent, readPostRule } from "./read-requests.mjs";
+import { createReplayer, daysBetween, fanOut, isoShift } from "./fanout.mjs";
 import { scrubSnapshot, serializeSnapshot } from "./scrub.mjs";
 import { walkRole } from "./walk.mjs";
 
@@ -19,6 +20,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DEMO_ERROR = "Это демо: изменения не сохраняются.";
 const SWEEP_FIRST = "2026-10-05";
 const SWEEP_LAST = "2026-11-13";
+// A day of the whole school is large; the week before the demo day and the next ones are enough.
+const WINDOWS = [{ pattern: /^\/api\/calendar\/day$/, first: "2026-10-26" }];
 
 function args() {
   const result = { roles: "admin,teacher,parent,student", budget: 500, walk: true, sweep: true, out: resolve(HERE, "snapshot") };
@@ -41,13 +44,6 @@ function args() {
   return result;
 }
 
-function days(first, last) {
-  const result = [];
-  for (let t = Date.parse(`${first}T00:00:00Z`); t <= Date.parse(`${last}T00:00:00Z`); t += 86400000)
-    result.push(new Date(t).toISOString().slice(0, 10));
-  return result;
-}
-const isoShift = (day, delta) => new Date(Date.parse(`${day}T00:00:00Z`) + delta * 86400000).toISOString().slice(0, 10);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function createRecorder(base) {
@@ -64,6 +60,11 @@ function createRecorder(base) {
     const workspace = url.searchParams.get("workspace");
     if (isDenied(path) || (workspace && workspace !== "school")) {
       state.denied += 1;
+      const stub = method === "GET" && (!workspace || workspace === "school") ? denyStub(path) : undefined;
+      if (stub) {
+        if (state.recording) record(getKey(url), 200, stub.body);
+        return json(200, stub.body);
+      }
       return json(method === "GET" || method === "HEAD" ? 404 : 403, { detail: "demo" });
     }
     if (method === "GET" || method === "HEAD") {
@@ -102,30 +103,23 @@ function createRecorder(base) {
 
 async function sweep(context, recorder, role, log) {
   const origin = new URL(recorder.base).origin;
-  const fetched = new Set(recorder.entries.keys());
-  const replay = async (urlText) => {
-    const url = new URL(urlText, origin);
-    const key = getKey(url);
-    if (fetched.has(key)) return;
-    fetched.add(key);
-    const response = await context.request.get(url.toString());
-    // Only answers with data: a lesson asked on a day it was not given would only be an error to store.
-    if (response.status() !== 200 || !/json/.test(response.headers()["content-type"] || "")) return;
-    recorder.record(key, 200, await response.json().catch(() => null));
-  };
+  const replayer = createReplayer({ context, origin, entries: recorder.entries, log });
+  const { get } = replayer;
+  // Every GET with one date (a day, a lesson date) is asked again for each school day of the window.
   const keys = [...recorder.entries.keys()].filter((key) => key.startsWith("GET "));
   let dated = 0;
   for (const key of keys) {
     const url = new URL(key.slice(4), origin);
-    // Lessons and homework are opened by key below; a day swept over a key is not a view of anything.
+    // Lessons and homework are opened by key in the fan-out; a day swept over a key is not a view of anything.
     if (/^\/api\/journal\/(entry|homework\/)/.test(url.pathname) || url.searchParams.has("lessonKey")) continue;
     const params = [...url.searchParams.entries()];
     const dateParams = params.filter(([name, value]) => ["day", "onDate", "date"].includes(name) && DATE.test(value));
     if (dateParams.length === 1) {
-      for (const day of days(SWEEP_FIRST, SWEEP_LAST)) {
+      const first = WINDOWS.find((window) => window.pattern.test(url.pathname))?.first ?? SWEEP_FIRST;
+      for (const day of daysBetween(first, SWEEP_LAST)) {
         const next = new URL(url);
         next.searchParams.set(dateParams[0][0], day);
-        await replay(next.toString());
+        await get(next.pathname + next.search);
         dated += 1;
       }
       continue;
@@ -137,34 +131,23 @@ async function sweep(context, recorder, role, log) {
         const next = new URL(url);
         next.searchParams.set(start[0], isoShift(start[1], delta));
         next.searchParams.set(end[0], isoShift(end[1], delta));
-        await replay(next.toString());
+        await get(next.pathname + next.search);
       }
     }
   }
-  if (role === "teacher") {
-    // Every lesson the teacher gave in the last two weeks, opened from the journal.
-    let opened = 0;
-    for (const [key, entry] of [...recorder.entries]) {
-      const match = key.match(/^GET \/api\/journal\/day\?day=(\d{4}-\d{2}-\d{2})$/);
-      if (!match || match[1] < "2026-10-19" || match[1] > "2026-11-02" || !entry.b?.lessons) continue;
-      for (const row of entry.b.lessons) {
-        await replay(`/api/journal/entry?lessonKey=${row.lessonKey}&day=${match[1]}`);
-        opened += 1;
-      }
-    }
-    log(`  teacher lessons opened: ${opened}`);
-  }
+  log(`  date sweep: ${dated} requests`);
+  await fanOut(replayer, role);
   // Homework opened from any queue the walk saw.
   let homework = 0;
   for (const [key, entry] of [...recorder.entries]) {
     if (!key.startsWith("GET /api/journal/homework-queue") || !Array.isArray(entry.b?.items)) continue;
-    for (const item of entry.b.items.slice(0, 80)) {
-      await replay(`/api/journal/homework/${item.lessonKey}?studentId=${item.studentId}`);
+    for (const item of entry.b.items.slice(0, 120)) {
+      await get(`/api/journal/homework/${item.lessonKey}?studentId=${item.studentId}`);
       homework += 1;
     }
   }
-  log(`  homework opened: ${homework}`);
-  log(`  date sweep: ${dated} requests`);
+  log(`  homework opened from queues: ${homework}`);
+  log(`  replayed ${replayer.stats.requests} requests, kept ${replayer.stats.stored}`);
 }
 
 async function captureRole(browser, options, meta, role) {

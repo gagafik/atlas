@@ -48,7 +48,7 @@ class _Factory:
 def _build():
     factory = _Factory()
     factory.used.add('Эскизова Ирина')
-    teachers = [factory.person(female=i % 3 != 2) for i in range(12)]
+    teachers = [factory.person(female=i % 3 != 2) for i in range(14)]
     pupils = [factory.person(female=i % 2 == 0) for i in range(60)]
     guardians = []
     for pupil in pupils[:15]:
