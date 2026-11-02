@@ -10,6 +10,7 @@
 !public/**
 !tools/
 !tools/**
+tools/demo/
 !backend/
 !backend/**
 !requirements.lock.txt

@@ -1,0 +1,9 @@
+{
+  "name": "atlas-demo-tools",
+  "private": true,
+  "type": "module",
+  "description": "Capture and verification tools for the Pages demo. Not part of the app: install with npm --prefix tools/demo ci.",
+  "dependencies": {
+    "playwright": "1.58.2"
+  }
+}
