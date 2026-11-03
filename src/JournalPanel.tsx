@@ -10,6 +10,8 @@ import AssignmentFilesPanel, {
   SavedMaterialLinks,
 } from "./AssignmentFilesPanel";
 import AbsencePanel from "./AbsencePanel";
+import FamilyJournal from "./FamilyJournal";
+import PublishedRows from "./PublishedRows";
 import { useLessonMarks } from "./LessonMarks";
 import LessonPupilCards from "./LessonPupilCards";
 import AttendancePanel from "./AttendancePanel";
@@ -54,21 +56,16 @@ import {
   type JournalDocument,
   type JournalEntry,
   type JournalLesson,
+  type JournalOptions,
   type JournalPanelName,
   type JournalReport,
   type JournalReportPage,
   type JournalRow,
+  type JournalView,
   type PupilRecord,
 } from "./journal";
 
-interface Options {
-  staff: boolean;
-  // Which management panels have anything for this account; the server still enforces rights.
-  panels?: Partial<Record<JournalPanelName, boolean>>;
-  yearStart: string;
-  yearEnd: string;
-  students: { id: string; name: string }[];
-}
+type Options = JournalOptions;
 interface DayLesson {
   lessonKey: string;
   lesson: JournalLesson;
@@ -87,90 +84,20 @@ interface History {
   document?: JournalDocument;
 }
 
-function PublishedRows({
-  rows,
-  workspace,
-  categories,
-  codeNames,
-}: {
-  rows: JournalRow[];
-  workspace?: string;
-  categories?: CategoryConfig | null;
-  codeNames?: Record<string, string>;
-}) {
-  return (
-    <div className="journal-published-list">
-      {rows.map((row) => (
-        <article key={row.lessonKey + row.record.studentId}>
-          <h3>
-            {row.lesson.date} · {row.lesson.start}–{row.lesson.end} ·{" "}
-            {row.lesson.subject}
-          </h3>
-          <p>
-            {row.student.name} · {row.lesson.group} · {row.lesson.teachers}
-          </p>
-          <p>
-            <strong>{attendanceText(row.record, row.lesson, codeNames)}</strong>
-            {row.record.comment && ` · ${row.record.comment}`}
-            {row.absenceApproval && " · объяснительная принята школой"}
-          </p>
-          {row.content.topic && (
-            <p className="journal-text">
-              <strong>Тема: </strong>
-              {row.content.topic}
-            </p>
-          )}
-          {row.content.homework && (
-            <p className="journal-text">
-              <strong>
-                Домашнее задание
-                {row.content.dueDate ? ` к ${row.content.dueDate}` : ""}:{" "}
-              </strong>
-              {row.content.homework}
-            </p>
-          )}
-          {row.content.assessments.map((a) => {
-            const g = row.record.grades.find((g) => g.assessmentId === a.id);
-            return (
-              <p key={a.id} className="journal-text">
-                <CategoryBadge category={categoryOf(a, categories)} />
-                <strong>
-                  {a.name}: {gradeLabel(g, a)}
-                </strong>
-                {a.kind === "points" && ` · вес ${a.weight}x`}
-                {g?.comment && ` · ${g.comment}`}
-              </p>
-            );
-          })}
-          <SavedPlanTopic value={row.content.curriculum} />
-          {workspace && (
-            <LessonMaterials
-              items={row.content.materials || []}
-              workspace={workspace}
-              lessonKey={row.lessonKey}
-            />
-          )}
-          {workspace && row.content.homework && (
-            <HomeworkPanel
-              key={workspace + row.lessonKey + row.student.id}
-              workspace={workspace}
-              lessonKey={row.lessonKey}
-              studentId={row.student.id}
-            />
-          )}
-        </article>
-      ))}
-    </div>
-  );
-}
-
-// Set by an opened notification: one pupil's report for that day, the report card of a period, or the absence notes.
+// Set by an opened notification: one pupil's day and lesson, the report card of a period, or the absence notes.
 export type JournalFocus =
-  | { studentId: string; day?: string; finalsPeriodId?: string; panel?: never }
+  | {
+      studentId: string;
+      day?: string;
+      lessonKey?: string;
+      finalsPeriodId?: string;
+      panel?: never;
+    }
   | {
       panel: "absences";
       studentId?: never;
       day?: never;
+      lessonKey?: never;
       finalsPeriodId?: never;
     };
 
@@ -182,8 +109,9 @@ export default function JournalPanel({
 }: {
   workspace: string;
   focus?: JournalFocus;
-  // Set by a menu entry: show this part of the journal alone, if the server offers it to the account.
-  view?: JournalPanelName;
+  // Set by a menu entry: show this part of the journal alone, if the server offers it to the account;
+  // for a pupil or a parent it names the screen of the family journal.
+  view?: JournalView;
   // The panel opened a lesson and left that part: the menu and the title must stop naming it.
   onLeaveView?: () => void;
 }) {
@@ -198,7 +126,11 @@ export default function JournalPanel({
     if (view) clearEditor();
   }, [view]);
   const single =
-    options && only && journalPanels(options).includes(only) ? only : undefined;
+    options?.staff &&
+    only &&
+    (journalPanels(options) as JournalView[]).includes(only)
+      ? (only as JournalPanelName)
+      : undefined;
   const [day, setDay] = useState(""),
     [start, setStart] = useState(""),
     [end, setEnd] = useState("");
@@ -248,7 +180,7 @@ export default function JournalPanel({
       .then((r: Options) => {
         if (!live) return;
         setOptions(r);
-        setMode(r.staff ? "day" : "report");
+        setMode(r.staff ? "day" : "family");
         setStudent(r.students[0]?.id || "");
         const today = new Date().toLocaleDateString("sv-SE");
         setDay(
@@ -271,6 +203,7 @@ export default function JournalPanel({
   }, [workspace]);
   useEffect(() => {
     if (
+      !options?.staff ||
       !focus?.day ||
       !options?.students.some((s) => s.id === focus.studentId)
     )
@@ -281,7 +214,12 @@ export default function JournalPanel({
     setEnd(focus.day);
   }, [options, focus]);
   useEffect(() => {
-    if (focus?.panel !== "absences" || !options?.panels?.absences) return;
+    if (
+      !options?.staff ||
+      focus?.panel !== "absences" ||
+      !options.panels?.absences
+    )
+      return;
     document
       .getElementById("journal-panel-absences")
       ?.scrollIntoView({ block: "start" });
@@ -688,7 +626,7 @@ export default function JournalPanel({
   const panels = options ? journalPanels(options) : [];
   return (
     <section className="journal-panel">
-      {!only || (options && !single) ? (
+      {options && !options.staff ? null : !only || (options && !single) ? (
         <p>
           Посещаемость, оценки, темы и домашние задания. Записи журнала
           сохраняются отдельно от расписания; переносы и правки групп не удаляют
@@ -706,6 +644,14 @@ export default function JournalPanel({
         </p>
       )}
       {!options && !error && <p role="status">Загружаю журнал…</p>}
+      {options && !options.staff && (
+        <FamilyJournal
+          workspace={workspace}
+          options={options}
+          view={view}
+          focus={focus}
+        />
+      )}
       {single && (
         <section
           className="journal-admin-panels"
@@ -714,7 +660,7 @@ export default function JournalPanel({
           {adminPanel(single, true)}
         </section>
       )}
-      {options && !single && (
+      {options?.staff && !single && (
         <>
           <div className="dated-toolbar journal-controls">
             {options.staff && (
@@ -1815,7 +1761,7 @@ export default function JournalPanel({
           )}
         </>
       )}
-      {!!panels.length && !single && (
+      {!!panels.length && !single && options?.staff && (
         <section
           className="journal-admin-panels"
           aria-label="Отчёты и управление журналом"

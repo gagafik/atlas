@@ -15,9 +15,9 @@ import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
 import Shell, { type ShellFrame } from "./Shell";
 import { useJournalPanels, useMessageUnread } from "./shellData";
-import { eventViews, schoolYear } from "./navigation";
+import { eventPart, eventViews, schoolYear } from "./navigation";
 import { bellState, minutesNow } from "./startPage";
-import type { JournalPanelName } from "./journal";
+import type { JournalView } from "./journal";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
@@ -216,9 +216,9 @@ export default function Portal({
   // a menu entry can open one part of the journal.
   const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
     [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>(),
-    [journalView, setJournalView] = useState<JournalPanelName | undefined>(),
+    [journalView, setJournalView] = useState<JournalView | undefined>(),
     [wantedRecord, setWantedRecord] = useState("");
-  function setSection(value: string, journal?: JournalPanelName) {
+  function setSection(value: string, journal?: JournalView) {
     if (canLeaveHomework()) {
       setSectionValue(value);
       setJournalView(journal);
@@ -319,7 +319,7 @@ export default function Portal({
       if (!canLeaveHomework()) return;
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setSectionValue(sections[event.type]);
-      setJournalView(undefined);
+      setJournalView(eventPart(session.user?.role ?? null, event.type, detail));
       setMessageFocus(
         focusRequest(
           event.type === "atlas-open-messages" ? detail.threadId : undefined,
@@ -334,6 +334,7 @@ export default function Portal({
             ? {
                 studentId: detail.studentId,
                 day: detail.day,
+                lessonKey: detail.lessonKey,
                 finalsPeriodId: detail.finalsPeriodId,
               }
             : undefined,

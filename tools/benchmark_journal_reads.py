@@ -91,6 +91,7 @@ def probe(url,identities,admin,year,sample,readers):
             return first,last
         report,_=measure('admin_report_year','/api/journal/report',admin,studentId='s0',**year)
         measure('parent_report_year','/api/journal/report',parent,studentId='s0',**year)
+        pupil_period,_=measure('parent_pupil_period_year','/api/journal/pupil-period',parent,studentId='s0',**year)
         queue,_=measure('admin_queue_year','/api/journal/homework-queue',admin,filter='all',limit=50,**year)
         if queue['nextCursor']:
             # Same shape on old and new code: the cursor of the first page, 5 times (cursors stay valid for 15 minutes).
@@ -123,6 +124,7 @@ def probe(url,identities,admin,year,sample,readers):
     blocked=write_reads['max_ms']>2*write_alone['p95_ms']+0.5*endpoints['admin_report_year']['p50_ms']
     return dict(seconds=round(time.perf_counter()-begin,2),projectionRebuildSeconds=round(rebuild,2),firstRequestMs=firsts,endpoints=endpoints,
                 reportFirstPage=dict(rows=len(report['rows']),nextAfter=report.get('nextAfter') is not None,pagedSummary=report.get('summary') is not None),
+                pupilPeriodYear=dict(marks=len(pupil_period['marks']),attendance=len(pupil_period['attendance'])),
                 queueFirstPageItems=len(queue['items']),pupilQueueItems=len(pupil_queue['items']),pupilQueueWindow=pupil_queue.get('window','range'),dayLessons=len(day['lessons']),
                 write_alone=write_alone,write_during_reads=write_reads,readers=readers,readsDuringWrites=summary(reads) if reads else None,writeBlockedByRead=blocked)
 

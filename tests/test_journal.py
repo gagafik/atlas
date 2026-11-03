@@ -358,3 +358,19 @@ def test_options_panels_by_role(client):
         db.execute("INSERT INTO final_results VALUES ('demo','period1','s1','sub0','row2',1,'{}')")
     assert panels(signed('student'))['finalGrades'] is True and panels(signed('parent'))['finalGrades'] is True
     assert panels(signed('teacher'))['finalGrades'] is True
+
+
+def test_options_give_the_family_periods_bells_and_the_class_of_each_child(client):
+    from uuid import uuid4
+    enable(client);create(client,'parent');create(client,'editor');create(client,'viewer',grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])])
+    made=client.put(f'/api/journal/periods/{uuid4().hex}?workspace=demo',json=dict(name='Первая четверть',start='2026-08-17',end='2026-10-16',kind='quarter',version=0,reason='Создание периода'))
+    assert made.status_code==200,made.text
+    options=signed('parent').get('/api/journal/options?workspace=demo');assert options.status_code==200,options.text
+    body=options.json();state=api.read('demo')
+    assert {k for p in body['periods'] for k in p}=={'id','name','start','end','kind'} and body['periods'][0]['name']=='Первая четверть' and body['periods'][0]['end']=='2026-10-16'
+    assert [s['id'] for s in body['students']]==['s1']
+    child=next(s for s in state.students if s.id=='s1');school_class=next(c for c in state.classes if c.id==child.classId)
+    assert body['students'][0]['className']==school_class.name and body['students'][0]['profileId']==school_class.profileId
+    assert [p['id'] for p in body['profiles']]==[p.id for p in state.profiles] and body['profiles'][0]['periods']==[b.model_dump() for b in state.profiles[0].periods]
+    assert date.fromisoformat(body['today'])
+    for reader in [signed('editor'),signed('viewer')]:assert reader.get('/api/journal/options?workspace=demo').status_code==403

@@ -1,3 +1,4 @@
+param([switch]$Demo)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $pythonExecutable = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
@@ -17,6 +18,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'dist\index.html'))) {
     if ($LASTEXITCODE -ne 0) { throw 'Node dependencies could not be installed.' }
     npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+}
+# -Demo: the invented school on a temporary database (see CONTRIBUTING.md, the local demo section).
+if ($Demo) {
+    & $pythonExecutable -m tools.demo.local
+    exit $LASTEXITCODE
 }
 Write-Host 'Atlas: http://127.0.0.1:8000'
 & $pythonExecutable -m uvicorn backend.api:app --host 127.0.0.1 --port 8000

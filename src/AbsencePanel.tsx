@@ -105,10 +105,16 @@ const labels: Record<string, string> = {
 export default function AbsencePanel({
   workspace,
   defaultOpen = false,
+  studentId,
+  compose = false,
 }: {
   workspace: string;
   // Opened from the menu: the panel starts expanded.
   defaultOpen?: boolean;
+  // The child the parent form starts with, when the account has that child.
+  studentId?: string;
+  // Opened to write a new note: the form is scrolled into view and focused once the options are here.
+  compose?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null),
@@ -150,7 +156,17 @@ export default function AbsencePanel({
     [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null),
     [bulkRequest, setBulkRequest] = useState(() => crypto.randomUUID());
   // One request id per class, version and direction, so a repeated click or retry is the same switch.
-  const switchIds = useRef<Record<string, string>>({});
+  const switchIds = useRef<Record<string, string>>({}),
+    composeForm = useRef<HTMLFormElement | null>(null),
+    composed = useRef(false);
+  useEffect(() => {
+    if (!compose || !options?.parent || composed.current) return;
+    composed.current = true;
+    composeForm.current?.scrollIntoView({ block: "start" });
+    composeForm.current
+      ?.querySelector<HTMLElement>("select, input, textarea")
+      ?.focus({ preventScroll: true });
+  }, [compose, options]);
   const child = options?.students.find((s) => s.id === student);
   const notesOff = closed(child);
   const locks = formLocks(busy, child);
@@ -181,7 +197,7 @@ export default function AbsencePanel({
   const loadOptions = async () => {
     const r: Options = await api("journal/absences/options", workspace);
     setOptions(r);
-    setStudent((old) => defaultChild(r.students, old));
+    setStudent((old) => defaultChild(r.students, old || studentId || ""));
     setStart((old) => old || r.defaultDate);
     setEnd((old) => old || r.defaultDate);
   };
@@ -232,7 +248,7 @@ export default function AbsencePanel({
       .then(([o, r]) => {
         if (!live) return;
         setOptions(o);
-        setStudent((old) => defaultChild(o.students, old));
+        setStudent((old) => defaultChild(o.students, old || studentId || ""));
         setStart((old) => old || o.defaultDate);
         setEnd((old) => old || o.defaultDate);
         setItems(r.items);
@@ -456,6 +472,8 @@ export default function AbsencePanel({
             )}
           {options?.parent && (
             <form
+              ref={composeForm}
+              id="absence-compose"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (

@@ -182,6 +182,31 @@ async function behaviour(r) {
   for (const student of options?.students || []) await r.get(`/api/behaviour/notes?${q({ studentId: student.id })}`);
 }
 
+// ---- the family journal: «Оценки» and «Посещаемость» ask for one range at a time (every period and the school year), the day view
+// of «Классный журнал» for the week of the day it shows. Further pages of notes are read the way the tab «Заметки» reads them.
+const WEEKS = ["2026-10-05", "2026-11-13"];
+async function familyJournal(r) {
+  const options = await r.get("/api/journal/options");
+  if (!options) return;
+  const periods = options.periods || [];
+  // Mirrors periodChoices (src/pupilJournal.ts): the school's periods and the year, unless a year period covers it.
+  const yearEnd = options.yearEnd < isoShift(options.yearStart, 366) ? options.yearEnd : isoShift(options.yearStart, 366);
+  const ranges = periods.map((p) => [p.start, p.end]);
+  if (!periods.some((p) => p.kind === "year" && p.start <= options.yearStart && p.end >= yearEnd)) ranges.push([options.yearStart, yearEnd]);
+  const finals = await r.get("/api/final-grades/options");
+  for (const student of options.students || []) {
+    for (const [start, end] of ranges) {
+      await r.get(`/api/journal/pupil-period?${q({ studentId: student.id, start, end })}`);
+      let page = await r.get(`/api/behaviour/family?${q({ studentId: student.id, start, end })}`);
+      for (let more = 0; page?.nextBefore && more < 9; more += 1)
+        page = await r.get(`/api/behaviour/family?${q({ studentId: student.id, start, end, before: page.nextBefore })}`);
+    }
+    for (const period of finals?.periods || []) await r.get(`/api/final-grades/report?${q({ studentId: student.id, periodId: period.id })}`);
+    for (let monday = WEEKS[0]; monday <= WEEKS[1]; monday = isoShift(monday, 7))
+      await r.get(`/api/journal/report?${q({ studentId: student.id, start: monday, end: isoShift(monday, 6), limit: 200 })}`);
+  }
+}
+
 // ---- the family's homework: the work behind every "Открыть домашнюю работу" of the journal
 async function familyHomework(r) {
   let count = 0;
@@ -236,6 +261,7 @@ export async function fanOut(r, role, schoolDays) {
     await courseTables(r);
     await finalGrades(r);
   } else {
+    await familyJournal(r);
     await familyHomework(r);
   }
   await months(r);

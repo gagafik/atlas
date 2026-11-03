@@ -174,8 +174,14 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
 
 // What the presentation shows, per role. Labels are the visible texts of the app.
 const JOURNAL = "Классный журнал";
-// A pupil and a parent read the one report of the journal under the name of the grades.
+// The screens of a pupil's and a parent's journal: «Классный журнал» is the day, «Оценки» the grades with their tabs,
+// «Посещаемость» the grid and the notes, «Табели» the report cards (in the menu once the school published them).
 const PUPIL_GRADES = "Оценки";
+// The tab of the new grades carries the number of unsigned ones behind its text.
+const PUPIL_TABS = ["По дате", "Заметки", "Оценки на графике", /^Новые оценки/, "Сводка оценок"];
+// The chip of one mark in the summary: «Работа: 8 / 10, 30.10.2026».
+const MARK_CHIP = /: [\d,]+ \/ [\d,]+, \d\d\.\d\d\.\d{4}/;
+const DAYS_BACK = 3;
 // The menu entry of the messages; the number of unread threads is a badge behind the text.
 const MESSAGES = "Уведомления";
 const DAY_LESSON = /Математика 7А/;
@@ -185,6 +191,30 @@ async function lessonScreens(kit, name) {
   // The lesson of the day: attendance and marks, then back to the list.
   await kit.path(JOURNAL, DAY_LESSON);
   await kit.snap(`${name}-lesson`);
+}
+
+// The four screens of the family journal. The notes of absences are the parent's; a pupil has them only when the school filed one.
+async function familyScreens(kit, { notes }) {
+  await kit.path(JOURNAL);
+  await kit.snap("journal");
+  for (let step = 0; step < DAYS_BACK; step += 1) await kit.click("Предыдущий день");
+  await kit.snap("journal-day");
+  await kit.click("Открыть домашнюю работу");
+  await kit.close();
+  await kit.path(PUPIL_GRADES);
+  await kit.snap("grades");
+  for (const tab of PUPIL_TABS) await kit.click(tab);
+  await kit.click(MARK_CHIP);
+  await kit.snap("mark");
+  await kit.close();
+  await kit.path("Посещаемость");
+  await kit.snap("attendance");
+  await kit.click("Записки об отсутствии", { optional: !notes });
+  await kit.home();
+  if (await kit.menu("Табели", { optional: true })) {
+    await kit.choose("Период табеля", 1);
+    await kit.click("Показать табель", { optional: true });
+  }
 }
 
 // Coverage of the journals and the attendance summary (administrator and teacher).
@@ -334,12 +364,7 @@ export const journeys = {
     await kit.snap("home");
     await kit.bell();
     await kit.close();
-    await kit.path(PUPIL_GRADES);
-    await kit.snap("journal");
-    await kit.click("Открыть домашнюю работу");
-    await kit.close();
-    await kit.click("Итоговые оценки и табели", { optional: true });
-    await kit.path("Посещаемость");
+    await familyScreens(kit, { notes: true });
     await homeworkQueue(kit, {});
     await kit.click("Посмотреть работу");
     await kit.snap("homework");
@@ -382,8 +407,7 @@ export const journeys = {
     await kit.click("Выполнить задание");
     await kit.snap("homework");
     await kit.close();
-    await kit.path(PUPIL_GRADES);
-    await kit.snap("marks");
+    await familyScreens(kit, { notes: false });
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.snap("test");
@@ -406,6 +430,15 @@ async function lessonCards(kit, days) {
     await kit.path(JOURNAL);
     await kit.setDate("Дата журнала", day);
     await kit.eachButton(LESSON_CARD, null, { max: 40 });
+  }
+}
+
+// The day view of a pupil: every school day of the two weeks before the demo day, the homework of each opened.
+async function familyDays(kit) {
+  await kit.path(JOURNAL);
+  for (let step = 0; step < 14; step += 1) {
+    await kit.click("Предыдущий день");
+    await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 20 });
   }
 }
 
@@ -449,8 +482,7 @@ export const tours = {
   },
 
   async parent(kit) {
-    await kit.path(PUPIL_GRADES);
-    await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
+    await familyDays(kit);
     await homeworkQueue(kit, {});
     await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
     await everyThread(kit, "Входящие");
@@ -459,8 +491,7 @@ export const tours = {
   },
 
   async student(kit) {
-    await kit.path(PUPIL_GRADES);
-    await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
+    await familyDays(kit);
     await homeworkQueue(kit, {});
     await kit.eachButton(/Выполнить задание|Посмотреть работу/, () => kit.close(), { max: 40 });
     await kit.path("События");

@@ -241,6 +241,47 @@ export type JournalPanelName =
   | "coverage"
   | "attendance"
   | "attendanceGrid";
+// A screen of the journal that a menu entry opens: a management panel alone, or a pupil screen of the family.
+// The pupil names carry a prefix because "attendance" is already the administrator's «Сводная посещаемость».
+export type JournalView = JournalPanelName | "pupilGrades" | "pupilAttendance";
+// What journal/options tells the page about the account and the school.
+export interface JournalOptions {
+  staff: boolean;
+  // Which management panels have anything for this account; the server still enforces rights.
+  panels?: Partial<Record<JournalPanelName, boolean>>;
+  yearStart: string;
+  yearEnd: string;
+  students: {
+    id: string;
+    name: string;
+    // The pupil's current class and its bell profile; a pupil who only appears in old records has neither.
+    className?: string | null;
+    profileId?: string | null;
+  }[];
+  // The school's journal periods and bell profiles, which families cannot read elsewhere, and the school's today.
+  periods?: JournalPeriodOption[];
+  profiles?: BellProfile[];
+  today?: string;
+}
+export interface JournalPeriodOption {
+  id: string;
+  name: string;
+  start: string;
+  end: string;
+  kind: "quarter" | "semester" | "year" | "custom";
+}
+export interface BellSlot {
+  label: string;
+  start: string;
+  end: string;
+}
+export interface BellProfile {
+  id: string;
+  name: string;
+  periods: BellSlot[];
+  // Bells of a single weekday; the key is the Python weekday (Monday is "0").
+  dayPeriods: Record<string, BellSlot[]>;
+}
 // The server says which management panels have anything for this account; they follow the lesson list.
 export function journalPanels(options: {
   panels?: Partial<Record<JournalPanelName, boolean>>;

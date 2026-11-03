@@ -272,3 +272,40 @@ def test_future_lesson_cannot_be_marked(client, monkeypatch):
     monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 17))
     assert ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['canMark']
     assert ok(lesson_note(t, key, ['s1']))['status'] == 'published'
+
+
+def english():
+    return next(s for s in api.read('demo').subjects if s.name == 'Английский язык')
+
+
+def test_family_notes_by_period_and_subject(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher'); guardian(client, 'mother', 's1'); guardian(client, 'other', 's2')
+    t, mother, other = signed('teacher'), signed('mother'), signed('other')
+    key = lesson_key(t)
+    ok(lesson_note(t, key, ['s1'], 'discipline', text='Разговаривал'))
+    ok(lesson_note(t, key, ['s1'], 'unprepared', text='Внутренняя пометка', visible=False))
+    ok(note(t, ['s1'], 'activity', 'Помог другу', day='2026-08-18'))
+    whole = ok(family(mother, 's1'))
+    assert {n['text'] for n in whole['items']} == {'Разговаривал', 'Помог другу'} and whole['praise'] == 1 and whole['remark'] == 1
+    assert {(s['subjectId'], s['praise'], s['remark']) for s in whole['subjects']} == {(english().id, 0, 1), (None, 1, 0)}
+    one_day = ok(mother.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)))
+    assert [(n['text'], n['subjectId'], n['subject']) for n in one_day['items']] == [('Разговаривал', english().id, english().name)]
+    assert one_day['remark'] == 1 and one_day['praise'] == 0
+    assert one_day['subjects'] == [dict(subjectId=english().id, subject=english().name, praise=0, remark=1)]
+    assert mother.get(url('family', studentId='s1', start='2026-08-20', end=LESSON_DAY)).status_code == 422
+    assert family(other, 's1').status_code == 404 and other.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)).status_code == 404
+
+
+def test_notes_written_before_subjects_take_the_subject_of_their_published_lesson(client, monkeypatch):
+    from test_journal import entry, write, graded
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); guardian(client, 'mother', 's1')
+    mother = signed('mother')
+    published, unpublished = lesson_key(client), lesson_key(client, 'Математика')
+    ok(lesson_note(client, published, ['s1'], 'discipline', text='Английский')); ok(lesson_note(client, unpublished, ['s1'], 'discipline', text='Математика'))
+    assert write(client, graded(entry(client, published, day=LESSON_DAY)), publish=True).status_code == 200
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_remove(document,'$.lesson.subjectId','$.lesson.subject')")
+    subjects = {n['text']: n['subjectId'] for n in ok(family(mother, 's1'))['items']}
+    assert subjects == {'Английский': english().id, 'Математика': None}

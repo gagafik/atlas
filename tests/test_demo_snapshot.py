@@ -2,7 +2,7 @@
 import gzip
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -166,6 +166,28 @@ def test_every_homework_of_the_journal_can_be_opened(role):
     assert len(rows) > 20, role
     for row in rows:
         assert get_key(f'/api/journal/homework/{row["lessonKey"]}', studentId=school.SHOWCASE_PUPIL) in entries, (role, row['lessonKey'])
+
+
+@pytest.mark.parametrize('role', ['parent', 'student'])
+def test_every_period_and_week_of_the_family_journal_has_its_answer(role):
+    entries = entries_of(role)
+    options = entries[get_key('/api/journal/options')]['b']
+    year_end = min(date.fromisoformat(options['yearEnd']), date.fromisoformat(options['yearStart']) + timedelta(days=366)).isoformat()
+    ranges = [(p['start'], p['end']) for p in options['periods']]
+    # The same choices as periodChoices in src/pupilJournal.ts: the school's periods and the school year.
+    if not any(p['kind'] == 'year' and p['start'] <= options['yearStart'] and p['end'] >= year_end for p in options['periods']):
+        ranges.append((options['yearStart'], year_end))
+    assert len(ranges) >= 3, ranges
+    for start, end in ranges:
+        for path in ['/api/journal/pupil-period', '/api/behaviour/family']:
+            assert get_key(path, studentId=school.SHOWCASE_PUPIL, start=start, end=end) in entries, (role, path, start, end)
+    monday = date(2026, 10, 5)
+    while monday <= date(2026, 11, 13):
+        key = get_key('/api/journal/report', studentId=school.SHOWCASE_PUPIL, start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat(), limit='200')
+        assert key in entries, (role, key)
+        monday += timedelta(days=7)
+    for period in entries[get_key('/api/final-grades/options')]['b']['periods']:
+        assert get_key('/api/final-grades/report', studentId=school.SHOWCASE_PUPIL, periodId=period['id']) in entries, period['id']
 
 
 def test_the_forms_of_the_administrator_show_their_results():

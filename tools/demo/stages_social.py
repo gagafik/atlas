@@ -89,13 +89,16 @@ class Social:
     def verify_families(self):
         """The school records who each guardian is, so the family screens show a verified relationship."""
         items = self.ok(self.admin.get('/api/access/families'))['items']
-        done = 0
+        done, touched = 0, set()
         for item in items:
             if item['verified']:
                 continue
             relation = 'mother' if self.guardian_is_mother(item['parentName']) else 'father'
+            # A guardian of two children: the first save changed the account, so the second link is read again.
+            current = self.ok(self.admin.get(f'/api/access/families/{item["parentId"]}/{item["studentId"]}')) if item['parentId'] in touched else item
+            touched.add(item['parentId'])
             self.ok(self.admin.put(f'/api/access/families/{item["parentId"]}/{item["studentId"]}', json=dict(
-                version=item['version'], accountVersion=item['accountVersion'], relationship=relation, verified=True,
+                version=current['version'], accountVersion=current['accountVersion'], relationship=relation, verified=True,
                 evidence='Данные из заявления о приёме (вымышленный пример)', status='active', reason='Сверено школой')))
             done += 1
         self.log(f'{done} family links verified')

@@ -37,6 +37,7 @@ BEHAVIOUR = {
     '2026-10-30': [('activity', [0], 'Лучшая работа на уроке недели'), ('help', [4, 8], 'Помогли подготовить класс к экскурсии')],
 }
 SCALE_BANDS = [('2', 0), ('3', 40), ('4', 60), ('5', 80)]
+FAMILY_LOGIN = 'demo-parent-family'
 
 
 def school_days(first, last):
@@ -144,7 +145,7 @@ class Seed(Stages, Social):
         def create(role, login, name, entity=None, view=None):
             password = self.password()
             self.passwords[login] = password
-            grants = [dict(workspace='school', view=view, entityIds=[entity])] if entity else []
+            grants = [dict(workspace='school', view=view, entityIds=entity if isinstance(entity, list) else [entity])] if entity else []
             made = self.ok(self.admin.post('/api/access/users', json=dict(name=name, login=login, role=role, workspaces=['school'], password=password, grants=grants)))
             self.account_ids[login] = made['id']
 
@@ -153,6 +154,8 @@ class Seed(Stages, Social):
         for index in range(school.PUPILS_PER_CLASS):
             create('parent', logins['parents'][index], names.GUARDIANS[index], school.pupil_id(index), 'student')
             create('student', logins['pupils'][index], names.PUPILS[index], school.pupil_id(index), 'student')
+        # One guardian of two children from two classes (7А and 7Б): the child picker of the family screens. It is never a captured role.
+        create('parent', FAMILY_LOGIN, 'Примерова Светлана', [school.pupil_id(0), school.pupil_id(school.PUPILS_PER_CLASS)], 'student')
         self.ok(self.admin.get('/api/forms/options'))
         self.log(f'{len(self.account_ids) + 1} accounts')
         self.verify_families()
@@ -319,7 +322,9 @@ def main(argv=None):
         api.shutdown_gradebook_jobs()
     meta = dict(now=school.DEMO_NOW, showcase=dict(classId=school.SHOWCASE_CLASS, pupilId=school.SHOWCASE_PUPIL, teacherId=school.SHOWCASE_TEACHER),
                 roles={role: dict(login=login, password=seed.passwords[login]) for role, login in dict(
-                    admin='demo-admin', teacher=school.logins()['teachers'][0], parent=school.logins()['parents'][0], student=school.logins()['pupils'][0]).items()})
+                    admin='demo-admin', teacher=school.logins()['teachers'][0], parent=school.logins()['parents'][0], student=school.logins()['pupils'][0]).items()},
+                # Not a role: check_seed.py and the capture tool walk meta['roles'] only.
+                extra=dict(parent_family=dict(label='родитель двух детей (7А и 7Б)', login=FAMILY_LOGIN, password=seed.passwords[FAMILY_LOGIN])))
     (work / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding='utf-8')
     seed.log('done')
     return 0

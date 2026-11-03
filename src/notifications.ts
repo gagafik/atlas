@@ -118,6 +118,8 @@ export function openEvent(
   if (result.module === "journal") {
     detail.studentId = result.studentId;
     detail.day = result.day;
+    // Journal notices name the lesson in recordId: the family's day view highlights it.
+    detail.lessonKey = result.recordId;
   } else if (result.module === "finals") {
     detail.studentId = result.studentId;
     detail.finalsPeriodId = result.recordId;

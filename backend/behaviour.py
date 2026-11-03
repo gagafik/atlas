@@ -344,6 +344,19 @@ def export_rows(rows,snap):
     return StreamingResponse(stream(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="behaviour.csv"'})
 
 
+# A note names its lesson (and since lessons carry a subject, the subject) when it was written for one.
+LESSON_JOIN=" LEFT JOIN journal_attendance_lessons l ON l.workspace=n.workspace AND l.lesson_key=json_extract(n.document,'$.lesson.key')"
+
+
+def note_subject_sql(db):
+    """(subject id SQL, subject name SQL, joined) over behaviour_notes as n: the subject stored with the note, else the published lesson it was written for.
+
+    When joined, the query must add LESSON_JOIN; a database where the journal never ran has no lessons to join, so the old notes have no subject."""
+    joined=bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_attendance_lessons'").fetchone())
+    stored=("json_extract(n.document,'$.lesson.subjectId')","json_extract(n.document,'$.lesson.subject')")
+    return (f'coalesce({stored[0]},l.subject_id)',f'coalesce({stored[1]},l.subject)',True) if joined else (*stored,False)
+
+
 def new_id():return uuid4().hex
 
 
