@@ -266,7 +266,7 @@ export const attendanceNames: Record<string, string> = {
 };
 // Lateness of this many minutes or more also counts as a share of the lesson (the server uses the same threshold).
 export const LATE_SHARE_FROM = 5;
-const clockMinutes = (time: string) =>
+export const clockMinutes = (time: string) =>
   Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 export const lessonLength = (lesson: { start: string; end: string }) =>
   clockMinutes(lesson.end) - clockMinutes(lesson.start);

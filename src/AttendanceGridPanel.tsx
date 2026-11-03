@@ -168,10 +168,13 @@ const Row = memo(function Row({
 
 export default function AttendanceGridPanel({
   workspace,
+  defaultOpen = false,
 }: {
   workspace: string;
+  // Opened from the menu: the panel starts expanded.
+  defaultOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false),
+  const [expanded, setExpanded] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null);
   const [classId, setClassId] = useState(""),
     [period, setPeriod] = useState<Period | null>(null);

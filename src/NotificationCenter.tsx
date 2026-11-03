@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Bell } from "lucide-react";
 import { api } from "./api";
 import { startPolling } from "./polling";
 import PushSettings from "./PushSettings";
@@ -364,11 +365,13 @@ export default function NotificationCenter({ identity }: { identity: string }) {
   return (
     <>
       <button
-        className="notifications-button"
+        className="notifications-button icon-button"
         onClick={() => setOpen(true)}
+        title="Уведомления"
         aria-label={`Уведомления${inbox?.unread ? `, непрочитанных: ${inbox.unread}` : ""}`}
       >
-        Уведомления {inbox && inbox.unread > 0 && <b>{inbox.unread}</b>}
+        <Bell size={18} />
+        {inbox && inbox.unread > 0 && <b>{inbox.unread}</b>}
       </button>
       <dialog
         ref={dialog}
@@ -743,7 +746,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                               : item.action.startsWith(
                                                     "absence.",
                                                   )
-                                                ? "Откройте «Отсутствия и объяснительные» в учебном журнале; ответственный учитель — в разделе «Работа с классами»."
+                                                ? "Откройте «Отсутствия и объяснительные» в классном журнале; ответственный учитель — в разделе «Посещаемость учащихся»."
                                                 : item.action ===
                                                     "family.updated"
                                                   ? "Откройте «Мои дети и доступ» в личном кабинете."

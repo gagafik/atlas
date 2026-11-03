@@ -266,6 +266,7 @@ export interface Report {
   qualityPenalty?: number;
 }
 export type Page =
+  | "home"
   | "messages"
   | "assistant"
   | "journal"

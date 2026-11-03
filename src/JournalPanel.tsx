@@ -177,14 +177,21 @@ export type JournalFocus =
 export default function JournalPanel({
   workspace,
   focus,
+  view,
 }: {
   workspace: string;
   focus?: JournalFocus;
+  // Set by a menu entry: show this part of the journal alone, if the server offers it to the account.
+  view?: JournalPanelName;
 }) {
   const coverageOpened = useRef(false),
     editorPanel = useRef<HTMLElement | null>(null);
   const [options, setOptions] = useState<Options | null>(null),
-    [mode, setMode] = useState("day");
+    [mode, setMode] = useState("day"),
+    [only, setOnly] = useState(view);
+  useEffect(() => setOnly(view), [view]);
+  const single =
+    options && only && journalPanels(options).includes(only) ? only : undefined;
   const [day, setDay] = useState(""),
     [start, setStart] = useState(""),
     [end, setEnd] = useState("");
@@ -273,7 +280,7 @@ export default function JournalPanel({
       ?.scrollIntoView({ block: "start" });
   }, [options, focus]);
   useEffect(() => {
-    if (!options || !day || mode !== "day") return;
+    if (!options || single || !day || mode !== "day") return;
     let live = true;
     setLoading(true);
     setLessons([]);
@@ -291,9 +298,10 @@ export default function JournalPanel({
     return () => {
       live = false;
     };
-  }, [workspace, options, day, mode, epoch]);
+  }, [workspace, options, single, day, mode, epoch]);
   useEffect(() => {
-    if (!options || !student || !start || !end || mode !== "report") return;
+    if (!options || single || !student || !start || !end || mode !== "report")
+      return;
     let live = true;
     ++reportScope.current;
     setLoading(true);
@@ -313,7 +321,7 @@ export default function JournalPanel({
     return () => {
       live = false;
     };
-  }, [workspace, options, student, start, end, mode, epoch]);
+  }, [workspace, options, single, student, start, end, mode, epoch]);
   function reportParams(after?: string, limit?: number) {
     const params = new URLSearchParams({ studentId: student, start, end });
     if (after) params.set("after", after);
@@ -571,15 +579,17 @@ export default function JournalPanel({
     );
     if (current()) setDueBusy(false);
   }
-  function adminPanel(name: JournalPanelName) {
+  function adminPanel(name: JournalPanelName, open = false) {
     switch (name) {
       case "courseTable":
         return (
           <CourseTablePanel
             key={`course-table-${workspace}`}
             workspace={workspace}
+            defaultOpen={open}
             onOpen={(key, date) => {
               if (!canLeave()) return;
+              setOnly(undefined);
               coverageOpened.current = true;
               clearEditor();
               setMode("day");
@@ -593,13 +603,14 @@ export default function JournalPanel({
           <FinalGradesPanel
             key={`final-grades-${workspace}`}
             workspace={workspace}
+            defaultOpen={open}
             focus={focus?.finalsPeriodId ? focus : undefined}
           />
         );
       case "absences":
         return (
           <div key={workspace} id="journal-panel-absences">
-            <AbsencePanel workspace={workspace} />
+            <AbsencePanel workspace={workspace} defaultOpen={open} />
           </div>
         );
       case "periods":
@@ -639,6 +650,7 @@ export default function JournalPanel({
             workspace={workspace}
             onOpen={(key, date) => {
               if (!canLeave()) return;
+              setOnly(undefined);
               coverageOpened.current = true;
               clearEditor();
               setMode("day");
@@ -659,6 +671,7 @@ export default function JournalPanel({
           <AttendanceGridPanel
             key={`attendance-grid-${workspace}`}
             workspace={workspace}
+            defaultOpen={open}
           />
         );
     }
@@ -666,11 +679,13 @@ export default function JournalPanel({
   const panels = options ? journalPanels(options) : [];
   return (
     <section className="journal-panel">
-      <p>
-        Посещаемость, оценки, темы и домашние задания. Записи журнала
-        сохраняются отдельно от расписания; переносы и правки групп не удаляют
-        прежние отметки.
-      </p>
+      {!only || (options && !single) ? (
+        <p>
+          Посещаемость, оценки, темы и домашние задания. Записи журнала
+          сохраняются отдельно от расписания; переносы и правки групп не удаляют
+          прежние отметки.
+        </p>
+      ) : null}
       {error && (
         <p role="alert" className="error-banner">
           {error}
@@ -682,7 +697,15 @@ export default function JournalPanel({
         </p>
       )}
       {!options && !error && <p role="status">Загружаю журнал…</p>}
-      {options && (
+      {single && (
+        <section
+          className="journal-admin-panels"
+          aria-label="Отчёты и управление журналом"
+        >
+          {adminPanel(single, true)}
+        </section>
+      )}
+      {options && !single && (
         <>
           <div className="dated-toolbar journal-controls">
             {options.staff && (
@@ -1783,12 +1806,12 @@ export default function JournalPanel({
           )}
         </>
       )}
-      {!!panels.length && (
+      {!!panels.length && !single && (
         <section
           className="journal-admin-panels"
           aria-label="Отчёты и управление журналом"
         >
-          {panels.map(adminPanel)}
+          {panels.map((name) => adminPanel(name))}
         </section>
       )}
     </section>

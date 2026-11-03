@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./api";
-import { roleNames, type AuthStatus, type AccessView } from "./auth";
+import { type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
 import { CHANGE_TYPES } from "./substitutions";
 import type { ChangeType } from "./types";
@@ -13,8 +13,11 @@ import { canLeaveHomework } from "./homeworkNavigation";
 import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
-import { unreadLabel } from "./messages";
-import { startPolling } from "./polling";
+import Shell, { type ShellFrame } from "./Shell";
+import { useJournalPanels, useMessageUnread } from "./shellData";
+import { eventViews, schoolYear } from "./navigation";
+import { bellState, minutesNow } from "./startPage";
+import type { JournalPanelName } from "./journal";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
@@ -73,28 +76,137 @@ const days = [
   "Суббота",
   "Воскресенье",
 ];
+// «Начало» of a pupil, a parent or a teacher: the lessons of today for the first record of the workspace, the one the schedule opens with.
+function TodayLessons({
+  workspace,
+  space,
+}: {
+  workspace: string;
+  space?: Space;
+}) {
+  const record = space?.records[0];
+  const [now, setNow] = useState(() => new Date());
+  const [rows, setRows] = useState<Row[] | null>(null),
+    [error, setError] = useState("");
+  const today = now.toLocaleDateString("sv-SE");
+  const day =
+    space && today >= space.yearStart && today <= space.yearEnd ? today : "";
+  // The countdown moves by the minute; half a minute keeps it from lagging behind the bell.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    setRows(null);
+    setError("");
+    if (!record || !day) return;
+    let live = true;
+    const params = new URLSearchParams({
+      view: record.view,
+      entityId: record.id,
+      day,
+    });
+    api(`portal/schedule?${params}`, workspace)
+      .then((r: Schedule) => {
+        if (live)
+          setRows([...r.rows].sort((a, b) => a.start.localeCompare(b.start)));
+      })
+      .catch((e) => {
+        if (live) setError(e.message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [workspace, record?.view, record?.id, day]);
+  // Duties, bookings and cancelled lessons do not ring a bell of their own.
+  const lessons = (rows ?? []).filter(
+    (r) =>
+      r.status !== "cancelled" &&
+      r.activity !== "duty" &&
+      r.activity !== "booking",
+  );
+  const stage = bellState(lessons, minutesNow(now));
+  const current = stage?.phase === "lesson" ? lessons[stage.index] : undefined;
+  const status = !stage
+    ? ""
+    : stage.phase === "lesson"
+      ? `${current!.subject} · до звонка ${stage.minutes} мин`
+      : stage.phase === "break"
+        ? `перемена · до звонка ${stage.minutes} мин`
+        : stage.phase === "before"
+          ? `до первого урока ${stage.minutes} мин`
+          : "уроки на сегодня закончились";
+  return (
+    <section className="today-lessons">
+      <header>
+        <h2>Уроки сегодня</h2>
+        {status && <strong role="status">{status}</strong>}
+      </header>
+      {error && (
+        <p role="alert" className="error-banner">
+          {error}
+        </p>
+      )}
+      {!record ? (
+        <p className="info-line">
+          Расписание появится, когда администратор назначит вам записи.
+        </p>
+      ) : !day ? (
+        <p className="info-line">Сегодня вне учебного года.</p>
+      ) : (
+        rows &&
+        (rows.length ? (
+          <div className="portal-day">
+            {rows.map((r, i) => (
+              <article
+                className={`dated-lesson ${r.status === "cancelled" ? "cancelled" : ""} ${r === current ? "current" : ""}`}
+                key={i}
+              >
+                <strong>
+                  {r.start}–{r.end}
+                </strong>
+                <span>{statusLabel(r)}</span>
+                <h4>
+                  {r.subject} · {r.group}
+                </h4>
+                <p>
+                  {r.teachers || "Учитель не назначен"}
+                  {r.rooms ? " · " + r.rooms : ""}
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="info-line">На сегодня уроков нет.</p>
+        ))
+      )}
+    </section>
+  );
+}
 export default function Portal({
   session,
-  controls,
+  frame,
 }: {
   session: AuthStatus;
-  controls: ReactNode;
+  frame: ShellFrame;
 }) {
   const [section, setSectionValue] = useState("home");
-  // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable.
+  // A notification can point the journal at one pupil's day, and the schedule at one pupil's timetable;
+  // a menu entry can open one part of the journal.
   const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
     [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>(),
+    [journalView, setJournalView] = useState<JournalPanelName | undefined>(),
     [wantedRecord, setWantedRecord] = useState("");
-  function setSection(value: string) {
+  function setSection(value: string, journal?: JournalPanelName) {
     if (canLeaveHomework()) {
       setSectionValue(value);
+      setJournalView(journal);
       setJournalFocus(undefined);
       setMessageFocus(undefined);
     }
   }
   const [spaces, setSpaces] = useState<Space[]>([]),
-    [workspace, setWorkspaceValue] = useState(""),
-    [messageUnread, setMessageUnread] = useState({ count: 0, more: false });
+    [workspace, setWorkspaceValue] = useState("");
   function setWorkspace(value: string) {
     if (canLeaveHomework()) setWorkspaceValue(value);
   }
@@ -126,30 +238,11 @@ export default function Portal({
     };
   }, []);
   const space = spaces.find((x) => x.id === workspace);
-  // The counter on the messages tab: one cheap read a minute, and again whenever something was read. Without messaging access it stays zero.
-  useEffect(() => {
-    if (!workspace) return;
-    let live = true;
-    const poll = startPolling(
-      async () => {
-        try {
-          const r = await api("messages/unread", workspace);
-          if (live) setMessageUnread({ count: r.count, more: r.more });
-        } catch (e: any) {
-          if (e.status !== 403) return false;
-          if (live) setMessageUnread({ count: 0, more: false });
-        }
-      },
-      { interval: 60000 },
-    );
-    const refresh = () => poll.refresh();
-    window.addEventListener("atlas-messages-read", refresh);
-    return () => {
-      live = false;
-      poll.stop();
-      window.removeEventListener("atlas-messages-read", refresh);
-    };
-  }, [workspace]);
+  const messageUnread = useMessageUnread(workspace);
+  const journalPanels = useJournalPanels(
+    workspace,
+    ["teacher", "student", "parent"].includes(session.user!.role),
+  );
   useEffect(() => {
     if (space) {
       const r = space.records[0];
@@ -199,22 +292,13 @@ export default function Portal({
   }, [wantedRecord, space]);
   // Opened from a notification after the server re-checked access to the record.
   useEffect(() => {
-    const sections: Record<string, string> = {
-      "atlas-open-journal": "journal",
-      "atlas-open-quizzes": "quizzes",
-      "atlas-open-schedule": "schedule",
-      "atlas-open-duties": "duties",
-      "atlas-open-messages": "messages",
-      "atlas-open-homework": "homework",
-      // A teacher reviews notes in the class workplace; the administrator finds them under the journal.
-      "atlas-open-absences":
-        session.user?.role === "teacher" ? "class-staff" : "journal",
-    };
+    const sections = eventViews("portal", session.user?.role ?? null);
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
       if (!canLeaveHomework()) return;
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setSectionValue(sections[event.type]);
+      setJournalView(undefined);
       setMessageFocus(
         focusRequest(
           event.type === "atlas-open-messages" ? detail.threadId : undefined,
@@ -274,404 +358,313 @@ export default function Portal({
     );
   }
   return (
-    <main className="portal">
-      <header>
-        <div>
-          <strong>атлас•</strong>
-          <h1>
-            {section === "class-staff"
-              ? "Работа с классами"
-              : section === "duties"
-                ? "Мои дежурства"
-                : section === "curriculum"
-                  ? "Учебные планы"
-                  : section === "materials"
-                    ? "Учебные материалы"
-                    : section === "family"
-                      ? "Мои дети и доступ"
-                      : section === "messages"
-                        ? "Сообщения"
-                        : section === "quizzes"
-                          ? "Контрольные и тесты"
-                          : section === "homework"
-                            ? "Домашние задания"
-                            : section === "journal"
-                              ? "Учебный журнал"
-                              : section === "courses"
-                                ? "Выбор курсов"
-                                : section === "home"
-                                  ? "Главная"
-                                  : "Моё расписание"}
-          </h1>
-          <p>{roleNames[session.user!.role]}</p>
-        </div>
-        {controls}
-      </header>
-      {
-        <div className="dated-toolbar portal-tabs">
-          <button
-            aria-pressed={section === "home"}
-            onClick={() => setSection("home")}
-          >
-            Главная
-          </button>
-          {session.user!.role === "teacher" && (
-            <button
-              aria-pressed={section === "class-staff"}
-              onClick={() => setSection("class-staff")}
-            >
-              Работа с классами
-            </button>
-          )}
-          {session.user!.role === "parent" && (
-            <button
-              aria-pressed={section === "family"}
-              onClick={() => setSection("family")}
-            >
-              Мои дети и доступ
-            </button>
-          )}
-          <button
-            aria-pressed={section === "schedule"}
-            onClick={() => setSection("schedule")}
-          >
-            Расписание
-          </button>
-          {session.user!.role === "teacher" && (
-            <button
-              aria-pressed={section === "duties"}
-              onClick={() => setSection("duties")}
-            >
-              Мои дежурства
-            </button>
-          )}
-          <button
-            aria-pressed={section === "messages"}
-            onClick={() => setSection("messages")}
-          >
-            Сообщения
-            {messageUnread.count || messageUnread.more
-              ? ` · ${unreadLabel(messageUnread.count, messageUnread.more)}`
-              : ""}
-          </button>
-          {session.user!.role === "teacher" && (
-            <button
-              aria-pressed={section === "curriculum"}
-              onClick={() => setSection("curriculum")}
-            >
-              Учебные планы
-            </button>
-          )}
-          {session.user!.role === "teacher" && (
-            <button
-              aria-pressed={section === "materials"}
-              onClick={() => setSection("materials")}
-            >
-              Учебные материалы
-            </button>
-          )}
-          {["teacher", "student", "parent"].includes(session.user!.role) && (
-            <button
-              aria-pressed={section === "quizzes"}
-              onClick={() => setSection("quizzes")}
-            >
-              Контрольные и тесты
-            </button>
-          )}
-          {["teacher", "student", "parent"].includes(session.user!.role) && (
-            <button
-              aria-pressed={section === "homework"}
-              onClick={() => setSection("homework")}
-            >
-              Домашние задания
-            </button>
-          )}
-          {["teacher", "student", "parent"].includes(session.user!.role) && (
-            <button
-              aria-pressed={section === "journal"}
-              onClick={() => setSection("journal")}
-            >
-              Учебный журнал
-            </button>
-          )}
-          {["student", "parent"].includes(session.user!.role) && (
-            <button
-              aria-pressed={section === "courses"}
-              onClick={() => setSection("courses")}
-            >
-              Выбор курсов
-            </button>
-          )}
-        </div>
-      }
-      {section === "home" ? (
-        <>
-          <label className="field">
-            <span>Пространство</span>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {workspace ? (
-            <MessageFeed key={workspace} workspace={workspace} />
-          ) : (
-            !loading && (
-              <p className="info-line">
-                Для вашей учётной записи пока нет рабочих пространств.
-                Объявления появятся после настройки доступа.
-              </p>
-            )
-          )}
-        </>
-      ) : section === "class-staff" ? (
-        <ClassStaffWorkspace />
-      ) : section === "family" ? (
-        <FamilyPortal />
-      ) : section === "duties" ? (
-        <>
-          <label className="field">
-            <span>Рабочее пространство</span>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {workspace && <MyDuties key={workspace} workspace={workspace} />}
-        </>
-      ) : section === "messages" ? (
-        <>
-          <label className="field">
-            <span>Пространство сообщений</span>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {workspace && (
-            <MessagesPanel
-              key={workspace}
-              workspace={workspace}
-              focusThread={messageFocus}
-              onFocusUsed={(r) =>
-                setMessageFocus((current) => spendFocus(current, r))
-              }
-            />
-          )}
-        </>
-      ) : section === "courses" ? (
-        <>
-          <label className="field">
-            <span>Рабочее пространство</span>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {workspace && <IntakePortal key={workspace} workspace={workspace} />}
-        </>
-      ) : section === "journal" ||
-        section === "materials" ||
-        section === "curriculum" ||
-        section === "homework" ||
-        section === "quizzes" ? (
-        <>
-          <label className="field">
-            <span>Рабочее пространство</span>
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {workspace &&
-            (section === "curriculum" ? (
-              <CurriculumPanel key={workspace} workspace={workspace} />
-            ) : section === "materials" ? (
-              <TeachingMaterialsPanel key={workspace} workspace={workspace} />
-            ) : section === "quizzes" ? (
-              <QuizzesPanel key={workspace} workspace={workspace} />
-            ) : section === "homework" ? (
-              <HomeworkQueuePanel key={workspace} workspace={workspace} />
-            ) : (
-              <JournalPanel
-                key={workspace}
-                workspace={workspace}
-                focus={journalFocus}
-              />
-            ))}
-        </>
-      ) : (
-        <>
-          <p className="info-line">
-            Здесь показана текущая рабочая версия расписания. Доступны только
-            записи, назначенные администратором. Опубликованные снимки по
-            отдельным ссылкам могут относиться к другой версии.
-          </p>
-          {error && (
-            <p role="alert" className="error-banner">
-              {error}
-            </p>
-          )}
-          <div className="dated-fields">
-            <label className="field">
-              <span>Рабочее пространство</span>
-              <select
-                value={workspace}
-                onChange={(e) => setWorkspace(e.target.value)}
-              >
-                {spaces.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Разрешённое расписание</span>
-              <select
-                value={record}
-                onChange={(e) => setRecord(e.target.value)}
-              >
-                {space?.records.map((r) => (
-                  <option
-                    key={r.view + ":" + r.id}
-                    value={JSON.stringify([r.view, r.id])}
-                  >
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Режим просмотра</span>
-              <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                <option value="day">На дату</option>
-                <option value="week">Неделя</option>
-              </select>
-            </label>
-            {mode === "day" ? (
+    <Shell
+      frame={frame}
+      journalPanels={journalPanels}
+      view={section}
+      journalView={journalView}
+      onView={setSection}
+      school={space?.name}
+      year={space && schoolYear(space.yearStart, space.yearEnd)}
+      unread={messageUnread}
+    >
+      {({ title }) => (
+        <main className="portal">
+          <div className="page-heading">
+            <h1>{title}</h1>
+          </div>
+          {section === "home" ? (
+            <>
               <label className="field">
-                <span>Дата расписания</span>
-                <input
-                  type="date"
-                  min={space?.yearStart}
-                  max={space?.yearEnd}
-                  value={day}
-                  onChange={(e) => setDay(e.target.value)}
-                />
-              </label>
-            ) : (
-              <label className="field">
-                <span>Учебная неделя</span>
+                <span>Пространство</span>
                 <select
-                  value={cycle}
-                  onChange={(e) => setCycle(e.target.value)}
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
                 >
-                  {space?.cycles.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+                  {spaces.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
                     </option>
                   ))}
                 </select>
               </label>
-            )}
-          </div>
-          <div className="dated-toolbar">
-            <button disabled={loading} onClick={() => setVersion((n) => n + 1)}>
-              Обновить расписание
-            </button>
-            <button disabled={!result} onClick={csv}>
-              Скачать CSV
-            </button>
-            <button disabled={!result} onClick={() => window.print()}>
-              Печать
-            </button>
-          </div>
-          {loading && <p role="status">Загружаю расписание…</p>}
-          {!loading && !space?.records.length && (
-            <p className="empty-state">
-              Доступных записей нет. Обратитесь к администратору.
-            </p>
-          )}
-          {result && (
-            <section>
-              <h2>{result.name}</h2>
-              {result.classTeacher && (
-                <p className="muted">
-                  Классный руководитель: {result.classTeacher}
+              {workspace ? (
+                <>
+                  <TodayLessons
+                    key={workspace}
+                    workspace={workspace}
+                    space={space}
+                  />
+                  <section className="start-feed">
+                    <h2>Уведомления</h2>
+                    <MessageFeed key={workspace} workspace={workspace} />
+                  </section>
+                </>
+              ) : (
+                !loading && (
+                  <p className="info-line">
+                    Для вашей учётной записи пока нет рабочих пространств.
+                    Объявления появятся после настройки доступа.
+                  </p>
+                )
+              )}
+            </>
+          ) : section === "class-staff" ? (
+            <ClassStaffWorkspace />
+          ) : section === "family" ? (
+            <FamilyPortal />
+          ) : section === "duties" ? (
+            <>
+              <label className="field">
+                <span>Рабочее пространство</span>
+                <select
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                >
+                  {spaces.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {workspace && <MyDuties key={workspace} workspace={workspace} />}
+            </>
+          ) : section === "messages" ? (
+            <>
+              <label className="field">
+                <span>Пространство сообщений</span>
+                <select
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                >
+                  {spaces.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {workspace && (
+                <MessagesPanel
+                  key={workspace}
+                  workspace={workspace}
+                  focusThread={messageFocus}
+                  onFocusUsed={(r) =>
+                    setMessageFocus((current) => spendFocus(current, r))
+                  }
+                />
+              )}
+            </>
+          ) : section === "courses" ? (
+            <>
+              <label className="field">
+                <span>Рабочее пространство</span>
+                <select
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                >
+                  {spaces.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {workspace && (
+                <IntakePortal key={workspace} workspace={workspace} />
+              )}
+            </>
+          ) : section === "journal" ||
+            section === "materials" ||
+            section === "curriculum" ||
+            section === "homework" ||
+            section === "quizzes" ? (
+            <>
+              <label className="field">
+                <span>Рабочее пространство</span>
+                <select
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                >
+                  {spaces.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {workspace &&
+                (section === "curriculum" ? (
+                  <CurriculumPanel key={workspace} workspace={workspace} />
+                ) : section === "materials" ? (
+                  <TeachingMaterialsPanel
+                    key={workspace}
+                    workspace={workspace}
+                  />
+                ) : section === "quizzes" ? (
+                  <QuizzesPanel key={workspace} workspace={workspace} />
+                ) : section === "homework" ? (
+                  <HomeworkQueuePanel key={workspace} workspace={workspace} />
+                ) : (
+                  <JournalPanel
+                    key={workspace}
+                    workspace={workspace}
+                    focus={journalFocus}
+                    view={journalView}
+                  />
+                ))}
+            </>
+          ) : (
+            <>
+              <p className="info-line">
+                Здесь показана текущая рабочая версия расписания. Доступны
+                только записи, назначенные администратором. Опубликованные
+                снимки по отдельным ссылкам могут относиться к другой версии.
+              </p>
+              {error && (
+                <p role="alert" className="error-banner">
+                  {error}
                 </p>
               )}
-              <p className="muted">
-                {result.school} · версия {result.revision}
-              </p>
-              {!result.rows.length && (
-                <p className="empty-state">Занятий не найдено.</p>
-              )}
-              {days.map((name, index) => {
-                const rows = result.rows.filter((r) => r.day === index);
-                return (
-                  !!rows.length && (
-                    <section className="portal-day" key={name}>
-                      <h3>
-                        {name}
-                        {mode === "day" ? " · " + day : ""}
-                      </h3>
-                      {rows.map((r, i) => (
-                        <article
-                          className={`dated-lesson ${r.status === "cancelled" ? "cancelled" : ""}`}
-                          key={i}
-                        >
-                          <strong>
-                            {r.start}–{r.end}
-                          </strong>
-                          <span>{statusLabel(r)}</span>
-                          <h4>
-                            {r.subject} · {r.group}
-                          </h4>
-                          <p>
-                            {r.teachers || "Учитель не назначен"}
-                            {r.rooms ? " · " + r.rooms : ""}
-                          </p>
-                        </article>
+              <div className="dated-fields">
+                <label className="field">
+                  <span>Рабочее пространство</span>
+                  <select
+                    value={workspace}
+                    onChange={(e) => setWorkspace(e.target.value)}
+                  >
+                    {spaces.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Разрешённое расписание</span>
+                  <select
+                    value={record}
+                    onChange={(e) => setRecord(e.target.value)}
+                  >
+                    {space?.records.map((r) => (
+                      <option
+                        key={r.view + ":" + r.id}
+                        value={JSON.stringify([r.view, r.id])}
+                      >
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Режим просмотра</span>
+                  <select
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value)}
+                  >
+                    <option value="day">На дату</option>
+                    <option value="week">Неделя</option>
+                  </select>
+                </label>
+                {mode === "day" ? (
+                  <label className="field">
+                    <span>Дата расписания</span>
+                    <input
+                      type="date"
+                      min={space?.yearStart}
+                      max={space?.yearEnd}
+                      value={day}
+                      onChange={(e) => setDay(e.target.value)}
+                    />
+                  </label>
+                ) : (
+                  <label className="field">
+                    <span>Учебная неделя</span>
+                    <select
+                      value={cycle}
+                      onChange={(e) => setCycle(e.target.value)}
+                    >
+                      {space?.cycles.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
                       ))}
-                    </section>
-                  )
-                );
-              })}
-            </section>
+                    </select>
+                  </label>
+                )}
+              </div>
+              <div className="dated-toolbar">
+                <button
+                  disabled={loading}
+                  onClick={() => setVersion((n) => n + 1)}
+                >
+                  Обновить расписание
+                </button>
+                <button disabled={!result} onClick={csv}>
+                  Скачать CSV
+                </button>
+                <button disabled={!result} onClick={() => window.print()}>
+                  Печать
+                </button>
+              </div>
+              {loading && <p role="status">Загружаю расписание…</p>}
+              {!loading && !space?.records.length && (
+                <p className="empty-state">
+                  Доступных записей нет. Обратитесь к администратору.
+                </p>
+              )}
+              {result && (
+                <section>
+                  <h2>{result.name}</h2>
+                  {result.classTeacher && (
+                    <p className="muted">
+                      Классный руководитель: {result.classTeacher}
+                    </p>
+                  )}
+                  <p className="muted">
+                    {result.school} · версия {result.revision}
+                  </p>
+                  {!result.rows.length && (
+                    <p className="empty-state">Занятий не найдено.</p>
+                  )}
+                  {days.map((name, index) => {
+                    const rows = result.rows.filter((r) => r.day === index);
+                    return (
+                      !!rows.length && (
+                        <section className="portal-day" key={name}>
+                          <h3>
+                            {name}
+                            {mode === "day" ? " · " + day : ""}
+                          </h3>
+                          {rows.map((r, i) => (
+                            <article
+                              className={`dated-lesson ${r.status === "cancelled" ? "cancelled" : ""}`}
+                              key={i}
+                            >
+                              <strong>
+                                {r.start}–{r.end}
+                              </strong>
+                              <span>{statusLabel(r)}</span>
+                              <h4>
+                                {r.subject} · {r.group}
+                              </h4>
+                              <p>
+                                {r.teachers || "Учитель не назначен"}
+                                {r.rooms ? " · " + r.rooms : ""}
+                              </p>
+                            </article>
+                          ))}
+                        </section>
+                      )
+                    );
+                  })}
+                </section>
+              )}
+            </>
           )}
-        </>
+        </main>
       )}
-    </main>
+    </Shell>
   );
 }
