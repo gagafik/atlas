@@ -93,6 +93,8 @@ def main(argv=None):
     meta_path = work / 'meta.json'
     if args.fresh or not meta_path.exists() or not (work / 'demo.db').exists():
         print('Создаю вымышленную школу, это займёт около двух минут…', flush=True)
+        # meta.json is written last: while it is missing the seed is unfinished, so an interrupted run reseeds next time.
+        meta_path.unlink(missing_ok=True)
         # The seed prints Russian progress lines: UTF-8 keeps it working when the output goes to a file or a pipe.
         subprocess.run([sys.executable, '-m', 'tools.demo.seed_school', '--workdir', str(work)], cwd=ROOT, check=True, env={**os.environ, 'PYTHONUTF8': '1'})
     meta = json.loads(meta_path.read_text(encoding='utf-8'))

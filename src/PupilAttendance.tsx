@@ -4,6 +4,7 @@ import AbsencePanel from "./AbsencePanel";
 import { dayTitle } from "./attendanceGrid";
 import { profileFor, slotsFor } from "./bells";
 import { PeriodPicker } from "./JournalPickers";
+import Popover from "./Popover";
 import {
   attendanceText,
   lateShare,
@@ -11,8 +12,10 @@ import {
   type JournalOptions,
 } from "./journal";
 import {
+  dayText,
   foldAttendance,
   markKind,
+  monthTitle,
   type MarkKind,
   type PeriodChoice,
   type PeriodSelection,
@@ -38,27 +41,34 @@ interface NoteOptions {
   }[];
 }
 
-function Mark({
-  row,
-  codes,
-}: {
-  row: PupilAttendanceRow;
-  codes: Record<string, string>;
-}) {
-  const kind = markKind(row);
-  const text = `${attendanceText(row, row, codes)}. ${row.subject}${
+// What a mark says: the lesson it belongs to, who taught it, and the note that excused it.
+const markText = (row: PupilAttendanceRow, codes: Record<string, string>) =>
+  `${attendanceText(row, row, codes)}. ${row.subject}${
     row.teachers ? `, ${row.teachers}` : ""
   }, ${row.start}–${row.end}${
     row.byNote ? ". Объяснительная принята школой" : ""
   }`;
+
+function Mark({
+  row,
+  codes,
+  onOpen,
+}: {
+  row: PupilAttendanceRow;
+  codes: Record<string, string>;
+  onOpen: (row: PupilAttendanceRow) => void;
+}) {
+  const kind = markKind(row);
+  const text = markText(row, codes);
   const share =
     kind === "late" ? lateShare(row.lateMinutes, row.start, row.end) : 0;
   return (
-    <span
+    <button
+      type="button"
       className={`pupil-att pupil-att-${kind}`}
-      role="img"
       aria-label={text}
       title={text}
+      onClick={() => onOpen(row)}
     >
       <b>{MARKS[kind].sign}</b>
       {kind === "late" && (
@@ -68,16 +78,52 @@ function Mark({
         </small>
       )}
       {kind === "left" && row.leftAt && <small>в {row.leftAt}</small>}
-    </span>
+    </button>
   );
 }
 
-const monthTitle = (date: string) =>
-  new Date(`${date}T00:00:00Z`).toLocaleDateString("ru-RU", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+// A touch screen has no tooltip: the lesson behind a mark opens as a sheet.
+function MarkDetails({
+  row,
+  codes,
+}: {
+  row: PupilAttendanceRow;
+  codes: Record<string, string>;
+}) {
+  return (
+    <dl className="pupil-details">
+      <dt>Отметка</dt>
+      <dd>{attendanceText(row, row, codes)}</dd>
+      {row.byNote && (
+        <>
+          <dt>Записка</dt>
+          <dd>Объяснительная принята школой</dd>
+        </>
+      )}
+      <dt>Предмет</dt>
+      <dd>
+        {row.subject}
+        {row.group ? `, ${row.group}` : ""}
+      </dd>
+      <dt>Урок</dt>
+      <dd>
+        {dayText(row.date)}, {row.start}–{row.end}
+      </dd>
+      {row.teachers && (
+        <>
+          <dt>Учитель</dt>
+          <dd>{row.teachers}</dd>
+        </>
+      )}
+      {row.rooms && (
+        <>
+          <dt>Кабинет</dt>
+          <dd>{row.rooms}</dd>
+        </>
+      )}
+    </dl>
+  );
+}
 
 export default function PupilAttendance({
   workspace,
@@ -124,6 +170,8 @@ export default function PupilAttendance({
   }, [workspace, hasNotes]);
   const [notesOpen, setNotesOpen] = useState(showNotes),
     [compose, setCompose] = useState(false),
+    [contact, setContact] = useState(false),
+    [opened, setOpened] = useState<PupilAttendanceRow | null>(null),
     notesRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!showNotes) return;
@@ -177,6 +225,8 @@ export default function PupilAttendance({
               type="button"
               className="primary"
               onClick={() => {
+                // Notes switched off for the class: the form would only repeat the refusal.
+                if (notesOff) return setContact(true);
                 setNotesOpen(true);
                 setCompose(true);
               }}
@@ -186,6 +236,13 @@ export default function PupilAttendance({
           )}
         </div>
       </div>
+      {notesOff && contact && (
+        <p role="status" className="info-line">
+          Классный руководитель не позволяет использовать электронные записки.
+          Свяжитесь с классным руководителем
+          {pupil?.classTeacher ? `: ${pupil.classTeacher}` : ""}.
+        </p>
+      )}
       {data.error && (
         <p role="alert" className="error-banner">
           {data.error}
@@ -260,6 +317,7 @@ export default function PupilAttendance({
                               key={row.lessonKey}
                               row={row}
                               codes={data.data!.absenceCodes}
+                              onOpen={setOpened}
                             />
                           ))}
                         </td>
@@ -292,23 +350,24 @@ export default function PupilAttendance({
           </ul>
         </>
       )}
-      {notesOff && compose && (
-        <p role="status" className="info-line">
-          Классный руководитель не позволяет использовать электронные записки.
-          Свяжитесь с классным руководителем
-          {pupil?.classTeacher ? `: ${pupil.classTeacher}` : ""}.
-        </p>
-      )}
       {notesOpen && (
         <div ref={notesRef} id="pupil-absence-notes">
           <AbsencePanel
-            key={compose && !notesOff ? "compose" : "notes"}
+            key={compose ? "compose" : "notes"}
             workspace={workspace}
             defaultOpen
             studentId={child}
-            compose={compose && !notesOff}
+            compose={compose}
           />
         </div>
+      )}
+      {opened && (
+        <Popover
+          title={`${opened.subject}, ${dayText(opened.date)}`}
+          onClose={() => setOpened(null)}
+        >
+          <MarkDetails row={opened} codes={data.data!.absenceCodes} />
+        </Popover>
       )}
     </section>
   );

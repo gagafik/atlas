@@ -10,11 +10,13 @@ from .assessment_categories import category_of, config as category_config
 MAX_ROWS = 5000
 
 
-def scale_of(db, workspace, student):
-    """The grade scale whose bands the chart paints: the one of the pupil's latest published final, else the school's only active threshold scale."""
+def scale_of(db, workspace, student, with_final=True):
+    """The grade scale whose bands the chart paints: the one of the pupil's latest published final, else the school's only active threshold scale.
+
+    A teacher does not read the pupil's report cards, so for a teacher the final is not looked at: the scale would reveal which one the card used."""
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('final_results','grading_scales')")}
     scale = None
-    if 'final_results' in tables:
+    if with_final and 'final_results' in tables:
         row = db.execute("SELECT document FROM final_results WHERE workspace=? AND student_id=? ORDER BY json_extract(document,'$.publishedAt') DESC LIMIT 1", (workspace, student)).fetchone()
         scale = json.loads(row[0]).get('scale') if row else None
     if not scale and 'grading_scales' in tables:
@@ -57,5 +59,5 @@ def register(journal, app, Workspace):
                     marks.append(where | dict(assessmentId=work['id'], name=work['name'], kind=work['kind'], category=category_of(work), maxScore=work['maxScore'], weight=work['weight'],
                                               score=grade['score'], label=grade['label'], comment=grade['comment'], unsigned=(key, work['id']) in waiting))
             return dict(studentId=studentId, start=start.isoformat(), end=end.isoformat(), source='published', summary=summary(rows, cfg, classes), marks=marks, attendance=attendance,
-                        absenceCodes=codes, scale=scale_of(db, workspace, studentId), signedAt=signed_at)
+                        absenceCodes=codes, scale=scale_of(db, workspace, studentId, user['role'] != 'teacher'), signedAt=signed_at)
         return journal.reading(read)

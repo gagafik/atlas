@@ -334,13 +334,14 @@ describe("mergeDay", () => {
     expect(row.record).toBe(record);
   });
   it("lets each record match one lesson and ignores duties", () => {
+    // A record moved to overlap both lessons of a double Математика still sits on one row.
     const rows = mergeDay(
       [
         lesson({}),
-        lesson({ start: "09:25", end: "10:10" }),
+        lesson({ start: "09:20", end: "10:05" }),
         lesson({ activity: "duty", subject: "Дежурство" }),
       ],
-      [published("k4", "Математика", "08:30", "09:15")],
+      [published("k4", "Математика", "09:00", "09:45")],
     );
     expect(rows.map((r) => r.record?.lessonKey ?? null)).toEqual(["k4", null]);
   });

@@ -268,6 +268,10 @@
   gap: 4px 12px;
   margin: 0 0 6px;
 }
+.pupil-chart-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
 .pupil-chart-bar {
   position: relative;
   padding-top: 18px;
@@ -301,8 +305,8 @@
 .pupil-block {
   position: relative;
   flex: 0 1 auto;
-  min-width: 0;
-  height: 48px;
+  min-width: 56px;
+  min-height: 52px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #f3f5f1;
@@ -323,16 +327,17 @@
   font-size: 11px;
   line-height: 1.25;
   font-weight: 700;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .pupil-block-text small {
   font-weight: 500;
   color: #4d5b53;
 }
+/* The marker spans the label and the band strip only, so it never cuts through a block's text. */
 .pupil-marker {
   position: absolute;
   top: 0;
-  bottom: 0;
+  height: 32px;
   width: 0;
   border-left: 2px solid var(--dark);
   pointer-events: none;
@@ -382,14 +387,31 @@
 .pupil-grid .pupil-month th {
   text-align: left;
   background: var(--warm);
-  text-transform: capitalize;
 }
 .pupil-att {
   display: inline-flex;
   flex-direction: column;
   align-items: center;
+  gap: 0;
   margin: 1px 2px;
   min-width: 26px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-weight: inherit;
+}
+button.pupil-att {
+  min-height: 28px;
+  justify-content: center;
+}
+button.pupil-att:hover {
+  background: transparent;
+}
+button.pupil-att:hover b {
+  filter: brightness(0.94);
 }
 .pupil-att b {
   display: inline-block;
@@ -532,7 +554,6 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 6px;
-  text-transform: capitalize;
 }
 .month-calendar-grid {
   display: grid;
@@ -602,7 +623,16 @@
     padding: 8px 10px;
   }
 }
+.pupil-print-head {
+  display: none;
+}
 @media print {
+  .pupil-print-head {
+    display: block;
+    margin: 0 0 8px;
+    font-weight: 700;
+  }
+  .workspace-field,
   .pupil-actions,
   .pupil-tabs,
   .pupil-picker,

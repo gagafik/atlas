@@ -1,13 +1,7 @@
 import { useEffect, useState } from "react";
-import { monthCells, shiftDate } from "./pupilJournal";
+import { monthCells, monthTitle, shiftDate } from "./pupilJournal";
 
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
-const monthName = (day: string) =>
-  new Date(`${day}T00:00:00Z`).toLocaleDateString("ru-RU", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 const nextMonth = (day: string, direction: 1 | -1) =>
   shiftDate(`${day.slice(0, 7)}-01`, direction > 0 ? 32 : -1).slice(0, 7) +
   "-01";
@@ -42,7 +36,7 @@ export default function MonthCalendar({
         >
           ‹
         </button>
-        <strong>{monthName(anchor)}</strong>
+        <strong>{monthTitle(anchor)}</strong>
         <button
           type="button"
           className="secondary pupil-arrow"

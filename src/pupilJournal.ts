@@ -241,6 +241,15 @@ const weekdays = [
 ];
 export const weekdayName = (day: string) =>
   weekdays[new Date(`${day}T00:00:00Z`).getUTCDay()];
+/** «Ноябрь 2026 г.»: only the first letter is capital, so the «г.» stays small. */
+export function monthTitle(day: string) {
+  const text = new Date(`${day}T00:00:00Z`).toLocaleDateString("ru-RU", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 /** «9 / 10 = 90%»: the points of a work, its maximum and the percent. */
 export function markText(mark: Pick<PupilMark, "score" | "maxScore">) {
   if (mark.score === null) return "—";

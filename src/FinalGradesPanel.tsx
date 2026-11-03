@@ -559,7 +559,9 @@ export default function FinalGradesPanel({
     setDirty(true);
   };
   useEffect(() => {
-    if (defaultOpen) void run(async () => void (await loadOptions()));
+    // A finals focus loads the options itself; a second run would find the lock taken and drop the card.
+    if (defaultOpen && !focus?.finalsPeriodId)
+      void run(async () => void (await loadOptions()));
   }, []);
   useEffect(() => {
     if (!chosen) return;

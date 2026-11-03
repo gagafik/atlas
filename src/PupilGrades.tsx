@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "./api";
 import CategoryBadge from "./CategoryBadge";
 import {
@@ -10,6 +10,7 @@ import {
 import { finalLabel } from "./finalGrades";
 import { FamilyFeedView, useFamilyFeed } from "./GradeFeed";
 import { PeriodPicker } from "./JournalPickers";
+import Popover from "./Popover";
 import {
   journalCsv,
   loadRemainingReport,
@@ -47,6 +48,8 @@ const TAB_NAMES: Record<Tab, string> = {
   feed: "Новые оценки",
 };
 const PAGE = 100;
+// The least width of a work on the chart: a narrower block cannot show its points.
+const BLOCK_WIDTH = 68;
 const NOTE_PAGES = 10;
 const stamp = (value: string | null) =>
   value
@@ -182,45 +185,6 @@ function useFinals(workspace: string, studentId: string, periodId: string) {
     };
   }, [workspace, studentId, periodId, has]);
   return finals;
-}
-
-function Popover({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  useEffect(() => {
-    const close = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
-  return (
-    <div className="modal-backdrop pupil-popover-layer" onClick={onClose}>
-      <div
-        className="pupil-popover"
-        role="dialog"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header>
-          <h3>{title}</h3>
-          <button
-            type="button"
-            className="secondary"
-            autoFocus
-            onClick={onClose}
-          >
-            Закрыть
-          </button>
-        </header>
-        {children}
-      </div>
-    </div>
-  );
 }
 
 const chipText = (m: PupilMark) =>
@@ -695,43 +659,50 @@ function ChartTab({
                 </span>
               ))}
             </div>
-            <div className="pupil-blocks">
-              {blocks.map((b) => {
-                const category = categoryOf(
-                  { category: b.category },
-                  categories,
-                );
-                return (
-                  <div
-                    key={b.key}
-                    className="pupil-block"
-                    style={{ flexBasis: `${b.share * 100}%` }}
-                    title={`${b.text}, ${category.name}`}
-                  >
-                    <span
-                      className="pupil-block-fill"
-                      style={{
-                        width: `${Math.min(100, b.percent)}%`,
-                        background: category.color,
-                      }}
-                    />
-                    <span className="pupil-block-text">
-                      {b.text}
-                      <small>{category.name}</small>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
             {row.average !== null && (
               <span
                 className="pupil-marker"
-                style={{ left: `${Math.min(100, Math.max(0, row.average))}%` }}
+                style={{
+                  left: `${Math.min(100, Math.max(0, row.average))}%`,
+                }}
                 aria-hidden="true"
               >
                 <b>{formatNumber(row.average)}%</b>
               </span>
             )}
+            <div className="pupil-chart-scroll">
+              <div
+                className="pupil-blocks"
+                style={{ minWidth: `${blocks.length * BLOCK_WIDTH}px` }}
+              >
+                {blocks.map((b) => {
+                  const category = categoryOf(
+                    { category: b.category },
+                    categories,
+                  );
+                  return (
+                    <div
+                      key={b.key}
+                      className="pupil-block"
+                      style={{ flexBasis: `${b.share * 100}%` }}
+                      title={`${b.text}, ${category.name}`}
+                    >
+                      <span
+                        className="pupil-block-fill"
+                        style={{
+                          width: `${Math.min(100, b.percent)}%`,
+                          background: category.color,
+                        }}
+                      />
+                      <span className="pupil-block-text">
+                        {b.text}
+                        <small>{category.name}</small>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
           {excluded > 0 && (
             <p className="pupil-muted">Работ без баллов: {excluded}</p>
@@ -778,6 +749,24 @@ export default function PupilGrades({
   useEffect(() => {
     if (tab === "notes" && !notesShown) setTab("summary");
   }, [tab, notesShown]);
+  // Arrows, Home and End walk the tabs; only the chosen one is in the Tab order.
+  const moveTab = (e: KeyboardEvent) => {
+    const at = tabs.indexOf(tab);
+    const to =
+      e.key === "ArrowRight"
+        ? (at + 1) % tabs.length
+        : e.key === "ArrowLeft"
+          ? (at + tabs.length - 1) % tabs.length
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? tabs.length - 1
+              : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    setTab(tabs[to]);
+    document.getElementById(`pupil-tab-${tabs[to]}`)?.focus();
+  };
   async function csv() {
     setBusy(true);
     setProblem("");
@@ -881,7 +870,12 @@ export default function PupilGrades({
           {data.error}
         </p>
       )}
-      <div role="tablist" aria-label="Разделы оценок" className="pupil-tabs">
+      <div
+        role="tablist"
+        aria-label="Разделы оценок"
+        className="pupil-tabs"
+        onKeyDown={moveTab}
+      >
         {tabs.map((t) => (
           <button
             key={t}
@@ -890,6 +884,7 @@ export default function PupilGrades({
             id={`pupil-tab-${t}`}
             aria-selected={tab === t}
             aria-controls="pupil-tabpanel"
+            tabIndex={tab === t ? 0 : -1}
             onClick={() => setTab(t)}
           >
             {TAB_NAMES[t]}

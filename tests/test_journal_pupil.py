@@ -5,7 +5,7 @@ from backend import api, final_grades, journal_pupil
 from test_access import client, enable, create, signed
 from test_journal import DAY, lesson, entry, write, graded
 from test_absences import setup as absence_setup, send, decide, mark
-from test_grade_feed import family, published, items, sign
+from test_grade_feed import family, items, sign
 from test_families import save as family_save
 from seeding import insert_row
 
@@ -119,14 +119,16 @@ def test_teacher_reads_only_the_rows_of_own_lessons(client):
 
 def test_each_account_signs_its_own_marks(client):
     family(client); parent, pupil = signed('parent'), signed('student')
-    published(client)
-    for reader in [parent, pupil]:
-        seen = period(reader).json(); assert seen['marks'][0]['unsigned'] is True and seen['signedAt'] is None
-    assert period(client).json()['marks'][0]['unsigned'] is False
+    publish(client); publish(client, 'Математика')
+    unsigned = lambda reader: {(m['subject'], m['date']): m['unsigned'] for m in period(reader).json()['marks']}
+    assert set(unsigned(parent).values()) == {True} and period(parent).json()['signedAt'] is None
+    assert set(unsigned(pupil).values()) == {True} and set(unsigned(client).values()) == {False}
     assert sign(parent, items(parent)['latest']).status_code == 200
-    signed_parent = period(parent).json()
-    assert signed_parent['marks'][0]['unsigned'] is False and signed_parent['signedAt']
-    assert period(pupil).json()['marks'][0]['unsigned'] is True and period(pupil).json()['signedAt'] is None
+    assert set(unsigned(parent).values()) == {False} and period(parent).json()['signedAt']
+    # A grade published after the signature is the only one waiting; the pupil signed nothing, so all three wait for the pupil.
+    publish(client, day=WEEK)
+    assert unsigned(parent) == {('Английский язык', DAY): False, ('Математика', DAY): False, ('Английский язык', WEEK): True}
+    assert set(unsigned(pupil).values()) == {True} and len(unsigned(pupil)) == 3 and period(pupil).json()['signedAt'] is None
 
 
 def test_too_many_records_refuse_before_any_document_is_read(client, monkeypatch):
@@ -138,10 +140,14 @@ def test_too_many_records_refuse_before_any_document_is_read(client, monkeypatch
 
 
 def test_scale_is_the_latest_final_or_the_only_active_threshold_scale(client):
-    enable(client); create(client, 'parent'); parent = signed('parent')
+    enable(client); create(client, 'parent'); create(client, 'teacher', login='unrelated', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    parent, unrelated = signed('parent'), signed('unrelated')
     publish(client)
     def scale(name, active=True, kind='thresholds'):
         return dict(version=1, name=name, kind=kind, bands=[dict(label='2', minPercent='0', points=None), dict(label='5', minPercent='85', points=None)], rounding='none', minCount=1, active=active)
+    def final(period_id, name, published_at):
+        insert_row(db, 'final_results', workspace='demo', period_id=period_id, student_id='s1', subject_id='sub0', row_id=period_id, version=1,
+                   document=json.dumps(dict(scale=scale(name, kind='labels'), publishedAt=published_at)))
     with api.connect() as db:
         final_grades.tables(db)
         insert_row(db, 'grading_scales', workspace='demo', id='a' * 32, version=1, document=json.dumps(scale('Первая')))
@@ -152,6 +158,8 @@ def test_scale_is_the_latest_final_or_the_only_active_threshold_scale(client):
     chosen = period(parent).json()['scale']
     assert chosen['name'] == 'Первая' and chosen['kind'] == 'thresholds' and [b['label'] for b in chosen['bands']] == ['2', '5'] and float(chosen['bands'][1]['minPercent']) == 85
     with api.connect() as db:
-        insert_row(db, 'final_results', workspace='demo', period_id='p1', student_id='s1', subject_id='sub0', row_id='row1', version=1,
-                   document=json.dumps(dict(scale=scale('Из табеля', kind='labels'), publishedAt='2026-09-01T10:00:00+00:00')))
-    assert period(parent).json()['scale']['name'] == 'Из табеля'
+        final('p2', 'Из последнего табеля', '2026-09-01T10:00:00+00:00')
+        final('p1', 'Из прошлого табеля', '2026-06-01T10:00:00+00:00')
+    assert period(parent).json()['scale']['name'] == 'Из последнего табеля'
+    # A teacher does not read the pupil's report cards: the scale of a card must not reach them through the chart.
+    assert period(unrelated).json()['scale']['name'] == 'Первая'

@@ -49,10 +49,6 @@ export default function PupilDay({
         ? options.yearEnd
         : day;
   const [day, setDay] = useState(() => clamp(focus?.day ?? today));
-  // A notification points at a lesson of its own day.
-  useEffect(() => {
-    if (focus?.day) setDay(clamp(focus.day));
-  }, [focus]);
   const categories = useAssessmentCategories(workspace);
   const week = weekOf(day);
   const timetableKey = `${child}|${day}`,
@@ -68,6 +64,16 @@ export default function PupilDay({
   } | null>(null);
   const [epoch, setEpoch] = useState(0);
   const weeks = useRef(new Map<string, JournalReport>());
+  const mounted = useRef(false);
+  // A notification points at a lesson of its own day, and says something was published since the week was read.
+  useEffect(() => {
+    if (focus?.day) setDay(clamp(focus.day));
+    if (mounted.current && focus) {
+      weeks.current.clear();
+      setEpoch((n) => n + 1);
+    }
+    mounted.current = true;
+  }, [focus]);
   useEffect(() => {
     let live = true;
     api(
@@ -133,7 +139,7 @@ export default function PupilDay({
     document
       .getElementById(`lesson-${focus.lessonKey}`)
       ?.scrollIntoView({ block: "center" });
-  }, [ready, focus, day]);
+  }, [ready, report, focus, day]);
   const className = options.students.find((s) => s.id === child)?.className;
   const move = (days: number) => setDay((old) => clamp(shiftDate(old, days)));
   return (

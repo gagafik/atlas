@@ -504,7 +504,7 @@ export default function Portal({
             section === "homework" ||
             section === "quizzes" ? (
             <>
-              <label className="field">
+              <label className="field workspace-field">
                 <span>Рабочее пространство</span>
                 <select
                   value={workspace}

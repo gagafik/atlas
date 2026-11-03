@@ -286,9 +286,11 @@ def test_family_notes_by_period_and_subject(client, monkeypatch):
     ok(lesson_note(t, key, ['s1'], 'discipline', text='Разговаривал'))
     ok(lesson_note(t, key, ['s1'], 'unprepared', text='Внутренняя пометка', visible=False))
     ok(note(t, ['s1'], 'activity', 'Помог другу', day='2026-08-18'))
+    ok(note(t, ['s1'], 'activity', 'Помог раньше', day='2026-08-14'))
     whole = ok(family(mother, 's1'))
-    assert {n['text'] for n in whole['items']} == {'Разговаривал', 'Помог другу'} and whole['praise'] == 1 and whole['remark'] == 1
-    assert {(s['subjectId'], s['praise'], s['remark']) for s in whole['subjects']} == {(english().id, 0, 1), (None, 1, 0)}
+    assert {n['text'] for n in whole['items']} == {'Разговаривал', 'Помог другу', 'Помог раньше'} and whole['praise'] == 2 and whole['remark'] == 1
+    assert {(s['subjectId'], s['praise'], s['remark']) for s in whole['subjects']} == {(english().id, 0, 1), (None, 2, 0)}
+    # Notes before and after the window are in neither the items, nor the totals, nor the subjects.
     one_day = ok(mother.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)))
     assert [(n['text'], n['subjectId'], n['subject']) for n in one_day['items']] == [('Разговаривал', english().id, english().name)]
     assert one_day['remark'] == 1 and one_day['praise'] == 0

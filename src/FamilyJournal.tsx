@@ -7,6 +7,7 @@ import PupilAttendance from "./PupilAttendance";
 import PupilDay from "./PupilDay";
 import PupilGrades from "./PupilGrades";
 import {
+  dayText,
   defaultChoice,
   periodChoices,
   recallChild,
@@ -120,8 +121,18 @@ export default function FamilyJournal({
         focus={focus}
       />
     );
+  // The pickers do not print, so the sheet names the pupil and, for grades and attendance, the period.
+  const pupil = students.find((s) => s.id === child);
+  const ranged =
+    view === "pupilGrades" || view === "pupilAttendance" || view === "absences";
   return (
     <div className="family-journal">
+      <p className="pupil-print-head">
+        {pupil?.name}
+        {pupil?.className ? `, ${pupil.className}` : ""}
+        {ranged &&
+          ` · ${choices.find((c) => c.id === period.id)?.name ?? "Период"}: ${dayText(period.start)} – ${dayText(period.end)}`}
+      </p>
       <ChildPicker students={students} value={child} onChange={pick} />
       {screen}
     </div>
