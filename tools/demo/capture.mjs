@@ -22,6 +22,11 @@ const SWEEP_FIRST = "2026-10-05";
 const SWEEP_LAST = "2026-11-13";
 // A day of the whole school is large; the week before the demo day and the next ones are enough.
 const WINDOWS = [{ pattern: /^\/api\/calendar\/day$/, first: "2026-10-26" }];
+// The other dated requests of one week are asked again for the weeks before and after it.
+const DEFAULT_SHIFTS = [-14, -7, 7, 14];
+// A week of the attendance grid is 30 KiB per class and the administrator has four of them: only the first class, the one on show,
+// is swept over the weeks around the demo day; the others keep the week the walk opened.
+const SWEPT_WEEKS = [{ pattern: /^\/api\/journal\/attendance\/grid$/, deltas: (url) => (url.searchParams.get("classId") === "c0" ? DEFAULT_SHIFTS : []) }];
 
 function args() {
   const result = { roles: "admin,teacher,parent,student", budget: 500, walk: true, sweep: true, out: resolve(HERE, "snapshot") };
@@ -127,7 +132,7 @@ async function sweep(context, recorder, role, log) {
     const start = params.find(([name]) => name === "start" || name === "from");
     const end = params.find(([name]) => name === "end" || name === "to");
     if (start && end && DATE.test(start[1]) && DATE.test(end[1]) && (Date.parse(end[1]) - Date.parse(start[1])) / 86400000 <= 7) {
-      for (const delta of [-14, -7, 7, 14]) {
+      for (const delta of SWEPT_WEEKS.find((rule) => rule.pattern.test(url.pathname))?.deltas(url) ?? DEFAULT_SHIFTS) {
         const next = new URL(url);
         next.searchParams.set(start[0], isoShift(start[1], delta));
         next.searchParams.set(end[0], isoShift(end[1], delta));

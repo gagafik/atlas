@@ -1093,6 +1093,7 @@ main {
   background: white;
 }
 .table-scroll {
+  position: relative;
   overflow-x: auto;
 }
 .data-table {
