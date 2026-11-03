@@ -140,7 +140,7 @@ export async function walkRole(page, base, activity, budget, log) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         await page.goto(base, { waitUntil: "domcontentloaded" });
-        await page.waitForSelector(".sidebar nav button", { timeout: 15000 });
+        await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 15000 });
         break;
       } catch (error) {
         if (attempt >= 2) throw error;

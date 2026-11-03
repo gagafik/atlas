@@ -178,18 +178,25 @@ export default function JournalPanel({
   workspace,
   focus,
   view,
+  onLeaveView,
 }: {
   workspace: string;
   focus?: JournalFocus;
   // Set by a menu entry: show this part of the journal alone, if the server offers it to the account.
   view?: JournalPanelName;
+  // The panel opened a lesson and left that part: the menu and the title must stop naming it.
+  onLeaveView?: () => void;
 }) {
   const coverageOpened = useRef(false),
     editorPanel = useRef<HTMLElement | null>(null);
   const [options, setOptions] = useState<Options | null>(null),
     [mode, setMode] = useState("day"),
     [only, setOnly] = useState(view);
-  useEffect(() => setOnly(view), [view]);
+  // The lesson editor is hidden while a part shows alone: what was typed there was given up at the leave prompt.
+  useEffect(() => {
+    setOnly(view);
+    if (view) clearEditor();
+  }, [view]);
   const single =
     options && only && journalPanels(options).includes(only) ? only : undefined;
   const [day, setDay] = useState(""),
@@ -590,6 +597,7 @@ export default function JournalPanel({
             onOpen={(key, date) => {
               if (!canLeave()) return;
               setOnly(undefined);
+              onLeaveView?.();
               coverageOpened.current = true;
               clearEditor();
               setMode("day");
@@ -651,6 +659,7 @@ export default function JournalPanel({
             onOpen={(key, date) => {
               if (!canLeave()) return;
               setOnly(undefined);
+              onLeaveView?.();
               coverageOpened.current = true;
               clearEditor();
               setMode("day");

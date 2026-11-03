@@ -262,7 +262,7 @@ export default function LessonTopic({
       {!loading && !plans.length && !disabled && !error && (
         <p>
           На эту дату нет действующего плана для предмета и группы. Создайте его
-          в разделе «Учебные планы».
+          в разделе «Планы и заготовки».
         </p>
       )}
       {error && (

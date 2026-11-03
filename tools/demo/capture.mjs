@@ -184,7 +184,7 @@ async function captureRole(browser, options, meta, role) {
   recorder.state.loginOpen = false;
   recorder.state.recording = true;
   await page.goto(base);
-  await page.waitForSelector(".sidebar nav button", { timeout: 20000 });
+  await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
   await waitQuiet(page, activity, 500, 10000, 800);
   if (options.walk) await walkRole(page, base, activity, { left: options.budget, seen: new Set() }, log);
   const kit = createKit({ page, base, activity, miss: (text) => log(`  [${role}] journey miss: ${text}`), log });

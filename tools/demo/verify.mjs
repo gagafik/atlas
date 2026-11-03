@@ -78,7 +78,7 @@ async function verifyRole(browser, base, role, widthName, shots, report, walk) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const kit = createKit({ page, base: url, activity, miss, log: (text) => notes.push(text), shots: shots && resolve(shots, label.replace("/", "-")) });
   try {
-    await page.waitForSelector(".sidebar nav button", { timeout: 20000 });
+    await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
     await journeys[role](kit);
     await tours[role]?.(kit);
   } catch (error) {

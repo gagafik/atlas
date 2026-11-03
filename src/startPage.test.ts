@@ -51,55 +51,93 @@ describe("the bells of a day", () => {
         yearEnd: "2027-05-31",
         days: ["Пн", "Вт", "Ср", "Чт", "Пт"],
       },
+      classes: [{ id: "c1" }, { id: "c2" }],
       profiles,
       events: [],
+      scheduleDays: [],
       ...extra,
     }) as unknown as State;
+  const event = (kind: string, extra = {}) => ({
+    id: "e",
+    name: "Событие",
+    kind,
+    start: "2026-10-26",
+    end: "2026-11-03",
+    grades: "",
+    ...extra,
+  });
+  const labels = (state: State, day: string) =>
+    todayBells(state, day).map((p) => p.label);
 
   it("are the periods of the profile, in time order, on a school day", () => {
     // 2026-11-02 is a Monday.
-    expect(todayBells(school(), "2026-11-02").map((p) => p.label)).toEqual([
-      "1",
-      "2",
-    ]);
+    expect(labels(school(), "2026-11-02")).toEqual(["1", "2"]);
   });
 
   it("use the periods of the weekday when the profile sets its own", () => {
     const own = [{ label: "A", start: "08:00", end: "08:40" }];
     const state = school({}, [profile({ dayPeriods: { "0": own } })]);
     expect(todayBells(state, "2026-11-02")).toEqual(own);
-    expect(todayBells(state, "2026-11-03").length).toBe(2);
+    expect(labels(state, "2026-11-03")).toEqual(["1", "2"]);
   });
 
-  it("are empty at the weekend, in a holiday and outside the school year", () => {
-    expect(todayBells(school(), "2026-11-07")).toEqual([]);
-    expect(todayBells(school(), "2026-08-15")).toEqual([]);
-    const holiday = school({
-      events: [
+  it("are empty at the weekend and outside the school year, and run on the first day of the year", () => {
+    expect(labels(school(), "2026-11-07")).toEqual([]);
+    // 2026-08-31 is a Monday, 2026-09-01 a Tuesday.
+    expect(labels(school(), "2026-08-31")).toEqual([]);
+    expect(labels(school(), "2026-09-01")).toEqual(["1", "2"]);
+  });
+
+  it.each([
+    ["a holiday", event("holiday"), "2026-10-28", false],
+    ["the last day of a break", event("winter"), "2026-11-03", false],
+    ["the day after a break", event("winter"), "2026-11-04", true],
+    ["an exam week", event("exam"), "2026-11-02", true],
+    ["a reading week that only notes", event("reading"), "2026-11-02", true],
+    [
+      "a reading week that cancels lessons",
+      event("reading", { effect: "cancel" }),
+      "2026-11-02",
+      false,
+    ],
+    [
+      "a cancelling event of one class",
+      event("extra", { effect: "cancel", classIds: ["c1"] }),
+      "2026-11-02",
+      true,
+    ],
+    [
+      "a cancelling event of every class",
+      event("extra", { effect: "cancel", classIds: ["c1", "c2"] }),
+      "2026-11-02",
+      false,
+    ],
+  ])("when the calendar has %s", (_, e, day, runs) => {
+    expect(labels(school({ events: [e] as never }), day).length > 0).toBe(runs);
+  });
+
+  it("follow the weekday chosen as «день в расписании»", () => {
+    const own = [{ label: "A", start: "08:00", end: "08:40" }];
+    const shifted = (extra = {}) =>
+      school(
         {
-          id: "e",
-          name: "Каникулы",
-          kind: "winter",
-          start: "2026-10-26",
-          end: "2026-11-03",
-          grades: "",
+          scheduleDays: [
+            {
+              id: "d",
+              name: "",
+              onDate: "2026-11-07",
+              day: 0,
+              classIds: [],
+              cycleId: null,
+              ...extra,
+            },
+          ],
         },
-      ],
-    });
-    expect(todayBells(holiday, "2026-11-02")).toEqual([]);
-    // An exam week is still a school week.
-    const exams = school({
-      events: [
-        {
-          id: "x",
-          name: "Экзамены",
-          kind: "exam",
-          start: "2026-10-26",
-          end: "2026-11-03",
-          grades: "",
-        },
-      ],
-    });
-    expect(todayBells(exams, "2026-11-02").length).toBe(2);
+        [profile({ dayPeriods: { "0": own } })],
+      );
+    // A Saturday that works as a Monday runs Monday's bells.
+    expect(todayBells(shifted(), "2026-11-07")).toEqual(own);
+    // A day set for some classes only does not turn the whole school on.
+    expect(todayBells(shifted({ classIds: ["c1"] }), "2026-11-07")).toEqual([]);
   });
 });

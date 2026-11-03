@@ -76,15 +76,20 @@ const days = [
   "Суббота",
   "Воскресенье",
 ];
-// «Начало» of a pupil, a parent or a teacher: the lessons of today for the first record of the workspace, the one the schedule opens with.
+// «Начало» of a pupil, a parent or a teacher: the lessons of today for a record of the workspace (the first one, as the schedule opens with it).
+// `named` puts the name of the record in the heading (a parent or a viewer looks at someone else's day).
 function TodayLessons({
   workspace,
   space,
+  named,
 }: {
   workspace: string;
   space?: Space;
+  named: boolean;
 }) {
-  const record = space?.records[0];
+  const records = space?.records ?? [],
+    [chosen, setChosen] = useState(0);
+  const record = records[chosen];
   const [now, setNow] = useState(() => new Date());
   const [rows, setRows] = useState<Row[] | null>(null),
     [error, setError] = useState("");
@@ -139,7 +144,23 @@ function TodayLessons({
   return (
     <section className="today-lessons">
       <header>
-        <h2>Уроки сегодня</h2>
+        <h2>
+          Уроки сегодня
+          {named && record && records.length < 2 ? ` · ${record.name}` : ""}
+        </h2>
+        {records.length > 1 && (
+          <select
+            aria-label="Чьё расписание"
+            value={chosen}
+            onChange={(e) => setChosen(Number(e.target.value))}
+          >
+            {records.map((r, i) => (
+              <option key={r.view + ":" + r.id} value={i}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        )}
         {status && <strong role="status">{status}</strong>}
       </header>
       {error && (
@@ -394,6 +415,7 @@ export default function Portal({
                     key={workspace}
                     workspace={workspace}
                     space={space}
+                    named={["parent", "viewer"].includes(session.user!.role)}
                   />
                   <section className="start-feed">
                     <h2>Уведомления</h2>
@@ -512,6 +534,7 @@ export default function Portal({
                     workspace={workspace}
                     focus={journalFocus}
                     view={journalView}
+                    onLeaveView={() => setJournalView(undefined)}
                   />
                 ))}
             </>

@@ -14,7 +14,7 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
     // Back to the first screen of the role.
     async home() {
       await page.goto(base, { waitUntil: "domcontentloaded" });
-      await page.waitForSelector(".sidebar nav button", { timeout: 20000 });
+      await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
       await settle(700);
     },
     // Click a button, tab, summary or link of the page by its text (a string matches the whole text).

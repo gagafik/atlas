@@ -1,6 +1,7 @@
 import {
   Fragment,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
@@ -194,7 +195,7 @@ export default function Shell({
   school?: string;
   year?: string;
   unread?: Unread;
-  badges?: Record<string, ReactNode>;
+  badges?: Record<string, number | undefined>;
   extra?: ReactNode;
   accountExtra?: { label: string; onSelect: () => void; disabled?: boolean }[];
   footer?: ReactNode;
@@ -208,7 +209,11 @@ export default function Shell({
   const [drawer, setDrawer] = useState(false),
     [accountOpen, setAccountOpen] = useState(false),
     [openGroups, setOpenGroups] = useState<string[]>([]);
-  const accountBox = useRef<HTMLDivElement>(null);
+  const accountBox = useRef<HTMLDivElement>(null),
+    accountToggle = useRef<HTMLButtonElement>(null),
+    sidebar = useRef<HTMLElement>(null),
+    menuToggle = useRef<HTMLButtonElement>(null),
+    shown = useRef(false);
   // The group of the screen on show is open, wherever the screen was reached from.
   const activeGroup = active ? groupOf(menu, active.id)?.id : undefined;
   useEffect(() => {
@@ -217,26 +222,62 @@ export default function Shell({
         open.includes(activeGroup) ? open : [...open, activeGroup],
       );
   }, [active?.id, activeGroup]);
+  // A new screen opens at its top, whatever the scroll position was when the fixed menu was used.
+  useLayoutEffect(() => {
+    if (shown.current) window.scrollTo(0, 0);
+    shown.current = true;
+  }, [view, journalView]);
+  // The drawer works as a dialog: the focus goes into the menu when it opens and back to its button when it closes.
+  function closeDrawer() {
+    if (!drawer) return;
+    setDrawer(false);
+    menuToggle.current?.focus();
+  }
+  useEffect(() => {
+    if (!drawer) return;
+    const nav = sidebar.current?.querySelector("nav");
+    (
+      nav?.querySelector<HTMLElement>('[aria-current="page"]') ??
+      nav?.querySelector<HTMLElement>("button")
+    )?.focus();
+  }, [drawer]);
   useEffect(() => {
     if (!drawer && !accountOpen) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setDrawer(false);
-      setAccountOpen(false);
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (accountOpen) accountToggle.current?.focus();
+        setAccountOpen(false);
+        closeDrawer();
+      } else if (event.key === "Tab" && drawer && sidebar.current) {
+        // Tab stays inside the open drawer: the rest of the page is behind its backdrop.
+        const stops = [
+          ...sidebar.current.querySelectorAll<HTMLElement>("a[href], button"),
+        ].filter((stop) => !stop.closest("[hidden]"));
+        const first = stops[0],
+          last = stops[stops.length - 1],
+          at = document.activeElement;
+        if (!sidebar.current.contains(at) || (event.shiftKey && at === first)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (!event.shiftKey && at === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     const outside = (event: MouseEvent) => {
       if (!accountBox.current?.contains(event.target as Node))
         setAccountOpen(false);
     };
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", keys);
     document.addEventListener("mousedown", outside);
     return () => {
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", keys);
       document.removeEventListener("mousedown", outside);
     };
   }, [drawer, accountOpen]);
   function select(item: NavItem) {
-    setDrawer(false);
+    closeDrawer();
     setAccountOpen(false);
     const { target } = item;
     if (target.kind === "view") onView(target.view, target.journal);
@@ -280,7 +321,11 @@ export default function Shell({
   };
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${drawer ? "open" : ""}`}>
+      <aside
+        id="shell-sidebar"
+        ref={sidebar}
+        className={`sidebar ${drawer ? "open" : ""}`}
+      >
         <a
           className="brand"
           href="#"
@@ -307,7 +352,14 @@ export default function Shell({
                 if (!isGroup(item)) return entry(item);
                 const open = openGroups.includes(item.id),
                   Icon = iconOf(item.icon),
-                  holds = item.items.some((child) => child === active);
+                  holds = item.items.some((child) => child === active),
+                  // A folded group still tells that something inside it waits.
+                  waiting = open
+                    ? 0
+                    : item.items.reduce(
+                        (sum, child) => sum + (badges?.[child.id] ?? 0),
+                        0,
+                      );
                 return (
                   <div className="nav-group" key={item.id}>
                     <button
@@ -324,6 +376,9 @@ export default function Shell({
                     >
                       <Icon size={18} />
                       <span>{item.label}</span>
+                      {!!waiting && (
+                        <span className="nav-count">{waiting}</span>
+                      )}
                       <ChevronRight className="nav-arrow" size={14} />
                     </button>
                     <div
@@ -344,15 +399,15 @@ export default function Shell({
           {footer}
         </div>
       </aside>
-      {drawer && (
-        <div className="sidebar-backdrop" onClick={() => setDrawer(false)} />
-      )}
+      {drawer && <div className="sidebar-backdrop" onClick={closeDrawer} />}
       <div className="main-shell">
         <header className="topbar">
           <div className="breadcrumb">
             <button
+              ref={menuToggle}
               className="icon-button menu-toggle"
               aria-label="Меню"
+              aria-controls="shell-sidebar"
               aria-expanded={drawer}
               onClick={() => setDrawer(!drawer)}
             >
@@ -371,16 +426,14 @@ export default function Shell({
               className="icon-button messages-button"
               title="Сообщения"
               aria-label={`Сообщения${unreadText ? `, непрочитанных: ${unreadText}` : ""}`}
-              onClick={() => {
-                setDrawer(false);
-                onView("messages");
-              }}
+              onClick={() => onView("messages")}
             >
               <MessageSquare size={18} />
               {unreadText && <b>{unreadText}</b>}
             </button>
             <div className="account" ref={accountBox}>
               <button
+                ref={accountToggle}
                 className="account-toggle"
                 aria-expanded={accountOpen}
                 onClick={() => setAccountOpen(!accountOpen)}

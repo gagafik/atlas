@@ -5,7 +5,7 @@ import type { NavItem } from "./navigation";
 import { bellState, minutesNow, todayBells } from "./startPage";
 import type { State } from "./types";
 
-/** «Начало» of the administration: the bells of today with the time left, the latest announcements and the tiles of the main modules. */
+/** «Начало» of the administration: the bells of today with the time left, the tiles of the main modules and, below them, the latest announcements. */
 export default function SchoolStart({
   state,
   workspace,
@@ -70,10 +70,6 @@ export default function SchoolStart({
         )}
       </section>
       <div className="start-grid">
-        <section className="start-feed">
-          <h2>Уведомления</h2>
-          <MessageFeed key={workspace} workspace={workspace} />
-        </section>
         <div className="start-tiles">
           {tiles.map((tile) => {
             const Icon = iconOf(tile.icon);
@@ -85,6 +81,10 @@ export default function SchoolStart({
             );
           })}
         </div>
+        <section className="start-feed">
+          <h2>Уведомления</h2>
+          <MessageFeed key={workspace} workspace={workspace} />
+        </section>
       </div>
     </>
   );

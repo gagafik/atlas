@@ -1636,6 +1636,7 @@ export default function App({
                 workspace={workspace}
                 focus={journalFocus}
                 view={journalView}
+                onLeaveView={() => setJournalView(undefined)}
               />
             )}
             {page === "homework" && (

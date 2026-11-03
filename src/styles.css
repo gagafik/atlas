@@ -289,6 +289,9 @@ small {
   margin-left: auto;
   transition: transform 0.15s;
 }
+.nav-count + .nav-arrow {
+  margin-left: 6px;
+}
 .nav-group > button[aria-expanded="true"] .nav-arrow {
   transform: rotate(90deg);
 }
@@ -1808,14 +1811,20 @@ main {
   }
 }
 @media (max-width: 900px) {
+  /* A closed drawer is hidden for good: its buttons leave the tab order and the reading order of screen readers. */
   .sidebar {
     transform: translateX(-100%);
+    visibility: hidden;
     width: 260px;
     max-width: 85vw;
-    transition: transform 0.2s;
+    transition:
+      transform 0.2s,
+      visibility 0s 0.2s;
   }
   .sidebar.open {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.2s;
     box-shadow: 20px 0 70px #1d372d25;
   }
   .sidebar-backdrop {
@@ -4944,6 +4953,9 @@ main {
 .start-feed {
   grid-column: 1 / -1;
   min-width: 0;
+}
+.start-tiles + .start-feed {
+  margin-top: 14px;
 }
 .start-feed > h2,
 .today-lessons > header h2 {

@@ -7,6 +7,7 @@ import {
   buildMenu,
   containerOf,
   eventViews,
+  isGroup,
   menuItems,
   startTiles,
   targetKey,
@@ -238,6 +239,19 @@ describe("the menu of each role", () => {
     ).not.toContain("modal:consultations");
     // The flag alone does not open them to another role.
     expect(keys(context("parent"))).not.toContain("modal:consultations");
+  });
+
+  it("shows no folder and no block with nothing in it, whatever the school hides", () => {
+    for (const role of [...ROLES, null])
+      for (const hiddenSections of [[], OPTIONAL_SECTIONS, null])
+        for (const journalPanels of [PANELS, [], null])
+          for (const block of buildMenu(
+            context(role, { hiddenSections, journalPanels }),
+          )) {
+            expect(block.length).toBeGreaterThan(0);
+            for (const entry of block)
+              if (isGroup(entry)) expect(entry.items.length).toBeGreaterThan(0);
+          }
   });
 
   it("opens no two entries to the same screen", () => {

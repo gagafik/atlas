@@ -1,7 +1,7 @@
 // The countdown and the bell strip of the start page. Pure: the caller passes the day and the minute.
 import { patternOn } from "./cycles";
 import { clockMinutes } from "./journal";
-import type { State } from "./types";
+import type { CalendarEvent, State } from "./types";
 
 export interface Bell {
   start: string;
@@ -42,15 +42,26 @@ export function bellState(bells: Bell[], minutes: number): BellState | null {
 export const minutesNow = (date: Date) =>
   date.getHours() * 60 + date.getMinutes();
 
-/** The periods of a school day, sorted; none on a weekend, a holiday, a break or outside the year. */
+/**
+ * The periods of a school day, sorted; none on a weekend, when the whole school is closed, or outside the year.
+ * The rules are the server's: «день в расписании» replaces the weekday, and an event closes the school only
+ * if it cancels lessons (or is a holiday or winter break) for every class.
+ */
 export function todayBells(state: State, day: string) {
   if (!patternOn(state, day)) return [];
-  const weekday = (new Date(day + "T12:00:00Z").getUTCDay() + 6) % 7;
+  const moved = (state.scheduleDays || []).find(
+    (d) => d.onDate === day && !d.classIds.length,
+  );
+  const weekday =
+    moved?.day ?? (new Date(day + "T12:00:00Z").getUTCDay() + 6) % 7;
   if (weekday >= state.settings.days.length) return [];
-  const off = ["holiday", "winter", "reading"];
+  const closes = (e: CalendarEvent) =>
+    (e.effect === "cancel" || e.kind === "holiday" || e.kind === "winter") &&
+    (!e.classIds?.length ||
+      state.classes.every((c) => e.classIds!.includes(c.id)));
   if (
     (state.events || []).some(
-      (e) => off.includes(e.kind) && e.start <= day && day <= e.end,
+      (e) => e.start <= day && day <= e.end && closes(e),
     )
   )
     return [];
