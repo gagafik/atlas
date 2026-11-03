@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placeInSlots, profileFor, slotsFor } from "./bells";
+import { dayProfile, placeInSlots, profileFor, slotsFor } from "./bells";
 import type { BellProfile } from "./journal";
 
 const slot = (label: string, start: string, end: string) => ({
@@ -76,5 +76,26 @@ describe("profileFor", () => {
     expect(profileFor(options, "a")?.id).toBe("q");
     expect(profileFor(options, "b")?.id).toBe("p");
     expect(profileFor({ students: [] }, "a")).toBeUndefined();
+  });
+});
+
+describe("dayProfile", () => {
+  const first = profile(),
+    second = { ...profile(), id: "q" };
+  it("takes the profile most of the day's lessons run on", () => {
+    const lessons = [
+      { profileId: "q" },
+      { profileId: "p" },
+      { profileId: "q" },
+    ];
+    expect(dayProfile(lessons, [first, second])?.id).toBe("q");
+  });
+  it("falls back to the first profile of the school when no lesson names one", () => {
+    expect(dayProfile([], [first, second])?.id).toBe("p");
+    expect(dayProfile([{ profileId: null }, {}], [first, second])?.id).toBe(
+      "p",
+    );
+    expect(dayProfile([{ profileId: "gone" }], [first, second])?.id).toBe("p");
+    expect(dayProfile([], undefined)).toBeUndefined();
   });
 });

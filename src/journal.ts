@@ -113,6 +113,47 @@ export interface AbsenceCodeOption {
   name: string;
   active: boolean;
 }
+// One lesson of the day list (journal/day): what the teacher's day grid shows without opening the lesson.
+export interface DayLesson {
+  lessonKey: string;
+  lesson: Pick<
+    JournalLesson,
+    | "date"
+    | "start"
+    | "end"
+    | "subject"
+    | "group"
+    | "teachers"
+    | "rooms"
+    | "status"
+  >;
+  studentCount: number;
+  version: number;
+  publishedVersion: number | null;
+  hasPublished: boolean;
+  archived: boolean;
+  frozen?: boolean;
+  // The bells the lesson runs on; an archived lesson has none.
+  profileId: string | null;
+  classes: string[];
+  // The draft the teacher sees; present and marked count the published attendance and are null while nothing is published for the day.
+  topic: string;
+  homework: string;
+  dueDate: string | null;
+  present: number | null;
+  marked: number | null;
+}
+/** Where the lesson stands for the families, in the teacher's words. */
+export const dayLessonState = (l: DayLesson) =>
+  l.archived
+    ? "Архивная запись"
+    : l.lesson.status === "cancelled"
+      ? "Отменено"
+      : l.hasPublished
+        ? `Ученикам: редакция ${l.publishedVersion}${l.publishedVersion !== l.version ? " · есть черновик" : ""}`
+        : l.version
+          ? "Черновик"
+          : "Не заполнено";
 export interface JournalRow {
   lessonKey: string;
   lesson: Omit<JournalLesson, "students">;
@@ -247,6 +288,8 @@ export type JournalView = JournalPanelName | "pupilGrades" | "pupilAttendance";
 // What journal/options tells the page about the account and the school.
 export interface JournalOptions {
   staff: boolean;
+  // The account is an administrator (the coverage calendar then follows a chosen class, not the own lessons).
+  admin?: boolean;
   // Which management panels have anything for this account; the server still enforces rights.
   panels?: Partial<Record<JournalPanelName, boolean>>;
   yearStart: string;

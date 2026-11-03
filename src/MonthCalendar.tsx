@@ -14,6 +14,7 @@ export default function MonthCalendar({
   max,
   mark,
   onSelect,
+  onMonth,
 }: {
   value: string;
   today: string;
@@ -21,10 +22,13 @@ export default function MonthCalendar({
   max?: string;
   mark?: (day: string) => string | undefined;
   onSelect: (day: string) => void;
+  // The month on show (YYYY-MM), told at the start and whenever the arrows or the chosen day change it.
+  onMonth?: (month: string) => void;
 }) {
   const [anchor, setAnchor] = useState(value);
   useEffect(() => setAnchor(value), [value]);
   const month = anchor.slice(0, 7);
+  useEffect(() => onMonth?.(month), [month]);
   return (
     <div className="month-calendar" aria-label="Календарь">
       <div className="month-calendar-head">

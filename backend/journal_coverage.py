@@ -20,7 +20,7 @@ PAGE=50
 CACHE_ENTRIES=4
 CACHE_ROWS=200000
 CACHE_SECONDS=600
-KEYS=('lessonKey','date','start','end','subject','group','teachers','classNames','status','due','pupils','missingPupils','unmarkedPupils','rosterUnknown','topicFilled','needsSync','version','publishedVersion','hasDraftChanges','canOpen')
+KEYS=('lessonKey','date','start','end','subject','group','teachers','classNames','status','due','pupils','missingPupils','unmarkedPupils','rosterUnknown','topicFilled','needsSync','version','publishedVersion','hasDraftChanges','canOpen','actionable')
 STATUS=KEYS.index('status')
 # Server-only tail of every cached row: never part of the public projection, tokens or paging.
 INTERNAL=('classIds','teacherIds','sourceDate')
@@ -197,6 +197,8 @@ class JournalCoverage:
                     version=saved['version'] if saved else 0,publishedVersion=saved['publishedVersion'] if saved else None,hasDraftChanges=bool(published and saved['version']!=saved['publishedVersion']),canOpen=staff_read(user,workspace,row),
                     # Current resolved teachers (a substitute wins even over a frozen publication) and the scope-limited classes.
                     classIds=sorted(classes&set(row['classIds'])),teacherIds=list(row['teacherIds']),sourceDate=row['sourceDate'] or row['date'])
+                # The calendar, the reminders and the class summary share one «не заполнено» rule.
+                value['actionable']=actionable(value)
                 rows.append(value)
                 if detail and key==detail.lessonKey:
                     names=sorted([dict(id=id,name=people[id].name if id in people else 'Ученик вне текущего состава',className=class_names.get(held[id],'Вне текущего состава'),issue='missing' if id in missing else 'unmarked') for id in missing|unmarked],key=lambda s:(s['name'].casefold(),s['id']))
@@ -212,7 +214,7 @@ class JournalCoverage:
                 archived_match=archived and (not body.subjectId or body.subjectId==lesson['subjectId']) and (not body.teacherId or body.teacherId in lesson['teacherIds'])
                 if not archived_match and not self.selected(lesson|dict(classIds=actual_classes),user,body,classes,own):continue
                 orphans[key]=dict(lessonKey=key,date=lesson['date'],start=lesson['start'],end=lesson['end'],subject=lesson['subject'],group=lesson['group'],teachers=lesson['teachers'],classNames=['Вне текущего состава'] if archived else [class_names[c] for c in sorted(classes&actual_classes)],status='orphaned',due=False,pupils=0,missingPupils=0,unmarkedPupils=0,rosterUnknown=False,topicFilled=saved['topic'],needsSync=True,version=saved['version'],publishedVersion=saved['publishedVersion'],hasDraftChanges=saved['version']!=saved['publishedVersion'],canOpen=user['role']=='admin' or bool(own&set(saved['draftTeachers'])),
-                    classIds=[] if archived else sorted(classes&actual_classes),teacherIds=list(lesson['teacherIds']),sourceDate=lesson['date'])
+                    classIds=[] if archived else sorted(classes&actual_classes),teacherIds=list(lesson['teacherIds']),sourceDate=lesson['date'],actionable=False)
         if detail:
             if not detail_value:raise HTTPException(404,'Урок не найден в доступном расписании выбранной даты.')
             return detail_value

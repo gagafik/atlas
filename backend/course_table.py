@@ -3,6 +3,7 @@
 Marks are written only through Journal.store_revision, one lesson at a time, in the two-revision pattern of
 homework_grading.apply: the publication gets the works and marks, the draft keeps everything else the teacher has not published."""
 from collections import defaultdict
+import json
 from copy import deepcopy
 from datetime import date
 
@@ -11,7 +12,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from . import class_staff
 from .access import now
-from .assessment_categories import GREY, breakdown, category_of, composite, config as category_config, merge, policy_for, tally
+from .assessment_categories import GREY, breakdown, category_of, composite, config as category_config, dump, merge, policy_for, tally
 from .calendar_ops import plain
 from .homework import course_teachers
 from .homework_bulk import remember, replay
@@ -19,6 +20,7 @@ from .journal import Content, Grade, PupilRecord, current_lesson, signature, sta
 from .journal_periods import require_open
 from .models import Model
 from .natural import natural
+from .notifications import encoded
 from .resources import teacher_ids
 
 GONE='Урока больше нет в расписании или он отменён.'
@@ -149,8 +151,40 @@ def store_marks(journal, db, workspace, key, user, revision, version, draft, pre
     return journal.store_revision(db,workspace,key,user,revision,version,draft,previous,created=created),False
 
 
-def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
-    """The compact payload: lessons and works as columns, pupils as rows, marks by work index, totals by the family report's own maths."""
+def computed(sums, policy, scale):
+    """The grade the final-grade rule recommends from these sums on this scale: the same call as a final-grade book makes. None for a labels scale, an inactive one, or too few marks."""
+    from .final_grades import recommendation
+    if not scale['active'] or scale['kind']!='thresholds': return None
+    return recommendation(dict(categories=dump(sums),policy=policy),scale)['recommended']
+
+
+def scale_of(db, workspace, id):
+    """The grading scale document, or 404: a database that never prepared final grades has none."""
+    raw=db.execute('SELECT document FROM grading_scales WHERE workspace=? AND id=?',(workspace,id)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='grading_scales'").fetchone() else None
+    if not raw: raise HTTPException(404,'Шкала не найдена.')
+    return json.loads(raw[0])
+
+
+def finals_of(db, snap, user, workspace, period, subject, pupils):
+    """{pupil: {label, outcome}}: the published final grades of the period in this subject that this account reads in the final grades.
+    The administrator reads all; anybody else reads the current pupils of the classes they lead and the rows assigned to them."""
+    if not db.execute("SELECT 1 FROM journal_periods WHERE workspace=? AND id=?",(workspace,period)).fetchone(): raise HTTPException(404,'Учебный период не найден.')
+    if not pupils or db.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('final_results','grading_rows')").fetchone()[0]<2: return {}
+    query='SELECT f.student_id,f.document FROM final_results f WHERE f.workspace=? AND f.period_id=? AND f.subject_id=? AND f.student_id IN (SELECT value FROM json_each(?))'
+    params=[workspace,period,subject,encoded(sorted(pupils))]
+    if user['role']!='admin':
+        led=class_staff.led(user,snap,workspace)
+        query+=' AND (f.student_id IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM grading_rows r WHERE r.workspace=f.workspace AND r.id=f.row_id AND r.assigned=?))'
+        params+=[encoded(sorted(s.id for s in snap.state.students if s.active and s.classId in led)),user['id']]
+    result={}
+    for student,raw in db.execute(query,params):
+        document=json.loads(raw);result[student]=dict(label=document['label'],outcome=document['outcome'])
+    return result
+
+
+def build_table(snap, cfg, scope, group, subject, start, end, shown, revision, scale=None):
+    """The compact payload: lessons and works as columns, pupils as rows, marks by work index, totals by the family report's own maths.
+    With a scale every pupil also carries `computed`, the grade that scale gives the same totals."""
     led=scope['classes']
     lessons,works,index,used=[],[],{},set()
     people,present={},defaultdict(list)
@@ -194,6 +228,7 @@ def build_table(snap, cfg, scope, group, subject, start, end, shown, revision):
         rows.append(dict(person,**{'from':lo,'to':hi},lessons=present.get(id,[]),marks=marks,categories=breakdown(sums,cfg,policy['method']),
                          sharePercentage=round(float(total['exact']),2) if total['exact'] is not None else None,
                          blocked=total['blocked'],missing=total['missing'],excluded=total['excluded'],rule=policy['ruleName']))
+        if scale is not None: rows[-1]['computed']=computed(sums,policy,scale)
     return dict(revision=revision,groupId=group,group=snap.entities['group'][group].name,subjectId=subject,subject=next(s.name for s in snap.state.subjects if s.id==subject),
                 scope=scope['kind'],canEdit=scope['canEdit'],source='draft' if scope['kind']=='course' else 'published',start=start.isoformat(),end=end.isoformat(),
                 categories=categories,lessons=lessons,works=works,pupils=rows)
@@ -322,7 +357,7 @@ class CourseTable:
             return dict(revision=state.revision,today=today().isoformat(),yearStart=state.settings.yearStart.isoformat(),yearEnd=state.settings.yearEnd.isoformat(),periods=periods,courses=items)
 
         @app.get('/api/journal/course-table')
-        def table(request: Request,groupId: str,subjectId: str,start: date,end: date,workspace: Workspace='school'):
+        def table(request: Request,groupId: str,subjectId: str,start: date,end: date,workspace: Workspace='school',scaleId: str='',periodId: str=''):
             user=journal.scope(request,workspace,staff=True)
             if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
             snap=snapshots.get(workspace)
@@ -330,7 +365,11 @@ class CourseTable:
             def read(db):
                 journal.recheck_read(db,user,snap,workspace)
                 cfg=category_config(db,workspace)
-                return build_table(snap,cfg,scope,groupId,subjectId,start,end,self.shown(db,user,snap,scope,workspace,groupId,subjectId,start,end),snap.state.revision)
+                scale=scale_of(db,workspace,scaleId) if scaleId else None
+                result=build_table(snap,cfg,scope,groupId,subjectId,start,end,self.shown(db,user,snap,scope,workspace,groupId,subjectId,start,end),snap.state.revision,scale)
+                # Published final grades of the period for the pupils of the table, within what this account reads there.
+                if periodId: result['finals']=finals_of(db,snap,user,workspace,periodId,subjectId,[p['id'] for p in result['pupils']])
+                return result
             return journal.reading(read)
 
         @app.post('/api/journal/course-table/save')

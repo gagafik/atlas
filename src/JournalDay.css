@@ -1,0 +1,157 @@
+/* «Классный журнал» of a teacher: the day grid, its month calendar and the editor under the open lesson. */
+.teacher-day-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 16px;
+  align-items: start;
+}
+.teacher-day-main {
+  min-width: 0;
+}
+.teacher-day-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+.teacher-day-head h2 {
+  margin: 0;
+  text-transform: none;
+}
+.teacher-day-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+}
+.teacher-day-tools .field {
+  margin: 0;
+  min-width: 150px;
+}
+.teacher-day {
+  display: grid;
+  gap: 8px;
+}
+.teacher-day-row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.teacher-day-slot {
+  display: flex;
+  flex-direction: column;
+  color: var(--dark);
+}
+.teacher-day-slot strong {
+  font-size: 1.5em;
+  line-height: 1.1;
+}
+.teacher-day-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.teacher-day-nothing {
+  margin: 0;
+  color: #9aa39d;
+}
+.teacher-lesson {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fafbf7;
+}
+.teacher-lesson-open {
+  outline: 2px solid var(--green);
+  outline-offset: 0;
+}
+.teacher-lesson-cancelled h3 {
+  text-decoration: line-through;
+}
+.teacher-lesson header h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.teacher-lesson header p,
+.teacher-lesson p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.teacher-topic {
+  font-weight: 600;
+}
+.teacher-homework {
+  color: #4d5b53;
+}
+.teacher-lesson-line,
+.teacher-lesson-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.teacher-count {
+  white-space: nowrap;
+}
+/* The editor opens as a block of its own under the row, as wide as the grid. */
+.teacher-day > .journal-editor {
+  margin: 0;
+}
+.month-calendar-unfilled {
+  background: #f6d5cc;
+  color: #8a2f14;
+  font-weight: 700;
+}
+/* The journal panel colours every pressed button green; the chosen day with unfilled lessons stays red. */
+.journal-panel
+  .month-calendar-day.month-calendar-unfilled.month-calendar-selected {
+  background: #9a3d1c;
+  border-color: #9a3d1c;
+  color: #fff;
+}
+.teacher-calendar-note {
+  margin: 6px 0 0;
+  font-size: 0.85em;
+}
+
+@media (max-width: 900px) {
+  .teacher-day-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .teacher-day-layout .month-calendar {
+    max-width: 360px;
+  }
+}
+@media (max-width: 640px) {
+  .teacher-day-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .teacher-day-slot {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .teacher-day-slot strong {
+    font-size: 1.25em;
+  }
+}
+@media print {
+  .teacher-day-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .teacher-day-layout .month-calendar,
+  .teacher-day-tools,
+  .teacher-lesson-actions {
+    display: none !important;
+  }
+}

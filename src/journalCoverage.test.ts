@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   classCardLines,
   drillFilters,
+  issueDays,
+  monthWindow,
   ruDate,
   runLine,
   schoolDays,
@@ -146,5 +148,37 @@ describe("summaryFilters and drillFilters", () => {
     const before = { ...form };
     drillFilters(form, "c-demo-a");
     expect(form).toEqual(before);
+  });
+});
+
+describe("issueDays", () => {
+  it("lists once each date that has an actionable lesson, in date order", () => {
+    expect(
+      issueDays([
+        { date: "2026-10-30", actionable: true },
+        { date: "2026-10-21", actionable: true },
+        { date: "2026-10-30", actionable: true },
+        { date: "2026-10-22", actionable: false },
+        { date: "2026-10-23" },
+      ]),
+    ).toEqual(["2026-10-21", "2026-10-30"]);
+  });
+});
+
+describe("monthWindow", () => {
+  it("cuts the month to the school year and gives nothing outside it", () => {
+    expect(monthWindow("2026-10", "2026-08-17", "2027-05-29")).toEqual({
+      start: "2026-10-01",
+      end: "2026-10-31",
+    });
+    expect(monthWindow("2026-08", "2026-08-17", "2027-05-29")).toEqual({
+      start: "2026-08-17",
+      end: "2026-08-31",
+    });
+    expect(monthWindow("2027-05", "2026-08-17", "2027-05-29")?.end).toBe(
+      "2027-05-29",
+    );
+    expect(monthWindow("2026-07", "2026-08-17", "2027-05-29")).toBeNull();
+    expect(monthWindow("2027-06", "2026-08-17", "2027-05-29")).toBeNull();
   });
 });

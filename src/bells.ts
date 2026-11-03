@@ -75,6 +75,30 @@ export function placeInSlots<T extends Timed>(
   );
 }
 
+/**
+ * The bells a day of lessons mostly runs on: the profile most of the lessons name (the earlier one of the school on a tie),
+ * else the first profile of the school. Lessons of another profile are placed by their overlap or get rows of their own.
+ */
+export function dayProfile(
+  lessons: { profileId?: string | null }[],
+  profiles: BellProfile[] = [],
+): BellProfile | undefined {
+  const counts = new Map<string, number>();
+  for (const lesson of lessons)
+    if (lesson.profileId)
+      counts.set(lesson.profileId, (counts.get(lesson.profileId) ?? 0) + 1);
+  let best: BellProfile | undefined,
+    most = 0;
+  for (const profile of profiles) {
+    const count = counts.get(profile.id) ?? 0;
+    if (count > most) {
+      best = profile;
+      most = count;
+    }
+  }
+  return best ?? profiles[0];
+}
+
 /** The bell profile of a pupil's class, else the first one of the school. */
 export function profileFor(
   options: {

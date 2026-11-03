@@ -61,6 +61,22 @@ def test_draft_publish_personal_projection_and_preserved_published_version(clien
     assert pupil.get('/api/notifications/inbox').json()['unread']==2
 
 
+def test_day_items_carry_the_draft_text_the_published_counts_and_the_bell_profile(client):
+    enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
+    state=api.read('demo');state.students+=[Student(id=f'n{i}',name=f'Новый ученик {i}',classId='c-demo-a') for i in range(3)];api.save('demo',state)
+    teacher=signed('teacher');item=lesson(teacher)
+    assert item['present'] is None and item['marked'] is None and item['topic']=='' and item['dueDate'] is None
+    assert item['studentCount']==5 and item['classes']==['10A'] and item['profileId']==next(w.profileId for w in state.workloads if w.id=='w0')
+    record=graded(entry(teacher,item['lessonKey']))
+    for pupil,mark in zip(record['document']['content']['records'],['present','present','late','absent','unmarked']):pupil.update(attendance=mark,lateMinutes=10 if mark=='late' else 0)
+    assert write(teacher,record,publish=True).status_code==200
+    item=lesson(teacher)
+    assert (item['present'],item['marked'],item['studentCount'])==(3,4,5)
+    assert (item['topic'],item['homework'],item['dueDate'])==('Тема урока','Прочитать страницу 12','2026-08-19')
+    # Another teacher never sees the lesson, so neither its text nor its counts.
+    assert 'Английский язык' not in str(signed('unrelated').get('/api/journal/day?workspace=demo&day='+DAY).json())
+
+
 def test_role_permissions_and_teacher_scope(client):
     enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
     create(client,'student');create(client,'editor');create(client,'viewer',grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])])

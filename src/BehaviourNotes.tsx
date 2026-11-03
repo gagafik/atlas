@@ -139,10 +139,13 @@ const dayLabel = (day: string) =>
 export default function BehaviourNotes({
   user,
   initialWorkspace,
+  prefill,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
+  // Opened from the gradebook: the pupils marked there, and whether the form should start as an educational measure.
+  prefill?: { studentIds: string[]; measure?: boolean };
   onClose: () => void;
 }) {
   const spaces =
@@ -195,7 +198,9 @@ export default function BehaviourNotes({
     [remarkAck, setRemarkAck] = useState(true);
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
-    request = useRef({ key: "", id: "" });
+    request = useRef({ key: "", id: "" }),
+    // The prefill is applied once, when the options first arrive.
+    prefilled = useRef(false);
   useEffect(() => {
     dialog.current?.showModal();
     return () => dialog.current?.close();
@@ -256,20 +261,42 @@ export default function BehaviourNotes({
       setOptions(opts);
       setCategories(opts.categories);
       setRemarkAck(opts.remarkAck);
+      const wanted = prefill && !prefilled.current ? prefill : null;
+      prefilled.current = true;
+      // A measure is a category of the class teacher or the director, or one with a letter, that the account may use.
+      const measure = wanted?.measure
+        ? opts.categories.find(
+            (c) =>
+              c.active &&
+              opts.myLevels.includes(c.level) &&
+              (c.level !== "teacher" || c.letter),
+          )
+        : undefined;
+      if (wanted?.measure && !measure)
+        setNotice("Воспитательные меры вам недоступны");
       setForm((f) => ({
         ...f,
         day: f.day || opts.today,
+        // The server checks the scope again; the pupils it does not offer are dropped here.
+        students: wanted
+          ? wanted.studentIds.filter((id) =>
+              opts.students.some((s) => s.id === id),
+            )
+          : f.students,
         categoryId:
+          measure?.id ||
           f.categoryId ||
           opts.categories.find(
             (c) => c.active && opts.myLevels.includes(c.level),
           )?.id ||
           "",
-        printed: f.categoryId
-          ? f.printed
-          : (opts.categories.find(
-              (c) => c.active && opts.myLevels.includes(c.level),
-            )?.report ?? false),
+        printed: measure
+          ? measure.report
+          : f.categoryId
+            ? f.printed
+            : (opts.categories.find(
+                (c) => c.active && opts.myLevels.includes(c.level),
+              )?.report ?? false),
       }));
       if (
         !opts.canWrite &&

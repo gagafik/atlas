@@ -153,10 +153,45 @@ def test_every_course_of_the_picker_has_its_tables(role):
     entries = entries_of(role)
     picker = entries[get_key('/api/journal/course-table/courses')]['b']
     assert picker['courses'] and picker['periods']
+    # A card of the gradebook opens the course on the first active scale with thresholds and asks for the final grades of the period.
+    scale = next(s for s in entries[get_key('/api/final-grades/options')]['b']['scales'] if s['active'] and s['kind'] == 'thresholds')
+    finals = 0
     for course in picker['courses']:
         for period in picker['periods']:
-            key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'])
+            key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'], scaleId=scale['id'], periodId=period['id'])
             assert key in entries, (role, course['group'], course['subject'], period['name'])
+            assert all('computed' in pupil for pupil in entries[key]['b']['pupils'])
+            finals += len(entries[key]['b']['finals'])
+            assert get_key('/api/behaviour/summary', start=period['start'], end=period['end'], subjectId=course['subjectId']) in entries, (role, course['group'], course['subject'], period['name'])
+    # The closed first quarter has published final grades, so the column is not empty in the demo.
+    assert finals, role
+
+
+def coverage_months(entries):
+    """(mode, class id, first day, last day) of every calendar request the day view of the journal made."""
+    found = set()
+    for key in entries:
+        if key.startswith('POST /api/journal/coverage/report#'):
+            body = json.loads(key.split('#', 1)[1])
+            if body['status'] == 'issues' and body['offset'] == 0:
+                found.add((body['mode'], body['classId'], body['start'], body['end']))
+    return found
+
+
+@pytest.mark.parametrize('role', ['admin', 'teacher'])
+def test_the_calendar_of_the_day_view_has_its_months(role):
+    entries = entries_of(role)
+    options = entries[get_key('/api/journal/options')]['b']
+    asked = coverage_months(entries)
+    if role == 'teacher':
+        scopes = [('teaching', '')]
+    else:
+        scopes = [('classes', c['id']) for c in entries[get_key('/api/journal/coverage/options')]['b']['classes']['classes']]
+    assert scopes, role
+    for mode, class_id in scopes:
+        for first, last in [('2026-10-01', '2026-10-31'), ('2026-11-01', '2026-11-30')]:
+            start, end = max(first, options['yearStart']), min(last, options['yearEnd'])
+            assert (mode, class_id, start, end) in asked, (role, mode, class_id, start, end)
 
 
 @pytest.mark.parametrize('role', ['parent', 'student'])

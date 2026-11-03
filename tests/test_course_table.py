@@ -12,6 +12,7 @@ from test_journal import DAY, entry, write, report
 from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
 from test_journal_periods import period, close
 from test_assessment_categories import put_config, shares
+from test_final_grades import seeded, scale, propose, publish, stop_gradebook_jobs  # noqa: F401
 
 URL = '/api/journal/course-table'
 G, S = 'g-a', 'sub2'
@@ -807,3 +808,37 @@ def test_table_marks_reach_lesson_report_and_history(client, clock):
     assert rows[0]['record']['grades'][0]['score'] == 4
     actions = [h['action'] for h in teacher.get('/api/journal/history', params=dict(workspace='demo', lessonKey=first['lessonKey'])).json()]
     assert 'journal.published' in actions[:2]
+
+
+def test_computed_grade_is_what_the_final_grade_rule_gives_on_the_chosen_scale(client, clock):
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=8, s2=7)))
+    bands = [dict(label=label, minPercent=percent) for label, percent in [('2', 0), ('3', 40), ('4', 60), ('5', 80)]]
+    def computed(**scale_values):
+        chosen = scale(client, bands=bands, **scale_values)
+        t = ok(teacher.get(URL, params=dict(workspace='demo', groupId=G, subjectId=S, start=DAY, end=END, scaleId=chosen['id'])))
+        return pupil(t, 's1')['computed'], pupil(t, 's2')['computed']
+    assert computed() == ('5', '4')
+    # An inactive scale and a labels scale never compute a grade.
+    assert computed(active=False) == (None, None)
+    assert computed(kind='labels') == (None, None)
+    missing = teacher.get(URL, params=dict(workspace='demo', groupId=G, subjectId=S, start=DAY, end=END, scaleId=uuid4().hex))
+    assert missing.status_code == 404
+
+
+def test_finals_in_the_table_stay_within_the_rights_of_the_final_grades(client, stop_gradebook_jobs):
+    p, _, chosen, row, _ = seeded(client)
+    create(client, 'teacher', login='second', grants=[dict(workspace='demo', view='teacher', entityIds=['t2'])])
+    create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    publish(client, propose(signed('teacher'), row, chosen).json())
+    lead('t1')
+    published = dict(s1=dict(label='Выше', outcome='graded'))
+    def finals(c, period=p['id']):
+        return c.get(URL, params=dict(workspace='demo', groupId=G, subjectId=S, start=DAY, end=END, periodId=period))
+    assert ok(finals(client))['finals'] == published
+    # The teacher the row is assigned to and the class teacher of the pupil read it; another teacher of the same course does not.
+    assert ok(finals(signed('teacher')))['finals'] == published
+    assert ok(finals(signed('lead')))['finals'] == published
+    assert ok(finals(signed('second')))['finals'] == {}
+    assert finals(client, uuid4().hex).status_code == 404
+

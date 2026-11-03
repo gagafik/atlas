@@ -341,11 +341,11 @@ class Journal:
     def rows(self, db, workspace, day, keys):
         """Day cards inside a snapshot: only the lesson part of the draft is parsed."""
         # The compact coverage projection carries the published lesson without parsing grade documents.
-        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson'),c.lesson FROM journal_entries e LEFT JOIN journal_coverage_documents c ON c.workspace=e.workspace AND c.lesson_key=e.lesson_key WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
+        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson'),c.lesson,json_extract(e.document,'$.content.topic'),json_extract(e.document,'$.content.homework'),json_extract(e.document,'$.content.dueDate') FROM journal_entries e LEFT JOIN journal_coverage_documents c ON c.workspace=e.workspace AND c.lesson_key=e.lesson_key WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
         params = [workspace,day.isoformat()]
         if keys:
             query += ' OR e.lesson_key IN (SELECT value FROM json_each(?))'; params.append(encoded(keys))
-        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4]),published=json.loads(r[5]) if r[5] else None) for r in db.execute(query+')',params)]
+        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4]),published=json.loads(r[5]) if r[5] else None,topic=r[6] or '',homework=r[7] or '',dueDate=r[8]) for r in db.execute(query+')',params)]
 
     def members(self, db, workspace, key, document, kind):
         from .coverage_projection import replace as coverage_replace
@@ -596,7 +596,7 @@ class Journal:
             for student in historical: students.setdefault(student['id'],dict(student,className=None,profileId=None))
             # Families cannot read /api/state or /api/journal/periods: the school's own periods and bells reach them here.
             profiles = [dict(id=p.id,name=p.name,periods=[b.model_dump() for b in p.periods],dayPeriods={k:[b.model_dump() for b in v] for k,v in p.dayPeriods.items()}) for p in state.profiles]
-            return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']),
+            return dict(staff=user['role'] in ['admin','teacher'],admin=user['role']=='admin',absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']),
                         periods=periods,profiles=profiles,today=today().isoformat())
 
         @app.get('/api/journal/day')
@@ -607,8 +607,17 @@ class Journal:
             keys = [key_for(r) for r in rows if r['activity']=='lesson']
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
-                return {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
-            saved = self.reading(read)
+                found = {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
+                # Published attendance of the day by lesson: the grid shows «присутствуют N/M» without opening every lesson. One range of the
+                # primary key per lesson; "+day" keeps the planner off the day index, which it would scan as the whole workspace.
+                counts = {r[0]:r[1:] for r in db.execute("SELECT lesson_key,sum(attendance IN ('present','late','left')),sum(attendance!='unmarked') FROM journal_attendance WHERE workspace=? AND +day=? AND lesson_key IN (SELECT value FROM json_each(?)) GROUP BY lesson_key",(workspace,day.isoformat(),encoded(sorted(found))))}
+                return found,counts
+            saved,counts = self.reading(read)
+            names = {c.id:c.name for c in state.classes}
+            def cards(record,key):
+                """Draft topic and homework and the published attendance counts; unpublished or moved lessons have no counts."""
+                present,marked = counts.get(key,(None,None))
+                return dict(topic=record['topic'] if record else '',homework=record['homework'] if record else '',dueDate=record['dueDate'] if record else None,present=present,marked=marked)
             result = []
             for row in rows:
                 if row['activity']!='lesson': continue
@@ -620,12 +629,14 @@ class Journal:
                     # An earlier day keeps the time, teachers and roster it was published with.
                     published = record['published']
                     lesson,count,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),sum(bool(s.get('enrolled',True)) for s in published['students']),True
-                result.append(dict(lessonKey=key,lesson=lesson,studentCount=count,version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed))
+                result.append(dict(lessonKey=key,lesson=lesson,studentCount=count,version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed,
+                                   profileId=row['profileId'],classes=[names[c] for c in (row['originalClassIds'] if row['status']=='cancelled' else row['classIds']) if c in names])|cards(record,key))
             present = {r['lessonKey'] for r in result}
             for key,record in saved.items():
                 lesson = record['lesson']
                 if key not in present and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
-                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False))
+                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False,
+                                       profileId=None,classes=sorted({s['className'] for s in lesson['students'] if s.get('className')}))|cards(record,key))
             result.sort(key=lambda r:(r['lesson']['start'],r['lesson']['group'],r['lesson']['subject']))
             return dict(revision=state.revision,lessons=result)
 

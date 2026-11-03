@@ -289,16 +289,17 @@ class Behaviour:
         db.execute('INSERT INTO behaviour_letters(workspace,year,last) VALUES (?,?,1) ON CONFLICT(workspace,year) DO UPDATE SET last=last+1',(workspace,year))
         return f"{year}-{db.execute('SELECT last FROM behaviour_letters WHERE workspace=? AND year=?',(workspace,year)).fetchone()[0]:04d}"
 
-    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status):
+    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status,alias=''):
+        """The WHERE clause of the notes this account may read; `alias` ('n.') qualifies the columns for a query that joins the lessons."""
         allowed=self.scope(db,user,snap,workspace)
         if studentId:allowed&={studentId}
         if classId:allowed={id for id in allowed if snap.entities['student'][id].classId==classId}
-        clause='workspace=? AND student_id IN (SELECT value FROM json_each(?))'
+        clause=f'{alias}workspace=? AND {alias}student_id IN (SELECT value FROM json_each(?))'
         params=[workspace,encoded(sorted(allowed))]
-        if kind:clause+=' AND kind=?';params.append(kind)
-        if status:clause+=' AND status=?';params.append(status)
-        if start:clause+=' AND day>=?';params.append(start.isoformat())
-        if end:clause+=' AND day<=?';params.append(end.isoformat())
+        if kind:clause+=f' AND {alias}kind=?';params.append(kind)
+        if status:clause+=f' AND {alias}status=?';params.append(status)
+        if start:clause+=f' AND {alias}day>=?';params.append(start.isoformat())
+        if end:clause+=f' AND {alias}day<=?';params.append(end.isoformat())
         return clause,params
 
     def register(self,app,Workspace):

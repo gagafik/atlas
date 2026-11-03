@@ -12,15 +12,17 @@ export function ChildPicker({
   students,
   value,
   onChange,
+  label = "Ребёнок",
 }: {
   students: { id: string; name: string; className?: string | null }[];
   value: string;
   onChange: (id: string) => void;
+  label?: string;
 }) {
   if (students.length < 2) return null;
   return (
     <label className="field pupil-picker">
-      <span>Ребёнок</span>
+      <span>{label}</span>
       <select value={value} onChange={(e) => onChange(e.target.value)}>
         {students.map((s) => (
           <option key={s.id} value={s.id}>

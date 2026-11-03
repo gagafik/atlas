@@ -3,7 +3,7 @@
 // every course of the picker ...), with exactly the URL the app builds, so that
 // a viewer of the demo does not meet an empty answer after the first click.
 // Only GET requests are made; every answer is kept only when it has data.
-import { getKey } from "./request-key.mjs";
+import { getKey, postKey } from "./request-key.mjs";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const weekdayOf = (day) => new Date(`${day}T00:00:00Z`).getUTCDay();
@@ -44,9 +44,25 @@ export function createReplayer({ context, origin, entries, log }) {
     stats.stored += 1;
     return body;
   }
+  // The answer of a POST that only reads (the coverage report), kept under the key the browser derives from the same body.
+  async function post(target, body) {
+    const url = new URL(target, origin);
+    const key = postKey(url, JSON.stringify(body));
+    if (entries.has(key)) return entries.get(key).b;
+    if (done.has(key)) return undefined;
+    done.add(key);
+    stats.requests += 1;
+    const response = await context.request.post(url.toString(), { data: body, headers: { "X-Atlas-Request": "1" } });
+    if (response.status() !== 200 || !/json/.test(response.headers()["content-type"] || "")) return undefined;
+    const answer = await response.json().catch(() => undefined);
+    if (answer === undefined) return undefined;
+    entries.set(key, { s: 200, b: answer });
+    stats.stored += 1;
+    return answer;
+  }
   const lists = (prefix) =>
     [...entries].filter(([key]) => key.startsWith(`GET ${prefix}`)).map(([, entry]) => entry.b);
-  return { get, lists, stats, entries, log };
+  return { get, post, lists, stats, entries, log };
 }
 
 const q = (params) => new URLSearchParams(params).toString();
@@ -117,17 +133,56 @@ async function meetings(r) {
     }
 }
 
-// ---- course tables: every course of the picker in every period
+// ---- course tables: every course of the picker in every period, as the gradebook asks for it: with the scale it opens on
+// (the first active scale with thresholds, the only one of the demo school) and the period, which brings the final grades;
+// the notes column asks for the praise and remarks of the period in the subject of the course.
 async function courseTables(r) {
   const picker = (await r.get("/api/journal/course-table/courses")) || null;
   if (!picker) return;
+  const options = await r.get("/api/final-grades/options");
+  const scale = (options?.scales || []).find((s) => s.active && s.kind === "thresholds");
   let count = 0;
   for (const course of picker.courses || [])
     for (const period of picker.periods || []) {
-      await r.get(`/api/journal/course-table?${q({ groupId: course.groupId, subjectId: course.subjectId, start: period.start, end: period.end })}`);
+      const table = { groupId: course.groupId, subjectId: course.subjectId, start: period.start, end: period.end, periodId: period.id };
+      await r.get(`/api/journal/course-table?${q(scale ? { ...table, scaleId: scale.id } : table)}`);
+      await r.get(`/api/behaviour/summary?${q({ start: period.start, end: period.end, subjectId: course.subjectId })}`);
       count += 1;
     }
   r.log(`  course tables: ${count}`);
+}
+
+// ---- the month calendar of «Классный журнал»: the days with unfilled lessons, as the hook asks for them (the own lessons of a
+// teacher, one class at a time for the administrator), for the months around the demo day.
+const COVERAGE_MONTHS = [
+  [2026, 10],
+  [2026, 11],
+];
+async function coverageMonths(r, role) {
+  const options = await r.get("/api/journal/options");
+  if (!options?.staff) return;
+  const scopes = [];
+  if (role === "teacher") scopes.push({ mode: "teaching", classId: "" });
+  else {
+    const classes = (await r.get("/api/journal/coverage/options"))?.classes?.classes || [];
+    for (const school of classes) scopes.push({ mode: "classes", classId: school.id });
+  }
+  for (const [year, month] of COVERAGE_MONTHS) {
+    // Mirrors monthWindow (src/journalCoverage.ts): the month cut to the school year.
+    const [first, last] = monthRange(year, month);
+    const start = first < options.yearStart ? options.yearStart : first;
+    const end = last > options.yearEnd ? options.yearEnd : last;
+    if (start > end) continue;
+    for (const scope of scopes) {
+      let offset = 0,
+        pin = {};
+      for (let page = 0; offset !== null && page < 20; page += 1) {
+        const answer = await r.post("/api/journal/coverage/report", { start, end, ...scope, status: "issues", offset, ...pin });
+        offset = answer?.nextOffset ?? null;
+        pin = { token: answer?.token, asOf: answer?.asOf };
+      }
+    }
+  }
 }
 
 // ---- final grades: the sheet, the matrix, the class reports. A page of the sheet is large (50 rows,
@@ -259,6 +314,7 @@ export async function fanOut(r, role, schoolDays) {
     await behaviour(r);
     await meetings(r);
     await courseTables(r);
+    await coverageMonths(r, role);
     await finalGrades(r);
   } else {
     await familyJournal(r);

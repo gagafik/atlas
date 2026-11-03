@@ -34,11 +34,14 @@ export default function FamilyJournal({
   options,
   view,
   focus,
+  family = true,
 }: {
   workspace: string;
   options: JournalOptions;
   view?: JournalView;
   focus?: JournalFocus;
+  // False for the staff reading a pupil's report: the same screens over the records the account may read, without what only a family does.
+  family?: boolean;
 }) {
   const { students } = options;
   const known = (id?: string) =>
@@ -86,6 +89,7 @@ export default function FamilyJournal({
         choices={choices}
         period={period}
         onPeriod={choose}
+        family={family}
       />
     ) : view === "pupilAttendance" || view === "absences" ? (
       <PupilAttendance
@@ -97,6 +101,7 @@ export default function FamilyJournal({
         period={period}
         onPeriod={choose}
         showNotes={focus?.panel === "absences" || view === "absences"}
+        family={family}
       />
     ) : view === "finalGrades" ? (
       <FinalGradesPanel
@@ -119,6 +124,7 @@ export default function FamilyJournal({
         child={child}
         today={today}
         focus={focus}
+        family={family}
       />
     );
   // The pickers do not print, so the sheet names the pupil and, for grades and attendance, the period.
@@ -133,7 +139,12 @@ export default function FamilyJournal({
         {ranged &&
           ` · ${choices.find((c) => c.id === period.id)?.name ?? "Период"}: ${dayText(period.start)} – ${dayText(period.end)}`}
       </p>
-      <ChildPicker students={students} value={child} onChange={pick} />
+      <ChildPicker
+        students={students}
+        value={child}
+        onChange={pick}
+        label={family ? "Ребёнок" : "Ученик"}
+      />
       {screen}
     </div>
   );

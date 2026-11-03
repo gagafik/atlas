@@ -153,6 +153,13 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       }
       return total;
     },
+    // A tick box by its accessible name.
+    async check(label) {
+      const box = page.getByRole("checkbox", { name: label }).filter({ visible: true }).first();
+      if (!(await box.count())) return miss(`no tick box: ${label}`);
+      await box.check({ timeout: 3000 }).catch(() => miss(`tick box: ${label}`));
+      await settle();
+    },
     // The text is on the page (a journey step that shows something).
     async see(text) {
       const target = page.getByText(text).filter({ visible: true }).first();
@@ -184,8 +191,28 @@ const MARK_CHIP = /: [\d,]+ \/ [\d,]+, \d\d\.\d\d\.\d{4}/;
 const DAYS_BACK = 3;
 // The menu entry of the messages; the number of unread threads is a badge behind the text.
 const MESSAGES = "Уведомления";
+// The button that opens a lesson of the day grid is named by the lesson: «Открыть урок · 09:00–09:40 · Математика 7А».
 const DAY_LESSON = /Математика 7А/;
+// A course card of «Оценки»: it ends with the kind of the access to the course.
+const COURSE_CARD = /(Мой курс|только чтение)$/;
 const CLASSES = ["7А", "7Б", "8А", "8Б"];
+
+// The day grid of the journal: the arrows, a day of the calendar, and a lesson opened right under its row.
+async function dayGrid(kit, { calendarDay }) {
+  await kit.path(JOURNAL);
+  await kit.click("Предыдущий день");
+  await kit.click("Следующий день");
+  await kit.click(calendarDay);
+  await kit.click(DAY_LESSON);
+  await kit.snap("day-grid");
+}
+
+// The report of a pupil for the staff: the screens of the family, over what the account may read.
+async function pupilReport(kit) {
+  await kit.path(JOURNAL, "Отчёт ученика");
+  await kit.snap("pupil-grades");
+  for (const tab of ["Посещаемость", "Записи уроков", "Оценки"]) await kit.click(tab);
+}
 
 async function lessonScreens(kit, name) {
   // The lesson of the day: attendance and marks, then back to the list.
@@ -276,11 +303,18 @@ export const journeys = {
     await kit.click("Показать табель");
     await kit.path(JOURNAL, "Учебные периоды и закрытие журналов");
     await kit.snap("periods");
-    await kit.path("Оценки");
-    for (const course of [/7А · Математика/, /8Б · Физика/]) await kit.choose("Курс", course);
+    await kit.path("Оценки", /7А · Математика/);
+    await kit.choose("Шкала", /Шкала 2–5/);
+    await kit.click("‹ Все курсы");
+    await kit.click(/8Б · Физика/);
     await kit.snap("course-table");
     await kit.path(JOURNAL, DAY_LESSON);
     await kit.snap("lesson");
+    await dayGrid(kit, { calendarDay: "30.10.2026" });
+    await pupilReport(kit);
+    await kit.path(JOURNAL);
+    await kit.choose("Класс", "7А");
+    await kit.snap("day-class");
     // Workload, substitutions, messages, forms.
     await kit.path("Нагрузка учителей");
     await kit.snap("workload");
@@ -319,9 +353,17 @@ export const journeys = {
     await lessonScreens(kit, "teacher");
     await kit.path(JOURNAL, /Математика 7Б/);
     await kit.path("Оценки");
-    await kit.eachOption("Курс", null, { from: 1, max: 12 });
-    await kit.choose("Курс", /7А · Математика/);
+    await kit.eachButton(COURSE_CARD, () => kit.click("‹ Все курсы"), { max: 12 });
+    await kit.click(/7А · Математика/);
+    await kit.choose("Шкала", /Шкала 2–5/);
     await kit.snap("course-table");
+    // The pupils ticked: the form of a note opens with them.
+    await kit.check("Выбрать всех учеников");
+    await kit.click("Новая заметка");
+    await kit.snap("behaviour-prefill");
+    await kit.close();
+    await dayGrid(kit, { calendarDay: "30.10.2026" });
+    await pupilReport(kit);
     // Report cards are in the menu only when the teacher has any.
     await kit.home();
     if (await kit.menu("Табели", { optional: true })) await kit.click("Открыть готовую ведомость", { optional: true });
@@ -423,7 +465,7 @@ export const journeys = {
 // several days, all courses, all message threads, all homework works. verify.mjs
 // runs them over the built demo; a snapshot miss on the way is a problem. The
 // capture does not click them (it asks the backend for the same details).
-const LESSON_CARD = /^\d\d:\d\d–\d\d:\d\d · /;
+const LESSON_CARD = /^Открыть урок · \d\d:\d\d–\d\d:\d\d · /;
 
 async function lessonCards(kit, days) {
   for (const day of days) {
@@ -442,6 +484,18 @@ async function familyDays(kit) {
   }
 }
 
+// Every course card of «Оценки»: its table on the opening period, then on the first period of the list, and back.
+async function everyCourse(kit, max) {
+  await kit.eachButton(
+    COURSE_CARD,
+    async () => {
+      await kit.choose("Период", 0);
+      await kit.click("‹ Все курсы");
+    },
+    { max },
+  );
+}
+
 async function everyThread(kit, back) {
   await kit.path(MESSAGES);
   const total = await kit.eachButton(/\d\d\.\d\d, \d\d:\d\d/, () => kit.click(back, { optional: true }), { max: 12 });
@@ -452,8 +506,7 @@ export const tours = {
   async admin(kit) {
     await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-21"]);
     await kit.path("Оценки");
-    await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 60 });
-    await kit.eachOption("Курс", null, { from: 1, max: 60 });
+    await everyCourse(kit, 60);
     await kit.path("Табели");
     await kit.click("Открыть готовую ведомость");
     await kit.eachOption("Ученик для табеля", () => kit.click("Показать табель"), { from: 1, max: 20 });
@@ -470,8 +523,7 @@ export const tours = {
   async teacher(kit) {
     await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-29", "2026-10-21", "2026-10-06"]);
     await kit.path("Оценки");
-    await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 20 });
-    await kit.eachOption("Курс", null, { from: 1, max: 20 });
+    await everyCourse(kit, 20);
     await everyThread(kit, "Входящие");
     await kit.path("Домашние задания");
     await kit.eachButton("Проверить работу", () => kit.close(), { max: 12 });

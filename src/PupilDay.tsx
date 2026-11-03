@@ -35,12 +35,15 @@ export default function PupilDay({
   child,
   today,
   focus,
+  family = true,
 }: {
   workspace: string;
   options: JournalOptions;
   child: string;
   today: string;
   focus?: JournalFocus;
+  // False for the staff: the timetable of the pupil is not theirs to read, so only the published records of the day show.
+  family?: boolean;
 }) {
   const clamp = (day: string) =>
     day < options.yearStart
@@ -75,6 +78,7 @@ export default function PupilDay({
     mounted.current = true;
   }, [focus]);
   useEffect(() => {
+    if (!family) return setTimetable({ key: timetableKey, rows: [] });
     let live = true;
     api(
       `portal/schedule?${new URLSearchParams({ view: "student", entityId: child, day })}`,

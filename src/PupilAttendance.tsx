@@ -133,6 +133,7 @@ export default function PupilAttendance({
   period,
   onPeriod,
   showNotes,
+  family = true,
 }: {
   workspace: string;
   options: JournalOptions;
@@ -142,6 +143,8 @@ export default function PupilAttendance({
   onPeriod: (value: PeriodSelection) => void;
   // Opened by an absence-note notification: the notes are open and in sight.
   showNotes: boolean;
+  // False for the staff: the absence notes have their own panel, and nobody writes one here.
+  family?: boolean;
 }) {
   const data = usePupilPeriod(workspace, child, period.start, period.end);
   const profile = profileFor(options, child);
@@ -155,7 +158,7 @@ export default function PupilAttendance({
     [data.data, profile],
   );
   const [notes, setNotes] = useState<NoteOptions | null>(null);
-  const hasNotes = !!options.panels?.absences;
+  const hasNotes = family && !!options.panels?.absences;
   useEffect(() => {
     if (!hasNotes) return;
     let live = true;

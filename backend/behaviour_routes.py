@@ -164,13 +164,18 @@ def register(service,app,Workspace):
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.get('/api/behaviour/summary')
-    def summary(request:Request,workspace:Workspace='school',classId:str|None=None,start:date|None=None,end:date|None=None):
+    def summary(request:Request,workspace:Workspace='school',classId:str|None=None,start:date|None=None,end:date|None=None,subjectId:str|None=None):
         window(start,end)
         with service.context(request,workspace) as (db,user,snap):
             staff(db,user,snap,workspace)
-            clause,params=service.filtered(db,user,snap,workspace,classId,None,None,start,end,'published')
+            clause,params=service.filtered(db,user,snap,workspace,classId,None,None,start,end,'published','n.')
+            join=''
+            if subjectId:
+                # The subject of a note is the one stored with it, else the one of the published lesson it was written for.
+                subject_id,_,joined=note_subject_sql(db);join=LESSON_JOIN if joined else ''
+                clause+=f' AND {subject_id}=?';params.append(subjectId)
             counts={}
-            for student,kind,count in db.execute(f'SELECT student_id,kind,count(*) FROM behaviour_notes WHERE {clause} GROUP BY student_id,kind',params):
+            for student,kind,count in db.execute(f'SELECT n.student_id,n.kind,count(*) FROM behaviour_notes n{join} WHERE {clause} GROUP BY n.student_id,n.kind',params):
                 counts.setdefault(student,dict(praise=0,remark=0))[kind]=count
             classes={c.id:c.name for c in snap.state.classes}
             rows=[dict(studentId=id,student=snap.entities['student'][id].name,className=classes.get(snap.entities['student'][id].classId,''),**value)

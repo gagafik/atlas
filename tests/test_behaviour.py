@@ -299,6 +299,20 @@ def test_family_notes_by_period_and_subject(client, monkeypatch):
     assert family(other, 's1').status_code == 404 and other.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)).status_code == 404
 
 
+def test_summary_counts_the_notes_of_one_subject(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher')
+    t = signed('teacher')
+    ok(lesson_note(t, lesson_key(t), ['s1'], 'discipline', text='Разговаривал'))
+    ok(note(t, ['s1'], 'activity', 'Помог другу', day='2026-08-18'))
+    def counts(**query):
+        return {(r['studentId'], r['praise'], r['remark']) for r in ok(t.get(url('summary', **query)))['items']}
+    assert counts() == {('s1', 1, 1)}
+    # Only the note written from a lesson of that subject counts; the note without a lesson belongs to no subject.
+    assert counts(subjectId=english().id) == {('s1', 0, 1)}
+    assert counts(subjectId='sub-without-notes') == set()
+
+
 def test_notes_written_before_subjects_take_the_subject_of_their_published_lesson(client, monkeypatch):
     from test_journal import entry, write, graded
     monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))

@@ -22,7 +22,7 @@ def known():
 
 def test_missing_draft_incomplete_complete_and_raw_unmarked_pupils(client):
     known();value=report(client).json();assert value['counts']['expected']==2 and value['counts']['missing']==2
-    row=english(value);assert row['missingPupils']==2 and row['canOpen']
+    row=english(value);assert row['missingPupils']==2 and row['canOpen'] and row['actionable']
     pupils=details(client,row['lessonKey']).json()['pupils'];assert {s['id'] for s in pupils}=={'s1','s2'}
     # The editor opens a held lesson with everybody present; the raw unmarked pupils are what is stored when the teacher leaves them so.
     def raw(record):
@@ -31,9 +31,9 @@ def test_missing_draft_incomplete_complete_and_raw_unmarked_pupils(client):
     draft=raw(entry(client,row['lessonKey']));saved=raw(write(client,draft).json())
     assert english(report(client).json())['status']=='draft'
     published=write(client,saved,publish=True).json()
-    partial=english(report(client).json());assert partial['status']=='incomplete' and partial['unmarkedPupils']==2 and not partial['topicFilled']
+    partial=english(report(client).json());assert partial['status']=='incomplete' and partial['unmarkedPupils']==2 and not partial['topicFilled'] and partial['actionable']
     complete=write(client,graded(published),publish=True).json()
-    value=report(client).json();assert english(value)['status']=='complete'
+    value=report(client).json();assert english(value)['status']=='complete' and not english(value)['actionable']
     assert details(client,row['lessonKey']).json()['pupils']==[]
     assert 'Комментарий' not in json.dumps(value,ensure_ascii=False) and 'grades' not in str(value)
     complete['document']['content']['topic']='Unpublished private draft';write(client,complete)

@@ -137,6 +137,8 @@ export function useFamilyFeed(
     setHidden(false);
     setError("");
     setNotice("");
+    // No pupil: the screen of a member of staff, which has no feed to read.
+    if (!studentId) return setBusy(false);
     setBusy(true);
     fetchFeed()
       .then((value) => {

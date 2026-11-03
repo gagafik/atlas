@@ -13,6 +13,7 @@ import {
   openCell,
   parseCell,
   parsePaste,
+  spread,
   type CoursePupil,
   type CourseTable,
   type Edit,
@@ -524,5 +525,32 @@ describe("CSV", () => {
     // p3 has no place in the first lesson.
     expect(lines[3]).toContain('"—";"—";""');
     expect(lines).toHaveLength(5);
+  });
+});
+
+describe("spread", () => {
+  const marks = (
+    a: number | null,
+    b: string,
+    c: number | null,
+  ): CoursePupil["marks"] => ({
+    0: { score: a, label: "", comment: "" },
+    1: { score: null, label: b, comment: "" },
+    2: { score: c, label: "", comment: "" },
+  });
+  it("is the standard deviation of the percentages of the works with points", () => {
+    // 8 of 10 and 20 of 20 are 80 % and 100 %: 10 points of percentage around their mean.
+    const p = pupil("p1", [0, 1], { marks: marks(8, "", 20) });
+    expect(spread(p, table())).toBe(10);
+  });
+  it("leaves out label marks and works that weigh nothing, and needs two marks", () => {
+    const p = pupil("p1", [0, 1], { marks: marks(8, "зачёт", 20) });
+    expect(spread(p, table())).toBe(10);
+    const free = table();
+    free.works[2].weight = 0;
+    expect(spread(p, free)).toBeNull();
+    expect(
+      spread(pupil("p1", [0], { marks: marks(8, "", null) }), table()),
+    ).toBeNull();
   });
 });

@@ -65,6 +65,8 @@ export interface CoursePupil {
   missing: string[];
   excluded: string[];
   rule: string;
+  // The grade the chosen scale gives the totals by the final-grade rule; only when a scale was asked for.
+  computed?: string | null;
 }
 export interface CourseTable {
   revision: number;
@@ -81,6 +83,8 @@ export interface CourseTable {
   lessons: CourseLesson[];
   works: CourseWork[];
   pupils: CoursePupil[];
+  // The published final grades of the asked period within the rights of the account, by pupil; only when a period was asked for.
+  finals?: Record<string, { label: string; outcome: string }>;
 }
 export interface CourseItem {
   groupId: string;
@@ -461,6 +465,39 @@ export function defaultCoursePeriod(
 function ruDay(iso: string) {
   const [y, m, d] = iso.split("-");
   return y && m && d ? `${d}.${m}.${y}` : iso;
+}
+/**
+ * The spread of a pupil's work: the population standard deviation of the percentages (score / maximum × 100) of the works with points
+ * and a weight above zero, to two decimals; null below two such marks. A statistic only: no grade or average is computed from it.
+ */
+export function spread(pupil: CoursePupil, table: CourseTable): number | null {
+  const shares: number[] = [];
+  table.works.forEach((work, i) => {
+    const mark = pupil.marks[i];
+    if (work.kind === "points" && work.weight > 0 && mark?.score != null)
+      shares.push((mark.score / work.maxScore) * 100);
+  });
+  if (shares.length < 2) return null;
+  const mean = shares.reduce((sum, x) => sum + x, 0) / shares.length;
+  const variance =
+    shares.reduce((sum, x) => sum + (x - mean) ** 2, 0) / shares.length;
+  return Math.round(Math.sqrt(variance) * 100) / 100;
+}
+// The scale of the computed grade is remembered per workspace in this browser; storage that is blocked or empty just forgets it.
+const SCALE_KEY = (workspace: string) => `atlas:gradebook-scale:${workspace}`;
+export function recallScale(workspace: string): string {
+  try {
+    return localStorage.getItem(SCALE_KEY(workspace)) ?? "";
+  } catch {
+    return "";
+  }
+}
+export function rememberScale(workspace: string, id: string) {
+  try {
+    localStorage.setItem(SCALE_KEY(workspace), id);
+  } catch {
+    // Not remembered; the first scale is the default again next time.
+  }
 }
 export function workTitle(work: CourseWork, table: CourseTable): string {
   const category = table.categories.find((c) => c.id === work.category);

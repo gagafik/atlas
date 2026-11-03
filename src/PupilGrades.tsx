@@ -8,7 +8,7 @@ import {
   type CategoryConfig,
 } from "./assessmentCategories";
 import { finalLabel } from "./finalGrades";
-import { FamilyFeedView, useFamilyFeed } from "./GradeFeed";
+import GradeFeed, { FamilyFeedView, useFamilyFeed } from "./GradeFeed";
 import { PeriodPicker } from "./JournalPickers";
 import Popover from "./Popover";
 import {
@@ -65,6 +65,8 @@ function useBehaviour(
   studentId: string,
   start: string,
   end: string,
+  // The notes of a family are not the staff's to read here.
+  enabled = true,
 ) {
   const key = `${workspace}|${studentId}|${start}|${end}`;
   const [state, setState] = useState<{
@@ -83,6 +85,8 @@ function useBehaviour(
       ...(before ? { before: String(before) } : {}),
     });
   useEffect(() => {
+    if (!enabled)
+      return setState({ key, family: null, items: [], missing: true });
     let live = true;
     api(`behaviour/family?${query()}`, workspace)
       .then((family: BehaviourFamily) => {
@@ -138,9 +142,16 @@ function useBehaviour(
 }
 
 // The published period finals of the pupil by subject, for the period being shown.
-function useFinals(workspace: string, studentId: string, periodId: string) {
+function useFinals(
+  workspace: string,
+  studentId: string,
+  periodId: string,
+  // The report cards of a staff member are in «Табели».
+  enabled = true,
+) {
   const [periods, setPeriods] = useState<Set<string> | null>(null);
   useEffect(() => {
+    if (!enabled) return setPeriods(new Set());
     let live = true;
     api("final-grades/options", workspace)
       .then((r: { periods?: { id: string }[] }) => {
@@ -152,7 +163,7 @@ function useFinals(workspace: string, studentId: string, periodId: string) {
     return () => {
       live = false;
     };
-  }, [workspace]);
+  }, [workspace, enabled]);
   const [finals, setFinals] = useState<Record<string, FinalMark>>({});
   const has = !!periods?.has(periodId);
   useEffect(() => {
@@ -719,18 +730,29 @@ export default function PupilGrades({
   choices,
   period,
   onPeriod,
+  family = true,
 }: {
   workspace: string;
   child: string;
   choices: PeriodChoice[];
   period: PeriodSelection;
   onPeriod: (value: PeriodSelection) => void;
+  // False for the staff: nothing is signed, and the list of new grades gives way to who in the family signed.
+  family?: boolean;
 }) {
   const categories = useAssessmentCategories(workspace);
   const data = usePupilPeriod(workspace, child, period.start, period.end);
-  const feed = useFamilyFeed(workspace, child, () => data.reload());
-  const behaviour = useBehaviour(workspace, child, period.start, period.end);
-  const finals = useFinals(workspace, child, period.id);
+  const feed = useFamilyFeed(workspace, family ? child : "", () =>
+    data.reload(),
+  );
+  const behaviour = useBehaviour(
+    workspace,
+    child,
+    period.start,
+    period.end,
+    family,
+  );
+  const finals = useFinals(workspace, child, period.id, family);
   const [tab, setTab] = useState<Tab>("summary");
   const [mark, setMark] = useState<PupilMark | null>(null);
   const [problem, setProblem] = useState("");
@@ -824,7 +846,7 @@ export default function PupilGrades({
           <button type="button" onClick={() => window.print()}>
             Печать
           </button>
-          {state?.canSign && (
+          {family && state?.canSign && (
             <button
               type="button"
               className="primary"
@@ -887,8 +909,8 @@ export default function PupilGrades({
             tabIndex={tab === t ? 0 : -1}
             onClick={() => setTab(t)}
           >
-            {TAB_NAMES[t]}
-            {t === "feed" && unsigned > 0 && (
+            {t === "feed" && !family ? "Подписи семьи" : TAB_NAMES[t]}
+            {t === "feed" && family && unsigned > 0 && (
               <span className="pupil-count">{unsigned}</span>
             )}
           </button>
@@ -924,7 +946,12 @@ export default function PupilGrades({
             categories={categories}
           />
         )}
-        {tab === "feed" && <FamilyFeedView feed={feed} showSign={false} />}
+        {tab === "feed" &&
+          (family ? (
+            <FamilyFeedView feed={feed} showSign={false} />
+          ) : (
+            <GradeFeed workspace={workspace} studentId={child} staff />
+          ))}
       </div>
       {mark && (
         <Popover title={mark.name} onClose={() => setMark(null)}>

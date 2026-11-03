@@ -86,6 +86,41 @@
 .ct-work {
   overflow-wrap: anywhere;
 }
+/* The tick boxes of the pupils stay in view beside their names. */
+.course-table .ct-pick {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 34px;
+  width: 34px;
+  background: #fff;
+}
+.course-table thead .ct-pick {
+  z-index: 3;
+  background: #fafbf7;
+}
+.course-table .ct-pick input,
+.course-table td.ct-pick input {
+  display: inline-block;
+  width: 16px;
+  min-width: 0;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+.course-table .ct-pick + .ct-pupil {
+  left: 34px;
+}
+.course-table .ct-total small {
+  display: block;
+  font-weight: 500;
+  font-size: 9px;
+  color: var(--muted);
+}
+.course-table-embedded .course-table-scroll {
+  max-height: 75vh;
+}
 .course-table .ct-pupil {
   position: sticky;
   left: 0;
@@ -289,5 +324,41 @@
   }
   .course-table thead {
     display: table-header-group;
+  }
+}
+
+/* «Оценки» of a teacher: the cards of the courses. */
+.gradebook {
+  min-width: 0;
+}
+.gradebook-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.gradebook-card {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 14px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.gradebook-card small {
+  overflow-wrap: anywhere;
+}
+.gradebook-kind {
+  justify-self: start;
+}
+.gradebook-kind-class,
+.gradebook-kind-admin {
+  background: #f3efe6;
+  color: #6b5a2e;
+}
+@media (max-width: 700px) {
+  .gradebook-cards {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

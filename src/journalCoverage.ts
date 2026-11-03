@@ -131,3 +131,25 @@ export function runLine(run: Run): string {
       ].join(", ");
   return `${ruDate(run.onDate)} · ${name}: ${result}`;
 }
+
+/** The dates that hold a lesson still «не заполнено» by the coverage rule (rows the server marks `actionable`), each once, in date order. */
+export function issueDays(
+  items: { date: string; actionable?: boolean }[],
+): string[] {
+  return [
+    ...new Set(items.filter((i) => i.actionable).map((i) => i.date)),
+  ].sort();
+}
+
+/** The part of a month inside the school year, `null` when the month lies wholly outside it. `month` is YYYY-MM. */
+export function monthWindow(
+  month: string,
+  yearStart: string,
+  yearEnd: string,
+): { start: string; end: string } | null {
+  const [year, number] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10);
+  const start = [`${month}-01`, yearStart].sort().at(-1)!,
+    end = [last, yearEnd].sort()[0];
+  return start <= end ? { start, end } : null;
+}
