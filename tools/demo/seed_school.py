@@ -155,7 +155,7 @@ class Seed(Stages, Social):
             create('parent', logins['parents'][index], names.GUARDIANS[index], school.pupil_id(index), 'student')
             create('student', logins['pupils'][index], names.PUPILS[index], school.pupil_id(index), 'student')
         # One guardian of two children from two classes (7А and 7Б): the child picker of the family screens. It is never a captured role.
-        create('parent', FAMILY_LOGIN, 'Примерова Светлана', [school.pupil_id(0), school.pupil_id(school.PUPILS_PER_CLASS)], 'student')
+        create('parent', FAMILY_LOGIN, names.FAMILY_GUARDIAN, [school.pupil_id(0), school.pupil_id(school.PUPILS_PER_CLASS)], 'student')
         self.ok(self.admin.get('/api/forms/options'))
         self.log(f'{len(self.account_ids) + 1} accounts')
         self.verify_families()

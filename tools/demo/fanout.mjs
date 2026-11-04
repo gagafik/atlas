@@ -156,10 +156,13 @@ async function courseTables(r) {
 }
 
 // ---- the month calendar of «Классный журнал»: the days with unfilled lessons, as the hook asks for them (the own lessons of a
-// teacher, one class at a time for the administrator), for the months around the demo day. The calendar shows six whole weeks.
+// teacher, one class at a time for the administrator), for the months around the demo day. The calendar shows six whole weeks,
+// and the arrows of the calendar go from September (a week of it is in the school year, which begins on 5 October) to December.
 const COVERAGE_MONTHS = [
+  [2026, 9],
   [2026, 10],
   [2026, 11],
+  [2026, 12],
 ];
 // Mirrors gridWindow (src/journalCoverage.ts): the weeks on show for a month, cut to the school year.
 function monthGrid(year, month) {

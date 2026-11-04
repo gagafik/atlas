@@ -103,6 +103,14 @@ def test_people_and_school_name_are_invented():
     assert len(state['students']) == 4 * school.PUPILS_PER_CLASS
 
 
+def test_every_account_of_the_public_snapshot_is_a_person_of_names_py():
+    people = {names.ADMIN_NAME, names.FAMILY_GUARDIAN, *names.TEACHERS, *names.PUPILS, *names.GUARDIANS}
+    accounts = load('admin')['entries']['GET /api/access/users']['b']
+    assert accounts
+    for account in accounts:
+        assert account['name'] in people, account['name']
+
+
 def test_snapshot_size_stays_within_the_budget():
     sizes = [(SNAPSHOTS / f'{role}.json').stat().st_size for role in ROLES]
     assert all(size <= PER_ROLE_BYTES for size in sizes), sizes
@@ -191,7 +199,7 @@ def test_the_calendar_of_the_day_view_has_its_months(role):
         scopes = [('classes', c['id']) for c in entries[get_key('/api/journal/coverage/options')]['b']['classes']['classes']]
     assert scopes, role
     for mode, class_id in scopes:
-        for month in ['2026-10-01', '2026-11-01']:
+        for month in ['2026-09-01', '2026-10-01', '2026-11-01', '2026-12-01']:
             # The calendar shows six whole weeks, Monday first, cut to the school year.
             first = date.fromisoformat(month) - timedelta(days=date.fromisoformat(month).weekday())
             start, end = max(first.isoformat(), options['yearStart']), min((first + timedelta(days=41)).isoformat(), options['yearEnd'])

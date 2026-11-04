@@ -131,10 +131,11 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
         await then?.(texts[index], index);
       }
     },
-    // A date field by the start of its label.
+    // A date field by the start of its label (the day view of a family has no label text, only an aria-label).
     async setDate(label, iso) {
       const own = new RegExp(`^\\s*${escape(label)}`);
-      const field = page.locator("label").filter({ has: page.locator("span").filter({ hasText: own }) }).locator("input").filter({ visible: true }).first();
+      const labelled = page.locator("label").filter({ has: page.locator("span").filter({ hasText: own }) }).locator("input").filter({ visible: true }).first();
+      const field = labelled.or(page.getByLabel(own).filter({ visible: true }).first()).first();
       if (!(await field.count())) return miss(`no date field: ${label}`);
       await field.fill(iso, { timeout: 3000 }).catch(() => miss(`date ${iso} of ${label}`));
       await settle();
@@ -188,6 +189,14 @@ const PUPIL_GRADES = "Оценки";
 const PUPIL_TABS = ["По дате", "Заметки", "Оценки на графике", /^Новые оценки/, "Сводка оценок"];
 // The chip of one mark in the summary: «Работа: 8 / 10, 30.10.2026».
 const MARK_CHIP = /: [\d,]+ \/ [\d,]+, \d\d\.\d\d\.\d{4}/;
+// The «?» behind an average: «Как считается среднее: Математика».
+const AVERAGE_RULE = /^Как считается среднее/;
+// The notes of the pupil are grouped four ways.
+const NOTE_GROUPINGS = ["Учитель", "Дата", "Тип", "Предмет"];
+// A mark of the attendance grid is named by the mark and its lesson: «Отсутствовал. Математика, … 09:00–09:40».
+const ATTENDANCE_MARK = /, \d\d:\d\d–\d\d:\d\d/;
+// The tabs of a pupil's grades for the staff: no notes of the family, and who signed instead of the new grades.
+const STAFF_GRADE_TABS = ["По дате", "Оценки на графике", "Подписи семьи", "Сводка оценок"];
 const DAYS_BACK = 3;
 // The menu entry of the messages; the number of unread threads is a badge behind the text.
 const MESSAGES = "Уведомления";
@@ -195,9 +204,12 @@ const MESSAGES = "Уведомления";
 const DAY_LESSON = /Математика 7А/;
 // A course card of «Оценки»: it ends with the kind of the access to the course.
 const COURSE_CARD = /(Мой курс|только чтение)$/;
+// The head of a work column of the gradebook is named by the day of its lesson: «Открыть урок 30.10.2026» (a lesson of the day grid has a time behind «Открыть урок»).
+const WORK_LESSON = /^Открыть урок \d\d\.\d\d\.\d{4}$/;
 const CLASSES = ["7А", "7Б", "8А", "8Б"];
 
-// The day grid of the journal: the arrows, a day of the calendar, and a lesson opened right under its row.
+// The day grid of the journal: the arrows, a day of the calendar, a lesson opened right under its row, another one on the
+// pupils' cards, the months of the calendar from September (the year begins on 5 October) to December, and «Сегодня».
 async function dayGrid(kit, { calendarDay }) {
   await kit.path(JOURNAL);
   await kit.click("Предыдущий день");
@@ -205,13 +217,27 @@ async function dayGrid(kit, { calendarDay }) {
   await kit.click(calendarDay);
   await kit.click(DAY_LESSON);
   await kit.snap("day-grid");
+  await kit.click(/^присутствуют /);
+  await kit.snap("day-pupils");
+  await kit.click("Предыдущий месяц");
+  for (let month = 0; month < 3; month += 1) await kit.click("Следующий месяц");
+  await kit.click("Сегодня");
 }
 
-// The report of a pupil for the staff: the screens of the family, over what the account may read.
+// The report of a pupil for the staff: the screens of the family, over what the account may read. It opens on the first pupil of
+// the list; the pupils behind the picker have no answer in the demo (every one would add a whole report to the public snapshot).
 async function pupilReport(kit) {
   await kit.path(JOURNAL, "Отчёт ученика");
   await kit.snap("pupil-grades");
-  for (const tab of ["Посещаемость", "Записи уроков", "Оценки"]) await kit.click(tab);
+  for (const tab of STAFF_GRADE_TABS) await kit.click(tab);
+  await kit.click("Посещаемость");
+  await kit.snap("pupil-attendance");
+  await kit.click(ATTENDANCE_MARK, { optional: true });
+  await kit.close();
+  await kit.click("Записи уроков");
+  await kit.click("Предыдущий день");
+  await kit.snap("pupil-day");
+  await kit.click("Оценки");
 }
 
 async function lessonScreens(kit, name) {
@@ -220,27 +246,64 @@ async function lessonScreens(kit, name) {
   await kit.snap(`${name}-lesson`);
 }
 
-// The four screens of the family journal. The notes of absences are the parent's; a pupil has them only when the school filed one.
-async function familyScreens(kit, { notes }) {
+// The day of the family journal: three days back with a homework opened, a day of the calendar, a date typed in, the arrow
+// forward and back to the day of the demo.
+async function familyDay(kit) {
   await kit.path(JOURNAL);
   await kit.snap("journal");
   for (let step = 0; step < DAYS_BACK; step += 1) await kit.click("Предыдущий день");
   await kit.snap("journal-day");
   await kit.click("Открыть домашнюю работу");
   await kit.close();
+  await kit.click(/^20\.10\.2026$/);
+  await kit.setDate("Дата журнала", "2026-11-06");
+  await kit.click("Следующий день");
+  await kit.click("Сегодня");
+}
+
+// «Оценки»: every tab, the notes grouped four ways, the chip of a mark and the rule of an average in their sheets, then
+// every period the school has (and the whole year) on the summary.
+async function familyGrades(kit) {
   await kit.path(PUPIL_GRADES);
   await kit.snap("grades");
   for (const tab of PUPIL_TABS) await kit.click(tab);
+  await kit.click("Заметки");
+  for (const by of NOTE_GROUPINGS) await kit.click(by);
+  await kit.snap("notes");
+  await kit.click("Сводка оценок");
   await kit.click(MARK_CHIP);
   await kit.snap("mark");
   await kit.close();
+  await kit.click(AVERAGE_RULE);
+  await kit.snap("average");
+  await kit.close();
+  await kit.eachOption("Период", null);
+}
+
+// «Посещаемость»: the grid, the sheet of a mark, every period and, for a parent, the notes of absences with the form of a new one.
+async function familyAttendance(kit, { notes }) {
   await kit.path("Посещаемость");
   await kit.snap("attendance");
+  await kit.click(ATTENDANCE_MARK);
+  await kit.snap("attendance-mark");
+  await kit.close();
+  await kit.eachOption("Период", null);
+  await kit.choose("Период", 0);
   await kit.click("Записки об отсутствии", { optional: !notes });
+  await kit.click("Добавить новую записку об отсутствии", { optional: !notes });
+  await kit.snap("attendance-notes");
+}
+
+// The four screens of the family journal. The notes of absences are the parent's; a pupil has them only when the school filed one.
+async function familyScreens(kit, { notes }) {
+  await familyDay(kit);
+  await familyGrades(kit);
+  await familyAttendance(kit, { notes });
   await kit.home();
   if (await kit.menu("Табели", { optional: true })) {
     await kit.choose("Период табеля", 1);
     await kit.click("Показать табель", { optional: true });
+    await kit.snap("report-card");
   }
 }
 
@@ -357,7 +420,11 @@ export const journeys = {
     await kit.click(/7А · Математика/);
     await kit.choose("Шкала", /Шкала 2–5/);
     await kit.snap("course-table");
+    // The head of a work column opens the lesson it was given in.
+    await kit.click(WORK_LESSON);
+    await kit.snap("work-lesson");
     // A new work is added in the latest lesson of the course, which opens in the journal.
+    await kit.path("Оценки", /7А · Математика/);
     await kit.click("Новая работа");
     await kit.snap("new-work");
     // The pupils ticked: the form of a note opens with them. It asks before it is closed with pupils in it, so the next path leaves it by reloading.
@@ -365,6 +432,10 @@ export const journeys = {
     await kit.check("Выбрать всех учеников");
     await kit.click("Новая заметка");
     await kit.snap("behaviour-prefill");
+    await kit.path("Оценки", /7А · Математика/);
+    await kit.check("Выбрать всех учеников");
+    await kit.click("Воспитательная мера");
+    await kit.snap("measure-prefill");
     await dayGrid(kit, { calendarDay: /^30\.10\.2026/ });
     await pupilReport(kit);
     // Report cards are in the menu only when the teacher has any.
@@ -487,6 +558,18 @@ async function familyDays(kit) {
   }
 }
 
+// Every tab of «Оценки» and the marks of «Посещаемость» on every period a pupil can choose, and the report card of every period.
+async function familyPeriods(kit) {
+  await kit.path(PUPIL_GRADES);
+  await kit.eachOption("Период", async () => {
+    for (const tab of PUPIL_TABS) await kit.click(tab);
+  });
+  await kit.path("Посещаемость");
+  await kit.eachOption("Период", () => kit.eachButton(ATTENDANCE_MARK, () => kit.close(), { max: 3 }));
+  await kit.home();
+  if (await kit.menu("Табели", { optional: true })) await kit.eachOption("Период табеля", () => kit.click("Показать табель", { optional: true }));
+}
+
 // Every course card of «Оценки»: its table on the opening period, then on the first period of the list, and back.
 async function everyCourse(kit, max) {
   await kit.eachButton(
@@ -538,6 +621,7 @@ export const tours = {
 
   async parent(kit) {
     await familyDays(kit);
+    await familyPeriods(kit);
     await homeworkQueue(kit, {});
     await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
     await everyThread(kit, "Входящие");
@@ -547,6 +631,7 @@ export const tours = {
 
   async student(kit) {
     await familyDays(kit);
+    await familyPeriods(kit);
     await homeworkQueue(kit, {});
     await kit.eachButton(/Выполнить задание|Посмотреть работу/, () => kit.close(), { max: 40 });
     await kit.path("События");
