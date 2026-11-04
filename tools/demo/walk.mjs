@@ -1,51 +1,32 @@
 // Walks every menu section of the app and clicks what it finds, so that the
 // capture records each GET without a hand-kept endpoint list. Every write is
 // refused by the capture's route rules, so clicking cannot change anything.
-import { closeOverlays, waitQuiet } from "./browser-kit.mjs";
+import { closeOverlays, menuButton, menuEntries, waitQuiet } from "./browser-kit.mjs";
 
 const SKIP_MENU = /^(Закрыть|Включить уведомления браузера|Обновить устройства|Прочитать все|Обновить|Прочитано|Открыть|Показать более ранние)$|Выйти|Пароль|Резервные|Принять приглашение|Состояние сервера|Попробовать на примере|Вернуться в свою школу|Приложение|Информационные экраны/;
 const SKIP_CLICK = /Выйти|Пароль|Резервные|Принять приглашение|Состояние сервера|Попробовать на примере|Удалить|Печать|Скачать|Экспорт|Выгрузить|Импорт|Загрузить|Отозвать|Заархивировать/;
-// The groups of the menu are folded away until opened; the walker opens them all after every reload.
-const MENU_GROUPS = [
-  { name: "sidebar", selector: ".sidebar nav button:not([aria-expanded])" },
-  { name: "account", selector: ".account-menu button", opener: ".account-toggle" },
-];
+const ACCOUNT = ".account-menu button";
 const EXCLUDE = ".sidebar, .topbar, .demo-bar";
 
-// On a phone the menu is a drawer behind the menu button.
-async function openDrawer(page) {
-  const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
-  if ((await toggle.count()) && !(await page.locator(".sidebar.open").count())) {
-    await toggle.click({ timeout: 2000 }).catch(() => {});
-    await page.waitForTimeout(350);
-  }
-}
-
-async function expandMenu(page) {
-  await openDrawer(page);
-  for (let guard = 0; guard < 12; guard += 1) {
-    const folded = page.locator(".sidebar nav button[aria-expanded=false]").first();
-    if (!(await folded.count())) break;
-    await folded.click({ timeout: 2000 }).catch(() => {});
-  }
-}
-
-async function openGroup(page, group) {
-  if (group.name === "sidebar") await expandMenu(page);
-  else if (!(await page.locator(group.selector).count())) await page.locator(group.opener).click({ timeout: 2000 }).catch(() => {});
-}
-
+// The entries of the left menu (a group of it is opened to read them: a flyout on a desktop, in place on a phone) and of
+// the account menu; `account` tells which of the two an entry belongs to.
 export async function menuTexts(page) {
   const found = [];
-  for (const group of MENU_GROUPS) {
-    await openGroup(page, group);
-    const count = await page.locator(group.selector).count();
-    for (let index = 0; index < count; index += 1) {
-      const text = (await page.locator(group.selector).nth(index).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-      if (text && !SKIP_MENU.test(text)) found.push({ group, index, text });
-    }
+  for (const entry of await menuEntries(page))
+    if (entry.text && !SKIP_MENU.test(entry.text)) found.push({ ...entry, account: false });
+  if (!(await page.locator(ACCOUNT).count())) await page.locator(".account-toggle").click({ timeout: 2000 }).catch(() => {});
+  const count = await page.locator(ACCOUNT).count();
+  for (let index = 0; index < count; index += 1) {
+    const text = (await page.locator(ACCOUNT).nth(index).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (text && !SKIP_MENU.test(text)) found.push({ account: true, group: -1, index, text });
   }
   return found;
+}
+
+async function entryButton(page, entry) {
+  if (!entry.account) return menuButton(page, entry);
+  if (!(await page.locator(ACCOUNT).count())) await page.locator(".account-toggle").click({ timeout: 2000 }).catch(() => {});
+  return page.locator(ACCOUNT).nth(entry.index);
 }
 
 function collect(page) {
@@ -154,8 +135,7 @@ export async function walkRole(page, base, activity, budget, log) {
     if (budget.left <= 0) break;
     try {
       await reload();
-      await openGroup(page, entry.group);
-      const button = page.locator(entry.group.selector).nth(entry.index);
+      const button = await entryButton(page, entry);
       if (!(await button.count())) continue;
       await button.click({ timeout: 3000, noWaitAfter: true }).catch(() => {});
       await waitQuiet(page, activity, 400, 8000);
