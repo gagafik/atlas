@@ -182,6 +182,11 @@ function useDesktop() {
 // A flyout keeps this far from the edge of the screen and holds up to this many tiles in a row.
 const FLYOUT_GAP = 8;
 const FLYOUT_COLUMNS = 3;
+// The tiles of a flyout that are on show: the focus cannot rest on a tile that is hidden (the demo hides the sections its page cannot run).
+const shownTiles = (panel?: Element | null) =>
+  [...(panel?.querySelectorAll("button") ?? [])].filter(
+    (tile) => tile.getClientRects().length > 0,
+  );
 
 /** What AuthShell hands to the screen of a role: the facts the menu depends on and how to act on a click. */
 export interface ShellFrame {
@@ -317,10 +322,9 @@ export default function Shell({
   }, [desktop]);
   // The focus goes to the active tile of a flyout, else to its first.
   function focusFlyout() {
-    const panel = flyoutBox.current?.querySelector(".nav-flyout");
+    const tiles = shownTiles(flyoutBox.current?.querySelector(".nav-flyout"));
     (
-      panel?.querySelector<HTMLElement>('[aria-current="page"]') ??
-      panel?.querySelector<HTMLElement>("button")
+      tiles.find((tile) => tile.matches('[aria-current="page"]')) ?? tiles[0]
     )?.focus();
   }
   // Closing from the keyboard returns the focus to the group button.
@@ -425,7 +429,7 @@ export default function Shell({
     );
   }
   function tileKeys(event: ReactKeyboardEvent<HTMLElement>) {
-    const tiles = [...event.currentTarget.querySelectorAll("button")];
+    const tiles = shownTiles(event.currentTarget);
     const to = stepIndex(
       tiles.indexOf(document.activeElement as HTMLButtonElement),
       tiles.length,
@@ -440,6 +444,8 @@ export default function Shell({
       id = `nav-group-${item.id}`,
       open = desktop ? flyout === item.id : openGroups.includes(item.id),
       holds = item.items.some((child) => child === active),
+      // The group of the current page says so (to the screen reader too); the entry itself is in the page only in a group unfolded in the drawer.
+      lit = holds && (desktop || !open),
       // A folded group still tells that something inside it waits; a flyout leaves the group folded.
       waiting =
         !desktop && open
@@ -455,7 +461,8 @@ export default function Shell({
         ref={desktop && open ? flyoutBox : undefined}
       >
         <button
-          className={holds && (desktop || !open) ? "active" : ""}
+          className={lit ? "active" : ""}
+          aria-current={lit ? "true" : undefined}
           title={rail ? item.label : undefined}
           aria-expanded={open}
           aria-controls={open || !desktop ? id : undefined}

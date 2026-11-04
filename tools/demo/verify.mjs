@@ -86,6 +86,26 @@ async function menuBehaviour(page, activity, desktop, problems) {
   await openGroup(page, 0);
   await page.locator(".breadcrumb strong").click({ timeout: 2000 }).catch(() => {});
   if (await flyouts.count()) fail("a click elsewhere does not close the flyout");
+  // A tile of the first group is picked, so that the page on show is inside a group.
+  await openGroup(page, 0);
+  await flyouts.first().locator("button").first().click({ timeout: 2000 }).catch(() => fail("the first tile cannot be picked"));
+  await closeOverlays(page);
+  await waitQuiet(page, activity);
+  for (let group = 0; group < groups; group += 1) {
+    await openGroup(page, group);
+    await page.waitForTimeout(300);
+    // A tile the demo hides is no stop: End reaches the last tile that shows and a step past it wraps round.
+    const shown = await flyouts.first().locator("button").evaluateAll((tiles) => tiles.filter((tile) => tile.getClientRects().length).map((tile) => (tile.textContent || "").replace(/\s+/g, " ").trim()));
+    if (shown.length > 2)
+      for (const [key, want] of [["End", shown.at(-1)], ["ArrowDown", shown[0]], ["ArrowUp", shown.at(-1)], ["Home", shown[0]]]) {
+        await page.keyboard.press(key);
+        if ((await focusedText()) !== want) fail(`${key} in the flyout of group ${group + 1} does not reach the ${want === shown[0] ? "first" : "last"} tile that shows`);
+      }
+    const holdsPage = (await flyouts.first().locator('[aria-current="page"]').count()) > 0;
+    await page.keyboard.press("Escape");
+    // The group of the page on show says so with its flyout closed, as the entry of a plain menu does.
+    if (((await heads.nth(group).getAttribute("aria-current")) === "true") !== holdsPage) fail(`group ${group + 1} does not tell whether it holds the page on show`);
+  }
   // The rail: icons with a name and a tooltip, groups still open flyouts, the page gets the room, the choice survives a reload.
   const widthOf = () => page.locator(".sidebar").evaluate((sidebar) => sidebar.getBoundingClientRect().width);
   const expanded = await widthOf();

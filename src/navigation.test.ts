@@ -331,7 +331,8 @@ describe("the flyout of a group", () => {
       expect(stepIndex(last, TILES, key)).toBe(last - 1);
       expect(stepIndex(0, TILES, key)).toBe(last);
     }
-    expect(stepIndex(1, TILES, "Home")).toBe(0);
+    // Home and End jump from where a single step would not reach the same tile.
+    expect(stepIndex(last, TILES, "Home")).toBe(0);
     expect(stepIndex(1, TILES, "End")).toBe(last);
   });
 
