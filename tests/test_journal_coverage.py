@@ -134,6 +134,27 @@ def test_snapshot_paging_ignores_saves_and_timetable_changes(client):
     assert report(client,end='2027-06-11',offset=50,token=first['token'],asOf=first['asOf']).status_code==409
 
 
+def test_calendar_days_follow_the_report_and_leave_its_snapshot_alone(client):
+    _,_,parent,teacher=setup(client);known()
+    def days(who,**extra):return who.post('/api/journal/coverage/days?workspace=demo',json=dict(start=DAY,end=DAY,mode='classes',classId='c-demo-a')|extra)
+    def issues(who,**extra):return sorted({r['date'] for r in report(who,status='issues',**extra).json()['items'] if r['actionable']})
+    assert days(client).json()['days']==issues(client,classId='c-demo-a')==[DAY]
+    assert write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).status_code==200
+    assert days(client).json()['days']==issues(client,classId='c-demo-a')
+    # The teacher's own lessons need no class; the administrator's whole school is the report's job.
+    assert days(teacher,mode='teaching',classId='').json()['days']==issues(teacher,mode='teaching')
+    assert days(client,classId='').status_code==422
+    assert days(parent).status_code==403
+    # Reading the calendar is not a report: the snapshot of a report, and its paging after a save, survive any number of calendar reads.
+    first=report(client,end='2027-06-11').json();assert first['total']>50
+    assert write(client,entry(client,lesson(client,'Математика')['lessonKey'])).status_code==200
+    def reads():return len([e for e in client.get('/api/access/audit').json() if e['action']=='journal.coverage_read'])
+    before=reads()
+    for _ in range(journal_coverage.CACHE_ENTRIES+1):assert days(client).status_code==200
+    assert reads()==before
+    assert report(client,end='2027-06-11',offset=50,token=first['token'],asOf=first['asOf']).status_code==200
+
+
 def test_live_token_limited_to_range_and_pupils(client):
     _,_,parent,teacher=setup(client);known();key=lesson(client)['lessonKey']
     first=report(teacher).json();api.journal_coverage.cache.clear()

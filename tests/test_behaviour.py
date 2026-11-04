@@ -160,10 +160,11 @@ def test_measure_levels_hidden_notes_and_teacher_limits(client):
     enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2'); class_teacher = create(client, 'staff')
     t, mother, ct = signed('math'), signed('mother'), signed('staff')
     options = ok(t.get(url('options')))
-    assert options['myLevels'] == ['teacher'] and any(c['quick'] for c in options['categories'])
+    assert options['myLevels'] == ['teacher'] and options['myClassIds'] == [] and any(c['quick'] for c in options['categories'])
     assert note(t, ['s2'], 'class-remark').status_code == 403 and note(t, ['s2'], 'director-remark').status_code == 403
     assign_class_teacher(client, class_teacher)
-    assert ok(ct.get(url('options')))['myLevels'] == ['class_teacher', 'teacher']
+    led = ok(ct.get(url('options')))
+    assert led['myLevels'] == ['class_teacher', 'teacher'] and led['myClassIds'] == ['c-demo-a']
     assert ok(note(ct, ['s1', 's2'], 'class-remark'))['status'] == 'published'
     assert note(ct, ['s3'], 'class-remark').status_code == 403
     ok(note(t, ['s2'], 'unprepared', 'Внутренняя пометка', visible=False))
@@ -311,6 +312,21 @@ def test_summary_counts_the_notes_of_one_subject(client, monkeypatch):
     # Only the note written from a lesson of that subject counts; the note without a lesson belongs to no subject.
     assert counts(subjectId=english().id) == {('s1', 0, 1)}
     assert counts(subjectId='sub-without-notes') == set()
+
+
+def test_note_written_for_a_course_counts_in_that_subject(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'math', 't1')
+    t, math = signed('teacher'), signed('math')
+    ok(note(t, ['s1'], 'activity', 'Помог другу', subjectId=english().id))
+    def counts(**query):
+        return {(r['studentId'], r['praise'], r['remark']) for r in ok(t.get(url('summary', **query)))['items']}
+    assert counts(subjectId=english().id) == {('s1', 1, 0)}
+    # Only a teacher of the subject says that a note belongs to it; the pupils stay within the usual scope.
+    assert note(math, ['s2'], 'activity', subjectId=english().id).status_code == 403
+    assert note(t, ['s1'], 'activity', subjectId='no-such-subject').status_code == 404
+    assert counts(subjectId=english().id) == {('s1', 1, 0)}
+    assert ok(note(client, ['s1'], 'activity', subjectId=english().id))['status'] == 'published'
+    assert counts(subjectId=english().id) == {('s1', 2, 0)}
 
 
 def test_notes_written_before_subjects_take_the_subject_of_their_published_lesson(client, monkeypatch):

@@ -5,7 +5,7 @@ homework_grading.apply: the publication gets the works and marks, the draft keep
 from collections import defaultdict
 import json
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import HTTPException, Request
 from pydantic import Field, ValidationError, model_validator
@@ -16,7 +16,7 @@ from .assessment_categories import GREY, breakdown, category_of, composite, conf
 from .calendar_ops import plain
 from .homework import course_teachers
 from .homework_bulk import remember, replay
-from .journal import Content, Grade, PupilRecord, current_lesson, signature, staff_read, user_ids
+from .journal import Content, Grade, PupilRecord, current_lesson, key_for, signature, staff_read, user_ids
 from .journal_periods import require_open
 from .models import Model
 from .natural import natural
@@ -180,6 +180,21 @@ def finals_of(db, snap, user, workspace, period, subject, pupils):
     for student,raw in db.execute(query,params):
         document=json.loads(raw);result[student]=dict(label=document['label'],outcome=document['outcome'])
     return result
+
+
+def last_lesson(snap, user, workspace, group, subject):
+    """{lessonKey, day} of the latest lesson of the course up to today that is not cancelled and that this account opens, else None.
+    Works are added in a lesson, so «Новая работа» goes here whatever the period of the table holds."""
+    from .journal import today
+    state=snap.state;rows=snap.course_rows(group,subject)
+    day=min(today(),state.settings.yearEnd)
+    while day>=state.settings.yearStart:
+        held=[r for r in rows(day) if r['status']!='cancelled' and staff_read(user,workspace,r)]
+        if held:
+            row=max(held,key=lambda r:r['start'])
+            return dict(lessonKey=key_for(row),day=day.isoformat())
+        day-=timedelta(days=1)
+    return None
 
 
 def build_table(snap, cfg, scope, group, subject, start, end, shown, revision, scale=None):
@@ -371,6 +386,17 @@ class CourseTable:
                 if periodId: result['finals']=finals_of(db,snap,user,workspace,periodId,subjectId,[p['id'] for p in result['pupils']])
                 return result
             return journal.reading(read)
+
+        @app.get('/api/journal/course-table/latest')
+        def latest(request: Request,groupId: str,subjectId: str,workspace: Workspace='school'):
+            user=journal.scope(request,workspace,staff=True)
+            snap=snapshots.get(workspace)
+            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса.')
+            # The schedule snapshot answers; the read only confirms that the account and the revision it was authorized with still hold.
+            journal.reading(lambda db: journal.recheck_read(db,user,snap,workspace))
+            found=last_lesson(snap,user,workspace,groupId,subjectId)
+            if not found: raise HTTPException(404,'В курсе нет прошедшего урока.')
+            return found
 
         @app.post('/api/journal/course-table/save')
         def save(body: CourseSave,request: Request,workspace: Workspace='school'):

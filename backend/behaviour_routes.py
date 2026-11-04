@@ -51,7 +51,7 @@ def register(service,app,Workspace):
             pending=db.execute("SELECT count(*) FROM behaviour_notes WHERE workspace=? AND status='pending'",(workspace,)).fetchone()[0] if user['role']=='admin' else 0
             return dict(admin=user['role']=='admin',canWrite=bool(allowed),family=bool(own) and not allowed,canAcknowledge=user['role']=='parent',
                         today=today().isoformat(),kinds=KINDS,levels=LEVELS,myLevels=sorted(service.levels(db,user,snap,workspace)),
-                        remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,
+                        myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,
                         configVersion=cfg['version'] if user['role']=='admin' else None,
                         classes=[dict(id=id,name=name) for id,name in classes.items() if any(s.classId==id for s in pupils)],
                         students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes.get(s.classId,'')) for s in pupils])
@@ -74,7 +74,7 @@ def register(service,app,Workspace):
             key,previous=service.replay(db,user,body)
             if previous:return previous
             if body.day>today() or body.day<today()-timedelta(days=366):raise HTTPException(422,'Дата записи — не позже сегодняшнего дня и не раньше года назад.')
-            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace);lesson=None
+            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace);lesson=course=None
             if body.lessonKey:
                 # Whoever teaches the lesson today may mark its pupils at teacher level, substitutes included.
                 lesson=service.lesson(db,user,snap,workspace,body.day,body.lessonKey)
@@ -87,6 +87,7 @@ def register(service,app,Workspace):
                 if not set(body.studentIds)<=allowed:raise HTTPException(403,'Можно отметить только учеников, которых вы сейчас учите или курируете.')
                 if not service.allowed(db,user,snap,workspace,category['level'],body.studentIds):
                     raise HTTPException(403,f'Меру уровня «{LEVELS[category["level"]]}» вы не можете назначить выбранным ученикам.')
+                if body.subjectId:course=service.course(user,snap,workspace,body.subjectId)
             status='pending' if category['approval'] and user['role']!='admin' else 'published'
             batch=new_id();created=stamp();ids=[]
             for student in body.studentIds:
@@ -95,6 +96,7 @@ def register(service,app,Workspace):
                           printed=category['report'] if body.printed is None else body.printed,requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
                           approvedBy=user['name'] if category['approval'] and status=='published' else '')
                 if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'],subjectId=lesson['subjectId'],subject=lesson['subject'])
+                if course:data['course']=course
                 row=dict(id=id,student_id=student,kind=category['kind'],visible=int(body.visible))
                 if status=='published':publish(db,workspace,row,user,1,data,snap)
                 db.execute('''INSERT INTO behaviour_notes(id,batch,workspace,student_id,class_id,version,status,kind,category_id,day,author_id,author_name,created,updated,document,visible)

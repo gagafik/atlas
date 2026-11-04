@@ -93,6 +93,7 @@ class NewNotes(Model):
     visible:bool=True
     printed:bool|None=None  # None takes the default of the category
     lessonKey:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
+    subjectId:str|None=Field(default=None,min_length=1,max_length=100)  # the course a note without a lesson is written for (the gradebook)
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.studentIds))!=len(self.studentIds):raise ValueError('Ученики не должны повторяться.')
@@ -194,6 +195,16 @@ class Behaviour:
             from .journal_periods import locks
             closed=bool(locks(db,workspace,dict(date=row['date'],sourceKey=row['id'])))
         return row|dict(locked=closed,label=f"{row['subject']}, {date.fromisoformat(row['date']).strftime('%d.%m.%Y')}, {row['start']}")
+
+    def course(self,user,snap,workspace,subject):
+        """The subject a note without a lesson is written for, as it is stored with the note: a subject of the school that the author teaches (an administrator: any)."""
+        from .journal import user_ids
+        from .resources import teacher_ids
+        found=next((s for s in snap.state.subjects if s.id==subject),None)
+        if not found:raise HTTPException(404,'Предмет не найден.')
+        own=user_ids(user,workspace,'teacher') if user['role']=='teacher' else set()
+        if user['role']!='admin' and not any(w.subjectId==subject and own&set(teacher_ids(w)) for w in snap.state.workloads):raise HTTPException(403,'Записать можно только предмет, который вы ведёте.')
+        return dict(subjectId=found.id,subject=found.name)
 
     def family(self,user,snap,workspace):
         if user['role'] not in ['parent','student']:return set()
@@ -354,7 +365,7 @@ def note_subject_sql(db):
 
     When joined, the query must add LESSON_JOIN; a database where the journal never ran has no lessons to join, so the old notes have no subject."""
     joined=bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_attendance_lessons'").fetchone())
-    stored=("json_extract(n.document,'$.lesson.subjectId')","json_extract(n.document,'$.lesson.subject')")
+    stored=("coalesce(json_extract(n.document,'$.lesson.subjectId'),json_extract(n.document,'$.course.subjectId'))","coalesce(json_extract(n.document,'$.lesson.subject'),json_extract(n.document,'$.course.subject'))")
     return (f'coalesce({stored[0]},l.subject_id)',f'coalesce({stored[1]},l.subject)',True) if joined else (*stored,False)
 
 

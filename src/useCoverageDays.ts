@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { issueDays, monthWindow } from "./journalCoverage";
+import { gridWindow } from "./journalCoverage";
 
-// Pages of 50 lessons: a month of one teacher or one class fits several times over.
-const PAGES = 20;
 const NONE = new Set<string>();
 
 // Whose lessons colour the calendar: the teacher's own, or one class of the school for the administrator.
@@ -11,7 +9,8 @@ export type CoverageScope =
   { mode: "teaching" } | { mode: "classes"; className: string };
 
 /**
- * The days of one month that hold a lesson still «не заполнено», by the rule of the reminders and the class summary.
+ * The days on the calendar of one month (its whole weeks) that hold a lesson still «не заполнено», by the rule of the reminders and the class summary.
+ * The server answers with the dates alone, outside the coverage report's snapshot and audit trail.
  * Nothing is coloured (and nothing is said) for an account without the coverage report, for «Все классы», or for a month outside the year.
  */
 export function useCoverageDays(
@@ -26,7 +25,7 @@ export function useCoverageDays(
   const key = `${workspace}|${scope?.mode ?? ""}|${name}|${month}|${year.start}|${year.end}|${epoch}`;
   const [found, setFound] = useState({ key: "", days: NONE });
   useEffect(() => {
-    const window = month ? monthWindow(month, year.start, year.end) : null;
+    const window = month ? gridWindow(month, year.start, year.end) : null;
     if (!scope || !window || (scope.mode === "classes" && !scope.className)) {
       setFound({ key, days: NONE });
       return;
@@ -42,24 +41,12 @@ export function useCoverageDays(
           )?.id ?? "";
         if (!classId) return [];
       }
-      const days: string[] = [];
-      let offset = 0,
-        pin = {};
-      for (let page = 0; page < PAGES; page++) {
-        const r = await api("journal/coverage/report", workspace, "POST", {
-          ...window,
-          mode: scope.mode,
-          classId,
-          status: "issues",
-          offset,
-          ...pin,
-        });
-        days.push(...issueDays(r.items));
-        if (r.nextOffset === null) break;
-        offset = r.nextOffset;
-        pin = { token: r.token, asOf: r.asOf };
-      }
-      return days;
+      const r = await api("journal/coverage/days", workspace, "POST", {
+        ...window,
+        mode: scope.mode,
+        classId,
+      });
+      return r.days as string[];
     })()
       .then((days) => live && setFound({ key, days: new Set(days) }))
       .catch(() => live && setFound({ key, days: NONE }));

@@ -149,18 +149,6 @@ export default function JournalPanel({
   );
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  useEffect(() => {
-    if (entry && coverageOpened.current) {
-      coverageOpened.current = false;
-      editorPanel.current?.focus({ preventScroll: true });
-      editorPanel.current?.scrollIntoView({ block: "start" });
-    }
-    if (entry && aim.current?.key === entry.lessonKey) {
-      const id = aim.current.id;
-      aim.current = null;
-      document.getElementById(id)?.scrollIntoView({ block: "start" });
-    }
-  }, [entry]);
   const [history, setHistory] = useState<History[]>([]),
     [historyMore, setHistoryMore] = useState(false),
     [historical, setHistorical] = useState<History | null>(null);
@@ -1291,6 +1279,20 @@ export default function JournalPanel({
   const today = options?.today ?? new Date().toLocaleDateString("sv-SE");
   const ready = listed.day === day;
   const lessons = ready ? listed.items : [];
+  // A lesson of another day opens before the list of that day is read; the editor mounts with the list, and only then can it take the focus.
+  useEffect(() => {
+    if (!entry || !editorPanel.current) return;
+    if (coverageOpened.current) {
+      coverageOpened.current = false;
+      editorPanel.current.focus({ preventScroll: true });
+      editorPanel.current.scrollIntoView({ block: "start" });
+    }
+    if (aim.current?.key === entry.lessonKey) {
+      const id = aim.current.id;
+      aim.current = null;
+      document.getElementById(id)?.scrollIntoView({ block: "start" });
+    }
+  }, [entry, ready]);
   const classNames = [
     ...new Set(
       [...lessons.flatMap((l) => l.classes), classFilter].filter(Boolean),
@@ -1511,6 +1513,7 @@ export default function JournalPanel({
                   mark={(d) =>
                     unfilled.has(d) ? "month-calendar-unfilled" : undefined
                   }
+                  markLabel="есть незаполненные уроки"
                   onSelect={goDay}
                   onMonth={setMonth}
                 />

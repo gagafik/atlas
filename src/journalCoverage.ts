@@ -1,4 +1,5 @@
 /** Pure helpers of the journal coverage panel (class summary and reminder settings). */
+import { monthCells } from "./pupilJournal";
 
 export const weekdays = [
   "Понедельник",
@@ -132,24 +133,14 @@ export function runLine(run: Run): string {
   return `${ruDate(run.onDate)} · ${name}: ${result}`;
 }
 
-/** The dates that hold a lesson still «не заполнено» by the coverage rule (rows the server marks `actionable`), each once, in date order. */
-export function issueDays(
-  items: { date: string; actionable?: boolean }[],
-): string[] {
-  return [
-    ...new Set(items.filter((i) => i.actionable).map((i) => i.date)),
-  ].sort();
-}
-
-/** The part of a month inside the school year, `null` when the month lies wholly outside it. `month` is YYYY-MM. */
-export function monthWindow(
+/** The days the calendar of a month (YYYY-MM) shows, whole weeks with the neighbouring months' days, cut to the school year; `null` when they lie wholly outside it. */
+export function gridWindow(
   month: string,
   yearStart: string,
   yearEnd: string,
 ): { start: string; end: string } | null {
-  const [year, number] = month.split("-").map(Number);
-  const last = new Date(Date.UTC(year, number, 0)).toISOString().slice(0, 10);
-  const start = [`${month}-01`, yearStart].sort().at(-1)!,
-    end = [last, yearEnd].sort()[0];
+  const cells = monthCells(`${month}-01`);
+  const start = [cells[0].date, yearStart].sort().at(-1)!,
+    end = [cells[cells.length - 1].date, yearEnd].sort()[0];
   return start <= end ? { start, end } : null;
 }

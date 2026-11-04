@@ -77,6 +77,16 @@ def test_day_items_carry_the_draft_text_the_published_counts_and_the_bell_profil
     assert 'Английский язык' not in str(signed('unrelated').get('/api/journal/day?workspace=demo&day='+DAY).json())
 
 
+def test_day_counter_stays_within_the_roster_after_a_pupil_leaves(client,monkeypatch):
+    # On the lesson day the roster follows the group, while the publication still holds the pupil who left.
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
+    item=lesson(client,'Математика');assert write(client,graded(entry(client,item['lessonKey'])),publish=True).status_code==200
+    item=lesson(client,'Математика');assert item['present']==item['marked']==item['studentCount']>1
+    state=api.read('demo');group=next(g for g in state.groups if g.id=='g-math');group.studentIds=group.studentIds[1:];api.save('demo',state)
+    left=lesson(client,'Математика');assert left['studentCount']==item['studentCount']-1
+    assert left['present']==left['marked']==left['studentCount']
+
+
 def test_role_permissions_and_teacher_scope(client):
     enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
     create(client,'student');create(client,'editor');create(client,'viewer',grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])])

@@ -13,6 +13,7 @@ export default function MonthCalendar({
   min,
   max,
   mark,
+  markLabel,
   onSelect,
   onMonth,
 }: {
@@ -21,6 +22,8 @@ export default function MonthCalendar({
   min?: string;
   max?: string;
   mark?: (day: string) => string | undefined;
+  // What a marked day means, for the screen reader (the colour alone says nothing to it).
+  markLabel?: string;
   onSelect: (day: string) => void;
   // The month on show (YYYY-MM), told at the start and whenever the arrows or the chosen day change it.
   onMonth?: (month: string) => void;
@@ -30,7 +33,7 @@ export default function MonthCalendar({
   const month = anchor.slice(0, 7);
   useEffect(() => onMonth?.(month), [month]);
   return (
-    <div className="month-calendar" aria-label="Календарь">
+    <div className="month-calendar" role="group" aria-label="Календарь">
       <div className="month-calendar-head">
         <button
           type="button"
@@ -61,12 +64,16 @@ export default function MonthCalendar({
         ))}
         {monthCells(`${month}-01`).map((cell, i) => {
           const off = (!!min && cell.date < min) || (!!max && cell.date > max);
+          const marked = mark?.(cell.date);
           return (
             <button
               key={cell.date}
               type="button"
               disabled={off}
-              aria-label={cell.date.split("-").reverse().join(".")}
+              aria-label={
+                cell.date.split("-").reverse().join(".") +
+                (marked && markLabel ? `, ${markLabel}` : "")
+              }
               aria-pressed={cell.date === value}
               className={[
                 "month-calendar-day",
@@ -74,7 +81,7 @@ export default function MonthCalendar({
                 cell.inMonth ? "" : "month-calendar-outside",
                 cell.date === today ? "month-calendar-today" : "",
                 cell.date === value ? "month-calendar-selected" : "",
-                mark?.(cell.date) ?? "",
+                marked ?? "",
               ]
                 .filter(Boolean)
                 .join(" ")}

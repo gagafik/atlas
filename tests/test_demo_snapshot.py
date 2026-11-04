@@ -157,6 +157,9 @@ def test_every_course_of_the_picker_has_its_tables(role):
     scale = next(s for s in entries[get_key('/api/final-grades/options')]['b']['scales'] if s['active'] and s['kind'] == 'thresholds')
     finals = 0
     for course in picker['courses']:
+        # «Новая работа» of a course the account teaches names the lesson to open.
+        if course['canEdit']:
+            assert get_key('/api/journal/course-table/latest', groupId=course['groupId'], subjectId=course['subjectId']) in entries, (role, course['group'], course['subject'])
         for period in picker['periods']:
             key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'], scaleId=scale['id'], periodId=period['id'])
             assert key in entries, (role, course['group'], course['subject'], period['name'])
@@ -171,10 +174,9 @@ def coverage_months(entries):
     """(mode, class id, first day, last day) of every calendar request the day view of the journal made."""
     found = set()
     for key in entries:
-        if key.startswith('POST /api/journal/coverage/report#'):
+        if key.startswith('POST /api/journal/coverage/days#'):
             body = json.loads(key.split('#', 1)[1])
-            if body['status'] == 'issues' and body['offset'] == 0:
-                found.add((body['mode'], body['classId'], body['start'], body['end']))
+            found.add((body['mode'], body['classId'], body['start'], body['end']))
     return found
 
 
@@ -189,8 +191,10 @@ def test_the_calendar_of_the_day_view_has_its_months(role):
         scopes = [('classes', c['id']) for c in entries[get_key('/api/journal/coverage/options')]['b']['classes']['classes']]
     assert scopes, role
     for mode, class_id in scopes:
-        for first, last in [('2026-10-01', '2026-10-31'), ('2026-11-01', '2026-11-30')]:
-            start, end = max(first, options['yearStart']), min(last, options['yearEnd'])
+        for month in ['2026-10-01', '2026-11-01']:
+            # The calendar shows six whole weeks, Monday first, cut to the school year.
+            first = date.fromisoformat(month) - timedelta(days=date.fromisoformat(month).weekday())
+            start, end = max(first.isoformat(), options['yearStart']), min((first + timedelta(days=41)).isoformat(), options['yearEnd'])
             assert (mode, class_id, start, end) in asked, (role, mode, class_id, start, end)
 
 

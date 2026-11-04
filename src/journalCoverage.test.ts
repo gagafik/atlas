@@ -2,8 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classCardLines,
   drillFilters,
-  issueDays,
-  monthWindow,
+  gridWindow,
   ruDate,
   runLine,
   schoolDays,
@@ -151,34 +150,22 @@ describe("summaryFilters and drillFilters", () => {
   });
 });
 
-describe("issueDays", () => {
-  it("lists once each date that has an actionable lesson, in date order", () => {
-    expect(
-      issueDays([
-        { date: "2026-10-30", actionable: true },
-        { date: "2026-10-21", actionable: true },
-        { date: "2026-10-30", actionable: true },
-        { date: "2026-10-22", actionable: false },
-        { date: "2026-10-23" },
-      ]),
-    ).toEqual(["2026-10-21", "2026-10-30"]);
-  });
-});
-
-describe("monthWindow", () => {
-  it("cuts the month to the school year and gives nothing outside it", () => {
-    expect(monthWindow("2026-10", "2026-08-17", "2027-05-29")).toEqual({
-      start: "2026-10-01",
-      end: "2026-10-31",
+describe("gridWindow", () => {
+  it("covers the weeks on show and cuts them to the school year", () => {
+    // 1 October 2026 is a Thursday: the grid starts on Monday 28 September and runs six weeks.
+    expect(gridWindow("2026-10", "2026-08-17", "2027-05-29")).toEqual({
+      start: "2026-09-28",
+      end: "2026-11-08",
     });
-    expect(monthWindow("2026-08", "2026-08-17", "2027-05-29")).toEqual({
-      start: "2026-08-17",
-      end: "2026-08-31",
-    });
-    expect(monthWindow("2027-05", "2026-08-17", "2027-05-29")?.end).toBe(
+    expect(gridWindow("2026-08", "2026-08-17", "2027-05-29")?.start).toBe(
+      "2026-08-17",
+    );
+    expect(gridWindow("2027-05", "2026-08-17", "2027-05-29")?.end).toBe(
       "2027-05-29",
     );
-    expect(monthWindow("2026-07", "2026-08-17", "2027-05-29")).toBeNull();
-    expect(monthWindow("2027-06", "2026-08-17", "2027-05-29")).toBeNull();
+  });
+  it("gives nothing for a month whose weeks lie outside the year", () => {
+    expect(gridWindow("2026-07", "2026-08-17", "2027-05-29")).toBeNull();
+    expect(gridWindow("2027-06", "2026-08-17", "2027-05-29")).toBeNull();
   });
 });

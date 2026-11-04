@@ -225,9 +225,24 @@ export default function CourseTablePanel({
     scaleId,
     periodId,
   ]);
+  // A note written in the form this table opened (or anywhere else) is counted as soon as the form closes.
+  const [noteEpoch, setNoteEpoch] = useState(0),
+    notesFor = useRef("");
+  useEffect(() => {
+    const bump = () => setNoteEpoch((n) => n + 1);
+    window.addEventListener("atlas-behaviour-closed", bump);
+    return () => window.removeEventListener("atlas-behaviour-closed", bump);
+  }, []);
   // The praise and remarks of the period in this subject; an account without them has no such column.
   useEffect(() => {
-    setNotes(null);
+    // Another table starts without the column; the same one keeps its counts until the fresh ones arrive.
+    const shown = table
+      ? `${workspace}|${table.groupId}|${table.subjectId}|${table.start}|${table.end}`
+      : "";
+    if (shown !== notesFor.current) {
+      notesFor.current = shown;
+      setNotes(null);
+    }
     if (!table) return;
     let live = true;
     api(
@@ -253,6 +268,7 @@ export default function CourseTablePanel({
     table?.start,
     table?.end,
     table?.revision,
+    noteEpoch,
   ]);
 
   const index = useMemo(() => {
@@ -408,6 +424,24 @@ export default function CourseTablePanel({
     setBusy(false);
     setReload((n) => n + 1);
   }
+  // Works belong to lessons: the latest lesson of the course up to today opens in the journal, where «Добавить работу» is.
+  async function newWork() {
+    if (!table || busy || !leave()) return;
+    setBusy(true);
+    setError("");
+    const [groupId, subjectId] = course.split("|");
+    try {
+      const r = await api(
+        `journal/course-table/latest?${new URLSearchParams({ groupId, subjectId })}`,
+        workspace,
+      );
+      onOpen(r.lessonKey, r.day);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
   function refresh() {
     setError("");
     setNote((n) => (n?.alert ? null : n));
@@ -462,16 +496,18 @@ export default function CourseTablePanel({
   }, [table]);
 
   const scale = scales?.find((x) => x.id === scaleId);
-  const lastLesson = table?.lessons
-    .filter((l) => l.openable && l.day <= (list?.today ?? ""))
-    .at(-1);
   const picked = table?.pupils.filter((p) => selected.has(p.id)) ?? [];
   const openBehaviour = (measure: boolean) =>
     window.dispatchEvent(
       new CustomEvent("atlas-open-behaviour", {
         detail: {
           workspace,
-          prefill: { studentIds: picked.map((p) => p.id), measure },
+          prefill: {
+            studentIds: picked.map((p) => p.id),
+            measure,
+            subjectId: table?.subjectId,
+            subject: table?.subject,
+          },
         },
       }),
     );
@@ -632,17 +668,9 @@ export default function CourseTablePanel({
             {table.canEdit && (
               <>
                 <button
-                  disabled={busy || !lastLesson}
-                  title={
-                    lastLesson
-                      ? "Откроет последний урок курса: работы добавляются в нём"
-                      : "В курсе нет прошедшего урока с работами: откройте урок в «Классном журнале»"
-                  }
-                  onClick={() =>
-                    lastLesson &&
-                    leave() &&
-                    onOpen(lastLesson.lessonKey, lastLesson.day)
-                  }
+                  disabled={busy}
+                  title="Откроет последний прошедший урок курса: работы добавляются в нём"
+                  onClick={() => void newWork()}
                 >
                   Новая работа
                 </button>

@@ -610,13 +610,15 @@ class Journal:
                 found = {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
                 # Published attendance of the day by lesson: the grid shows «присутствуют N/M» without opening every lesson. One range of the
                 # primary key per lesson; "+day" keeps the planner off the day index, which it would scan as the whole workspace.
-                counts = {r[0]:r[1:] for r in db.execute("SELECT lesson_key,sum(attendance IN ('present','late','left')),sum(attendance!='unmarked') FROM journal_attendance WHERE workspace=? AND +day=? AND lesson_key IN (SELECT value FROM json_each(?)) GROUP BY lesson_key",(workspace,day.isoformat(),encoded(sorted(found))))}
-                return found,counts
-            saved,counts = self.reading(read)
+                held = {}
+                for key,student,mark in db.execute("SELECT lesson_key,student_id,attendance FROM journal_attendance WHERE workspace=? AND +day=? AND lesson_key IN (SELECT value FROM json_each(?))",(workspace,day.isoformat(),encoded(sorted(found)))): held.setdefault(key,{})[student] = mark
+                return found,held
+            saved,held = self.reading(read)
             names = {c.id:c.name for c in state.classes}
-            def cards(record,key):
-                """Draft topic and homework and the published attendance counts; unpublished or moved lessons have no counts."""
-                present,marked = counts.get(key,(None,None))
+            def cards(record,key,roster):
+                """Draft topic and homework and the published attendance counts over the pupils of `roster` (so N never exceeds the studentCount M); unpublished or moved lessons have no counts."""
+                marks = held.get(key);present = marked = None
+                if marks is not None: present,marked = sum(marks.get(id) in ('present','late','left') for id in roster),sum(marks.get(id,'unmarked')!='unmarked' for id in roster)
                 return dict(topic=record['topic'] if record else '',homework=record['homework'] if record else '',dueDate=record['dueDate'] if record else None,present=present,marked=marked)
             result = []
             for row in rows:
@@ -624,19 +626,19 @@ class Journal:
                 key = key_for(row)
                 record = saved.get(key)
                 if not (staff_read(user,workspace,row) or record and staff_read(user,workspace,record['lesson'])): continue
-                lesson,count,fixed = {k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},len(row['studentIds']),False
+                lesson,roster,fixed = {k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},row['studentIds'],False
                 if record and frozen(record['published'],row,today()) and record['published']['date']==day.isoformat():
                     # An earlier day keeps the time, teachers and roster it was published with.
                     published = record['published']
-                    lesson,count,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),sum(bool(s.get('enrolled',True)) for s in published['students']),True
-                result.append(dict(lessonKey=key,lesson=lesson,studentCount=count,version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed,
-                                   profileId=row['profileId'],classes=[names[c] for c in (row['originalClassIds'] if row['status']=='cancelled' else row['classIds']) if c in names])|cards(record,key))
-            present = {r['lessonKey'] for r in result}
+                    lesson,roster,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),[s['id'] for s in published['students'] if s.get('enrolled',True)],True
+                result.append(dict(lessonKey=key,lesson=lesson,studentCount=len(roster),version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed,
+                                   profileId=row['profileId'],classes=[names[c] for c in (row['originalClassIds'] if row['status']=='cancelled' else row['classIds']) if c in names])|cards(record,key,roster))
+            listed = {r['lessonKey'] for r in result}
             for key,record in saved.items():
                 lesson = record['lesson']
-                if key not in present and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
+                if key not in listed and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
                     result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False,
-                                       profileId=None,classes=sorted({s['className'] for s in lesson['students'] if s.get('className')}))|cards(record,key))
+                                       profileId=None,classes=sorted({s['className'] for s in lesson['students'] if s.get('className')}))|cards(record,key,[s['id'] for s in lesson['students']]))
             result.sort(key=lambda r:(r['lesson']['start'],r['lesson']['group'],r['lesson']['subject']))
             return dict(revision=state.revision,lessons=result)
 

@@ -4,7 +4,7 @@
 // POSTs that only read. The demo answers them from the snapshot by body.
 export const READ_POSTS = [
   { pattern: "^/api/collaboration/presence$", anyBody: true },
-  { pattern: "^/api/journal/coverage/(report|classes|details)$" },
+  { pattern: "^/api/journal/coverage/(report|classes|details|days)$" },
   { pattern: "^/api/journal/attendance/(report|details)$" },
   { pattern: "^/api/calendar/day-plan$" },
   { pattern: "^/api/journal/quizzes/[^/]+/transfer/preview$" },

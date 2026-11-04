@@ -103,7 +103,13 @@ export default function AuthShell() {
     ),
     // The pupils the gradebook marked for a note or a measure.
     [behaviourPrefill, setBehaviourPrefill] = useState<
-      { studentIds: string[]; measure?: boolean } | undefined
+      | {
+          studentIds: string[];
+          measure?: boolean;
+          subjectId?: string;
+          subject?: string;
+        }
+      | undefined
     >();
   useEffect(() => {
     const open = (event: Event) => {
@@ -711,6 +717,8 @@ export default function AuthShell() {
             onClose={() => {
               setBehaviourWorkspace(null);
               setBehaviourPrefill(undefined);
+              // The counts of the gradebook follow the notes written in the form.
+              window.dispatchEvent(new Event("atlas-behaviour-closed"));
             }}
           />
         </Suspense>

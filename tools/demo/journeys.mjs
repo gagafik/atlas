@@ -310,7 +310,7 @@ export const journeys = {
     await kit.snap("course-table");
     await kit.path(JOURNAL, DAY_LESSON);
     await kit.snap("lesson");
-    await dayGrid(kit, { calendarDay: "30.10.2026" });
+    await dayGrid(kit, { calendarDay: /^30\.10\.2026/ });
     await pupilReport(kit);
     await kit.path(JOURNAL);
     await kit.choose("Класс", "7А");
@@ -357,12 +357,15 @@ export const journeys = {
     await kit.click(/7А · Математика/);
     await kit.choose("Шкала", /Шкала 2–5/);
     await kit.snap("course-table");
-    // The pupils ticked: the form of a note opens with them.
+    // A new work is added in the latest lesson of the course, which opens in the journal.
+    await kit.click("Новая работа");
+    await kit.snap("new-work");
+    // The pupils ticked: the form of a note opens with them. It asks before it is closed with pupils in it, so the next path leaves it by reloading.
+    await kit.path("Оценки", /7А · Математика/);
     await kit.check("Выбрать всех учеников");
     await kit.click("Новая заметка");
     await kit.snap("behaviour-prefill");
-    await kit.close();
-    await dayGrid(kit, { calendarDay: "30.10.2026" });
+    await dayGrid(kit, { calendarDay: /^30\.10\.2026/ });
     await pupilReport(kit);
     // Report cards are in the menu only when the teacher has any.
     await kit.home();

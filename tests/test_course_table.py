@@ -1,5 +1,5 @@
 """Course table: pupils against the works of one course, dated rows, roles, and the per-lesson atomic save and publication."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 import pytest
@@ -9,7 +9,7 @@ from backend.models import DatedLesson, Student
 from backend.timetable_history import History
 from test_access import client, enable, create, signed
 from test_journal import DAY, entry, write, report
-from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
+from test_journal_history import clock, resave, card, lessons, ENGLISH, NEXT, TODAY  # noqa: F401
 from test_journal_periods import period, close
 from test_assessment_categories import put_config, shares
 from test_final_grades import seeded, scale, propose, publish, stop_gradebook_jobs  # noqa: F401
@@ -842,3 +842,15 @@ def test_finals_in_the_table_stay_within_the_rights_of_the_final_grades(client, 
     assert ok(finals(signed('second')))['finals'] == {}
     assert finals(client, uuid4().hex).status_code == 404
 
+
+def test_new_work_goes_to_the_latest_lesson_of_the_course_even_without_any_work(client, clock):
+    teacher, _ = staffed(client)
+    create(client, 'teacher', login='second', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    def latest(c):
+        return c.get(URL + '/latest', params=dict(workspace='demo', groupId=G, subjectId=S))
+    found = ok(latest(teacher))
+    # The latest day up to today on which the group has its lesson, found through the day list.
+    held = next(day for day in (TODAY - timedelta(days=n) for n in range(30)) if any(r['lesson']['group'] == '10A' and r['lesson']['subject'] == ENGLISH for r in lessons(teacher, day.isoformat())))
+    assert found == dict(lessonKey=card(teacher, held.isoformat())['lessonKey'], day=held.isoformat())
+    # Only a teacher of the course adds works: the administrator and a colleague of another course do not.
+    assert latest(client).status_code == 403 and latest(signed('second')).status_code == 403

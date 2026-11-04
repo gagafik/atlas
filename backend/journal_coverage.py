@@ -330,6 +330,18 @@ class JournalCoverage:
 
         @app.post('/api/journal/coverage/report')
         def report(body:CoverageQuery,request:Request,workspace:Workspace='school'):return read(body,request,workspace)
+        @app.post('/api/journal/coverage/days')
+        def days(body:CoverageQuery,request:Request,workspace:Workspace='school'):
+            """The dates of the window that hold a lesson still «не заполнено» (the calendar of the journal). Dates only, so it is neither paged,
+            audited nor kept in the report cache: a calendar opened by every teacher must not push a report's snapshot out of the four entries."""
+            user,snap=self.reports.context(request,workspace)
+            # Calculating a month of the whole school is the report's job (cached, audited, paged); the calendar asks for one class or the teacher's own lessons.
+            if user['role']=='admin' and not body.classId:raise HTTPException(422,'Календарь строится по одному классу или по урокам учителя.')
+            body=body.model_copy(update=dict(asOf=now(),status='issues',offset=0,token=''))
+            with self.access.read_connect() as db:
+                db.execute('BEGIN');self.absences.recheck(db,user,snap,workspace)
+                rows=self.calculate(db,user,snap,workspace,body)['rows']
+            return dict(days=sorted({r['date'] for r in rows if r['actionable']}))
         @app.post('/api/journal/coverage/classes')
         def classes_summary(body:CoverageQuery,request:Request,workspace:Workspace='school'):
             user,snap=self.reports.context(request,workspace)

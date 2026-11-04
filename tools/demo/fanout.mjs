@@ -149,15 +149,24 @@ async function courseTables(r) {
       await r.get(`/api/behaviour/summary?${q({ start: period.start, end: period.end, subjectId: course.subjectId })}`);
       count += 1;
     }
+  // «Новая работа» of the courses the account teaches: the latest lesson to open.
+  for (const course of picker.courses || [])
+    if (course.canEdit) await r.get(`/api/journal/course-table/latest?${q({ groupId: course.groupId, subjectId: course.subjectId })}`);
   r.log(`  course tables: ${count}`);
 }
 
 // ---- the month calendar of «Классный журнал»: the days with unfilled lessons, as the hook asks for them (the own lessons of a
-// teacher, one class at a time for the administrator), for the months around the demo day.
+// teacher, one class at a time for the administrator), for the months around the demo day. The calendar shows six whole weeks.
 const COVERAGE_MONTHS = [
   [2026, 10],
   [2026, 11],
 ];
+// Mirrors gridWindow (src/journalCoverage.ts): the weeks on show for a month, cut to the school year.
+function monthGrid(year, month) {
+  const first = monthRange(year, month)[0];
+  const start = isoShift(first, -((weekdayOf(first) + 6) % 7));
+  return [start, isoShift(start, 41)];
+}
 async function coverageMonths(r, role) {
   const options = await r.get("/api/journal/options");
   if (!options?.staff) return;
@@ -168,20 +177,11 @@ async function coverageMonths(r, role) {
     for (const school of classes) scopes.push({ mode: "classes", classId: school.id });
   }
   for (const [year, month] of COVERAGE_MONTHS) {
-    // Mirrors monthWindow (src/journalCoverage.ts): the month cut to the school year.
-    const [first, last] = monthRange(year, month);
+    const [first, last] = monthGrid(year, month);
     const start = first < options.yearStart ? options.yearStart : first;
     const end = last > options.yearEnd ? options.yearEnd : last;
     if (start > end) continue;
-    for (const scope of scopes) {
-      let offset = 0,
-        pin = {};
-      for (let page = 0; offset !== null && page < 20; page += 1) {
-        const answer = await r.post("/api/journal/coverage/report", { start, end, ...scope, status: "issues", offset, ...pin });
-        offset = answer?.nextOffset ?? null;
-        pin = { token: answer?.token, asOf: answer?.asOf };
-      }
-    }
+    for (const scope of scopes) await r.post("/api/journal/coverage/days", { start, end, ...scope });
   }
 }
 
