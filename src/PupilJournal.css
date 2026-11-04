@@ -613,7 +613,12 @@ button.pupil-att:hover b {
     font-size: 1.25em;
   }
   .pupil-table .pupil-sticky {
-    max-width: 112px;
+    max-width: 148px;
+  }
+  /* Montserrat is wider than the old font: a subject name wraps (a word up to 128 px stays whole) instead of being cut */
+  .pupil-table:not(.pupil-grid) .pupil-sticky {
+    white-space: normal;
+    overflow-wrap: break-word;
   }
   .pupil-popover-layer {
     align-items: flex-end;
