@@ -15,6 +15,7 @@ import InvitationForm from "./InvitationForm";
 import SchoolLogo from "./SchoolLogo";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { useLaunch } from "./launch";
 import type { AccountId, ModalId } from "./navigation";
 import type { ShellFrame } from "./Shell";
 const App = lazy(() => import("./App"));
@@ -74,11 +75,15 @@ export default function AuthShell() {
   const [handoverWorkspace, setHandoverWorkspace] = useState<string | null>(
     null,
   );
+  // The child a window of the menu starts on; a notice that names a child opens the window on them, any other opening on none.
+  const [modalChild, setModalChild] = useState<string | undefined>();
   useEffect(() => {
-    const open = (event: Event) =>
+    const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setHandoverWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
       );
+    };
     window.addEventListener("atlas-open-handover", open);
     return () => window.removeEventListener("atlas-open-handover", open);
   }, []);
@@ -112,9 +117,14 @@ export default function AuthShell() {
         }
       | undefined
     >();
+  // «Воспитательная мера» of the launcher: the form opens on a measure, for pupils chosen in it.
+  useLaunch(["measure"], () =>
+    setBehaviourPrefill({ studentIds: [], measure: true }),
+  );
   useEffect(() => {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;
+      setModalChild(detail?.studentId);
       setBehaviourPrefill(detail?.prefill);
       setBehaviourWorkspace(detail?.workspace || "school");
     };
@@ -125,10 +135,12 @@ export default function AuthShell() {
     string | null
   >(null);
   useEffect(() => {
-    const open = (event: Event) =>
+    const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setAssessmentsWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
       );
+    };
     window.addEventListener("atlas-open-assessments", open);
     return () => window.removeEventListener("atlas-open-assessments", open);
   }, []);
@@ -195,6 +207,7 @@ export default function AuthShell() {
   const [meetingsSection, setMeetingsSection] = useState<string | undefined>();
   useEffect(() => {
     const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setMeetingsSection((event as CustomEvent).detail?.section);
       setMeetingsWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
@@ -486,7 +499,8 @@ export default function AuthShell() {
     registers: setRegistersWorkspace,
     hall: setHallWorkspace,
   };
-  function openModal(id: ModalId) {
+  function openModal(id: ModalId, child?: string) {
+    setModalChild(child);
     if (id === "meetings") {
       setMeetingsSection(undefined);
       setMeetingsWorkspace("school");
@@ -638,6 +652,7 @@ export default function AuthShell() {
             key={`${session.user.id}:${session.user.version}`}
             user={session.user}
             initialWorkspace={paymentsWorkspace}
+            studentId={modalChild}
             onClose={() => setPaymentsWorkspace(null)}
           />
         </Suspense>
@@ -648,6 +663,7 @@ export default function AuthShell() {
             key={`${session.user.id}:${session.user.version}`}
             user={session.user}
             initialWorkspace={handoverWorkspace}
+            studentId={modalChild}
             onClose={() => setHandoverWorkspace(null)}
           />
         </Suspense>
@@ -718,6 +734,7 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={behaviourWorkspace}
+            studentId={modalChild}
             prefill={behaviourPrefill}
             onClose={() => {
               setBehaviourWorkspace(null);
@@ -736,6 +753,7 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={assessmentsWorkspace}
+            studentId={modalChild}
             onClose={() => setAssessmentsWorkspace(null)}
           />
         </Suspense>
@@ -797,6 +815,7 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={meetingsWorkspace}
             initialSection={meetingsSection}
+            studentId={modalChild}
             onClose={() => setMeetingsWorkspace(null)}
           />
         </Suspense>

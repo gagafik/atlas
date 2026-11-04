@@ -108,8 +108,10 @@ const EVENTS: Record<string, string> = {
   finals: "atlas-open-journal",
 };
 // Which screen to open for the server's answer: [event name, event detail], or null for an unknown module.
+// `children` are the pupils the entry names: an entry about one child, whatever its module, also tells which child.
 export function openEvent(
   result: OpenResult,
+  children: NoticeChild[] = [],
 ): [string, Record<string, string | null | undefined>] | null {
   if (!Object.hasOwn(EVENTS, result.module)) return null;
   const detail: Record<string, string | null | undefined> = {
@@ -128,5 +130,7 @@ export function openEvent(
   else if (result.module === "class_meetings") detail.section = "class";
   else if (result.module === "meetings" && result.section)
     detail.section = result.section;
+  if (!detail.studentId && children.length === 1)
+    detail.studentId = children[0].id;
   return [EVENTS[result.module], detail];
 }

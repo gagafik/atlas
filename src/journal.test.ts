@@ -18,7 +18,9 @@ import {
   changeAttendance,
   initials,
   lateShare,
+  clockMinutes,
   lessonsText,
+  lessonOfNow,
   noAbsentees,
   withNoAbsentees,
   type JournalContent,
@@ -612,5 +614,40 @@ describe("marks of a held lesson", () => {
       mergeReportPage(first, page({ absenceCodes: { family: "Семья" } }))
         .absenceCodes,
     ).toEqual({ family: "Семья" });
+  });
+});
+
+describe("the lesson to start from", () => {
+  const at = (start: string, end: string, archived = false) => ({
+    lesson: { start, end },
+    archived,
+  });
+  const day = [
+    at("09:30", "10:15"),
+    at("08:30", "09:15"),
+    at("11:30", "12:15"),
+  ];
+
+  it("is the lesson that is on", () => {
+    expect(lessonOfNow(day, clockMinutes("09:45"))).toBe(day[0]);
+    // A lesson begins on its first minute and is over on its last.
+    expect(lessonOfNow(day, clockMinutes("08:30"))).toBe(day[1]);
+    expect(lessonOfNow(day, clockMinutes("10:15"))).toBe(day[2]);
+  });
+
+  it("is the next lesson between two, and the first before the day", () => {
+    expect(lessonOfNow(day, clockMinutes("09:20"))).toBe(day[0]);
+    expect(lessonOfNow(day, clockMinutes("07:00"))).toBe(day[1]);
+  });
+
+  it("is the last lesson once the day is over", () => {
+    expect(lessonOfNow(day, clockMinutes("18:00"))).toBe(day[2]);
+  });
+
+  it("leaves out an archived lesson and is none for a day without lessons", () => {
+    const old = at("09:30", "10:15", true);
+    expect(lessonOfNow([old, day[2]], clockMinutes("09:45"))).toBe(day[2]);
+    expect(lessonOfNow([old], clockMinutes("09:45"))).toBeUndefined();
+    expect(lessonOfNow([], clockMinutes("09:45"))).toBeUndefined();
   });
 });

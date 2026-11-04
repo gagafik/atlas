@@ -16,7 +16,6 @@ import LessonPupilCards from "./LessonPupilCards";
 import AttendancePanel from "./AttendancePanel";
 import AttendanceGridPanel from "./AttendanceGridPanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
-import CourseTablePanel from "./CourseTablePanel";
 import TeacherGradebook from "./TeacherGradebook";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
@@ -25,6 +24,7 @@ import TeacherDayGrid from "./TeacherDayGrid";
 import { dayProfile, slotsFor } from "./bells";
 import { dayText, shiftDate, weekdayName } from "./pupilJournal";
 import { useCoverageDays, type CoverageScope } from "./useCoverageDays";
+import { useLaunch, type LaunchIntent } from "./launch";
 import {
   WEIGHT_PRESETS,
   bookingDefault,
@@ -36,6 +36,7 @@ import {
 import {
   absenceCodeNames,
   attendanceProblem,
+  lessonOfNow,
   attendanceText,
   gradeLabel,
   journalCsv,
@@ -97,11 +98,14 @@ export type JournalFocus =
 
 export default function JournalPanel({
   workspace,
+  child,
   focus,
   view,
   onLeaveView,
 }: {
   workspace: string;
+  // The child a pupil's or parent's portal looks at; the family screens follow it.
+  child?: string;
   focus?: JournalFocus;
   // Set by a menu entry: show this part of the journal alone, if the server offers it to the account;
   // for a pupil or a parent it names the screen of the family journal.
@@ -113,7 +117,10 @@ export default function JournalPanel({
     editorPanel = useRef<HTMLElement | null>(null);
   const [options, setOptions] = useState<Options | null>(null),
     [mode, setMode] = useState("day"),
-    [only, setOnly] = useState(view);
+    [only, setOnly] = useState(view),
+    // «Тема урока и посещаемость», «Добавить домашнее задание» of the launcher: waits for the day grid of today.
+    [aimed, setAimed] = useState<LaunchIntent | null>(null);
+  useLaunch(["todayLesson", "homework"], setAimed);
   // The lesson editor is hidden while a part shows alone: what was typed there was given up at the leave prompt.
   useEffect(() => {
     setOnly(view);
@@ -454,19 +461,14 @@ export default function JournalPanel({
     aim.current = target ? { key, id: target } : null;
     void openEntry(key);
   }
-  function adminPanel(name: JournalPanelName, open = false) {
+  // A part of the journal opens alone, from the menu, and is open at once. The course table is the gradebook of the
+  // teacher: course cards, then the table of one course at full width.
+  function adminPanel(name: JournalPanelName) {
     switch (name) {
       case "courseTable":
-        // Alone, the part is the gradebook of the teacher: course cards, then the table of one course at full width.
-        return open ? (
+        return (
           <TeacherGradebook
             key={`gradebook-${workspace}`}
-            workspace={workspace}
-            onOpen={openLesson}
-          />
-        ) : (
-          <CourseTablePanel
-            key={`course-table-${workspace}`}
             workspace={workspace}
             onOpen={openLesson}
           />
@@ -476,14 +478,14 @@ export default function JournalPanel({
           <FinalGradesPanel
             key={`final-grades-${workspace}`}
             workspace={workspace}
-            defaultOpen={open}
+            defaultOpen
             focus={focus?.finalsPeriodId ? focus : undefined}
           />
         );
       case "absences":
         return (
           <div key={workspace} id="journal-panel-absences">
-            <AbsencePanel workspace={workspace} defaultOpen={open} />
+            <AbsencePanel workspace={workspace} defaultOpen />
           </div>
         );
       case "periods":
@@ -491,6 +493,7 @@ export default function JournalPanel({
           <JournalPeriodsPanel
             key={`periods-${workspace}`}
             workspace={workspace}
+            defaultOpen
             onChanged={() => {
               setEpoch((x) => x + 1);
               if (entry) {
@@ -521,6 +524,7 @@ export default function JournalPanel({
           <JournalCoveragePanel
             key={`coverage-${workspace}`}
             workspace={workspace}
+            defaultOpen
             onOpen={openLesson}
           />
         );
@@ -532,11 +536,11 @@ export default function JournalPanel({
           />
         );
       case "attendanceGrid":
-        // Alone, the grid of the classes comes with the summary of attendance when the account has one (the administrator).
+        // The grid of the classes comes with the summary of attendance when the account has one (the administrator).
         return (
           <Fragment key={`attendance-grid-${workspace}`}>
-            <AttendanceGridPanel workspace={workspace} defaultOpen={open} />
-            {open && panels.includes("attendance") && adminPanel("attendance")}
+            <AttendanceGridPanel workspace={workspace} defaultOpen />
+            {panels.includes("attendance") && adminPanel("attendance")}
           </Fragment>
         );
     }
@@ -666,7 +670,7 @@ export default function JournalPanel({
               }
             />
           </div>
-          <label className="field">
+          <label className="field" id="journal-homework">
             <span>Домашнее задание</span>
             <textarea
               maxLength={4000}
@@ -1325,6 +1329,32 @@ export default function JournalPanel({
   const title = day
     ? `${weekdayName(day).replace(/^./, (c) => c.toUpperCase())}, ${dayText(day)}`
     : "";
+  // The launcher opens the lesson of today that is on or comes next, at the topic or at the homework; the administrator gets the day alone.
+  useEffect(() => {
+    if (!aimed || !options?.staff || single) return;
+    const finish = () => setAimed(null);
+    if (mode !== "day") {
+      if (!canLeave()) return finish();
+      clearEditor();
+      return setMode("day");
+    }
+    if (day !== clampDay(today, options.yearStart, options.yearEnd)) {
+      if (!canLeave()) return finish();
+      clearEditor();
+      return setDay(clampDay(today, options.yearStart, options.yearEnd));
+    }
+    if (!ready || loading) return;
+    finish();
+    if (options.admin) return;
+    const clock = new Date(),
+      now = clock.getHours() * 60 + clock.getMinutes();
+    const lesson = lessonOfNow(lessons, now);
+    if (lesson)
+      openFromGrid(
+        lesson.lessonKey,
+        aimed === "homework" ? "journal-homework" : "journal-lesson-topic",
+      );
+  }, [aimed, options, single, mode, day, ready, loading]);
   function goDay(next: string) {
     if (!options || !next) return;
     const target = clampDay(next, options.yearStart, options.yearEnd);
@@ -1356,6 +1386,7 @@ export default function JournalPanel({
         <FamilyJournal
           workspace={workspace}
           options={options}
+          chosen={child}
           view={view}
           focus={focus}
         />
@@ -1365,7 +1396,7 @@ export default function JournalPanel({
           className="journal-admin-panels"
           aria-label="Отчёты и управление журналом"
         >
-          {adminPanel(single, true)}
+          {adminPanel(single)}
         </section>
       )}
       {options?.staff && !single && (
@@ -1559,14 +1590,6 @@ export default function JournalPanel({
             </>
           )}
         </>
-      )}
-      {!!panels.length && !single && options?.staff && (
-        <section
-          className="journal-admin-panels"
-          aria-label="Отчёты и управление журналом"
-        >
-          {panels.map((name) => adminPanel(name))}
-        </section>
       )}
     </section>
   );

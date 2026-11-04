@@ -2,6 +2,8 @@
 import gzip
 import json
 import re
+import shutil
+import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -83,16 +85,62 @@ def test_snapshot_never_holds_operations_audit_or_public_link_routes(role):
         assert 'workspace=' not in key, key
 
 
+# The showcase pupil has one account of their own; the showcase guardian has a second child, so the child switcher has two to show.
+OWN_CHILDREN = {'parent': {school.SHOWCASE_PUPIL, school.SIBLING_PUPIL}, 'student': {school.SHOWCASE_PUPIL}}
+
+
 @pytest.mark.parametrize('role', ['parent', 'student'])
-def test_family_snapshots_hold_no_staff_data_and_only_the_showcase_pupil(role):
+def test_family_snapshots_hold_no_staff_data_and_only_the_pupils_of_the_account(role):
     entries = load(role)['entries']
     for key, entry in entries.items():
         if key.startswith('GET /api/state') or key.startswith('GET /api/access/'):
             assert entry['s'] >= 400, key
         match = re.search(r'studentId=([^&]+)', key)
         if match:
-            assert match.group(1) == school.SHOWCASE_PUPIL, key
+            assert match.group(1) in OWN_CHILDREN[role], key
     assert any(key.startswith('GET /api/journal/report') for key in entries)
+
+
+def test_the_parent_can_switch_between_two_children_with_their_screens_in_the_snapshot():
+    entries = load('parent')['entries']
+    children = [child['id'] for child in entries[get_key('/api/journal/options')]['b']['students']]
+    assert children == [school.SHOWCASE_PUPIL, school.SIBLING_PUPIL]
+    for child in children:
+        assert any(key.startswith('GET /api/journal/report') and f'studentId={child}' in key for key in entries), child
+        assert any(key.startswith('GET /api/journal/pupil-period') and f'studentId={child}' in key for key in entries), child
+        # The lists of the family hold the child on show only, so the visitor never sees the sibling's work among them.
+        for path in ['/api/journal/homework-queue', '/api/journal/quizzes']:
+            lists = [entry['b']['items'] for key, entry in entries.items() if key.startswith(f'GET {path}?') and f'studentId={child}' in key and entry['s'] == 200]
+            assert lists, (child, path)
+            assert all(item['studentId'] == child for items in lists for item in items), (child, path)
+
+
+# The route each part of the journal opens with. The menu offers a part when `journal/options` says the account has it, so a part
+# without any answer in the snapshot would lead a visitor to a screen of misses. The demo serves the snapshot through
+# tools/demo/served.mjs, which withdraws such a part (the administrator's file is at the size limit, without the absence notes).
+PART_ROUTES = {
+    'absences': '/api/journal/absences', 'coverage': '/api/journal/coverage', 'attendance': '/api/journal/attendance',
+    'attendanceGrid': '/api/journal/attendance', 'finalGrades': '/api/final-grades', 'periods': '/api/journal/periods',
+    'courseTable': '/api/journal/course-table',
+}
+
+
+def served(role):
+    """The snapshot of a role as the built demo serves it."""
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node.js is needed to build the demo')
+    result = subprocess.run([node, str(SNAPSHOTS.parent / 'served.mjs'), role], capture_output=True, check=True, timeout=60)
+    return json.loads(result.stdout.decode('utf-8'))
+
+
+@pytest.mark.parametrize('role', ['admin', 'teacher'])
+def test_every_part_of_the_journal_the_menu_offers_has_answers_in_the_snapshot(role):
+    entries = served(role)['entries']
+    panels = entries[get_key('/api/journal/options')]['b']['panels']
+    for part, route in PART_ROUTES.items():
+        if panels.get(part):
+            assert any(key.split(' ', 1)[1].startswith(route) for key in entries), (role, part)
 
 
 def test_people_and_school_name_are_invented():
@@ -212,7 +260,7 @@ def test_every_homework_of_the_journal_can_be_opened(role):
     rows = [row for body in lists_under(entries, '/api/journal/report') for row in body['rows'] if row['content'].get('homework')]
     assert len(rows) > 20, role
     for row in rows:
-        assert get_key(f'/api/journal/homework/{row["lessonKey"]}', studentId=school.SHOWCASE_PUPIL) in entries, (role, row['lessonKey'])
+        assert get_key(f'/api/journal/homework/{row["lessonKey"]}', studentId=row['student']['id']) in entries, (role, row['lessonKey'])
 
 
 @pytest.mark.parametrize('role', ['parent', 'student'])
@@ -225,16 +273,17 @@ def test_every_period_and_week_of_the_family_journal_has_its_answer(role):
     if not any(p['kind'] == 'year' and p['start'] <= options['yearStart'] and p['end'] >= year_end for p in options['periods']):
         ranges.append((options['yearStart'], year_end))
     assert len(ranges) >= 3, ranges
-    for start, end in ranges:
-        for path in ['/api/journal/pupil-period', '/api/behaviour/family']:
-            assert get_key(path, studentId=school.SHOWCASE_PUPIL, start=start, end=end) in entries, (role, path, start, end)
-    monday = date(2026, 10, 5)
-    while monday <= date(2026, 11, 13):
-        key = get_key('/api/journal/report', studentId=school.SHOWCASE_PUPIL, start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat(), limit='200')
-        assert key in entries, (role, key)
-        monday += timedelta(days=7)
-    for period in entries[get_key('/api/final-grades/options')]['b']['periods']:
-        assert get_key('/api/final-grades/report', studentId=school.SHOWCASE_PUPIL, periodId=period['id']) in entries, period['id']
+    for child in OWN_CHILDREN[role]:
+        for start, end in ranges:
+            for path in ['/api/journal/pupil-period', '/api/behaviour/family']:
+                assert get_key(path, studentId=child, start=start, end=end) in entries, (role, child, path, start, end)
+        monday = date(2026, 10, 5)
+        while monday <= date(2026, 11, 13):
+            key = get_key('/api/journal/report', studentId=child, start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat(), limit='200')
+            assert key in entries, (role, key)
+            monday += timedelta(days=7)
+        for period in entries[get_key('/api/final-grades/options')]['b']['periods']:
+            assert get_key('/api/final-grades/report', studentId=child, periodId=period['id']) in entries, (child, period['id'])
 
 
 def test_the_forms_of_the_administrator_show_their_results():
@@ -256,7 +305,7 @@ def test_the_final_sheet_and_the_consultations_are_there():
 
 def test_the_showcase_pupil_is_a_good_learner_and_deadlines_avoid_weekends():
     parent = entries_of('parent')
-    rows = [row for body in lists_under(parent, '/api/journal/report') for row in body['rows']]
+    rows = [row for body in lists_under(parent, '/api/journal/report') for row in body['rows'] if row['student']['id'] == school.SHOWCASE_PUPIL]
     marks = [grade['score'] / 10 for row in rows for grade in row['record']['grades']]
     assert marks and sum(marks) / len(marks) >= .7, 'the pupil the parent and the pupil see has no good marks'
     for body in lists_under(parent, '/api/journal/homework-queue'):

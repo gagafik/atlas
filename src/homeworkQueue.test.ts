@@ -35,6 +35,11 @@ describe("homework queue request", () => {
     expect(params.get("search")).toBe("физика");
     expect(params.has("cursor")).toBe(false);
   });
+  it("asks for one child when a family portal looks at a child", () => {
+    expect(queueParams(empty, "", "s2").get("studentId")).toBe("s2");
+    expect(queueParams(empty, "", "").has("studentId")).toBe(false);
+    expect(queueParams(empty, "").has("studentId")).toBe(false);
+  });
   it("sends a single date as it is", () => {
     const params = queueParams({ ...empty, start: "2026-09-01" }, "");
     expect(params.get("start")).toBe("2026-09-01");

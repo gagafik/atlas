@@ -152,7 +152,9 @@ class Seed(Stages, Social):
         for index, login in enumerate(logins['teachers']):
             create('teacher', login, names.TEACHERS[index], f't{index}', 'teacher')
         for index in range(school.PUPILS_PER_CLASS):
-            create('parent', logins['parents'][index], names.GUARDIANS[index], school.pupil_id(index), 'student')
+            # The showcase guardian has a second child in 7Б (the switcher of the family portal); the others have one.
+            children = [school.pupil_id(index)] + ([school.SIBLING_PUPIL] if index == 0 else [])
+            create('parent', logins['parents'][index], names.GUARDIANS[index], children, 'student')
             create('student', logins['pupils'][index], names.PUPILS[index], school.pupil_id(index), 'student')
         # One guardian of two children from two classes (7А and 7Б): the child picker of the family screens. It is never a captured role.
         create('parent', FAMILY_LOGIN, names.FAMILY_GUARDIAN, [school.pupil_id(0), school.pupil_id(school.PUPILS_PER_CLASS)], 'student')

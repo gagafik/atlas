@@ -58,6 +58,18 @@ def test_queue_scope_statuses_and_private_drafts(client):
     assert api.read('demo')==before
 
 
+def test_queue_of_a_family_narrows_to_the_chosen_child(client):
+    record,pupil,parent,teacher=setup(client)
+    create(client,'parent',login='two-children',grants=[dict(workspace='demo',view='student',entityIds=['s1','s2'])])
+    family=signed('two-children')
+    assert {i['studentId'] for i in items(family,filter='all')}=={'s1','s2'}
+    for child in ['s1','s2']:assert {i['studentId'] for i in items(family,filter='all',studentId=child)}=={child}
+    # A child outside the account's links is refused, not filtered to an empty list; a page cursor belongs to its own filter.
+    assert queue(parent,studentId='s2').status_code==403
+    first=queue(family,limit=1,filter='all',**RANGE).json()
+    assert queue(family,limit=1,cursor=first['nextCursor'],filter='all',studentId='s2',**RANGE).status_code==409
+
+
 def test_changed_conditions_reopen_accepted_answer_and_publication_withdrawal(client):
     from test_assignment_files import upload as upload_material, save_materials
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']

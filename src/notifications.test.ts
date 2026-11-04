@@ -83,6 +83,20 @@ describe("openEvent", () => {
       "atlas-open-messages",
       { workspace: "demo", threadId: "r" },
     ]);
+    // An entry about one child tells which child whatever its module; about none or several it does not.
+    expect(
+      openEvent(result("homework"), [{ id: "s2", name: "Имя" }])?.[1],
+    ).toEqual({ workspace: "demo", studentId: "s2" });
+    expect(
+      openEvent(result("homework"), [
+        { id: "s2", name: "Имя" },
+        { id: "s3", name: "Имя" },
+      ])?.[1],
+    ).toEqual({ workspace: "demo" });
+    // The pupil the server named wins over the entry's.
+    expect(
+      openEvent(result("journal"), [{ id: "s2", name: "Имя" }])?.[1].studentId,
+    ).toBe("s1");
     const plain: [string, string][] = [
       ["quizzes", "atlas-open-quizzes"],
       ["duty", "atlas-open-duties"],

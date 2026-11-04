@@ -501,13 +501,20 @@ export function LoadGrid({
 export function FamilyView({
   workspace,
   options,
+  studentId,
   onError,
 }: {
   workspace: string;
   options: Options;
+  // The child the portal shows, when the account has that child.
+  studentId?: string;
   onError: (message: string) => void;
 }) {
-  const [student, setStudent] = useState(options.students[0]?.id || "");
+  const [student, setStudent] = useState(
+    options.students.find((s) => s.id === studentId)?.id ||
+      options.students[0]?.id ||
+      "",
+  );
   const [month, setMonth] = useState(options.today.slice(0, 7));
   const [items, setItems] = useState<FamilyItem[] | null>(null);
   const sequence = useRef(0);

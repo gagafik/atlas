@@ -6,6 +6,7 @@ import AttendancePanel from "./AttendancePanel";
 import AttendanceGridPanel from "./AttendanceGridPanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { useLaunch } from "./launch";
 import "./classStaff.css";
 
 type Space = {
@@ -23,7 +24,10 @@ export default function ClassStaffWorkspace({
     [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(true),
     [error, setError] = useState("");
-  const [generation, setGeneration] = useState(0);
+  const [generation, setGeneration] = useState(0),
+    // «Записки об отсутствии» of the launcher: the notes open instead of staying a collapsed section.
+    [notesAsked, setNotesAsked] = useState(false);
+  useLaunch(["absences"], () => setNotesAsked(true));
   useEffect(() => {
     let alive = true;
     setBusy(true);
@@ -107,7 +111,9 @@ export default function ClassStaffWorkspace({
             ))}
           </details>
           <section key={workspace + ":" + generation}>
-            {has("absence_review") && <AbsencePanel workspace={workspace} />}
+            {has("absence_review") && (
+              <AbsencePanel workspace={workspace} defaultOpen={notesAsked} />
+            )}
             {has("attendance_read") && (
               <AttendancePanel workspace={workspace} />
             )}

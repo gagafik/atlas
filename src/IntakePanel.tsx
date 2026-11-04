@@ -358,7 +358,14 @@ export function IntakeAdmin({
   );
 }
 
-export function IntakePortal({ workspace }: { workspace: string }) {
+// `child` is the child the family portal looks at: the application is for them and no other pupil is offered.
+export function IntakePortal({
+  workspace,
+  child,
+}: {
+  workspace: string;
+  child?: string;
+}) {
   const [students, setStudents] = useState<{ id: string; name: string }[]>([]),
     [student, setStudent] = useState("");
   const [data, setData] = useState<Personal | null>(null),
@@ -379,7 +386,11 @@ export function IntakePortal({ workspace }: { workspace: string }) {
       .then((rows) => {
         if (live) {
           setStudents(rows);
-          setStudent(rows[0]?.id || "");
+          setStudent(
+            rows.find((row: { id: string }) => row.id === child)?.id ||
+              rows[0]?.id ||
+              "",
+          );
         }
       })
       .catch((e) => {
@@ -415,9 +426,24 @@ export function IntakePortal({ workspace }: { workspace: string }) {
       e.preventDefault();
       e.returnValue = "";
     };
+    // The portal asks before it changes the child or the screen.
+    const leave = (e: Event) => {
+      if (
+        !window.confirm("Неотправленные изменения будут потеряны. Продолжить?")
+      )
+        e.preventDefault();
+    };
     window.addEventListener("beforeunload", guard);
-    return () => window.removeEventListener("beforeunload", guard);
+    window.addEventListener("atlas-homework-leave", leave);
+    return () => {
+      window.removeEventListener("beforeunload", guard);
+      window.removeEventListener("atlas-homework-leave", leave);
+    };
   }, [dirty]);
+  useEffect(() => {
+    if (child && students.some((s) => s.id === child)) setStudent(child);
+  }, [child, students]);
+  const pinned = students.find((s) => s.id === child);
   function discard() {
     return (
       !dirty ||
@@ -436,25 +462,31 @@ export function IntakePortal({ workspace }: { workspace: string }) {
         желаемый курс. По одной заявке выбирается один курс. Если нужны два
         разных курса, создайте две заявки.
       </p>
-      <label className="field">
-        <span>Ученик</span>
-        <select
-          value={student}
-          disabled={busy}
-          onChange={(e) => {
-            if (discard()) {
-              setStudent(e.target.value);
-              setMessage("");
-            }
-          }}
-        >
-          {students.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {pinned ? (
+        <p className="info-line">
+          Ученик: <strong>{pinned.name}</strong>
+        </p>
+      ) : (
+        <label className="field">
+          <span>Ученик</span>
+          <select
+            value={student}
+            disabled={busy}
+            onChange={(e) => {
+              if (discard()) {
+                setStudent(e.target.value);
+                setMessage("");
+              }
+            }}
+          >
+            {students.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <button
         disabled={busy}
         onClick={() => {

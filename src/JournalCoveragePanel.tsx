@@ -94,12 +94,15 @@ const initial: Query = {
 
 export default function JournalCoveragePanel({
   workspace,
+  defaultOpen = false,
   onOpen,
 }: {
   workspace: string;
+  // Opened from the menu: the panel starts expanded.
+  defaultOpen?: boolean;
   onOpen?: (key: string, day: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false),
+  const [expanded, setExpanded] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null);
   const [query, setQuery] = useState<Query>(initial),
     [applied, setApplied] = useState<Query | null>(null);

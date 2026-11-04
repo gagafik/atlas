@@ -46,11 +46,13 @@ class HomeworkQueue:
             while len(self.cursors)>4096:self.cursors.popitem(last=False)
         return key
 
-    def read(self,request,workspace,start,end,selected,history,search,cursor,limit):
+    def read(self,request,workspace,start,end,selected,history,search,cursor,limit,student=None):
         user=self.journal.scope(request,workspace)
         snap=self.homework.snapshots.get(workspace);state=snap.state
         staff=user['role'] in ['admin','teacher']
         selected=selected or ('submitted' if staff else 'todo')
+        # A family portal looks at one child: the list narrows to them, and only to a child the account is linked to.
+        if student and not staff and student not in user_ids(user,workspace,'student'):raise HTTPException(403,'Нет действующего доступа к этому ребёнку.')
         day=now().astimezone(ZoneInfo('Asia/Qyzylorda')).date();today=day.isoformat()
         year_start,year_end=state.settings.yearStart,state.settings.yearEnd
         if not staff and start is None and end is None:
@@ -65,7 +67,7 @@ class HomeworkQueue:
             phases=[('range',start,end,False)]
         # Only conditions, rights, the schedule revision and the school day bind a cursor: the keyset
         # (sort, lesson, pupil) stays valid when unrelated journal entries or answers change.
-        token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),state.revision,today,start.isoformat(),end.isoformat(),window,selected,history,search]).encode()).hexdigest()
+        token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),state.revision,today,start.isoformat(),end.isoformat(),window,selected,history,search,student]).encode()).hexdigest()
         after=self.cursor_read(cursor) if cursor else None
         if after and after[0]!=token:raise HTTPException(409,'Очередь изменилась. Обновите список перед загрузкой следующей страницы.')
         clauses=[];args=[]
@@ -84,6 +86,7 @@ class HomeworkQueue:
             args.extend([encoded(sorted(own)),encoded(sorted(placements)),encoded(sorted(extras)),encoded([list(p) for p in pairs])])
         elif not staff:
             clauses.append('m.student_id IN (SELECT value FROM json_each(?))');args.append(encoded(sorted(user_ids(user,workspace,'student'))))
+        if student:clauses.append('m.student_id=?');args.append(student)
         changed='(a.assignment IS NOT NULL AND a.assignment<>q.assignment)'
         status="coalesce(a.status,'not_submitted')"
         # Homework without online submission is never a to-do once its day has passed: there is nothing to send.
@@ -165,5 +168,6 @@ class HomeworkQueue:
         @app.get('/api/journal/homework-queue')
         def queue(request:Request,workspace:Workspace='school',start:date|None=None,end:date|None=None,
                   filter:Filter|None=None,history:bool=False,search:str=Query(default='',max_length=100),
-                  cursor:str|None=Query(default=None,max_length=1024),limit:int=Query(default=30,ge=1,le=50)):
-            return self.read(request,workspace,start,end,filter,history,search.strip(),cursor,limit)
+                  cursor:str|None=Query(default=None,max_length=1024),limit:int=Query(default=30,ge=1,le=50),
+                  studentId:str|None=Query(default=None,max_length=100)):
+            return self.read(request,workspace,start,end,filter,history,search.strip(),cursor,limit,studentId or None)

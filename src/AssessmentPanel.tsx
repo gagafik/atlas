@@ -59,10 +59,13 @@ const blank = (): FormState => ({
 export default function AssessmentPanel({
   user,
   initialWorkspace,
+  studentId,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
+  // The child a family portal showed: the calendar of a parent starts on them.
+  studentId?: string;
   onClose: () => void;
 }) {
   const spaces =
@@ -509,6 +512,7 @@ export default function AssessmentPanel({
           <FamilyView
             workspace={workspace}
             options={options}
+            studentId={studentId}
             onError={setError}
           />
         )}

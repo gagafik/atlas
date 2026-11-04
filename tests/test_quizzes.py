@@ -452,6 +452,18 @@ def test_journal_grade_rechecks_changes_after_preparation(client,monkeypatch,cha
     assert attempt(pupil,sent).get('grading') is None
 
 
+def test_catalog_of_a_family_narrows_to_the_chosen_child(client):
+    quiz,pupil,parent,teacher,_=ready(client)
+    create(client,'parent',login='two-children',grants=[dict(workspace='demo',view='student',entityIds=['s1','s2'])])
+    family=signed('two-children');catalog=lambda **params:family.get('/api/journal/quizzes',params=dict(workspace='demo',**params))
+    assert {i['studentId'] for i in catalog().json()['items']}=={'s1','s2'}
+    for child in ['s1','s2']:assert {i['studentId'] for i in catalog(studentId=child).json()['items']}=={child}
+    # A child outside the account's links is refused, not filtered to an empty list; a page cursor belongs to its own filter.
+    assert parent.get('/api/journal/quizzes',params=dict(workspace='demo',studentId='s2')).status_code==403
+    first=catalog(limit=1).json()
+    assert catalog(limit=1,cursor=first['nextCursor'],studentId='s2').status_code==409
+
+
 def test_catalog_pagination_rights_generation_and_compact_payloads(client):
     quiz,pupil,parent,teacher,payload=ready(client)
     for index in range(3):

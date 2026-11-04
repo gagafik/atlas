@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { type AuthStatus, type AccessView } from "./auth";
 import { csvCell, download } from "./utils";
@@ -14,10 +14,11 @@ import { focusRequest, spendFocus, type FocusRequest } from "./focusRequest";
 import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
 import Shell, { type ShellFrame } from "./Shell";
-import { useJournalPanels, useMessageUnread } from "./shellData";
+import { useJournalOptions, useMessageUnread } from "./shellData";
+import { currentChild, recallChoice, rememberChoice } from "./familyChild";
 import { eventPart, eventViews, schoolYear } from "./navigation";
 import { bellState, minutesNow } from "./startPage";
-import type { JournalView } from "./journal";
+import { journalPanels as panelsOf, type JournalView } from "./journal";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
 import ClassStaffWorkspace from "./ClassStaffWorkspace";
@@ -82,14 +83,20 @@ function TodayLessons({
   workspace,
   space,
   named,
+  child,
 }: {
   workspace: string;
   space?: Space;
   named: boolean;
+  // The child the family portal looks at: their lessons are shown and no other record is offered.
+  child?: string;
 }) {
   const records = space?.records ?? [],
     [chosen, setChosen] = useState(0);
-  const record = records[chosen];
+  const bound = child
+    ? records.find((r) => r.view === "student" && r.id === child)
+    : undefined;
+  const record = bound ?? records[chosen];
   const [now, setNow] = useState(() => new Date());
   const [rows, setRows] = useState<Row[] | null>(null),
     [error, setError] = useState("");
@@ -146,9 +153,11 @@ function TodayLessons({
       <header>
         <h2>
           Уроки сегодня
-          {named && record && records.length < 2 ? ` · ${record.name}` : ""}
+          {named && record && (bound || records.length < 2)
+            ? ` · ${record.name}`
+            : ""}
         </h2>
-        {records.length > 1 && (
+        {!bound && records.length > 1 && (
           <select
             aria-label="Чьё расписание"
             value={chosen}
@@ -260,10 +269,41 @@ export default function Portal({
   }, []);
   const space = spaces.find((x) => x.id === workspace);
   const messageUnread = useMessageUnread(workspace);
-  const journalPanels = useJournalPanels(
+  const role = session.user!.role;
+  const { options: journal, failed } = useJournalOptions(
     workspace,
-    ["teacher", "student", "parent"].includes(session.user!.role),
+    ["teacher", "student", "parent"].includes(role),
   );
+  const journalPanels = journal ? panelsOf(journal) : failed ? [] : null;
+  // A pupil's or parent's portal looks at one child: the one chosen in the account menu while the account still has them.
+  const withChild = role === "parent" || role === "student";
+  const children = withChild ? (journal?.students ?? []) : [];
+  const [chosenChild, setChosenChild] = useState<string | undefined>(),
+    [wantedChild, setWantedChild] = useState("");
+  const remembered = useMemo(() => recallChoice(workspace), [workspace]);
+  const child = withChild
+    ? currentChild(children, chosenChild ?? remembered)
+    : "";
+  // The lists of homework and tests are the parent's children as the server lists them, so they wait for the children to be
+  // known and then show the one chosen; a pupil's lists are their own.
+  const listChild = role === "parent" ? child : undefined;
+  const listsReady = role !== "parent" || !!journal || failed;
+  function chooseChild(id: string) {
+    if (id === child || !children.some((c) => c.id === id)) return;
+    if (!canLeaveHomework()) return;
+    setChosenChild(id);
+    rememberChoice(workspace, id);
+  }
+  useEffect(() => setChosenChild(undefined), [workspace]);
+  // An opened notification about another child switches the portal to that child, once the account's children are known.
+  useEffect(() => {
+    if (!wantedChild || !journal) return;
+    if (children.some((c) => c.id === wantedChild)) {
+      setChosenChild(wantedChild);
+      rememberChoice(workspace, wantedChild);
+    }
+    setWantedChild("");
+  }, [wantedChild, journal]);
   useEffect(() => {
     if (space) {
       const r = space.records[0];
@@ -277,6 +317,14 @@ export default function Portal({
       );
     }
   }, [workspace, spaces]);
+  // The timetable is the child's own while the portal looks at a child who has one.
+  const childRecord = child
+    ? space?.records.find((r) => r.view === "student" && r.id === child)
+    : undefined;
+  useEffect(() => {
+    if (childRecord)
+      setRecord(JSON.stringify([childRecord.view, childRecord.id]));
+  }, [childRecord?.id, space]);
   useEffect(() => {
     if (!workspace || !record || (mode === "day" ? !day : !cycle)) return;
     let live = true;
@@ -318,6 +366,7 @@ export default function Portal({
       const detail = (event as CustomEvent).detail || {};
       if (!canLeaveHomework()) return;
       if (detail.workspace) setWorkspaceValue(detail.workspace);
+      if (detail.studentId) setWantedChild(detail.studentId);
       setSectionValue(sections[event.type]);
       setJournalView(eventPart(session.user?.role ?? null, event.type, detail));
       setMessageFocus(
@@ -389,6 +438,11 @@ export default function Portal({
       school={space?.name}
       year={space && schoolYear(space.yearStart, space.yearEnd)}
       unread={messageUnread}
+      family={
+        role === "parent" && children.length
+          ? { children, current: child, onChoose: chooseChild }
+          : undefined
+      }
     >
       {({ title }) => (
         <main className="portal">
@@ -417,6 +471,7 @@ export default function Portal({
                     workspace={workspace}
                     space={space}
                     named={["parent", "viewer"].includes(session.user!.role)}
+                    child={child}
                   />
                   <section className="start-feed">
                     <h2>Уведомления</h2>
@@ -472,6 +527,7 @@ export default function Portal({
                 <MessagesPanel
                   key={workspace}
                   workspace={workspace}
+                  child={child}
                   focusThread={messageFocus}
                   onFocusUsed={(r) =>
                     setMessageFocus((current) => spendFocus(current, r))
@@ -495,7 +551,11 @@ export default function Portal({
                 </select>
               </label>
               {workspace && (
-                <IntakePortal key={workspace} workspace={workspace} />
+                <IntakePortal
+                  key={workspace}
+                  workspace={workspace}
+                  child={child}
+                />
               )}
             </>
           ) : section === "journal" ||
@@ -525,14 +585,26 @@ export default function Portal({
                     key={workspace}
                     workspace={workspace}
                   />
+                ) : (section === "quizzes" || section === "homework") &&
+                  !listsReady ? (
+                  <p role="status">Загружаем список…</p>
                 ) : section === "quizzes" ? (
-                  <QuizzesPanel key={workspace} workspace={workspace} />
+                  <QuizzesPanel
+                    key={`${workspace}:${listChild}`}
+                    workspace={workspace}
+                    child={listChild}
+                  />
                 ) : section === "homework" ? (
-                  <HomeworkQueuePanel key={workspace} workspace={workspace} />
+                  <HomeworkQueuePanel
+                    key={`${workspace}:${listChild}`}
+                    workspace={workspace}
+                    child={listChild}
+                  />
                 ) : (
                   <JournalPanel
                     key={workspace}
                     workspace={workspace}
+                    child={child}
                     focus={journalFocus}
                     view={journalView}
                     onLeaveView={() => setJournalView(undefined)}
@@ -565,22 +637,28 @@ export default function Portal({
                     ))}
                   </select>
                 </label>
-                <label className="field">
-                  <span>Разрешённое расписание</span>
-                  <select
-                    value={record}
-                    onChange={(e) => setRecord(e.target.value)}
-                  >
-                    {space?.records.map((r) => (
-                      <option
-                        key={r.view + ":" + r.id}
-                        value={JSON.stringify([r.view, r.id])}
-                      >
-                        {r.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {childRecord ? (
+                  <p className="info-line">
+                    Расписание: <strong>{childRecord.name}</strong>
+                  </p>
+                ) : (
+                  <label className="field">
+                    <span>Разрешённое расписание</span>
+                    <select
+                      value={record}
+                      onChange={(e) => setRecord(e.target.value)}
+                    >
+                      {space?.records.map((r) => (
+                        <option
+                          key={r.view + ":" + r.id}
+                          value={JSON.stringify([r.view, r.id])}
+                        >
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <label className="field">
                   <span>Режим просмотра</span>
                   <select

@@ -72,6 +72,14 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       await entry.click({ timeout: 3000, noWaitAfter: true }).catch(() => miss(`account entry: ${label}`));
       await settle();
     },
+    // The child of a parent's portal who is not on show: chosen in the list of the account menu, which then names the whole portal.
+    async otherChild() {
+      await page.locator(".account-toggle").click({ timeout: 3000 }).catch(() => miss("no account menu: child"));
+      const other = page.locator(".account-children button:not([aria-current])").first();
+      if (!(await other.count())) return miss("no other child in the account menu");
+      await other.click({ timeout: 3000, noWaitAfter: true }).catch(() => miss("account entry: child"));
+      await settle();
+    },
     // A path of clicks from the home screen: an entry of the menu, then buttons of the page.
     async path(first, ...labels) {
       await kit.home();
@@ -323,6 +331,33 @@ async function homeworkQueue(kit, { filterLabel }) {
   }
 }
 
+// The second child of a parent: the whole portal follows the child chosen in the account menu, so the start page, the
+// screens of the journal, the homework and tests of the family and the timetable are shown again for the sibling (the window
+// of the pick-up opens on her); the first child is chosen back at the end.
+async function siblingScreens(kit) {
+  await kit.home();
+  await kit.otherChild();
+  await kit.snap("sibling-home");
+  await familyScreens(kit, { notes: true });
+  await homeworkQueue(kit, {});
+  await kit.snap("sibling-homework");
+  await kit.path("Контрольные и тесты");
+  await kit.snap("sibling-tests");
+  await kit.path("Забрать из школы");
+  await kit.snap("sibling-pickup");
+  await kit.close();
+  await kit.path("Расписание");
+  await kit.choose("Режим просмотра", "Неделя");
+  await kit.snap("sibling-timetable");
+  await kit.path("Учебный план");
+  // The new message is about the child on show: the contacts of the sibling's class teacher.
+  await kit.path(MESSAGES);
+  await kit.click("Написать сообщение");
+  await kit.snap("sibling-compose");
+  await kit.home();
+  await kit.otherChild();
+}
+
 export const journeys = {
   async admin(kit) {
     await kit.home();
@@ -334,12 +369,12 @@ export const journeys = {
     await kit.close();
     await kit.click("Учитель", { optional: true });
     await kit.click("Класс", { optional: true });
-    // Journal control: coverage, attendance, the final table, course table, periods.
-    await kit.path(JOURNAL, "Контроль заполнения журналов");
+    // Journal control: coverage, attendance, the final table, course table, periods. Each part is an entry of the menu.
+    await kit.path("Заполнение журнала");
     await controlScreens(kit);
-    await kit.path(JOURNAL, "Сводная посещаемость");
-    await attendanceSummary(kit);
     await kit.path("Посещаемость (учащиеся)");
+    await kit.click("Сводная посещаемость");
+    await attendanceSummary(kit);
     await kit.path("Табели");
     await kit.click("Открыть готовую ведомость");
     await kit.snap("final-grades-sheet");
@@ -350,7 +385,7 @@ export const journeys = {
     await kit.choose("Ученик для табеля", 1);
     await kit.choose("Период табеля", "Первая четверть");
     await kit.click("Показать табель");
-    await kit.path(JOURNAL, "Учебные периоды и закрытие журналов");
+    await kit.path("Периоды журнала");
     await kit.snap("periods");
     await kit.path("Оценки", /7А · Математика/);
     await kit.choose("Шкала", /Шкала 2–5/);
@@ -434,6 +469,11 @@ export const journeys = {
     await controlScreens(kit);
     await kit.click("Сетка посещаемости класса");
     await kit.click("Мои полномочия по классам");
+    // The other parts of the journal the teacher has in the menu, each open alone.
+    await kit.path("Заполнение журнала");
+    await kit.click("Проверить заполнение");
+    await kit.path("Сетка посещаемости");
+    await kit.path("Периоды журнала");
     await kit.path("Домашние задания");
     await kit.click("Проверить работу");
     await kit.snap("homework-review");
@@ -495,6 +535,7 @@ export const journeys = {
     await kit.path("Регистрация / Опросы");
     await kit.path("Официальные письма");
     await kit.path("Учебный план");
+    await siblingScreens(kit);
   },
 
   async student(kit) {
@@ -608,6 +649,12 @@ export const tours = {
   async parent(kit) {
     await familyDays(kit);
     await familyPeriods(kit);
+    await kit.home();
+    await kit.otherChild();
+    await familyDays(kit);
+    await familyPeriods(kit);
+    await kit.home();
+    await kit.otherChild();
     await homeworkQueue(kit, {});
     await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
     await everyThread(kit, "Входящие");

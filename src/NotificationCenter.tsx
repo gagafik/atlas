@@ -315,6 +315,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
           "school",
           "POST",
         )) as OpenResult,
+        item.students,
       );
       if (target) {
         window.dispatchEvent(new CustomEvent(target[0], { detail: target[1] }));
@@ -746,7 +747,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                               : item.action.startsWith(
                                                     "absence.",
                                                   )
-                                                ? "Откройте «Отсутствия и объяснительные»: у родителя — «Посещаемость», у администратора — «Классный журнал»; ответственный учитель — «Посещаемость учащихся»."
+                                                ? "Откройте «Отсутствия и объяснительные»: у родителя — «Посещаемость», у администратора — «Обучение» → «Записки об отсутствии»; ответственный учитель — «Посещаемость учащихся»."
                                                 : item.action ===
                                                     "family.updated"
                                                   ? "Откройте «Мои дети и доступ» в меню аккаунта."

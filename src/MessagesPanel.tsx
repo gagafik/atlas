@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { roleNames, type Role } from "./auth";
 import { takeFocus, type FocusRequest } from "./focusRequest";
+import { useLaunch } from "./launch";
 import MessageAttachments, { MessageFileList } from "./MessageAttachments";
 import type { MessageFile } from "./MessageAttachments";
 import MessageChannels from "./MessageChannels";
@@ -131,10 +132,13 @@ function useSearchDelay(value: string) {
 
 export default function MessagesPanel({
   workspace,
+  child,
   focusThread,
   onFocusUsed,
 }: {
   workspace: string;
+  // The child a parent looks at in the portal: the message is about this child and the list of pupils is not offered.
+  child?: string;
   // Set by an opened notification: show this conversation. The request is reported as spent as soon as the panel takes it.
   focusThread?: FocusRequest;
   onFocusUsed?: (request: FocusRequest) => void;
@@ -150,6 +154,15 @@ export default function MessagesPanel({
   const [selected, setSelected] = useState(""),
     [detail, setDetail] = useState<Detail | null>(null),
     [composing, setComposing] = useState(false);
+  // «Новое сообщение» of the launcher: the compose form opens as the button «Написать сообщение» opens it.
+  useLaunch(["compose"], () => {
+    if (leave()) {
+      setSelected("");
+      setDetail(null);
+      setComposing(true);
+      setShowDrafts(false);
+    }
+  });
   const [kind, setKind] = useState("direct"),
     [student, setStudent] = useState(""),
     [recipient, setRecipient] = useState(""),
@@ -262,7 +275,9 @@ export default function MessagesPanel({
           // Only a pupil or a parent starts with a child; a member of staff may as well write about no pupil at all.
           setStudent(
             ["parent", "student"].includes(r.role)
-              ? r.students[0]?.id || ""
+              ? r.students.find((s: { id: string }) => s.id === child)?.id ||
+                  r.students[0]?.id ||
+                  ""
               : "",
           );
           void loadDrafts().catch((e) => {
@@ -278,6 +293,20 @@ export default function MessagesPanel({
       alive.current = false;
     };
   }, [workspace]);
+  // The portal looks at another child: the message is about that child, and the recipient chosen for the old one goes.
+  useEffect(() => {
+    if (
+      !child ||
+      !options ||
+      !["parent", "student"].includes(options.role) ||
+      student === child ||
+      !options.students.some((s: { id: string }) => s.id === child)
+    )
+      return;
+    setStudent(child);
+    setSelectedPeople([]);
+    setRecipient("");
+  }, [child, options]);
   useEffect(() => {
     if (!focusThread) return;
     // An unsent reply or draft is asked about first, like every other way out of a conversation.
@@ -593,6 +622,11 @@ export default function MessagesPanel({
     );
   const shownStudents = filterStudents(options.students, studentQuery, student),
     classTeacher = options.classTeachers?.find((c) => c.studentId === student),
+    // A parent whose portal looks at one child writes about that child only.
+    pinnedChild =
+      options.role === "parent" && child && student === child
+        ? options.students.find((s) => s.id === child)
+        : undefined,
     titleMissing = announcing && !title.trim();
   return (
     <section className="messages-panel">
@@ -758,40 +792,50 @@ export default function MessagesPanel({
           )}
           {usingContacts ? (
             <>
-              {options.students.length > 5 && (
-                <label className="field">
-                  <span>Найти ученика</span>
-                  <input
-                    type="search"
-                    maxLength={100}
-                    value={studentQuery}
-                    onChange={(e) => setStudentQuery(e.target.value)}
-                  />
-                </label>
-              )}
-              <label className="field">
-                <span>По поводу ученика</span>
-                <select
-                  value={student}
-                  onChange={(e) => {
-                    setStudent(e.target.value);
-                    setSelectedPeople([]);
-                    setRecipient("");
-                  }}
-                >
-                  {!["parent", "student"].includes(options.role) && (
-                    <option value="">Переписка сотрудников</option>
+              {pinnedChild ? (
+                <p className="info-line">
+                  По поводу ученика: <strong>{pinnedChild.name}</strong>
+                </p>
+              ) : (
+                <>
+                  {options.students.length > 5 && (
+                    <label className="field">
+                      <span>Найти ученика</span>
+                      <input
+                        type="search"
+                        maxLength={100}
+                        value={studentQuery}
+                        onChange={(e) => setStudentQuery(e.target.value)}
+                      />
+                    </label>
                   )}
-                  {shownStudents.items.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-                {shownStudents.cut && (
-                  <small>Показаны первые 200 учеников: уточните поиск.</small>
-                )}
-              </label>
+                  <label className="field">
+                    <span>По поводу ученика</span>
+                    <select
+                      value={student}
+                      onChange={(e) => {
+                        setStudent(e.target.value);
+                        setSelectedPeople([]);
+                        setRecipient("");
+                      }}
+                    >
+                      {!["parent", "student"].includes(options.role) && (
+                        <option value="">Переписка сотрудников</option>
+                      )}
+                      {shownStudents.items.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    {shownStudents.cut && (
+                      <small>
+                        Показаны первые 200 учеников: уточните поиск.
+                      </small>
+                    )}
+                  </label>
+                </>
+              )}
               {kind === "direct" && classTeacher && (
                 <div className="dated-toolbar">
                   <button

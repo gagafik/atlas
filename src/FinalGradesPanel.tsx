@@ -402,17 +402,25 @@ export default function FinalGradesPanel({
     // Raised after every change, so the matrices and the steps never show numbers from before it.
     [epoch, setEpoch] = useState(0),
     [report, setReport] = useState<{
+      // The pupil the card was asked for: the heading names them, whoever is chosen by the time it arrives.
+      studentId: string;
       period: Period;
       items: Published[];
       gpa: Gpa | null;
       measures: Measure[];
     } | null>(null);
   const lock = useRef(false),
+    // Raised whenever the card is cleared or asked for again: an answer that is not the latest is dropped.
+    reportSequence = useRef(0),
     lastScale = useRef(""),
     // Raised when a notification asks for a report: the card is brought into view once it has loaded.
     reveal = useRef(false),
     reportRef = useRef<HTMLDivElement>(null);
   const tableDirty = dirtyTables.length > 0;
+  const clearReport = () => {
+    reportSequence.current += 1;
+    setReport(null);
+  };
   const markTable = (table: string, unsaved: boolean) =>
     setDirtyTables((keys) => markDirty(keys, table, unsaved));
   const leave = () =>
@@ -566,7 +574,7 @@ export default function FinalGradesPanel({
   useEffect(() => {
     if (!chosen) return;
     setStudentId(chosen);
-    setReport(null);
+    clearReport();
   }, [chosen]);
   useEffect(() => {
     const period = focus?.finalsPeriodId;
@@ -577,12 +585,13 @@ export default function FinalGradesPanel({
       await loadOptions();
       setStudentId(focus.studentId);
       setPeriodId(period);
-      setReport(
-        await api(
-          `final-grades/report?${new URLSearchParams({ studentId: focus.studentId, periodId: period })}`,
-          workspace,
-        ),
+      const asked = ++reportSequence.current;
+      const card = await api(
+        `final-grades/report?${new URLSearchParams({ studentId: focus.studentId, periodId: period })}`,
+        workspace,
       );
+      if (asked === reportSequence.current)
+        setReport({ ...card, studentId: focus.studentId });
     }).then((done) => {
       if (!done) reveal.current = false;
     });
@@ -597,6 +606,10 @@ export default function FinalGradesPanel({
   // Families, administrators and the class teacher of the pupils read published reports.
   const readsReports =
     !!options?.classTeacher || !options?.staff || options.admin;
+  // The family portal looks at one child: the card is theirs and no other pupil is offered.
+  const pinnedPupil = chosen
+    ? options?.students.find((s) => s.id === chosen)
+    : undefined;
   return (
     <section className="absence-panel final-grades-panel">
       <button
@@ -633,7 +646,7 @@ export default function FinalGradesPanel({
                 if (leave())
                   void run(async () => {
                     clearRow();
-                    setReport(null);
+                    clearReport();
                     await loadOptions();
                     if (bookId) await loadSheet(bookId, offset);
                     changed();
@@ -1287,21 +1300,27 @@ export default function FinalGradesPanel({
                     : "Опубликованный личный табель"}
                 </h3>
                 <div className="dated-toolbar">
-                  <Select
-                    label="Ученик для табеля"
-                    value={studentId}
-                    onChange={(id) => {
-                      setStudentId(id);
-                      setReport(null);
-                    }}
-                    items={options.students}
-                  />
+                  {pinnedPupil ? (
+                    <p className="info-line">
+                      Ученик: <strong>{pinnedPupil.name}</strong>
+                    </p>
+                  ) : (
+                    <Select
+                      label="Ученик для табеля"
+                      value={studentId}
+                      onChange={(id) => {
+                        setStudentId(id);
+                        clearReport();
+                      }}
+                      items={options.students}
+                    />
+                  )}
                   <Select
                     label="Период табеля"
                     value={periodId}
                     onChange={(id) => {
                       setPeriodId(id);
-                      setReport(null);
+                      clearReport();
                     }}
                     items={options.periods}
                   />
@@ -1309,12 +1328,13 @@ export default function FinalGradesPanel({
                     disabled={!studentId || !periodId}
                     onClick={() =>
                       void run(async () => {
-                        setReport(
-                          await api(
-                            `final-grades/report?${new URLSearchParams({ studentId, periodId })}`,
-                            workspace,
-                          ),
+                        const asked = ++reportSequence.current;
+                        const card = await api(
+                          `final-grades/report?${new URLSearchParams({ studentId, periodId })}`,
+                          workspace,
                         );
+                        if (asked === reportSequence.current)
+                          setReport({ ...card, studentId });
                       })
                     }
                   >
@@ -1335,7 +1355,11 @@ export default function FinalGradesPanel({
                     >
                       <h3>Табель · {report.period.name}</h3>
                       <p>
-                        {options.students.find((s) => s.id === studentId)?.name}{" "}
+                        {
+                          options.students.find(
+                            (s) => s.id === report.studentId,
+                          )?.name
+                        }{" "}
                         · {report.period.start}–{report.period.end}
                       </p>
                       {!report.items.length && (

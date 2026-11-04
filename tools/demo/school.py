@@ -15,6 +15,9 @@ CLASS_NAMES = ['7А', '7Б', '8А', '8Б']
 PUPILS_PER_CLASS = 15
 SHOWCASE_CLASS = 'c0'
 SHOWCASE_PUPIL = 's0'
+# A pupil of 7Б who is the showcase guardian's second child: the child switcher of the family portal has two to show.
+# She sorts after the showcase pupil, so the portal opens on the showcase pupil.
+SIBLING_PUPIL = 's22'
 SHOWCASE_TEACHER = 't0'
 
 SUBJECTS = [

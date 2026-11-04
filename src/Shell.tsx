@@ -20,6 +20,8 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
+  CalendarRange,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +31,7 @@ import {
   Clock3,
   CreditCard,
   FileText,
+  FileWarning,
   FlaskConical,
   FolderOpen,
   Gauge,
@@ -42,6 +45,7 @@ import {
   LayoutGrid,
   Library,
   ListChecks,
+  ListTodo,
   LockKeyhole,
   LogOut,
   Mail,
@@ -72,10 +76,14 @@ import {
   Utensils,
   Wrench,
 } from "lucide-react";
+import Launcher from "./Launcher";
 import NotificationCenter from "./NotificationCenter";
 import SchoolLogo from "./SchoolLogo";
 import { roleNames, type Account } from "./auth";
+import { childLabel, type ChildChoice } from "./familyChild";
 import type { JournalPanelName, JournalView } from "./journal";
+import { clearLaunch, requestLaunch } from "./launch";
+import { launcherActions, type LauncherAction } from "./launcherActions";
 import { unreadLabel } from "./messages";
 import {
   accountMenu,
@@ -117,6 +125,9 @@ const ICONS: Record<string, Icon> = {
   grades: Award,
   reports: ScrollText,
   attendance: UserCheck,
+  absences: FileWarning,
+  coverage: ListTodo,
+  periods: CalendarRange,
   curriculum: ClipboardList,
   materials: FolderOpen,
   homework: NotebookPen,
@@ -195,8 +206,15 @@ export interface ShellFrame {
   identity: string;
   user: Account | null;
   busy: boolean;
-  onModal(id: ModalId): void;
+  // A family portal names the child on show, so the window that lists a child's records opens on them.
+  onModal(id: ModalId, child?: string): void;
   onAccount(id: AccountId): void;
+}
+/** The children of a parent: the account menu lists them and the portal follows the one chosen. */
+export interface FamilyChoice {
+  children: ChildChoice[];
+  current: string;
+  onChoose(id: string): void;
 }
 export interface ShellApi {
   title: string;
@@ -217,6 +235,7 @@ export default function Shell({
   badges,
   extra,
   accountExtra,
+  family,
   footer,
   children,
 }: {
@@ -231,6 +250,7 @@ export default function Shell({
   badges?: Record<string, number | undefined>;
   extra?: ReactNode;
   accountExtra?: { label: string; onSelect: () => void; disabled?: boolean }[];
+  family?: FamilyChoice;
   footer?: ReactNode;
   children: (shell: ShellApi) => ReactNode;
 }) {
@@ -239,6 +259,10 @@ export default function Shell({
   const accounts = accountMenu(context);
   const active = activeItem(menu, view, journalView);
   const title = menuTitle(menu, accounts, view, journalView);
+  const actions = launcherActions(context, menu);
+  const shownChild = family?.children.find(
+    (child) => child.id === family.current,
+  );
   const desktop = useDesktop();
   const [drawer, setDrawer] = useState(false),
     [accountOpen, setAccountOpen] = useState(false),
@@ -376,13 +400,21 @@ export default function Shell({
     rememberRail(!folded);
   }
   function select(item: NavItem) {
+    // A request of the launcher that no screen took is not carried to the screen chosen here.
+    clearLaunch();
     closeDrawer();
     setAccountOpen(false);
     setFlyout(null);
     const { target } = item;
     if (target.kind === "view") onView(target.view, target.journal);
-    else if (target.kind === "modal") frame.onModal(target.modal);
+    else if (target.kind === "modal")
+      frame.onModal(target.modal, family?.current);
     else frame.onAccount(target.account);
+  }
+  // An action of the launcher goes the way of the menu entry it belongs to, then asks the screen for its editor.
+  function launch(action: LauncherAction) {
+    select(action.item);
+    if (action.intent) requestLaunch(action.intent);
   }
   const home = menuItems(menu).find((item) => item.id === "home");
   const unreadText =
@@ -609,6 +641,9 @@ export default function Shell({
           </div>
           <div className="topbar-right">
             {extra}
+            {!!actions.length && (
+              <Launcher actions={actions} onChoose={launch} />
+            )}
             <NotificationCenter
               key={frame.identity}
               identity={frame.identity}
@@ -622,6 +657,11 @@ export default function Shell({
               <MessageSquare size={18} />
               {unreadText && <b>{unreadText}</b>}
             </button>
+            {shownChild && (
+              <span className="topbar-child" title="Выбранный ребёнок">
+                {childLabel(shownChild)}
+              </span>
+            )}
             <div className="account" ref={accountBox}>
               <button
                 ref={accountToggle}
@@ -645,6 +685,32 @@ export default function Shell({
                         : "Вход не включён"}
                     </small>
                   </div>
+                  {family && family.children.length > 1 && (
+                    <div
+                      className="account-children"
+                      role="group"
+                      aria-label="Ребёнок"
+                    >
+                      <small>Ребёнок</small>
+                      {family.children.map((child) => (
+                        <button
+                          key={child.id}
+                          aria-current={
+                            child.id === family.current ? "true" : undefined
+                          }
+                          onClick={() => {
+                            setAccountOpen(false);
+                            family.onChoose(child.id);
+                            accountToggle.current?.focus();
+                          }}
+                        >
+                          <GraduationCap size={16} />
+                          <span>{childLabel(child)}</span>
+                          {child.id === family.current && <Check size={14} />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {accounts.filter((item) => item !== signOut).map(accountItem)}
                   {accountExtra?.map((item) => (
                     <button

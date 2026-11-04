@@ -272,19 +272,31 @@ describe("the parts of the journal in the menu", () => {
     keys(ctx).filter((key) => key.includes("#"));
 
   it("appear only where the journal does and the server has something for the account", () => {
+    // Every panel the day grid used to list under itself is a part of the menu now, in the group of its kind.
     expect(parts(context("admin"))).toEqual([
       "view:journal#courseTable",
       "view:journal#finalGrades",
       "view:journal#attendanceGrid",
+      "view:journal#absences",
+      "view:journal#coverage",
+      "view:journal#periods",
     ]);
     expect(parts(context("admin", { journalPanels: null }))).toEqual([]);
     expect(parts(context("admin", { journalPanels: ["courseTable"] }))).toEqual(
       ["view:journal#courseTable"],
     );
-    // A teacher without report cards keeps the grades.
+    // A teacher without report cards keeps the grades; the absence notes of the school are the administrator's.
     expect(
       parts(context("teacher", { journalPanels: ["courseTable", "absences"] })),
     ).toEqual(["view:journal#courseTable"]);
+    // A teacher reaches every other panel the server offers.
+    expect(parts(context("teacher"))).toEqual([
+      "view:journal#courseTable",
+      "view:journal#finalGrades",
+      "view:journal#attendanceGrid",
+      "view:journal#coverage",
+      "view:journal#periods",
+    ]);
     // The editor has no journal, so none of its parts either.
     for (const role of ["editor", "viewer", "staff"] as Role[])
       expect(parts(context(role))).toEqual([]);
@@ -313,8 +325,10 @@ describe("the parts of the journal in the menu", () => {
       return item && targetKey(item.target);
     };
     expect(shown("finalGrades")).toBe("view:journal#finalGrades");
+    expect(shown("periods")).toBe("view:journal#periods");
     expect(shown()).toBe("view:journal");
-    expect(shown("periods")).toBe("view:journal");
+    // The summary of attendance is shown with the grid and has no entry of its own.
+    expect(shown("attendance")).toBe("view:journal");
   });
 });
 

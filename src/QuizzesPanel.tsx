@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { useLaunch } from "./launch";
 import { csvCell, download } from "./utils";
 import QuizBankPanel from "./QuizBankPanel";
 import QuizBuilder from "./QuizBuilder";
@@ -480,7 +481,14 @@ function Detail({
   );
 }
 
-export default function QuizzesPanel({ workspace }: { workspace: string }) {
+export default function QuizzesPanel({
+  workspace,
+  child,
+}: {
+  workspace: string;
+  // The child a parent's portal looks at: the list shows their tests only.
+  child?: string;
+}) {
   const [section, setSection] = useState<"list" | "bank" | "builder">("list"),
     [editing, setEditing] = useState<{
       quiz?: Quiz;
@@ -505,6 +513,8 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
   const [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
     [activity, setActivity] = useState<Activity>({ dirty: false, busy: false });
+  // «Создать тест» of the launcher starts the builder like the button of the page.
+  useLaunch(["newTest"], () => edit());
   useEffect(() => {
     const leave = (e: Event) => {
       if (
@@ -534,7 +544,7 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
     setBusy(true);
     setError("");
     api(
-      `journal/quizzes?${new URLSearchParams({ search: applied, history: String(history), ...(cursor ? { cursor } : {}) })}`,
+      `journal/quizzes?${new URLSearchParams({ search: applied, history: String(history), ...(cursor ? { cursor } : {}), ...(child ? { studentId: child } : {}) })}`,
       workspace,
     )
       .then((r) => {
@@ -553,7 +563,7 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
     return () => {
       live = false;
     };
-  }, [workspace, applied, history, cursor, epoch]);
+  }, [workspace, child, applied, history, cursor, epoch]);
   function refresh() {
     setCursor("");
     setEpoch((v) => v + 1);

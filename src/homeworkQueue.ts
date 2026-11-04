@@ -6,9 +6,11 @@ export interface QueueFilters {
   search: string;
 }
 // Without dates the server opens pupils and parents on its default window, so empty fields are never sent.
+// `student` is the child a family portal looks at: the server narrows the queue to them before it pages.
 export function queueParams(
   applied: QueueFilters,
   cursor: string,
+  student?: string,
 ): URLSearchParams {
   const params = new URLSearchParams({
     history: String(applied.history),
@@ -17,6 +19,7 @@ export function queueParams(
   for (const name of ["start", "end", "filter"] as const)
     if (applied[name]) params.set(name, applied[name]);
   if (cursor) params.set("cursor", cursor);
+  if (student) params.set("studentId", student);
   return params;
 }
 
