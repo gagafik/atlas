@@ -170,6 +170,21 @@ export default function AbsencePanel({
       ?.querySelector<HTMLElement>("select, input, textarea")
       ?.focus({ preventScroll: true });
   }, [compose, options]);
+  // Asked to open while it is on show (the launcher): the section opens.
+  useEffect(() => {
+    if (defaultOpen) setExpanded(true);
+  }, [defaultOpen]);
+  // The portal asks before it changes the child or the screen while a note is half written.
+  const unsent = !!(reason || files.length);
+  useEffect(() => {
+    if (!unsent) return;
+    const leave = (e: Event) => {
+      if (!window.confirm("Неотправленная записка будет потеряна. Продолжить?"))
+        e.preventDefault();
+    };
+    window.addEventListener("atlas-homework-leave", leave);
+    return () => window.removeEventListener("atlas-homework-leave", leave);
+  }, [unsent]);
   const child = options?.students.find((s) => s.id === student);
   const notesOff = closed(child);
   const locks = formLocks(busy, child);

@@ -206,7 +206,8 @@ export interface ShellFrame {
   identity: string;
   user: Account | null;
   busy: boolean;
-  onModal(id: ModalId): void;
+  // A family portal names the child on show, so the window that lists a child's records opens on them.
+  onModal(id: ModalId, child?: string): void;
   onAccount(id: AccountId): void;
 }
 /** The children of a parent: the account menu lists them and the portal follows the one chosen. */
@@ -406,7 +407,8 @@ export default function Shell({
     setFlyout(null);
     const { target } = item;
     if (target.kind === "view") onView(target.view, target.journal);
-    else if (target.kind === "modal") frame.onModal(target.modal);
+    else if (target.kind === "modal")
+      frame.onModal(target.modal, family?.current);
     else frame.onAccount(target.account);
   }
   // An action of the launcher goes the way of the menu entry it belongs to, then asks the screen for its editor.

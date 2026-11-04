@@ -50,6 +50,8 @@ interface Spec {
   via: string[];
   intent?: LaunchIntent;
   popular?: true;
+  // The label is the name of the entry it opens, which differs by role (the same words must lead to the same screen).
+  named?: true;
   // More words the search finds it by.
   words?: string;
 }
@@ -95,6 +97,7 @@ const ACTIONS: Spec[] = [
     label: "Записки об отсутствии",
     category: "attendance",
     via: ["absences", "class-staff"],
+    intent: "absences",
     popular: true,
     words: "объяснительная пропуск",
   },
@@ -131,7 +134,7 @@ const ACTIONS: Spec[] = [
     category: "works",
     via: ["assessments"],
     popular: true,
-    words: "экзамен событие календарь",
+    words: "контрольная экзамен событие календарь",
   },
   { id: "dated", label: "Замены", category: "timetable", via: ["dated"] },
   {
@@ -152,7 +155,8 @@ const ACTIONS: Spec[] = [
     label: "Посещаемость учащихся",
     category: "attendance",
     via: ["attendance"],
-    words: "сетка",
+    named: true,
+    words: "посещаемость учащихся сетка",
   },
   {
     id: "coverage",
@@ -216,7 +220,7 @@ export function launcherActions(
       ? [
           {
             id: spec.id,
-            label: spec.label,
+            label: spec.named ? item.label : spec.label,
             category: spec.category,
             popular: !!spec.popular,
             item,
@@ -228,22 +232,24 @@ export function launcherActions(
   });
 }
 
-const haystack = (action: LauncherAction) =>
-  `${action.label} ${action.words ?? ""}`.toLocaleLowerCase("ru");
+// The words of a name or of what is typed; a slash, as in «Новая оценка / работа», or a hyphen only separates.
+const wordsOf = (text: string) =>
+  text
+    .toLocaleLowerCase("ru")
+    .split(/[\s/,;.-]+/)
+    .filter(Boolean);
 
-/** The actions that answer what was typed. Every word typed has to be found in some word of the action
- *  (its name or the words it is known by), whatever the case; nothing typed leaves all of them. */
+/** The actions that answer what was typed. Every word typed has to begin some word of the action (its name or the
+ *  words it is known by), whatever the case: «дом» finds the homework, not «ведомость»; nothing typed leaves all of them. */
 export function filterActions(
   actions: LauncherAction[],
   query: string,
 ): LauncherAction[] {
-  const typed = query.toLocaleLowerCase("ru").split(/\s+/).filter(Boolean);
+  const typed = wordsOf(query);
   if (!typed.length) return actions;
   return actions.filter((action) => {
-    const known = haystack(action)
-      .split(/[\s/,;.]+/)
-      .filter(Boolean);
-    return typed.every((word) => known.some((one) => one.includes(word)));
+    const known = wordsOf(`${action.label} ${action.words ?? ""}`);
+    return typed.every((word) => known.some((one) => one.startsWith(word)));
   });
 }
 

@@ -129,6 +129,8 @@ export default function AuthShell() {
   const [assessmentsWorkspace, setAssessmentsWorkspace] = useState<
     string | null
   >(null);
+  // The child the family portal showed when a window of the menu was opened: the window starts on them.
+  const [modalChild, setModalChild] = useState<string | undefined>();
   useEffect(() => {
     const open = (event: Event) =>
       setAssessmentsWorkspace(
@@ -491,7 +493,8 @@ export default function AuthShell() {
     registers: setRegistersWorkspace,
     hall: setHallWorkspace,
   };
-  function openModal(id: ModalId) {
+  function openModal(id: ModalId, child?: string) {
+    setModalChild(child);
     if (id === "meetings") {
       setMeetingsSection(undefined);
       setMeetingsWorkspace("school");
@@ -723,6 +726,7 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={behaviourWorkspace}
+            studentId={modalChild}
             prefill={behaviourPrefill}
             onClose={() => {
               setBehaviourWorkspace(null);
@@ -741,6 +745,7 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={assessmentsWorkspace}
+            studentId={modalChild}
             onClose={() => setAssessmentsWorkspace(null)}
           />
         </Suspense>

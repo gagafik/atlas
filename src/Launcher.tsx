@@ -18,7 +18,10 @@ export default function Launcher({
     [active, setActive] = useState(0);
   const box = useRef<HTMLDivElement>(null),
     button = useRef<HTMLButtonElement>(null),
-    field = useRef<HTMLInputElement>(null);
+    field = useRef<HTMLInputElement>(null),
+    list = useRef<HTMLDivElement>(null),
+    // Raised when the keys (or typing) move the choice: the option is brought into view; the pointer's own move is not.
+    follow = useRef(false);
   const id = useId();
   const groups = launcherGroups(actions, query);
   // The options as they stand on screen, a popular one twice (in «Популярные» and in its own category).
@@ -33,6 +36,22 @@ export default function Launcher({
   useEffect(() => {
     if (open) field.current?.focus();
   }, [open]);
+  // The list scrolls inside the panel: the option the keys reached must not stay below its edge, where Enter would open it unseen.
+  useEffect(() => {
+    if (!follow.current) return;
+    follow.current = false;
+    const box = list.current,
+      row = document.getElementById(optionId(active));
+    if (!box || !row) return;
+    if (active === 0) box.scrollTop = 0;
+    else {
+      const rect = row.getBoundingClientRect(),
+        area = box.getBoundingClientRect();
+      if (rect.top < area.top) box.scrollTop -= area.top - rect.top;
+      else if (rect.bottom > area.bottom)
+        box.scrollTop += rect.bottom - area.bottom;
+    }
+  }, [active, query]);
   useEffect(() => {
     if (!open) return;
     const keys = (event: KeyboardEvent) => {
@@ -86,6 +105,7 @@ export default function Launcher({
                 autoComplete="off"
                 value={query}
                 onChange={(event) => {
+                  follow.current = true;
                   setQuery(event.target.value);
                   setActive(0);
                 }}
@@ -99,7 +119,10 @@ export default function Launcher({
                     return;
                   event.preventDefault();
                   const to = stepIndex(active, options.length, event.key);
-                  if (to !== null) setActive(to);
+                  if (to !== null) {
+                    follow.current = true;
+                    setActive(to);
+                  }
                 }}
               />
             </label>
@@ -114,6 +137,7 @@ export default function Launcher({
           </div>
           <div
             className="launcher-list"
+            ref={list}
             id={`${id}-list`}
             role="listbox"
             aria-label="Действия"
@@ -141,7 +165,8 @@ export default function Launcher({
                       className="launcher-option"
                       // The field keeps the focus while the pointer chooses.
                       onMouseDown={(event) => event.preventDefault()}
-                      onMouseEnter={() => setActive(mine)}
+                      // Only a move of the pointer chooses: a list that scrolls under a resting pointer must not take the choice from the keys.
+                      onMouseMove={() => active !== mine && setActive(mine)}
                       onClick={() => choose(action)}
                     >
                       {action.label}

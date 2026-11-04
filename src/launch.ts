@@ -3,7 +3,13 @@
 import { useEffect, useRef } from "react";
 
 export type LaunchIntent =
-  "compose" | "newWork" | "measure" | "todayLesson" | "homework" | "newTest";
+  | "compose"
+  | "newWork"
+  | "measure"
+  | "todayLesson"
+  | "homework"
+  | "newTest"
+  | "absences";
 
 const EVENT = "atlas-launch";
 // A screen that does not start with the intent leaves it waiting only this long, so a later visit does not find an old request.

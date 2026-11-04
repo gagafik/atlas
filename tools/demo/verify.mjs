@@ -198,6 +198,37 @@ async function launcherBehaviour(page, activity, kit, problems, role) {
   await page.keyboard.press("Escape");
   if (await panel.count()) fail("Esc does not close the panel");
   if (!(await button.evaluate((node) => node === document.activeElement))) fail("Esc does not return the focus to the button");
+  // Deep in the list the choice stays on screen (the list scrolls inside the panel), so Enter never opens an option nobody sees.
+  await button.click({ timeout: 3000 });
+  const chosenShown = () =>
+    page.evaluate(() => {
+      const row = document.getElementById(document.querySelector(".launcher-panel input")?.getAttribute("aria-activedescendant") || "");
+      const list = document.querySelector(".launcher-list");
+      if (!row || !list) return false;
+      const at = row.getBoundingClientRect();
+      const box = list.getBoundingClientRect();
+      return at.top >= box.top - 1 && at.bottom <= box.bottom + 1;
+    });
+  for (let step = 1; step <= all.length; step += 1) {
+    await page.keyboard.press("ArrowDown");
+    if (!(await chosenShown())) {
+      fail(`the choice is out of sight after ${step} presses of the arrow`);
+      break;
+    }
+  }
+  await page.keyboard.press("Escape");
+  // The panel fits the screen at every width, a tablet in portrait included (it hangs under its button only where the menu is open beside it).
+  const size = page.viewportSize();
+  for (const width of [...new Set([size.width, 768, 820])]) {
+    await page.setViewportSize({ width, height: size.height });
+    await page.waitForTimeout(150);
+    await button.click({ timeout: 3000 });
+    const box = await panel.boundingBox();
+    if (!box || box.x < -1 || box.x + box.width > width + 1) fail(`the panel does not fit a screen ${width} px wide`);
+    await page.keyboard.press("Escape");
+  }
+  await page.setViewportSize(size);
+  await page.waitForTimeout(150);
   // Every action, once, from the start page: the page changes or a window opens, and the panel is gone.
   const home = await heading();
   for (const label of [...new Set(all)]) {
@@ -212,13 +243,18 @@ async function launcherBehaviour(page, activity, kit, problems, role) {
     await closeOverlays(page);
   }
   // The actions that start an editor: the editor is on screen when the action has run.
+  // «Новая оценка / работа» opens the grades of the courses; the editor of the work comes with the course chosen there.
+  const pickCourse = () => page.getByRole("button", { name: /7А · Математика/ }).first().click({ timeout: 3000 });
   const editors = [
     ["Новое сообщение", ".message-compose"],
     ["Создать тест", "text=Новый тест"],
     ["Тема урока и посещаемость", ".journal-editor"],
     ["Добавить домашнее задание", ".journal-editor"],
+    ["Новая оценка / работа", ".journal-editor", pickCourse],
+    ["Воспитательная мера", "dialog[open] >> text=Новая запись"],
+    ["Записки об отсутствии", ".absence-panel[open]"],
   ];
-  for (const [label, editor] of editors) {
+  for (const [label, editor, next] of editors) {
     // The administrator keeps no lessons of their own, so the day alone opens for the lesson actions.
     if (!all.includes(label) || (role === "admin" && editor === ".journal-editor")) continue;
     await kit.home();
@@ -226,6 +262,10 @@ async function launcherBehaviour(page, activity, kit, problems, role) {
     await page.keyboard.type(label);
     await page.keyboard.press("Enter");
     await waitQuiet(page, activity, 400, 6000, 700);
+    if (next) {
+      await next().catch(() => fail(`${label}: the course cannot be chosen`));
+      await waitQuiet(page, activity, 400, 6000, 700);
+    }
     await page.waitForSelector(editor, { timeout: 4000 }).catch(() => fail(`${label}: the editor is not opened`));
     await closeOverlays(page);
   }

@@ -108,6 +108,24 @@ def test_the_parent_can_switch_between_two_children_with_their_screens_in_the_sn
         assert any(key.startswith('GET /api/journal/pupil-period') and f'studentId={child}' in key for key in entries), child
 
 
+# The route each part of the journal opens with. The menu offers a part when `journal/options` says the account has it, so a part
+# without any answer in the snapshot would lead a visitor to a screen of misses.
+PART_ROUTES = {
+    'absences': '/api/journal/absences', 'coverage': '/api/journal/coverage', 'attendance': '/api/journal/attendance',
+    'attendanceGrid': '/api/journal/attendance', 'finalGrades': '/api/final-grades', 'periods': '/api/journal/periods',
+    'courseTable': '/api/journal/course-table',
+}
+
+
+@pytest.mark.parametrize('role', ['admin', 'teacher'])
+def test_every_part_of_the_journal_the_menu_offers_has_answers_in_the_snapshot(role):
+    entries = load(role)['entries']
+    panels = entries[get_key('/api/journal/options')]['b']['panels']
+    for part, route in PART_ROUTES.items():
+        if panels.get(part):
+            assert any(key.split(' ', 1)[1].startswith(route) for key in entries), (role, part)
+
+
 def test_people_and_school_name_are_invented():
     state = load('admin')['entries']['GET /api/state']['b']
     assert 'Пример' in state['settings']['name']

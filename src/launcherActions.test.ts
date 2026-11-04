@@ -117,6 +117,23 @@ describe("what the launcher lists", () => {
     expect(byId.get("compose")).toBe("compose");
     expect(byId.get("newTest")).toBe("newTest");
     expect(byId.get("dated")).toBeUndefined();
+    // The class workplace holds the absence notes among other sections: the action asks for them to be open.
+    expect(byId.get("absences")).toBe("absences");
+  });
+
+  it("is named as the entry it opens whenever the menu has an entry of that name", () => {
+    for (const role of ROLES)
+      for (const journalPanels of [PANELS, []]) {
+        const ctx = context(role, { journalPanels });
+        const offered = menuItems(buildMenu(ctx));
+        for (const action of actionsOf(ctx)) {
+          const same = offered.filter((item) => item.label === action.label);
+          if (same.length)
+            expect(same, `${role}: ${action.label}`).toContainEqual(
+              action.item,
+            );
+        }
+      }
   });
 });
 
@@ -130,16 +147,28 @@ describe("typing in the launcher", () => {
     expect(filterActions(actions, "   ")).toEqual(actions);
   });
 
-  it("finds an action by any word of it, whatever the case or the part of the word", () => {
+  it("finds an action by the beginning of any word of it, whatever the case", () => {
     for (const action of actions)
       for (const word of wordsOf(action.label)) {
         expect(ids(filterActions(actions, word.toUpperCase()))).toContain(
           action.id,
         );
         expect(
-          ids(filterActions(actions, word.slice(1, -1).toLowerCase())),
+          ids(filterActions(actions, word.slice(0, -1).toLowerCase())),
         ).toContain(action.id);
       }
+  });
+
+  it("finds an action by its whole name, a slash in it included", () => {
+    for (const action of actions)
+      expect(ids(filterActions(actions, action.label))).toContain(action.id);
+  });
+
+  it("does not take the middle of a word for the word", () => {
+    // «дом» begins the homework, but it only sits inside «ведомость», by which the report cards are known.
+    const found = ids(filterActions(actions, "дом"));
+    expect(found).toContain("homework");
+    expect(found).not.toContain("reports");
   });
 
   it("needs every typed word to be found", () => {

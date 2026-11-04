@@ -293,6 +293,20 @@ export default function MessagesPanel({
       alive.current = false;
     };
   }, [workspace]);
+  // The portal looks at another child: the message is about that child, and the recipient chosen for the old one goes.
+  useEffect(() => {
+    if (
+      !child ||
+      !options ||
+      !["parent", "student"].includes(options.role) ||
+      student === child ||
+      !options.students.some((s: { id: string }) => s.id === child)
+    )
+      return;
+    setStudent(child);
+    setSelectedPeople([]);
+    setRecipient("");
+  }, [child, options]);
   useEffect(() => {
     if (!focusThread) return;
     // An unsent reply or draft is asked about first, like every other way out of a conversation.

@@ -342,6 +342,10 @@ async function siblingScreens(kit) {
   await kit.choose("Режим просмотра", "Неделя");
   await kit.snap("sibling-timetable");
   await kit.path("Учебный план");
+  // The new message is about the child on show: the contacts of the sibling's class teacher.
+  await kit.path(MESSAGES);
+  await kit.click("Написать сообщение");
+  await kit.snap("sibling-compose");
   await kit.home();
   await kit.otherChild();
 }

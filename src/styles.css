@@ -775,7 +775,7 @@ small {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* The launcher «Начните своё действие здесь»: a panel under its button on a computer, a sheet over the page on a phone. */
+/* The launcher «Начните своё действие здесь»: a panel under its button on a computer, a sheet over the page on a tablet or a phone. */
 .launcher {
   position: relative;
 }
@@ -860,7 +860,8 @@ small {
   padding: 14px;
   color: var(--text-muted);
 }
-@media (max-width: 700px) {
+/* Where the menu becomes a drawer the button is too far from the edge for a panel hanging under it: a sheet instead. */
+@media (max-width: 900px) {
   .launcher {
     position: static;
   }
@@ -873,6 +874,8 @@ small {
     border: 0;
     border-radius: 0;
   }
+}
+@media (max-width: 700px) {
   .topbar-child {
     max-width: 150px;
   }

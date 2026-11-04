@@ -142,11 +142,14 @@ const dayLabel = (day: string) =>
 export default function BehaviourNotes({
   user,
   initialWorkspace,
+  studentId,
   prefill,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
+  // The child a family portal showed: the records of a parent start with them.
+  studentId?: string;
   // Opened from the gradebook: the pupils marked there, whether the form should start as an educational measure, and the course
   // (its subject) the notes are written for.
   prefill?: {
@@ -317,7 +320,12 @@ export default function BehaviourNotes({
         opts.students.length &&
         !opts.students.some((s) => s.id === filters.studentId)
       ) {
-        setFilters((f) => ({ ...f, studentId: opts.students[0].id }));
+        setFilters((f) => ({
+          ...f,
+          studentId: (
+            opts.students.find((s) => s.id === studentId) ?? opts.students[0]
+          ).id,
+        }));
         return;
       }
       if (view === "board") await loadBoard(boardKind);
