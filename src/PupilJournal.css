@@ -574,8 +574,9 @@ button.pupil-att:hover b {
   border-radius: 6px;
   background: transparent;
 }
+/* muted, not red: red marks days with unfilled lessons in the teacher's calendar */
 .month-calendar-weekend {
-  color: #9a3d1c;
+  color: #8a938d;
 }
 .month-calendar-outside {
   opacity: 0.4;

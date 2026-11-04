@@ -4,6 +4,7 @@ import { SavedPlanTopic } from "./LessonTopic";
 import CategoryBadge from "./CategoryBadge";
 import { categoryOf, type CategoryConfig } from "./assessmentCategories";
 import { attendanceText, gradeLabel, type JournalRow } from "./journal";
+import { ruDate } from "./journalCoverage";
 
 // Published lessons of one pupil: the topic, homework, the pupil's marks and attendance of each.
 export default function PublishedRows({
@@ -50,7 +51,7 @@ export default function PublishedRows({
             <p className="journal-text">
               <strong>
                 Домашнее задание
-                {row.content.dueDate ? ` к ${row.content.dueDate}` : ""}:{" "}
+                {row.content.dueDate ? ` к ${ruDate(row.content.dueDate)}` : ""}:{" "}
               </strong>
               {row.content.homework}
             </p>
