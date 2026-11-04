@@ -1,4 +1,5 @@
 /** Pure helpers of the journal coverage panel (class summary and reminder settings). */
+import { monthCells } from "./pupilJournal";
 
 export const weekdays = [
   "Понедельник",
@@ -130,4 +131,16 @@ export function runLine(run: Run): string {
           : []),
       ].join(", ");
   return `${ruDate(run.onDate)} · ${name}: ${result}`;
+}
+
+/** The days the calendar of a month (YYYY-MM) shows, whole weeks with the neighbouring months' days, cut to the school year; `null` when they lie wholly outside it. */
+export function gridWindow(
+  month: string,
+  yearStart: string,
+  yearEnd: string,
+): { start: string; end: string } | null {
+  const cells = monthCells(`${month}-01`);
+  const start = [cells[0].date, yearStart].sort().at(-1)!,
+    end = [cells[cells.length - 1].date, yearEnd].sort()[0];
+  return start <= end ? { start, end } : null;
 }

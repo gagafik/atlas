@@ -108,20 +108,22 @@ function changeText(item: FeedItem, categories: CategoryConfig | null) {
   return ["изменена", ...parts].join(", ");
 }
 
-// Published grade changes for one pupil; parents sign them, pupils mark them as seen.
-function FamilyFeed({
-  workspace,
-  studentId,
-}: {
-  workspace: string;
-  studentId: string;
-}) {
+// Published grade changes for one pupil; parents sign them, pupils mark them as seen. The state is a hook so a screen
+// can show the signing button and the list apart (onSigned runs after a signature was saved).
+export function useFamilyFeed(
+  workspace: string,
+  studentId: string,
+  onSigned?: () => void,
+) {
   const categories = useAssessmentCategories(workspace);
+  const signed = useRef(onSigned);
+  signed.current = onSigned;
   const [feed, setFeed] = useState<Feed | null>(null),
     [hidden, setHidden] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+    [notice, setNotice] = useState(""),
+    [epoch, setEpoch] = useState(0);
   const sequence = useRef(0);
   const pupil = feed?.role === "student";
   function fetchFeed(before?: number): Promise<Feed> {
@@ -135,6 +137,8 @@ function FamilyFeed({
     setHidden(false);
     setError("");
     setNotice("");
+    // No pupil: the screen of a member of staff, which has no feed to read.
+    if (!studentId) return setBusy(false);
     setBusy(true);
     fetchFeed()
       .then((value) => {
@@ -153,7 +157,7 @@ function FamilyFeed({
       ++sequence.current;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, studentId]);
+  }, [workspace, studentId, epoch]);
   async function more() {
     if (!feed?.nextBefore || busy) return;
     const token = sequence.current;
@@ -178,7 +182,8 @@ function FamilyFeed({
     }
   }
   async function sign() {
-    // Only grades already on screen are signed: the newest one of the first page.
+    // One click signs everything up to the newest grade of the loaded list, as in EduPage, even pages not opened yet;
+    // grades published after the list was loaded stay unsigned.
     if (!feed?.latest || busy) return;
     const token = ++sequence.current;
     setBusy(true);
@@ -203,6 +208,7 @@ function FamilyFeed({
         result = "withdrawn";
       }
       if (token !== sequence.current) return;
+      if (result !== "withdrawn") signed.current?.();
       const value = await fetchFeed();
       if (token !== sequence.current) return;
       setFeed(value);
@@ -228,14 +234,50 @@ function FamilyFeed({
       if (token === sequence.current) setBusy(false);
     }
   }
-  if (hidden) return null;
   const unsigned = feed?.unsigned ?? 0;
-  // Unsigned grades are the newest ones; all of them must be on screen before signing.
-  // Once every page is loaded nothing at or below `latest` is left unseen, even if
-  // grades were corrected or signed elsewhere between pages.
+  // Unsigned grades below the loaded pages, shown as a hint only. Once every page is loaded
+  // nothing at or below `latest` is left unseen, even if grades were corrected or signed
+  // elsewhere between pages.
   const unseen = feed?.nextBefore
     ? unsigned - feed.items.filter((i) => !i.signed).length
     : 0;
+  return {
+    feed,
+    hidden,
+    busy,
+    error,
+    notice,
+    categories,
+    pupil,
+    unsigned,
+    unseen,
+    more,
+    sign,
+    reload: () => setEpoch((n) => n + 1),
+  };
+}
+export type FamilyFeedState = ReturnType<typeof useFamilyFeed>;
+
+// The list of grade changes with the signing button; a screen that signs elsewhere hides the button.
+export function FamilyFeedView({
+  feed: state,
+  showSign = true,
+}: {
+  feed: FamilyFeedState;
+  showSign?: boolean;
+}) {
+  const {
+    feed,
+    hidden,
+    busy,
+    error,
+    notice,
+    categories,
+    pupil,
+    unsigned,
+    unseen,
+  } = state;
+  if (hidden) return null;
   return (
     <section className="grade-feed" aria-label="Новые оценки">
       <header className="grade-feed-head">
@@ -251,12 +293,12 @@ function FamilyFeed({
                 : "Все оценки подписаны"}
           </span>
         )}
-        {feed?.canSign && (
+        {showSign && feed?.canSign && (
           <button
             type="button"
             className="primary"
-            disabled={busy || !unsigned || !feed.latest || unseen > 0}
-            onClick={() => void sign()}
+            disabled={busy || !unsigned || !feed.latest}
+            onClick={() => void state.sign()}
           >
             {pupil ? "Просмотрено" : "Подписать оценки"}
           </button>
@@ -264,9 +306,8 @@ function FamilyFeed({
       </header>
       {unseen > 0 && (
         <p className="grade-feed-meta">
-          Ещё {unseen} {pupil ? "непросмотренных" : "неподписанных"} ниже:
-          откройте их кнопкой «Показать ещё», чтобы{" "}
-          {pupil ? "отметить" : "подписать"}.
+          Ещё {unseen} {pupil ? "непросмотренных" : "неподписанных"} ниже, под
+          кнопкой «Показать ещё».
         </p>
       )}
       {feed?.signedAt && (
@@ -329,7 +370,7 @@ function FamilyFeed({
         </ul>
       )}
       {feed?.nextBefore && (
-        <button type="button" disabled={busy} onClick={() => void more()}>
+        <button type="button" disabled={busy} onClick={() => void state.more()}>
           Показать ещё
         </button>
       )}
@@ -415,6 +456,16 @@ function FamilySignatures({
       )}
     </section>
   );
+}
+
+function FamilyFeed({
+  workspace,
+  studentId,
+}: {
+  workspace: string;
+  studentId: string;
+}) {
+  return <FamilyFeedView feed={useFamilyFeed(workspace, studentId)} />;
 }
 
 export default function GradeFeed({

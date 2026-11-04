@@ -61,6 +61,32 @@ def test_draft_publish_personal_projection_and_preserved_published_version(clien
     assert pupil.get('/api/notifications/inbox').json()['unread']==2
 
 
+def test_day_items_carry_the_draft_text_the_published_counts_and_the_bell_profile(client):
+    enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
+    state=api.read('demo');state.students+=[Student(id=f'n{i}',name=f'Новый ученик {i}',classId='c-demo-a') for i in range(3)];api.save('demo',state)
+    teacher=signed('teacher');item=lesson(teacher)
+    assert item['present'] is None and item['marked'] is None and item['topic']=='' and item['dueDate'] is None
+    assert item['studentCount']==5 and item['classes']==['10A'] and item['profileId']==next(w.profileId for w in state.workloads if w.id=='w0')
+    record=graded(entry(teacher,item['lessonKey']))
+    for pupil,mark in zip(record['document']['content']['records'],['present','present','late','absent','unmarked']):pupil.update(attendance=mark,lateMinutes=10 if mark=='late' else 0)
+    assert write(teacher,record,publish=True).status_code==200
+    item=lesson(teacher)
+    assert (item['present'],item['marked'],item['studentCount'])==(3,4,5)
+    assert (item['topic'],item['homework'],item['dueDate'])==('Тема урока','Прочитать страницу 12','2026-08-19')
+    # Another teacher never sees the lesson, so neither its text nor its counts.
+    assert 'Английский язык' not in str(signed('unrelated').get('/api/journal/day?workspace=demo&day='+DAY).json())
+
+
+def test_day_counter_stays_within_the_roster_after_a_pupil_leaves(client,monkeypatch):
+    # On the lesson day the roster follows the group, while the publication still holds the pupil who left.
+    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
+    item=lesson(client,'Математика');assert write(client,graded(entry(client,item['lessonKey'])),publish=True).status_code==200
+    item=lesson(client,'Математика');assert item['present']==item['marked']==item['studentCount']>1
+    state=api.read('demo');group=next(g for g in state.groups if g.id=='g-math');group.studentIds=group.studentIds[1:];api.save('demo',state)
+    left=lesson(client,'Математика');assert left['studentCount']==item['studentCount']-1
+    assert left['present']==left['marked']==left['studentCount']
+
+
 def test_role_permissions_and_teacher_scope(client):
     enable(client);create(client,'teacher');create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
     create(client,'student');create(client,'editor');create(client,'viewer',grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])])
@@ -358,3 +384,19 @@ def test_options_panels_by_role(client):
         db.execute("INSERT INTO final_results VALUES ('demo','period1','s1','sub0','row2',1,'{}')")
     assert panels(signed('student'))['finalGrades'] is True and panels(signed('parent'))['finalGrades'] is True
     assert panels(signed('teacher'))['finalGrades'] is True
+
+
+def test_options_give_the_family_periods_bells_and_the_class_of_each_child(client):
+    from uuid import uuid4
+    enable(client);create(client,'parent');create(client,'editor');create(client,'viewer',grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])])
+    made=client.put(f'/api/journal/periods/{uuid4().hex}?workspace=demo',json=dict(name='Первая четверть',start='2026-08-17',end='2026-10-16',kind='quarter',version=0,reason='Создание периода'))
+    assert made.status_code==200,made.text
+    options=signed('parent').get('/api/journal/options?workspace=demo');assert options.status_code==200,options.text
+    body=options.json();state=api.read('demo')
+    assert {k for p in body['periods'] for k in p}=={'id','name','start','end','kind'} and body['periods'][0]['name']=='Первая четверть' and body['periods'][0]['end']=='2026-10-16'
+    assert [s['id'] for s in body['students']]==['s1']
+    child=next(s for s in state.students if s.id=='s1');school_class=next(c for c in state.classes if c.id==child.classId)
+    assert body['students'][0]['className']==school_class.name and body['students'][0]['profileId']==school_class.profileId
+    assert [p['id'] for p in body['profiles']]==[p.id for p in state.profiles] and body['profiles'][0]['periods']==[b.model_dump() for b in state.profiles[0].periods]
+    assert date.fromisoformat(body['today'])
+    for reader in [signed('editor'),signed('viewer')]:assert reader.get('/api/journal/options?workspace=demo').status_code==403

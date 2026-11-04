@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classCardLines,
   drillFilters,
+  gridWindow,
   ruDate,
   runLine,
   schoolDays,
@@ -146,5 +147,25 @@ describe("summaryFilters and drillFilters", () => {
     const before = { ...form };
     drillFilters(form, "c-demo-a");
     expect(form).toEqual(before);
+  });
+});
+
+describe("gridWindow", () => {
+  it("covers the weeks on show and cuts them to the school year", () => {
+    // 1 October 2026 is a Thursday: the grid starts on Monday 28 September and runs six weeks.
+    expect(gridWindow("2026-10", "2026-08-17", "2027-05-29")).toEqual({
+      start: "2026-09-28",
+      end: "2026-11-08",
+    });
+    expect(gridWindow("2026-08", "2026-08-17", "2027-05-29")?.start).toBe(
+      "2026-08-17",
+    );
+    expect(gridWindow("2027-05", "2026-08-17", "2027-05-29")?.end).toBe(
+      "2027-05-29",
+    );
+  });
+  it("gives nothing for a month whose weeks lie outside the year", () => {
+    expect(gridWindow("2026-07", "2026-08-17", "2027-05-29")).toBeNull();
+    expect(gridWindow("2027-06", "2026-08-17", "2027-05-29")).toBeNull();
   });
 });

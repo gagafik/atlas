@@ -71,7 +71,7 @@ import {
 } from "lucide-react";
 import NotificationCenter from "./NotificationCenter";
 import { roleNames, type Account } from "./auth";
-import type { JournalPanelName } from "./journal";
+import type { JournalPanelName, JournalView } from "./journal";
 import { unreadLabel } from "./messages";
 import {
   accountMenu,
@@ -190,8 +190,8 @@ export default function Shell({
   frame: ShellFrame;
   journalPanels: JournalPanelName[] | null;
   view: string;
-  journalView?: JournalPanelName;
-  onView: (view: string, journal?: JournalPanelName) => void;
+  journalView?: JournalView;
+  onView: (view: string, journal?: JournalView) => void;
   school?: string;
   year?: string;
   unread?: Unread;

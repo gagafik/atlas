@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Account } from "./auth";
+import { measureCategory } from "./behaviourMeasure";
 import "./BehaviourNotes.css";
 
 type Kind = "praise" | "remark";
@@ -26,6 +27,8 @@ type Options = {
   today: string;
   levels: Record<Level, string>;
   myLevels: Level[];
+  // The classes the account leads as class teacher: the measures of that level hold for their pupils only.
+  myClassIds: string[];
   remarkAck: boolean;
   categories: Category[];
   pending: number;
@@ -139,10 +142,19 @@ const dayLabel = (day: string) =>
 export default function BehaviourNotes({
   user,
   initialWorkspace,
+  prefill,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
+  // Opened from the gradebook: the pupils marked there, whether the form should start as an educational measure, and the course
+  // (its subject) the notes are written for.
+  prefill?: {
+    studentIds: string[];
+    measure?: boolean;
+    subjectId?: string;
+    subject?: string;
+  };
   onClose: () => void;
 }) {
   const spaces =
@@ -195,7 +207,15 @@ export default function BehaviourNotes({
     [remarkAck, setRemarkAck] = useState(true);
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
-    request = useRef({ key: "", id: "" });
+    request = useRef({ key: "", id: "" }),
+    // The prefill is applied once, when the options first arrive.
+    prefilled = useRef(false);
+  // The subject of the course the pupils were marked in; the author may let it go for a note that is about something else.
+  const course =
+    prefill?.subjectId && workspace === initialWorkspace
+      ? { id: prefill.subjectId, name: prefill.subject ?? "" }
+      : null;
+  const [forCourse, setForCourse] = useState(true);
   useEffect(() => {
     dialog.current?.showModal();
     return () => dialog.current?.close();
@@ -256,20 +276,40 @@ export default function BehaviourNotes({
       setOptions(opts);
       setCategories(opts.categories);
       setRemarkAck(opts.remarkAck);
+      const wanted = prefill && !prefilled.current ? prefill : null;
+      prefilled.current = true;
+      // The server checks the scope again; the pupils it does not offer are dropped here.
+      const chosen =
+        wanted?.studentIds.filter((id) =>
+          opts.students.some((s) => s.id === id),
+        ) ?? [];
+      const measure = wanted?.measure
+        ? measureCategory(
+            opts.categories,
+            opts,
+            opts.students.filter((s) => chosen.includes(s.id)),
+          )
+        : undefined;
+      if (wanted?.measure && !measure)
+        setNotice("Воспитательные меры вам недоступны");
       setForm((f) => ({
         ...f,
         day: f.day || opts.today,
+        students: wanted ? chosen : f.students,
         categoryId:
+          measure?.id ||
           f.categoryId ||
           opts.categories.find(
             (c) => c.active && opts.myLevels.includes(c.level),
           )?.id ||
           "",
-        printed: f.categoryId
-          ? f.printed
-          : (opts.categories.find(
-              (c) => c.active && opts.myLevels.includes(c.level),
-            )?.report ?? false),
+        printed: measure
+          ? measure.report
+          : f.categoryId
+            ? f.printed
+            : (opts.categories.find(
+                (c) => c.active && opts.myLevels.includes(c.level),
+              )?.report ?? false),
       }));
       if (
         !opts.canWrite &&
@@ -337,6 +377,7 @@ export default function BehaviourNotes({
       day: categoryId === form.categoryId ? form.day : options!.today,
       text,
       visible: form.visible,
+      ...(course && forCourse ? { subjectId: course.id } : {}),
       // A quick mark takes the default of its own category.
       ...(categoryId === form.categoryId ? { printed: form.printed } : {}),
     };
@@ -784,6 +825,16 @@ export default function BehaviourNotes({
                 />
                 Печатать в табель
               </label>
+              {course && (
+                <label className="bn-check">
+                  <input
+                    type="checkbox"
+                    checked={forCourse}
+                    onChange={(e) => setForCourse(e.target.checked)}
+                  />
+                  По предмету «{course.name}»
+                </label>
+              )}
             </div>
             <label className="bn-wide">
               Комментарий или основание

@@ -2,7 +2,7 @@
 // rules run in node tests. Every condition below is the one the header buttons (AuthShell), the
 // administrator's NAV (App) or the portal tabs (Portal, StaffWorkspace) had before the shell.
 import type { Role } from "./auth";
-import type { JournalPanelName } from "./journal";
+import type { JournalPanelName, JournalView } from "./journal";
 import { menuRoles } from "./assessmentCalendar";
 import { sectionVisible } from "./schoolSections";
 
@@ -32,7 +32,7 @@ export type AccountId =
   "family" | "invitation" | "password" | "recovery" | "app" | "signOut";
 export type Container = "app" | "portal" | "staff";
 export type NavTarget =
-  | { kind: "view"; view: string; journal?: JournalPanelName }
+  | { kind: "view"; view: string; journal?: JournalView }
   | { kind: "modal"; modal: ModalId }
   | { kind: "account"; account: AccountId };
 export interface NavItem {
@@ -81,7 +81,7 @@ export const targetKey = (target: NavTarget) =>
       ? `modal:${target.modal}`
       : `account:${target.account}`;
 
-const view = (name: string, journal?: JournalPanelName): NavTarget =>
+const view = (name: string, journal?: JournalView): NavTarget =>
   journal
     ? { kind: "view", view: name, journal }
     : { kind: "view", view: name };
@@ -134,7 +134,7 @@ const journalPart = (
     ITEMS.journal.allow(ctx, target) &&
     target.kind === "view" &&
     !!target.journal &&
-    !!ctx.journalPanels?.includes(target.journal),
+    !!ctx.journalPanels?.includes(target.journal as JournalPanelName),
 });
 
 const ITEMS: Record<string, Spec> = {
@@ -180,6 +180,20 @@ const ITEMS: Record<string, Spec> = {
   dated: page("Замены", "dated", "dated"),
   commitments: page("Дежурства и бронирования", "commitments", "commitments"),
   grades: journalPart("Оценки", "grades", "courseTable"),
+  // The screens of the family journal read the published records of the account's own children, which every
+  // pupil and parent may do, so the server's panel flags do not gate them.
+  pupilGrades: {
+    label: "Оценки",
+    icon: "grades",
+    target: view("journal", "pupilGrades"),
+    allow: (ctx) => signed(ctx, ["student", "parent"]),
+  },
+  pupilAttendance: {
+    label: "Посещаемость",
+    icon: "attendance",
+    target: view("journal", "pupilAttendance"),
+    allow: (ctx) => signed(ctx, ["student", "parent"]),
+  },
   reports: journalPart("Табели", "reports", "finalGrades"),
   attendance: journalPart(
     "Посещаемость (учащиеся)",
@@ -458,7 +472,10 @@ const LAYOUTS: Record<string, Layout> = {
     [
       "home",
       "notices",
-      slot("journal", "Оценки"),
+      "journal",
+      "pupilGrades",
+      "pupilAttendance",
+      "reports",
       "schedule",
       slot("courses", "Учебный план"),
       "clubs",
@@ -481,8 +498,10 @@ const LAYOUTS: Record<string, Layout> = {
     [
       "home",
       "notices",
-      slot("journal", "Оценки"),
-      slot("attendance", "Посещаемость", view("journal", "absences")),
+      "journal",
+      "pupilGrades",
+      "pupilAttendance",
+      "reports",
       "schedule",
     ],
     [
@@ -616,7 +635,7 @@ export const groupOf = (menu: NavMenu, itemId: string): NavGroup | undefined =>
 export function activeItem(
   menu: NavMenu,
   name: string,
-  journal?: JournalPanelName,
+  journal?: JournalView,
 ): NavItem | undefined {
   const same = menuItems(menu).filter(
     (item) => item.target.kind === "view" && item.target.view === name,
@@ -634,7 +653,7 @@ export function menuTitle(
   menu: NavMenu,
   accounts: AccountItem[],
   name: string,
-  journal?: JournalPanelName,
+  journal?: JournalView,
 ) {
   return (
     activeItem(menu, name, journal)?.label ??
@@ -681,6 +700,19 @@ const TILES = [
 export function startTiles(menu: NavMenu): NavItem[] {
   const items = menuItems(menu);
   return TILES.flatMap((id) => items.find((item) => item.id === id) ?? []);
+}
+
+/** The screen of the journal a pupil's or parent's notification opens: the day by default, the report card for a
+ *  finals notice, the attendance for an absence note. Everyone else keeps the whole journal. */
+export function eventPart(
+  role: Role | null,
+  type: string,
+  detail: { finalsPeriodId?: string | null } = {},
+): JournalView | undefined {
+  if (role !== "student" && role !== "parent") return undefined;
+  if (type === "atlas-open-journal" && detail.finalsPeriodId)
+    return "finalGrades";
+  return type === "atlas-open-absences" ? "pupilAttendance" : undefined;
 }
 
 /** Where an opened notification lands: event name to the view of the container that listens. */

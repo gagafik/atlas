@@ -2,7 +2,7 @@
 import gzip
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -103,6 +103,14 @@ def test_people_and_school_name_are_invented():
     assert len(state['students']) == 4 * school.PUPILS_PER_CLASS
 
 
+def test_every_account_of_the_public_snapshot_is_a_person_of_names_py():
+    people = {names.ADMIN_NAME, names.FAMILY_GUARDIAN, *names.TEACHERS, *names.PUPILS, *names.GUARDIANS}
+    accounts = load('admin')['entries']['GET /api/access/users']['b']
+    assert accounts
+    for account in accounts:
+        assert account['name'] in people, account['name']
+
+
 def test_snapshot_size_stays_within_the_budget():
     sizes = [(SNAPSHOTS / f'{role}.json').stat().st_size for role in ROLES]
     assert all(size <= PER_ROLE_BYTES for size in sizes), sizes
@@ -153,10 +161,49 @@ def test_every_course_of_the_picker_has_its_tables(role):
     entries = entries_of(role)
     picker = entries[get_key('/api/journal/course-table/courses')]['b']
     assert picker['courses'] and picker['periods']
+    # A card of the gradebook opens the course on the first active scale with thresholds and asks for the final grades of the period.
+    scale = next(s for s in entries[get_key('/api/final-grades/options')]['b']['scales'] if s['active'] and s['kind'] == 'thresholds')
+    finals = 0
     for course in picker['courses']:
+        # «Новая работа» of a course the account teaches names the lesson to open.
+        if course['canEdit']:
+            assert get_key('/api/journal/course-table/latest', groupId=course['groupId'], subjectId=course['subjectId']) in entries, (role, course['group'], course['subject'])
         for period in picker['periods']:
-            key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'])
+            key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'], scaleId=scale['id'], periodId=period['id'])
             assert key in entries, (role, course['group'], course['subject'], period['name'])
+            assert all('computed' in pupil for pupil in entries[key]['b']['pupils'])
+            finals += len(entries[key]['b']['finals'])
+            assert get_key('/api/behaviour/summary', start=period['start'], end=period['end'], subjectId=course['subjectId']) in entries, (role, course['group'], course['subject'], period['name'])
+    # The closed first quarter has published final grades, so the column is not empty in the demo.
+    assert finals, role
+
+
+def coverage_months(entries):
+    """(mode, class id, first day, last day) of every calendar request the day view of the journal made."""
+    found = set()
+    for key in entries:
+        if key.startswith('POST /api/journal/coverage/days#'):
+            body = json.loads(key.split('#', 1)[1])
+            found.add((body['mode'], body['classId'], body['start'], body['end']))
+    return found
+
+
+@pytest.mark.parametrize('role', ['admin', 'teacher'])
+def test_the_calendar_of_the_day_view_has_its_months(role):
+    entries = entries_of(role)
+    options = entries[get_key('/api/journal/options')]['b']
+    asked = coverage_months(entries)
+    if role == 'teacher':
+        scopes = [('teaching', '')]
+    else:
+        scopes = [('classes', c['id']) for c in entries[get_key('/api/journal/coverage/options')]['b']['classes']['classes']]
+    assert scopes, role
+    for mode, class_id in scopes:
+        for month in ['2026-09-01', '2026-10-01', '2026-11-01', '2026-12-01']:
+            # The calendar shows six whole weeks, Monday first, cut to the school year.
+            first = date.fromisoformat(month) - timedelta(days=date.fromisoformat(month).weekday())
+            start, end = max(first.isoformat(), options['yearStart']), min((first + timedelta(days=41)).isoformat(), options['yearEnd'])
+            assert (mode, class_id, start, end) in asked, (role, mode, class_id, start, end)
 
 
 @pytest.mark.parametrize('role', ['parent', 'student'])
@@ -166,6 +213,28 @@ def test_every_homework_of_the_journal_can_be_opened(role):
     assert len(rows) > 20, role
     for row in rows:
         assert get_key(f'/api/journal/homework/{row["lessonKey"]}', studentId=school.SHOWCASE_PUPIL) in entries, (role, row['lessonKey'])
+
+
+@pytest.mark.parametrize('role', ['parent', 'student'])
+def test_every_period_and_week_of_the_family_journal_has_its_answer(role):
+    entries = entries_of(role)
+    options = entries[get_key('/api/journal/options')]['b']
+    year_end = min(date.fromisoformat(options['yearEnd']), date.fromisoformat(options['yearStart']) + timedelta(days=366)).isoformat()
+    ranges = [(p['start'], p['end']) for p in options['periods']]
+    # The same choices as periodChoices in src/pupilJournal.ts: the school's periods and the school year.
+    if not any(p['kind'] == 'year' and p['start'] <= options['yearStart'] and p['end'] >= year_end for p in options['periods']):
+        ranges.append((options['yearStart'], year_end))
+    assert len(ranges) >= 3, ranges
+    for start, end in ranges:
+        for path in ['/api/journal/pupil-period', '/api/behaviour/family']:
+            assert get_key(path, studentId=school.SHOWCASE_PUPIL, start=start, end=end) in entries, (role, path, start, end)
+    monday = date(2026, 10, 5)
+    while monday <= date(2026, 11, 13):
+        key = get_key('/api/journal/report', studentId=school.SHOWCASE_PUPIL, start=monday.isoformat(), end=(monday + timedelta(days=6)).isoformat(), limit='200')
+        assert key in entries, (role, key)
+        monday += timedelta(days=7)
+    for period in entries[get_key('/api/final-grades/options')]['b']['periods']:
+        assert get_key('/api/final-grades/report', studentId=school.SHOWCASE_PUPIL, periodId=period['id']) in entries, period['id']
 
 
 def test_the_forms_of_the_administrator_show_their_results():

@@ -93,6 +93,7 @@ class NewNotes(Model):
     visible:bool=True
     printed:bool|None=None  # None takes the default of the category
     lessonKey:str|None=Field(default=None,pattern=r'^[a-f0-9]{64}$')
+    subjectId:str|None=Field(default=None,min_length=1,max_length=100)  # the course a note without a lesson is written for (the gradebook)
     @model_validator(mode='after')
     def unique(self):
         if len(set(self.studentIds))!=len(self.studentIds):raise ValueError('Ученики не должны повторяться.')
@@ -195,6 +196,16 @@ class Behaviour:
             closed=bool(locks(db,workspace,dict(date=row['date'],sourceKey=row['id'])))
         return row|dict(locked=closed,label=f"{row['subject']}, {date.fromisoformat(row['date']).strftime('%d.%m.%Y')}, {row['start']}")
 
+    def course(self,user,snap,workspace,subject):
+        """The subject a note without a lesson is written for, as it is stored with the note: a subject of the school that the author teaches (an administrator: any)."""
+        from .journal import user_ids
+        from .resources import teacher_ids
+        found=next((s for s in snap.state.subjects if s.id==subject),None)
+        if not found:raise HTTPException(404,'Предмет не найден.')
+        own=user_ids(user,workspace,'teacher') if user['role']=='teacher' else set()
+        if user['role']!='admin' and not any(w.subjectId==subject and own&set(teacher_ids(w)) for w in snap.state.workloads):raise HTTPException(403,'Записать можно только предмет, который вы ведёте.')
+        return dict(subjectId=found.id,subject=found.name)
+
     def family(self,user,snap,workspace):
         if user['role'] not in ['parent','student']:return set()
         return {id for id in grant_ids(user,workspace,'student') if id in snap.entities['student'] and snap.entities['student'][id].active}
@@ -289,16 +300,17 @@ class Behaviour:
         db.execute('INSERT INTO behaviour_letters(workspace,year,last) VALUES (?,?,1) ON CONFLICT(workspace,year) DO UPDATE SET last=last+1',(workspace,year))
         return f"{year}-{db.execute('SELECT last FROM behaviour_letters WHERE workspace=? AND year=?',(workspace,year)).fetchone()[0]:04d}"
 
-    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status):
+    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status,alias=''):
+        """The WHERE clause of the notes this account may read; `alias` ('n.') qualifies the columns for a query that joins the lessons."""
         allowed=self.scope(db,user,snap,workspace)
         if studentId:allowed&={studentId}
         if classId:allowed={id for id in allowed if snap.entities['student'][id].classId==classId}
-        clause='workspace=? AND student_id IN (SELECT value FROM json_each(?))'
+        clause=f'{alias}workspace=? AND {alias}student_id IN (SELECT value FROM json_each(?))'
         params=[workspace,encoded(sorted(allowed))]
-        if kind:clause+=' AND kind=?';params.append(kind)
-        if status:clause+=' AND status=?';params.append(status)
-        if start:clause+=' AND day>=?';params.append(start.isoformat())
-        if end:clause+=' AND day<=?';params.append(end.isoformat())
+        if kind:clause+=f' AND {alias}kind=?';params.append(kind)
+        if status:clause+=f' AND {alias}status=?';params.append(status)
+        if start:clause+=f' AND {alias}day>=?';params.append(start.isoformat())
+        if end:clause+=f' AND {alias}day<=?';params.append(end.isoformat())
         return clause,params
 
     def register(self,app,Workspace):
@@ -342,6 +354,19 @@ def export_rows(rows,snap):
         with output:
             while chunk:=output.read(65536):yield chunk.encode('utf-8')
     return StreamingResponse(stream(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="behaviour.csv"'})
+
+
+# A note names its lesson (and since lessons carry a subject, the subject) when it was written for one.
+LESSON_JOIN=" LEFT JOIN journal_attendance_lessons l ON l.workspace=n.workspace AND l.lesson_key=json_extract(n.document,'$.lesson.key')"
+
+
+def note_subject_sql(db):
+    """(subject id SQL, subject name SQL, joined) over behaviour_notes as n: the subject stored with the note, else the published lesson it was written for.
+
+    When joined, the query must add LESSON_JOIN; a database where the journal never ran has no lessons to join, so the old notes have no subject."""
+    joined=bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_attendance_lessons'").fetchone())
+    stored=("coalesce(json_extract(n.document,'$.lesson.subjectId'),json_extract(n.document,'$.course.subjectId'))","coalesce(json_extract(n.document,'$.lesson.subject'),json_extract(n.document,'$.course.subject'))")
+    return (f'coalesce({stored[0]},l.subject_id)',f'coalesce({stored[1]},l.subject)',True) if joined else (*stored,False)
 
 
 def new_id():return uuid4().hex

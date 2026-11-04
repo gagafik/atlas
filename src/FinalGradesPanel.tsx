@@ -352,12 +352,15 @@ export default function FinalGradesPanel({
   workspace,
   focus,
   defaultOpen = false,
+  studentId: chosen,
 }: {
   workspace: string;
   // Set by an opened notification: show the report card of this pupil for this period.
   focus?: { studentId: string; finalsPeriodId?: string };
   // Opened from the menu: the panel starts open and loads its options like a click on the button.
   defaultOpen?: boolean;
+  // The pupil of the report card chooser, when the page already knows the child.
+  studentId?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null),
@@ -556,8 +559,15 @@ export default function FinalGradesPanel({
     setDirty(true);
   };
   useEffect(() => {
-    if (defaultOpen) void run(async () => void (await loadOptions()));
+    // A finals focus loads the options itself; a second run would find the lock taken and drop the card.
+    if (defaultOpen && !focus?.finalsPeriodId)
+      void run(async () => void (await loadOptions()));
   }, []);
+  useEffect(() => {
+    if (!chosen) return;
+    setStudentId(chosen);
+    setReport(null);
+  }, [chosen]);
   useEffect(() => {
     const period = focus?.finalsPeriodId;
     if (!focus || !period) return;

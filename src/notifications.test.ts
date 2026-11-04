@@ -64,7 +64,12 @@ describe("openEvent", () => {
   it("maps every module to the screen that already listens for it", () => {
     expect(openEvent(result("journal"))).toEqual([
       "atlas-open-journal",
-      { workspace: "demo", studentId: "s1", day: "2026-08-17" },
+      {
+        workspace: "demo",
+        studentId: "s1",
+        day: "2026-08-17",
+        lessonKey: "r",
+      },
     ]);
     expect(openEvent(result("timetable"))).toEqual([
       "atlas-open-schedule",

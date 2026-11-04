@@ -1,0 +1,652 @@
+/* The journal of a pupil and a parent: grades, attendance, the day. Wide grids scroll inside .pupil-scroll, never the page. */
+.family-journal,
+.pupil-screen {
+  min-width: 0;
+  max-width: 100%;
+}
+.pupil-screen h2,
+.pupil-screen h3 {
+  overflow-wrap: anywhere;
+}
+.pupil-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin: 8px 0 12px;
+}
+.pupil-period-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.pupil-picker.field {
+  margin: 0 0 8px;
+  max-width: 100%;
+}
+.pupil-picker select {
+  max-width: 100%;
+}
+.pupil-arrow {
+  min-width: 36px;
+  font-size: 1.5em;
+  line-height: 1;
+  padding-top: 0;
+  padding-bottom: 4px;
+}
+.pupil-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pupil-problem {
+  color: #9a3d1c;
+  margin: 4px 0;
+}
+.pupil-muted {
+  color: #66706a;
+  overflow-wrap: anywhere;
+}
+.pupil-sign-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0 0 10px;
+}
+.pupil-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.pupil-tabs [role="tab"] {
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  padding: 8px 14px;
+}
+.pupil-tabs [role="tab"][aria-selected="true"] {
+  background: #fff;
+  border-color: var(--line);
+  color: var(--dark);
+  font-weight: 700;
+  margin-bottom: -1px;
+}
+.pupil-count {
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #fdf1d6;
+  color: #7a4f00;
+  font-weight: 700;
+}
+.pupil-panel {
+  min-width: 0;
+}
+
+.pupil-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.pupil-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+.pupil-table th,
+.pupil-table td {
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.pupil-table thead th {
+  background: var(--warm);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pupil-table tbody th {
+  font-weight: 600;
+}
+.pupil-table .pupil-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 1px 0 0 var(--line);
+}
+.pupil-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 160px;
+}
+.pupil-chip {
+  min-width: 40px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.pupil-chip-new {
+  outline: 2px solid #d99a1e;
+  outline-offset: 1px;
+}
+.pupil-average {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.pupil-info {
+  min-width: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+}
+.pupil-note-counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.pupil-praise {
+  color: #2f6f3e;
+  font-weight: 700;
+}
+.pupil-remark {
+  color: #9a3d1c;
+  font-weight: 700;
+}
+.pupil-category-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 10px;
+}
+
+.pupil-popover-layer {
+  padding: 16px;
+}
+.pupil-popover {
+  width: min(480px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 40px rgba(33, 60, 48, 0.25);
+}
+.pupil-popover header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pupil-popover h3 {
+  margin: 0 0 8px;
+}
+.pupil-details {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) 1fr;
+  gap: 6px 14px;
+  margin: 8px 0 0;
+}
+.pupil-details dt {
+  color: #66706a;
+}
+.pupil-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pupil-mark-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.pupil-mark-list li {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.pupil-mark-list li.pupil-mark-new {
+  border-left-color: #d99a1e;
+  background: #fffaf0;
+}
+.pupil-mark-list p {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.pupil-mark-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.pupil-notes-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+.pupil-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pupil-switch button[aria-pressed="true"] {
+  background: #e3efe8;
+  border-color: #72a995;
+}
+.pupil-note-group h3 {
+  margin: 14px 0 6px;
+}
+
+.pupil-chart-row {
+  margin: 0 0 18px;
+}
+.pupil-chart-row h3 {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0 0 6px;
+}
+.pupil-chart-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.pupil-chart-bar {
+  position: relative;
+  padding-top: 18px;
+  min-width: 0;
+}
+.pupil-bands {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pupil-bands-plain {
+  background: #e8ece6;
+}
+.pupil-bands span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  font-size: 10px;
+  line-height: 14px;
+  padding-left: 3px;
+  color: #3b4b43;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pupil-blocks {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+}
+.pupil-block {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 56px;
+  min-height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f3f5f1;
+  overflow: hidden;
+}
+.pupil-block-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  opacity: 0.32;
+}
+.pupil-block-text {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.pupil-block-text small {
+  font-weight: 500;
+  color: #4d5b53;
+}
+/* The marker spans the label and the band strip only, so it never cuts through a block's text. */
+.pupil-marker {
+  position: absolute;
+  top: 0;
+  height: 32px;
+  width: 0;
+  border-left: 2px solid var(--dark);
+  pointer-events: none;
+}
+.pupil-marker b {
+  position: absolute;
+  top: -1px;
+  left: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: #fff;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+.pupil-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.pupil-totals div {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.pupil-totals dt {
+  color: #66706a;
+}
+.pupil-totals dd {
+  margin: 2px 0 0;
+  font-size: 1.15em;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.pupil-grid th,
+.pupil-grid td {
+  text-align: center;
+  vertical-align: middle;
+  padding: 4px 6px;
+}
+.pupil-grid .pupil-sticky {
+  text-align: left;
+  white-space: nowrap;
+}
+.pupil-grid .pupil-month th {
+  text-align: left;
+  background: var(--warm);
+}
+.pupil-att {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 1px 2px;
+  min-width: 26px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-weight: inherit;
+}
+button.pupil-att {
+  min-height: 28px;
+  justify-content: center;
+}
+button.pupil-att:hover {
+  background: transparent;
+}
+button.pupil-att:hover b {
+  filter: brightness(0.94);
+}
+.pupil-att b {
+  display: inline-block;
+  min-width: 24px;
+  padding: 1px 4px;
+  border-radius: 6px;
+  line-height: 1.4;
+  background: #eef2ec;
+  color: #3b4b43;
+}
+.pupil-att small {
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.pupil-att-present b {
+  background: transparent;
+  color: #2f6f3e;
+}
+.pupil-att-absent b {
+  background: #f6d5cc;
+  color: #8a2f14;
+}
+.pupil-att-excused b {
+  background: #d8e8f6;
+  color: #1f4f7a;
+}
+.pupil-att-late b {
+  background: #fde6b0;
+  color: #7a4f00;
+}
+.pupil-att-left b {
+  background: #e4dcf3;
+  color: #4a3680;
+}
+.pupil-att-school b {
+  background: #cfeadf;
+  color: #1d5a43;
+}
+.pupil-att-unmarked b {
+  background: transparent;
+  border: 1px dashed #9aa39c;
+}
+.pupil-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  list-style: none;
+  margin: 10px 0 14px;
+  padding: 0;
+}
+.pupil-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pupil-day-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 16px;
+  align-items: start;
+}
+.pupil-day-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+.pupil-day-head h2 {
+  margin: 0;
+  text-transform: none;
+}
+.pupil-lessons {
+  display: grid;
+  gap: 8px;
+}
+.pupil-lesson {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.pupil-lesson-focus {
+  outline: 3px solid #d99a1e;
+  outline-offset: 1px;
+}
+.pupil-lesson-cancelled h3 {
+  text-decoration: line-through;
+}
+.pupil-lesson-slot {
+  display: flex;
+  flex-direction: column;
+  color: var(--dark);
+}
+.pupil-lesson-slot strong {
+  font-size: 1.5em;
+  line-height: 1.1;
+}
+.pupil-lesson-body {
+  min-width: 0;
+}
+.pupil-lesson-body h3 {
+  margin: 0 0 2px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.pupil-lesson-body .journal-published-list article {
+  border: 0;
+  padding: 0;
+  margin: 6px 0 0;
+  background: transparent;
+}
+.pupil-status-cancelled {
+  background: #f6d5cc;
+  color: #8a2f14;
+}
+.pupil-status-changed,
+.pupil-status-added {
+  background: #fde6b0;
+  color: #7a4f00;
+}
+
+.month-calendar {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  min-width: 0;
+}
+.month-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.month-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+.month-calendar-grid > span {
+  color: #66706a;
+  font-size: 0.85em;
+  padding: 2px 0;
+}
+.month-calendar-day {
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+/* muted, not red: red marks days with unfilled lessons in the teacher's calendar */
+.month-calendar-weekend {
+  color: #8a938d;
+}
+.month-calendar-outside {
+  opacity: 0.4;
+}
+.month-calendar-today {
+  border-color: var(--green);
+}
+.month-calendar-selected {
+  background: var(--green);
+  color: #fff;
+}
+.month-calendar-day:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+@media (max-width: 900px) {
+  .pupil-day-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .month-calendar {
+    max-width: 360px;
+  }
+}
+@media (max-width: 640px) {
+  .pupil-lesson {
+    grid-template-columns: 56px minmax(0, 1fr);
+    gap: 8px;
+  }
+  .pupil-lesson-slot strong {
+    font-size: 1.25em;
+  }
+  .pupil-table .pupil-sticky {
+    max-width: 112px;
+  }
+  .pupil-popover-layer {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .pupil-popover {
+    width: 100%;
+    border-radius: 12px 12px 0 0;
+  }
+  .pupil-tabs [role="tab"] {
+    padding: 8px 10px;
+  }
+}
+.pupil-print-head {
+  display: none;
+}
+@media print {
+  .pupil-print-head {
+    display: block;
+    margin: 0 0 8px;
+    font-weight: 700;
+  }
+  .workspace-field,
+  .pupil-actions,
+  .pupil-tabs,
+  .pupil-picker,
+  .pupil-period-picker,
+  .month-calendar,
+  .pupil-info,
+  .pupil-popover-layer {
+    display: none !important;
+  }
+  .pupil-scroll {
+    overflow: visible;
+  }
+  .pupil-day-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

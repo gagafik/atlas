@@ -398,6 +398,20 @@ def test_class_teacher_measures_follow_the_duty(client,monkeypatch):
     assert len(report(client,p).json()['measures'])==1
 
 
+def test_staff_read_the_card_of_a_pupil_only_within_their_scope(client):
+    p,b,s,first,second=published_pair(client);create(client,'teacher',login='lead',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])]);lead('t1')
+    lead_,course=signed('lead'),signed('teacher')
+    # The administrator and the class teacher read the grades the family reads; a course teacher who leads no class reads none.
+    family=[(i['subject'],i['label']) for i in report(signed('parent'),p).json()['items']];assert len(family)==2
+    assert [(i['subject'],i['label']) for i in report(client,p).json()['items']]==family and [(i['subject'],i['label']) for i in report(lead_,p).json()['items']]==family
+    assert report(course,p).status_code==403
+    # The pupils offered next to the period are exactly those the card is open for.
+    offered=lambda c:{x['id'] for x in opts(c)['students']}
+    everyone=offered(client);led=offered(lead_);outside=sorted(everyone-led)
+    assert 's1' in led and outside and offered(course)==set() and opts(client)['admin'] is True and opts(lead_)['admin'] is False
+    assert all(report(lead_,p,x).status_code==200 for x in led) and report(lead_,p,outside[0]).status_code==403
+
+
 def test_report_without_behaviour_tables(client):
     p,b,s,first,second=published_pair(client)
     with api.connect() as db:

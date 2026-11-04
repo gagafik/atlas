@@ -113,6 +113,47 @@ export interface AbsenceCodeOption {
   name: string;
   active: boolean;
 }
+// One lesson of the day list (journal/day): what the teacher's day grid shows without opening the lesson.
+export interface DayLesson {
+  lessonKey: string;
+  lesson: Pick<
+    JournalLesson,
+    | "date"
+    | "start"
+    | "end"
+    | "subject"
+    | "group"
+    | "teachers"
+    | "rooms"
+    | "status"
+  >;
+  studentCount: number;
+  version: number;
+  publishedVersion: number | null;
+  hasPublished: boolean;
+  archived: boolean;
+  frozen?: boolean;
+  // The bells the lesson runs on; an archived lesson has none.
+  profileId: string | null;
+  classes: string[];
+  // The draft the teacher sees; present and marked count the published attendance and are null while nothing is published for the day.
+  topic: string;
+  homework: string;
+  dueDate: string | null;
+  present: number | null;
+  marked: number | null;
+}
+/** Where the lesson stands for the families, in the teacher's words. */
+export const dayLessonState = (l: DayLesson) =>
+  l.archived
+    ? "Архивная запись"
+    : l.lesson.status === "cancelled"
+      ? "Отменено"
+      : l.hasPublished
+        ? `Ученикам: редакция ${l.publishedVersion}${l.publishedVersion !== l.version ? " · есть черновик" : ""}`
+        : l.version
+          ? "Черновик"
+          : "Не заполнено";
 export interface JournalRow {
   lessonKey: string;
   lesson: Omit<JournalLesson, "students">;
@@ -241,6 +282,49 @@ export type JournalPanelName =
   | "coverage"
   | "attendance"
   | "attendanceGrid";
+// A screen of the journal that a menu entry opens: a management panel alone, or a pupil screen of the family.
+// The pupil names carry a prefix because "attendance" is already the administrator's «Сводная посещаемость».
+export type JournalView = JournalPanelName | "pupilGrades" | "pupilAttendance";
+// What journal/options tells the page about the account and the school.
+export interface JournalOptions {
+  staff: boolean;
+  // The account is an administrator (the coverage calendar then follows a chosen class, not the own lessons).
+  admin?: boolean;
+  // Which management panels have anything for this account; the server still enforces rights.
+  panels?: Partial<Record<JournalPanelName, boolean>>;
+  yearStart: string;
+  yearEnd: string;
+  students: {
+    id: string;
+    name: string;
+    // The pupil's current class and its bell profile; a pupil who only appears in old records has neither.
+    className?: string | null;
+    profileId?: string | null;
+  }[];
+  // The school's journal periods and bell profiles, which families cannot read elsewhere, and the school's today.
+  periods?: JournalPeriodOption[];
+  profiles?: BellProfile[];
+  today?: string;
+}
+export interface JournalPeriodOption {
+  id: string;
+  name: string;
+  start: string;
+  end: string;
+  kind: "quarter" | "semester" | "year" | "custom";
+}
+export interface BellSlot {
+  label: string;
+  start: string;
+  end: string;
+}
+export interface BellProfile {
+  id: string;
+  name: string;
+  periods: BellSlot[];
+  // Bells of a single weekday; the key is the Python weekday (Monday is "0").
+  dayPeriods: Record<string, BellSlot[]>;
+}
 // The server says which management panels have anything for this account; they follow the lesson list.
 export function journalPanels(options: {
   panels?: Partial<Record<JournalPanelName, boolean>>;

@@ -6,6 +6,7 @@ import {
   activeItem,
   buildMenu,
   containerOf,
+  eventPart,
   eventViews,
   isGroup,
   menuItems,
@@ -281,15 +282,25 @@ describe("the parts of the journal in the menu", () => {
     expect(
       parts(context("teacher", { journalPanels: ["courseTable", "absences"] })),
     ).toEqual(["view:journal#courseTable"]);
-    expect(parts(context("parent", { journalPanels: ["absences"] }))).toEqual([
-      "view:journal#absences",
-    ]);
-    expect(
-      parts(context("parent", { journalPanels: ["courseTable"] })),
-    ).toEqual([]);
-    // The editor has no journal, so none of its parts either; the pupil reads one report.
-    for (const role of ["editor", "student", "viewer", "staff"] as Role[])
+    // The editor has no journal, so none of its parts either.
+    for (const role of ["editor", "viewer", "staff"] as Role[])
       expect(parts(context(role))).toEqual([]);
+  });
+
+  it("give a pupil and a parent the screens of their own journal, and the report cards once the school published them", () => {
+    const own = ["view:journal#pupilGrades", "view:journal#pupilAttendance"];
+    for (const role of ["student", "parent"] as Role[]) {
+      expect(parts(context(role))).toEqual([
+        ...own,
+        "view:journal#finalGrades",
+      ]);
+      for (const journalPanels of [[], null])
+        expect(parts(context(role, { journalPanels }))).toEqual(own);
+      // The management parts of the staff stay out of a family's menu even when the server lists them.
+      const family = parts(context(role)).join();
+      for (const part of ["courseTable", "attendanceGrid", "absences"])
+        expect(family).not.toContain(part);
+    }
   });
 
   it("highlight their own entry, and the journal itself when the part is not in the menu", () => {
@@ -338,6 +349,18 @@ describe("an opened notification", () => {
     expect(eventViews("staff", "staff")["atlas-open-absences"]).toBe(
       "class-staff",
     );
+  });
+
+  it("sends a pupil or a parent to the screen of the family journal that shows the notice", () => {
+    expect(
+      eventPart("parent", "atlas-open-journal", { finalsPeriodId: "p" }),
+    ).toBe("finalGrades");
+    expect(eventPart("student", "atlas-open-absences")).toBe("pupilAttendance");
+    expect(eventPart("parent", "atlas-open-journal", {})).toBeUndefined();
+    for (const type of ["atlas-open-absences", "atlas-open-journal"])
+      expect(
+        eventPart("teacher", type, { finalsPeriodId: "p" }),
+      ).toBeUndefined();
   });
 
   it("never leaves a role on a screen its menu does not open", () => {

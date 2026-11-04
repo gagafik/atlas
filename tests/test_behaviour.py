@@ -160,10 +160,11 @@ def test_measure_levels_hidden_notes_and_teacher_limits(client):
     enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2'); class_teacher = create(client, 'staff')
     t, mother, ct = signed('math'), signed('mother'), signed('staff')
     options = ok(t.get(url('options')))
-    assert options['myLevels'] == ['teacher'] and any(c['quick'] for c in options['categories'])
+    assert options['myLevels'] == ['teacher'] and options['myClassIds'] == [] and any(c['quick'] for c in options['categories'])
     assert note(t, ['s2'], 'class-remark').status_code == 403 and note(t, ['s2'], 'director-remark').status_code == 403
     assign_class_teacher(client, class_teacher)
-    assert ok(ct.get(url('options')))['myLevels'] == ['class_teacher', 'teacher']
+    led = ok(ct.get(url('options')))
+    assert led['myLevels'] == ['class_teacher', 'teacher'] and led['myClassIds'] == ['c-demo-a']
     assert ok(note(ct, ['s1', 's2'], 'class-remark'))['status'] == 'published'
     assert note(ct, ['s3'], 'class-remark').status_code == 403
     ok(note(t, ['s2'], 'unprepared', 'Внутренняя пометка', visible=False))
@@ -272,3 +273,71 @@ def test_future_lesson_cannot_be_marked(client, monkeypatch):
     monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 17))
     assert ok(t.get(url('lesson', lessonKey=key, day=LESSON_DAY)))['canMark']
     assert ok(lesson_note(t, key, ['s1']))['status'] == 'published'
+
+
+def english():
+    return next(s for s in api.read('demo').subjects if s.name == 'Английский язык')
+
+
+def test_family_notes_by_period_and_subject(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher'); guardian(client, 'mother', 's1'); guardian(client, 'other', 's2')
+    t, mother, other = signed('teacher'), signed('mother'), signed('other')
+    key = lesson_key(t)
+    ok(lesson_note(t, key, ['s1'], 'discipline', text='Разговаривал'))
+    ok(lesson_note(t, key, ['s1'], 'unprepared', text='Внутренняя пометка', visible=False))
+    ok(note(t, ['s1'], 'activity', 'Помог другу', day='2026-08-18'))
+    ok(note(t, ['s1'], 'activity', 'Помог раньше', day='2026-08-14'))
+    whole = ok(family(mother, 's1'))
+    assert {n['text'] for n in whole['items']} == {'Разговаривал', 'Помог другу', 'Помог раньше'} and whole['praise'] == 2 and whole['remark'] == 1
+    assert {(s['subjectId'], s['praise'], s['remark']) for s in whole['subjects']} == {(english().id, 0, 1), (None, 2, 0)}
+    # Notes before and after the window are in neither the items, nor the totals, nor the subjects.
+    one_day = ok(mother.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)))
+    assert [(n['text'], n['subjectId'], n['subject']) for n in one_day['items']] == [('Разговаривал', english().id, english().name)]
+    assert one_day['remark'] == 1 and one_day['praise'] == 0
+    assert one_day['subjects'] == [dict(subjectId=english().id, subject=english().name, praise=0, remark=1)]
+    assert mother.get(url('family', studentId='s1', start='2026-08-20', end=LESSON_DAY)).status_code == 422
+    assert family(other, 's1').status_code == 404 and other.get(url('family', studentId='s1', start=LESSON_DAY, end=LESSON_DAY)).status_code == 404
+
+
+def test_summary_counts_the_notes_of_one_subject(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher')
+    t = signed('teacher')
+    ok(lesson_note(t, lesson_key(t), ['s1'], 'discipline', text='Разговаривал'))
+    ok(note(t, ['s1'], 'activity', 'Помог другу', day='2026-08-18'))
+    def counts(**query):
+        return {(r['studentId'], r['praise'], r['remark']) for r in ok(t.get(url('summary', **query)))['items']}
+    assert counts() == {('s1', 1, 1)}
+    # Only the note written from a lesson of that subject counts; the note without a lesson belongs to no subject.
+    assert counts(subjectId=english().id) == {('s1', 0, 1)}
+    assert counts(subjectId='sub-without-notes') == set()
+
+
+def test_note_written_for_a_course_counts_in_that_subject(client):
+    enable(client); create(client, 'teacher'); teacher(client, 'math', 't1')
+    t, math = signed('teacher'), signed('math')
+    ok(note(t, ['s1'], 'activity', 'Помог другу', subjectId=english().id))
+    def counts(**query):
+        return {(r['studentId'], r['praise'], r['remark']) for r in ok(t.get(url('summary', **query)))['items']}
+    assert counts(subjectId=english().id) == {('s1', 1, 0)}
+    # Only a teacher of the subject says that a note belongs to it; the pupils stay within the usual scope.
+    assert note(math, ['s2'], 'activity', subjectId=english().id).status_code == 403
+    assert note(t, ['s1'], 'activity', subjectId='no-such-subject').status_code == 404
+    assert counts(subjectId=english().id) == {('s1', 1, 0)}
+    assert ok(note(client, ['s1'], 'activity', subjectId=english().id))['status'] == 'published'
+    assert counts(subjectId=english().id) == {('s1', 2, 0)}
+
+
+def test_notes_written_before_subjects_take_the_subject_of_their_published_lesson(client, monkeypatch):
+    from test_journal import entry, write, graded
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); guardian(client, 'mother', 's1')
+    mother = signed('mother')
+    published, unpublished = lesson_key(client), lesson_key(client, 'Математика')
+    ok(lesson_note(client, published, ['s1'], 'discipline', text='Английский')); ok(lesson_note(client, unpublished, ['s1'], 'discipline', text='Математика'))
+    assert write(client, graded(entry(client, published, day=LESSON_DAY)), publish=True).status_code == 200
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_remove(document,'$.lesson.subjectId','$.lesson.subject')")
+    subjects = {n['text']: n['subjectId'] for n in ok(family(mother, 's1'))['items']}
+    assert subjects == {'Английский': english().id, 'Математика': None}

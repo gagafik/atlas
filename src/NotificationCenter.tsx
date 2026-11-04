@@ -765,7 +765,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                                         : item.action.startsWith(
                                                               "journal.",
                                                             )
-                                                          ? "Откройте «Классный журнал» (у ученика и родителя — «Оценки»), чтобы проверить опубликованные записи."
+                                                          ? "Откройте «Классный журнал» (у ученика и родителя оценки лежат в «Оценках», посещаемость — в «Посещаемости»), чтобы проверить опубликованные записи."
                                                           : item.action.startsWith(
                                                                 "registers.",
                                                               )

@@ -3,7 +3,7 @@ from datetime import date,timedelta
 import json
 
 from fastapi import HTTPException,Query,Request
-from .behaviour import Config,NewNotes,Edit,Withdraw,Decision,Acknowledge,KINDS,LEVELS,PAGE,stamp,today,new_id,export_rows,window
+from .behaviour import Config,NewNotes,Edit,Withdraw,Decision,Acknowledge,KINDS,LEVELS,PAGE,LESSON_JOIN,stamp,today,new_id,export_rows,window,note_subject_sql
 from .notifications import encoded
 
 STATUS='^(pending|published|rejected|withdrawn)$'
@@ -51,7 +51,7 @@ def register(service,app,Workspace):
             pending=db.execute("SELECT count(*) FROM behaviour_notes WHERE workspace=? AND status='pending'",(workspace,)).fetchone()[0] if user['role']=='admin' else 0
             return dict(admin=user['role']=='admin',canWrite=bool(allowed),family=bool(own) and not allowed,canAcknowledge=user['role']=='parent',
                         today=today().isoformat(),kinds=KINDS,levels=LEVELS,myLevels=sorted(service.levels(db,user,snap,workspace)),
-                        remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,
+                        myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,
                         configVersion=cfg['version'] if user['role']=='admin' else None,
                         classes=[dict(id=id,name=name) for id,name in classes.items() if any(s.classId==id for s in pupils)],
                         students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes.get(s.classId,'')) for s in pupils])
@@ -74,7 +74,7 @@ def register(service,app,Workspace):
             key,previous=service.replay(db,user,body)
             if previous:return previous
             if body.day>today() or body.day<today()-timedelta(days=366):raise HTTPException(422,'Дата записи — не позже сегодняшнего дня и не раньше года назад.')
-            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace);lesson=None
+            category=service.category(db,workspace,body.categoryId);cfg=service.config(db,workspace);lesson=course=None
             if body.lessonKey:
                 # Whoever teaches the lesson today may mark its pupils at teacher level, substitutes included.
                 lesson=service.lesson(db,user,snap,workspace,body.day,body.lessonKey)
@@ -87,6 +87,7 @@ def register(service,app,Workspace):
                 if not set(body.studentIds)<=allowed:raise HTTPException(403,'Можно отметить только учеников, которых вы сейчас учите или курируете.')
                 if not service.allowed(db,user,snap,workspace,category['level'],body.studentIds):
                     raise HTTPException(403,f'Меру уровня «{LEVELS[category["level"]]}» вы не можете назначить выбранным ученикам.')
+                if body.subjectId:course=service.course(user,snap,workspace,body.subjectId)
             status='pending' if category['approval'] and user['role']!='admin' else 'published'
             batch=new_id();created=stamp();ids=[]
             for student in body.studentIds:
@@ -94,7 +95,8 @@ def register(service,app,Workspace):
                 data=dict(category=category['title'],text=body.text.strip(),level=category['level'],approval=category['approval'],letter=category['letter'],
                           printed=category['report'] if body.printed is None else body.printed,requireAck=category['letter'] or category['kind']=='remark' and cfg['remarkAck'],
                           approvedBy=user['name'] if category['approval'] and status=='published' else '')
-                if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'])
+                if lesson:data['lesson']=dict(key=body.lessonKey,label=lesson['label'],subjectId=lesson['subjectId'],subject=lesson['subject'])
+                if course:data['course']=course
                 row=dict(id=id,student_id=student,kind=category['kind'],visible=int(body.visible))
                 if status=='published':publish(db,workspace,row,user,1,data,snap)
                 db.execute('''INSERT INTO behaviour_notes(id,batch,workspace,student_id,class_id,version,status,kind,category_id,day,author_id,author_name,created,updated,document,visible)
@@ -164,13 +166,18 @@ def register(service,app,Workspace):
             return service.public(service.note(db,workspace,id),snap,True,user)
 
     @app.get('/api/behaviour/summary')
-    def summary(request:Request,workspace:Workspace='school',classId:str|None=None,start:date|None=None,end:date|None=None):
+    def summary(request:Request,workspace:Workspace='school',classId:str|None=None,start:date|None=None,end:date|None=None,subjectId:str|None=None):
         window(start,end)
         with service.context(request,workspace) as (db,user,snap):
             staff(db,user,snap,workspace)
-            clause,params=service.filtered(db,user,snap,workspace,classId,None,None,start,end,'published')
+            clause,params=service.filtered(db,user,snap,workspace,classId,None,None,start,end,'published','n.')
+            join=''
+            if subjectId:
+                # The subject of a note is the one stored with it, else the one of the published lesson it was written for.
+                subject_id,_,joined=note_subject_sql(db);join=LESSON_JOIN if joined else ''
+                clause+=f' AND {subject_id}=?';params.append(subjectId)
             counts={}
-            for student,kind,count in db.execute(f'SELECT student_id,kind,count(*) FROM behaviour_notes WHERE {clause} GROUP BY student_id,kind',params):
+            for student,kind,count in db.execute(f'SELECT n.student_id,n.kind,count(*) FROM behaviour_notes n{join} WHERE {clause} GROUP BY n.student_id,n.kind',params):
                 counts.setdefault(student,dict(praise=0,remark=0))[kind]=count
             classes={c.id:c.name for c in snap.state.classes}
             rows=[dict(studentId=id,student=snap.entities['student'][id].name,className=classes.get(snap.entities['student'][id].classId,''),**value)
@@ -203,15 +210,24 @@ def register(service,app,Workspace):
             return export_rows(rows,snap)
 
     @app.get('/api/behaviour/family')
-    def family(request:Request,studentId:str,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
+    def family(request:Request,studentId:str,workspace:Workspace='school',before:int|None=Query(default=None,ge=1),start:date|None=None,end:date|None=None):
+        window(start,end)
         with service.context(request,workspace) as (db,user,snap):
             if studentId not in service.family(user,snap,workspace):raise HTTPException(404,'Ученик недоступен.')
-            clause,params="workspace=? AND student_id=? AND status='published' AND visible=1",[workspace,studentId]
-            totals={k:v for k,v in db.execute(f'SELECT kind,count(*) FROM behaviour_notes WHERE {clause} GROUP BY kind',params)}
-            if before:clause+=' AND seq<?';params.append(before)
-            rows=db.execute(f'SELECT * FROM behaviour_notes WHERE {clause} ORDER BY day DESC,seq DESC LIMIT {PAGE+1}',params).fetchall()
-            return dict(items=items(rows[:PAGE],snap,staff_view=False),nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None,
-                        praise=totals.get('praise',0),remark=totals.get('remark',0))
+            clause,params="n.workspace=? AND n.student_id=? AND n.status='published' AND n.visible=1",[workspace,studentId]
+            if start:clause+=' AND n.day>=?';params.append(start.isoformat())
+            if end:clause+=' AND n.day<=?';params.append(end.isoformat())
+            subject_id,subject_name,joined=note_subject_sql(db);join=LESSON_JOIN if joined else ''
+            totals={k:v for k,v in db.execute(f'SELECT n.kind,count(*) FROM behaviour_notes n WHERE {clause} GROUP BY n.kind',params)}
+            # The subjects of the same period: school subject names win over the name stored with the lesson.
+            names={s.id:s.name for s in snap.state.subjects};subjects={}
+            for sid,stored,kind,count in db.execute(f'SELECT {subject_id},{subject_name},n.kind,count(*) FROM behaviour_notes n{join} WHERE {clause} GROUP BY 1,2,3',params):
+                row=subjects.setdefault(sid,dict(subjectId=sid,subject=names.get(sid,stored) if sid else None,praise=0,remark=0));row[kind]+=count
+            if before:clause+=' AND n.seq<?';params.append(before)
+            rows=db.execute(f'SELECT n.*,{subject_id} AS subject_id,{subject_name} AS subject FROM behaviour_notes n{join} WHERE {clause} ORDER BY n.day DESC,n.seq DESC LIMIT {PAGE+1}',params).fetchall()
+            shown=[i|dict(subjectId=r['subject_id'],subject=names.get(r['subject_id'],r['subject']) if r['subject_id'] else None) for i,r in zip(items(rows[:PAGE],snap,staff_view=False),rows)]
+            return dict(items=shown,nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None,praise=totals.get('praise',0),remark=totals.get('remark',0),
+                        subjects=sorted(subjects.values(),key=lambda s:(s['subjectId'] is None,s['subject'] or '')))
 
     @app.get('/api/behaviour/notes/{id}/letter')
     def letter(id:str,request:Request,workspace:Workspace='school'):

@@ -61,3 +61,5 @@ def _build():
 
 
 ADMIN_NAME, TEACHERS, PUPILS, GUARDIANS = _build()
+# The guardian of two children (7А and 7Б) for the local demo; a name made by hand, like the administrator's.
+FAMILY_GUARDIAN = 'Примерова Светлана'

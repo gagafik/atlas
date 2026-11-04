@@ -341,11 +341,11 @@ class Journal:
     def rows(self, db, workspace, day, keys):
         """Day cards inside a snapshot: only the lesson part of the draft is parsed."""
         # The compact coverage projection carries the published lesson without parsing grade documents.
-        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson'),c.lesson FROM journal_entries e LEFT JOIN journal_coverage_documents c ON c.workspace=e.workspace AND c.lesson_key=e.lesson_key WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
+        query = "SELECT e.lesson_key,e.version,e.published_version,e.published_document IS NOT NULL,json_extract(e.document,'$.lesson'),c.lesson,json_extract(e.document,'$.content.topic'),json_extract(e.document,'$.content.homework'),json_extract(e.document,'$.content.dueDate') FROM journal_entries e LEFT JOIN journal_coverage_documents c ON c.workspace=e.workspace AND c.lesson_key=e.lesson_key WHERE e.workspace=? AND (json_extract(e.document,'$.lesson.date')=?"
         params = [workspace,day.isoformat()]
         if keys:
             query += ' OR e.lesson_key IN (SELECT value FROM json_each(?))'; params.append(encoded(keys))
-        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4]),published=json.loads(r[5]) if r[5] else None) for r in db.execute(query+')',params)]
+        return [dict(lessonKey=r[0],version=r[1],publishedVersion=r[2],hasPublished=bool(r[3]),lesson=json.loads(r[4]),published=json.loads(r[5]) if r[5] else None,topic=r[6] or '',homework=r[7] or '',dueDate=r[8]) for r in db.execute(query+')',params)]
 
     def members(self, db, workspace, key, document, kind):
         from .coverage_projection import replace as coverage_replace
@@ -483,6 +483,51 @@ class Journal:
         if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(snap.state.revision,):
             raise HTTPException(409,'Расписание изменилось. Обновите журнал.')
 
+    def pupil_reader(self, request, workspace, student_id, start, end):
+        """The account allowed to read one pupil's published rows for a period: the report and the pupil screens share this rule."""
+        user = self.scope(request,workspace)
+        if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
+        if user['role'] in ['student','parent'] and student_id not in user_ids(user,workspace,'student'):
+            raise HTTPException(403,'Этот ученик не назначен вашей учётной записи.')
+        return user
+
+    def published_rows(self, db, user, workspace, student_id, start, end, after=None, limit=100):
+        """Published rows of one pupil by (date, start, lessonKey) with accepted notes applied.
+
+        Returns (rows, marks, classes, fetched, more): marks are the keyset cursors of the rows, classes maps a lesson
+        key to the pupil's class in it, fetched is the scanned slice and more tells that a later page exists."""
+        from .absences import approvals
+        classes = {}
+        # The attendance projection holds one row per published record, so it drives the range scan.
+        query = 'SELECT e.lesson_key,e.published_document,e.published_version,e.published_at,a.day,a.start FROM journal_attendance a JOIN journal_entries e ON e.workspace=a.workspace AND e.lesson_key=a.lesson_key WHERE a.workspace=? AND a.student_id=? AND a.day BETWEEN ? AND ? AND e.published_document IS NOT NULL'
+        params = [workspace,student_id,start.isoformat(),end.isoformat()]
+        if user['role']=='teacher':
+            query += " AND EXISTS(SELECT 1 FROM json_each(e.published_document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
+            params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
+        if after:
+            query += ' AND (a.day,a.start,a.lesson_key)>(?,?,?)'; params += after.split('|')
+        query += ' ORDER BY a.day,a.start,a.lesson_key'
+        if after: query += ' LIMIT ?'; params.append(limit+1)
+        fetched = db.execute(query,params).fetchall()
+        more = bool(after) and len(fetched)>limit
+        if more: fetched = fetched[:limit]
+        rows,marks = [],[]
+        for key,raw,published_version,published_at,day,begin in fetched:
+            document = json.loads(raw)
+            if not start.isoformat()<=document['lesson']['date']<=end.isoformat(): continue
+            if user['role'] in ['admin','teacher'] and not staff_read(user,workspace,document['lesson']): continue
+            projected = pupil_projection(document,student_id)
+            if projected:
+                rows.append(projected | dict(lessonKey=key,version=published_version,publishedAt=published_at));marks.append(f'{day}|{begin}|{key}')
+                classes[key] = next((x.get('classId') for x in document['lesson']['students'] if x['id']==student_id),None)
+        accepted = approvals(db,workspace,[r['lesson']|dict(students=[dict(id=student_id)]) for r in rows])
+        for i,row in enumerate(rows):
+            excuse = accepted.get(i,{}).get(student_id)
+            if excuse and row['record']['attendance']=='absent':
+                row['record'] = row['record']|dict(attendance='excused')
+                row['absenceApproval'] = excuse
+        return rows,marks,classes,fetched,more
+
     def notify(self, db, workspace, version, before, after, key=None):
         if key:
             from .grade_feed import record
@@ -527,6 +572,8 @@ class Journal:
         grade_feed(self,app,Workspace)
         from .assessment_categories import register as categories
         categories(self,app,Workspace)
+        from .journal_pupil import register as pupil_period
+        pupil_period(self,app,Workspace)
         @app.get('/api/journal/options')
         def options(request: Request,workspace: Workspace='school'):
             user = self.scope(request,workspace)
@@ -538,13 +585,19 @@ class Journal:
                 teachers = user_ids(user,workspace,'teacher')
                 groups = {w.groupId for w in state.workloads if teachers & set(teacher_ids(w))}
                 allowed_students = {s.id for s in state.students if any(g.id in groups and (s.classId in g.classIds if g.kind=='whole' else s.id in g.studentIds) for g in state.groups)}
-            students = {s.id:dict(id=s.id,name=s.name) for s in state.students if s.id in allowed_students}
+            classes = {c.id:c for c in state.classes}
+            # The class and its bell profile are what the family screens need to number lessons; a historical pupil has neither.
+            students = {s.id:dict(id=s.id,name=s.name,className=classes[s.classId].name if s.classId in classes else None,profileId=classes[s.classId].profileId if s.classId in classes else None) for s in state.students if s.id in allowed_students}
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
-                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap)
-            historical,panels = self.reading(read)
-            for student in historical: students.setdefault(student['id'],student)
-            return dict(staff=user['role'] in ['admin','teacher'],absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']))
+                periods = [dict(id=r[0],name=r[1],start=r[2],end=r[3],kind=r[4]) for r in db.execute('SELECT id,name,start_day,end_day,kind FROM journal_periods WHERE workspace=? ORDER BY start_day,end_day DESC,id',(workspace,))]
+                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap),periods
+            historical,panels,periods = self.reading(read)
+            for student in historical: students.setdefault(student['id'],dict(student,className=None,profileId=None))
+            # Families cannot read /api/state or /api/journal/periods: the school's own periods and bells reach them here.
+            profiles = [dict(id=p.id,name=p.name,periods=[b.model_dump() for b in p.periods],dayPeriods={k:[b.model_dump() for b in v] for k,v in p.dayPeriods.items()}) for p in state.profiles]
+            return dict(staff=user['role'] in ['admin','teacher'],admin=user['role']=='admin',absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']),
+                        periods=periods,profiles=profiles,today=today().isoformat())
 
         @app.get('/api/journal/day')
         def day_view(request: Request,day: date,workspace: Workspace='school'):
@@ -554,25 +607,38 @@ class Journal:
             keys = [key_for(r) for r in rows if r['activity']=='lesson']
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
-                return {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
-            saved = self.reading(read)
+                found = {r['lessonKey']:r for r in self.rows(db,workspace,day,keys)}
+                # Published attendance of the day by lesson: the grid shows «присутствуют N/M» without opening every lesson. One range of the
+                # primary key per lesson; "+day" keeps the planner off the day index, which it would scan as the whole workspace.
+                held = {}
+                for key,student,mark in db.execute("SELECT lesson_key,student_id,attendance FROM journal_attendance WHERE workspace=? AND +day=? AND lesson_key IN (SELECT value FROM json_each(?))",(workspace,day.isoformat(),encoded(sorted(found)))): held.setdefault(key,{})[student] = mark
+                return found,held
+            saved,held = self.reading(read)
+            names = {c.id:c.name for c in state.classes}
+            def cards(record,key,roster):
+                """Draft topic and homework and the published attendance counts over the pupils of `roster` (so N never exceeds the studentCount M); unpublished or moved lessons have no counts."""
+                marks = held.get(key);present = marked = None
+                if marks is not None: present,marked = sum(marks.get(id) in ('present','late','left') for id in roster),sum(marks.get(id,'unmarked')!='unmarked' for id in roster)
+                return dict(topic=record['topic'] if record else '',homework=record['homework'] if record else '',dueDate=record['dueDate'] if record else None,present=present,marked=marked)
             result = []
             for row in rows:
                 if row['activity']!='lesson': continue
                 key = key_for(row)
                 record = saved.get(key)
                 if not (staff_read(user,workspace,row) or record and staff_read(user,workspace,record['lesson'])): continue
-                lesson,count,fixed = {k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},len(row['studentIds']),False
+                lesson,roster,fixed = {k:row[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},row['studentIds'],False
                 if record and frozen(record['published'],row,today()) and record['published']['date']==day.isoformat():
                     # An earlier day keeps the time, teachers and roster it was published with.
                     published = record['published']
-                    lesson,count,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),sum(bool(s.get('enrolled',True)) for s in published['students']),True
-                result.append(dict(lessonKey=key,lesson=lesson,studentCount=count,version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed))
-            present = {r['lessonKey'] for r in result}
+                    lesson,roster,fixed = {k:published[k] for k in ['date','start','end','subject','group','teachers','rooms']}|dict(status=row['status']),[s['id'] for s in published['students'] if s.get('enrolled',True)],True
+                result.append(dict(lessonKey=key,lesson=lesson,studentCount=len(roster),version=record['version'] if record else 0,publishedVersion=record['publishedVersion'] if record else None,hasPublished=bool(record and record['hasPublished']),archived=False,frozen=fixed,
+                                   profileId=row['profileId'],classes=[names[c] for c in (row['originalClassIds'] if row['status']=='cancelled' else row['classIds']) if c in names])|cards(record,key,roster))
+            listed = {r['lessonKey'] for r in result}
             for key,record in saved.items():
                 lesson = record['lesson']
-                if key not in present and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
-                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False))
+                if key not in listed and lesson['date']==day.isoformat() and staff_read(user,workspace,lesson):
+                    result.append(dict(lessonKey=key,lesson={k:lesson[k] for k in ['date','start','end','subject','group','teachers','rooms','status']},studentCount=len(lesson['students']),version=record['version'],publishedVersion=record['publishedVersion'],hasPublished=record['hasPublished'],archived=True,frozen=False,
+                                       profileId=None,classes=sorted({s['className'] for s in lesson['students'] if s.get('className')}))|cards(record,key,[s['id'] for s in lesson['students']]))
             result.sort(key=lambda r:(r['lesson']['start'],r['lesson']['group'],r['lesson']['subject']))
             return dict(revision=state.revision,lessons=result)
 
@@ -674,45 +740,12 @@ class Journal:
         def report(request: Request,studentId: str,start: date,end: date,workspace: Workspace='school',
                    after: str | None=Query(default=None,pattern=r'^\d{4}-\d{2}-\d{2}\|\d{2}:\d{2}\|[a-f0-9]{64}$'),limit: int=Query(default=100,ge=1,le=200)):
             """Published rows by (date, start, lessonKey). The first page also carries the summary of the whole period."""
-            user = self.scope(request,workspace)
-            if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
-            if user['role'] in ['student','parent'] and studentId not in user_ids(user,workspace,'student'):
-                raise HTTPException(403,'Этот ученик не назначен вашей учётной записи.')
-            from .absences import approvals
+            user = self.pupil_reader(request,workspace,studentId,start,end)
             def read(db):
                 self.recheck_account(db,user)
-                cfg = category_config(db,workspace);classes = {}
+                cfg = category_config(db,workspace)
                 codes = absence_codes.names(db,workspace)
-                # The attendance projection holds one row per published record, so it drives the range scan.
-                query = 'SELECT e.lesson_key,e.published_document,e.published_version,e.published_at,a.day,a.start FROM journal_attendance a JOIN journal_entries e ON e.workspace=a.workspace AND e.lesson_key=a.lesson_key WHERE a.workspace=? AND a.student_id=? AND a.day BETWEEN ? AND ? AND e.published_document IS NOT NULL'
-                params = [workspace,studentId,start.isoformat(),end.isoformat()]
-                if user['role']=='teacher':
-                    query += " AND EXISTS(SELECT 1 FROM json_each(e.published_document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
-                    params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
-                if after:
-                    query += ' AND (a.day,a.start,a.lesson_key)>(?,?,?)'; params += after.split('|')
-                query += ' ORDER BY a.day,a.start,a.lesson_key'
-                if after: query += ' LIMIT ?'; params.append(limit+1)
-                fetched = db.execute(query,params).fetchall()
-                more = bool(after) and len(fetched)>limit
-                if more: fetched = fetched[:limit]
-                rows,marks = [],[]
-                for key,raw,published_version,published_at,day,begin in fetched:
-                    document = json.loads(raw)
-                    if not start.isoformat()<=document['lesson']['date']<=end.isoformat(): continue
-                    if user['role'] in ['admin','teacher'] and not staff_read(user,workspace,document['lesson']): continue
-                    projected = pupil_projection(document,studentId)
-                    if projected:
-                        rows.append(projected | dict(lessonKey=key,version=published_version,publishedAt=published_at));marks.append(f'{day}|{begin}|{key}')
-                        classes[key] = next((x.get('classId') for x in document['lesson']['students'] if x['id']==studentId),None)
-                def approve(chosen):
-                    accepted = approvals(db,workspace,[r['lesson']|dict(students=[dict(id=studentId)]) for r in chosen])
-                    for i,row in enumerate(chosen):
-                        excuse = accepted.get(i,{}).get(studentId)
-                        if excuse and row['record']['attendance']=='absent':
-                            row['record'] = row['record']|dict(attendance='excused')
-                            row['absenceApproval'] = excuse
-                approve(rows)
+                rows,marks,classes,fetched,more = self.published_rows(db,user,workspace,studentId,start,end,after,limit)
                 # A later page continues after the last row it scanned, even if some were filtered out.
                 if after: return dict(rows=rows,summary=None,nextAfter=f'{fetched[-1][4]}|{fetched[-1][5]}|{fetched[-1][0]}' if more else None,absenceCodes=codes,source='published')
                 return dict(rows=rows[:limit],summary=summary(rows,cfg,classes),nextAfter=marks[limit-1] if len(rows)>limit else None,absenceCodes=codes,source='published')

@@ -32,7 +32,7 @@ import Shell, { type ShellFrame } from "./Shell";
 import SchoolStart from "./SchoolStart";
 import { useJournalPanels, useMessageUnread } from "./shellData";
 import { schoolYear, startTiles, viewLabel, eventViews } from "./navigation";
-import type { JournalPanelName } from "./journal";
+import type { JournalView } from "./journal";
 import { withEffectiveFrom } from "./timetableVersions";
 import { startPolling } from "./polling";
 import {
@@ -197,8 +197,8 @@ export default function App({
   // a menu entry can open one part of the journal.
   const [journalFocus, setJournalFocus] = useState<JournalFocus | undefined>(),
     [messageFocus, setMessageFocus] = useState<FocusRequest | undefined>(),
-    [journalView, setJournalView] = useState<JournalPanelName | undefined>();
-  function setPage(value: Page, journal?: JournalPanelName) {
+    [journalView, setJournalView] = useState<JournalView | undefined>();
+  function setPage(value: Page, journal?: JournalView) {
     if (canLeaveHomework()) {
       setPageValue(value);
       setJournalView(journal);

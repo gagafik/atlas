@@ -99,13 +99,24 @@ export default function AuthShell() {
     null,
   );
   const [behaviourWorkspace, setBehaviourWorkspace] = useState<string | null>(
-    null,
-  );
+      null,
+    ),
+    // The pupils the gradebook marked for a note or a measure.
+    [behaviourPrefill, setBehaviourPrefill] = useState<
+      | {
+          studentIds: string[];
+          measure?: boolean;
+          subjectId?: string;
+          subject?: string;
+        }
+      | undefined
+    >();
   useEffect(() => {
-    const open = (event: Event) =>
-      setBehaviourWorkspace(
-        (event as CustomEvent).detail?.workspace || "school",
-      );
+    const open = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      setBehaviourPrefill(detail?.prefill);
+      setBehaviourWorkspace(detail?.workspace || "school");
+    };
     window.addEventListener("atlas-open-behaviour", open);
     return () => window.removeEventListener("atlas-open-behaviour", open);
   }, []);
@@ -453,7 +464,10 @@ export default function AuthShell() {
     live: setLiveWorkspace,
     library: setLibraryWorkspace,
     lostFound: setLostFoundWorkspace,
-    behaviour: setBehaviourWorkspace,
+    behaviour: (workspace) => {
+      setBehaviourPrefill(undefined);
+      setBehaviourWorkspace(workspace);
+    },
     assessments: setAssessmentsWorkspace,
     clubs: setClubsWorkspace,
     canteen: setCanteenWorkspace,
@@ -699,7 +713,13 @@ export default function AuthShell() {
             key={session.user.id + ":" + session.user.version}
             user={session.user}
             initialWorkspace={behaviourWorkspace}
-            onClose={() => setBehaviourWorkspace(null)}
+            prefill={behaviourPrefill}
+            onClose={() => {
+              setBehaviourWorkspace(null);
+              setBehaviourPrefill(undefined);
+              // The counts of the gradebook follow the notes written in the form.
+              window.dispatchEvent(new Event("atlas-behaviour-closed"));
+            }}
           />
         </Suspense>
       )}
