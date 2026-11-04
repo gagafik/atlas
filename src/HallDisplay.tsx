@@ -110,7 +110,7 @@ export default function HallDisplay() {
     if (data) document.title = `${data.screen} · Атлас`;
   }, [data?.screen]);
   useEffect(() => {
-    document.body.style.background = "#0b1714";
+    document.body.style.background = "var(--surface-inverse)";
     return () => {
       document.body.style.background = "";
     };

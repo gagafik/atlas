@@ -15,7 +15,7 @@
 .teaching-library-heading p,
 .teaching-library .muted,
 .lesson-materials .muted {
-  color: #526078;
+  color: var(--text-muted);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -28,13 +28,13 @@
 .teaching-library-list,
 .teaching-library-detail {
   min-width: 0;
-  background: #fff;
-  border: 1px solid #dde3eb;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 18px;
 }
 .teaching-library-detail:focus {
-  outline: 2px solid #637e9c;
+  outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
 .teaching-library input:not([type="checkbox"]),
@@ -83,14 +83,14 @@
   overflow-wrap: anywhere;
 }
 .teaching-library-results button[aria-pressed="true"] {
-  border-color: #608169;
-  background: #edf4ef;
+  border-color: var(--accent);
+  background: var(--accent-tint-strong);
 }
 .teaching-library-results span,
 .teaching-library-results small {
   font-size: 12px;
   font-weight: 400;
-  color: #526078;
+  color: var(--text-muted);
 }
 .teaching-library-pagination {
   display: flex;
@@ -131,8 +131,8 @@
   font-size: 12px;
 }
 .teaching-material-card {
-  border: 1px solid #dde3eb;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 14px;
   margin: 12px 0;
   overflow-wrap: anywhere;
@@ -141,7 +141,7 @@
   margin: 0 0 8px;
 }
 .teaching-material-card h4 small {
-  color: #526078;
+  color: var(--text-muted);
   font-size: 12px;
   font-weight: 400;
 }

@@ -2,14 +2,14 @@
   width: min(1100px, calc(100vw - 32px));
   max-height: 92dvh;
   overflow: auto;
-  border: 1px solid #ccd5de;
-  border-radius: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 24px;
-  background: #fff;
-  color: #172c39;
+  background: var(--surface);
+  color: var(--text);
 }
 .hall-screens::backdrop {
-  background: #10253588;
+  background: var(--scrim);
 }
 .hall-screens header,
 .hs-controls,
@@ -43,8 +43,8 @@
   min-width: 0;
 }
 .hall-screens fieldset {
-  border: 1px solid #d8e0e6;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   min-width: 0;
 }
 .hall-screens input,
@@ -54,11 +54,11 @@
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #b7c8d6;
-  border-radius: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 9px;
   color: inherit;
-  background: #fff;
+  background: var(--surface);
 }
 .hall-screens textarea {
   width: 100%;
@@ -68,10 +68,10 @@
 .hall-screens button {
   font: inherit;
   cursor: pointer;
-  border: 1px solid #c9d5dc;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 12px;
-  background: #fff;
+  background: var(--surface);
   color: inherit;
 }
 .hall-screens button:disabled {
@@ -79,15 +79,17 @@
   cursor: default;
 }
 .hall-screens button:hover:enabled {
-  background: #eff8f4;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .hall-screens [role="alert"] {
-  background: #fff0ee;
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-line);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .hall-screens [role="status"] {
-  color: #17594b;
+  color: var(--success);
 }
 .hs-controls {
   margin: 12px 0;
@@ -98,12 +100,12 @@
 }
 .hs-tabs {
   padding: 12px 0;
-  border-bottom: 1px solid #d8e0e6;
+  border-bottom: 1px solid var(--line);
   margin: 12px 0;
 }
 .hs-tabs [aria-pressed="true"] {
-  border-color: #246a57;
-  background: #edf7f3;
+  border-color: var(--accent);
+  background: var(--accent-tint);
 }
 .hs-form {
   display: grid;
@@ -111,9 +113,9 @@
   gap: 12px;
   margin: 12px 0;
   padding: 16px;
-  border: 1px solid #d0dfdb;
-  border-radius: 10px;
-  background: #f6faf8;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
 }
 .hs-form h3,
 .hs-form fieldset,
@@ -124,9 +126,9 @@
 .hs-panel {
   margin: 12px 0;
   padding: 16px;
-  border: 1px solid #d0dfdb;
-  border-radius: 10px;
-  background: #f6faf8;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
 }
 .hs-copy input {
   flex: 1 1 280px;
@@ -140,14 +142,14 @@
 .hs-card {
   min-width: 0;
   padding: 14px;
-  border: 1px solid #d8e0e6;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .hs-card .hs-actions {
   margin: 10px 0;
 }
 .hs-warn {
-  color: #9a4a00;
+  color: var(--warning);
 }
 .hs-prose {
   white-space: pre-wrap;
@@ -155,24 +157,24 @@
 .hs-badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
-  background: #e8eef2;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   font-size: 0.8em;
   font-weight: 600;
   vertical-align: middle;
 }
 .hs-showing {
-  background: #d8f0e2;
+  background: var(--success-tint);
 }
 .hs-scheduled {
-  background: #e2ecfb;
+  background: var(--info-tint);
 }
 .hs-withdrawn,
 .hs-ended {
-  background: #eceae6;
+  background: var(--surface-sunken);
 }
 .hs-hidden {
-  background: #fdeccc;
+  background: var(--warning-tint);
 }
 .hall-screens .hs-check {
   display: flex;
@@ -188,8 +190,8 @@
   position: relative;
   width: 100%;
   overflow: hidden;
-  border-radius: 8px;
-  background: #0b1714;
+  border-radius: var(--radius);
+  background: var(--surface-inverse);
 }
 @media (max-width: 600px) {
   .hall-screens {

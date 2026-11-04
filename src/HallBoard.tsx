@@ -15,6 +15,7 @@ import {
   schoolClock,
   type HallPayload,
 } from "./hallScreen";
+import SchoolLogo from "./SchoolLogo";
 import "./HallDisplay.css";
 
 interface Slide {
@@ -130,6 +131,7 @@ export default function HallBoard({
       aria-label="Информационный экран"
     >
       <header className="hall-head">
+        <SchoolLogo on="blue" className="hall-logo" />
         <div className="hall-title">
           <strong>{data.school}</strong>
           <span>{data.screen}</span>

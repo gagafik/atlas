@@ -2,14 +2,14 @@
   width: min(1160px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   padding: 22px;
-  border: 1px solid #d5dfd4;
-  border-radius: 16px;
-  background: white;
-  color: #24382d;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
   overflow: auto;
 }
 .school-forms-dialog::backdrop {
-  background: #182c2466;
+  background: var(--scrim);
 }
 .school-forms-header {
   display: flex;
@@ -19,7 +19,7 @@
   position: sticky;
   top: -22px;
   padding: 12px 0;
-  background: white;
+  background: var(--surface);
   z-index: 2;
 }
 .school-forms-header h2 {
@@ -53,9 +53,9 @@
   max-width: 100%;
   font: inherit;
   padding: 9px;
-  border: 1px solid #bdcbbf;
-  border-radius: 7px;
-  background: white;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  background: var(--surface);
   color: inherit;
 }
 .school-forms-dialog textarea {
@@ -64,8 +64,8 @@
 }
 .school-forms-dialog fieldset {
   min-width: 0;
-  border: 1px solid #dbe3dc;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 14px;
   margin: 16px 0;
 }
@@ -94,8 +94,9 @@
   white-space: normal;
 }
 .school-forms-dialog button[aria-pressed="true"] {
-  background: #e7efe4;
-  border-color: #688562;
+  background: var(--accent-tint-strong);
+  border-color: var(--accent);
+  color: var(--primary);
 }
 .school-form-list {
   display: grid;
@@ -115,9 +116,9 @@
 .school-form-question,
 .school-form-response {
   padding: 14px;
-  background: #f7f9f5;
-  border: 1px solid #dbe3dc;
-  border-radius: 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   margin: 14px 0;
 }
 .school-forms-dialog .school-form-check {
@@ -161,17 +162,17 @@
   margin-bottom: 10px;
 }
 .school-forms-error {
-  background: #fff0ec;
-  border: 1px solid #d7afa2;
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-line);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .school-forms-notice,
 .school-form-preview {
-  background: #edf4ea;
-  border: 1px solid #b4c8ae;
+  background: var(--success-tint);
+  border: 1px solid var(--success-line);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .school-form-response dd {
   margin: 4px 0 14px;

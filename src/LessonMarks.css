@@ -7,35 +7,35 @@
 }
 .lesson-mark {
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 0.85em;
-  background: #eef2f5;
+  background: var(--surface-sunken);
 }
 .lesson-mark.lesson-mark-praise {
-  background: #e3f3e8;
-  color: #1f6a35;
+  background: var(--success-tint);
+  color: var(--success);
 }
 .lesson-mark.lesson-mark-remark {
-  background: #fbe9e2;
-  color: #9a3d1c;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .lesson-mark-button {
   font-size: 0.85em;
   padding: 2px 10px;
 }
 .lesson-mark-button.lesson-mark-praise {
-  border-color: #2f8a4a;
-  color: #1f6a35;
+  border-color: var(--success);
+  color: var(--success);
 }
 .lesson-mark-button.lesson-mark-remark {
-  border-color: #c0532b;
-  color: #9a3d1c;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .lesson-marks select {
   font-size: 0.85em;
   max-width: 220px;
 }
 .lesson-mark-error {
-  color: #9a3d1c;
+  color: var(--danger);
   font-size: 0.85em;
 }

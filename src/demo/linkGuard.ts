@@ -13,8 +13,8 @@ export function showDemoToast(text: string): void {
     toast.setAttribute("role", "status");
     toast.style.cssText =
       "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:500;" +
-      "max-width:min(92vw,420px);padding:10px 16px;border-radius:10px;background:#1d332a;" +
-      "color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 8px 30px #0003;text-align:center";
+      "max-width:min(92vw,420px);padding:10px 16px;border-radius:var(--radius);background:var(--surface-inverse-deep);" +
+      "color:var(--text-on-primary);font:14px/1.4 var(--font);box-shadow:var(--shadow-overlay);text-align:center";
     document.body.append(toast);
   }
   toast.textContent = text;

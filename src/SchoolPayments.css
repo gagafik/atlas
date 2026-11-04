@@ -2,17 +2,15 @@
   width: min(1180px, calc(100vw - 32px));
   max-height: 94dvh;
   box-sizing: border-box;
-  border: 1px solid #c6d7d4;
-  border-radius: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 26px;
-  background: #f5f8f7;
-  color: #163835;
-  font:
-    15px/1.5 system-ui,
-    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 var(--font);
 }
 .school-payments::backdrop {
-  background: #0d282880;
+  background: var(--scrim);
 }
 .school-payments header,
 .finance-toolbar,
@@ -41,7 +39,7 @@
 .finance-eyebrow {
   letter-spacing: 0.1em;
   font-size: 12px;
-  color: #396b64;
+  color: var(--accent-strong);
   font-weight: 700;
 }
 .finance-body,
@@ -59,10 +57,10 @@
 .school-payments select,
 .school-payments textarea {
   font: inherit;
-  border: 1px solid #aac2bd;
-  border-radius: 7px;
-  background: white;
-  color: #163835;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
   box-sizing: border-box;
   padding: 10px;
   min-width: 0;
@@ -74,48 +72,55 @@
 }
 .school-payments button {
   font: inherit;
-  color: #163835;
-  background: #fff;
-  border: 1px solid #abc5bf;
-  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 14px;
   cursor: pointer;
 }
 .school-payments button:hover {
-  background: #e4f1ec;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .school-payments button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .school-payments :focus-visible {
-  outline: 3px solid #d49e40;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 .school-payments a {
-  color: #17615b;
+  color: var(--accent-strong);
   text-decoration: underline;
 }
 .school-payments form > button[type="submit"],
 .school-payments form > button:not([type]) {
-  background: #17665b;
-  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-on-primary);
   margin: 10px 8px 0 0;
+}
+.school-payments form > button[type="submit"]:hover,
+.school-payments form > button:not([type]):hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 .finance-tabs {
   margin: 20px 0;
   padding-bottom: 12px;
-  border-bottom: 1px solid #cbded8;
+  border-bottom: 1px solid var(--line);
 }
 .finance-tabs [aria-pressed="true"],
 .finance-account-list .selected {
-  background: #d7eae3;
-  border-color: #4c8b7d;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .finance-card {
-  background: #fff;
-  border: 1px solid #d0dfda;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 20px;
   margin: 18px 0;
   min-width: 0;
@@ -129,10 +134,10 @@
   align-items: end;
 }
 .finance-editor {
-  border-left: 3px solid #73a89b;
+  border-left: 3px solid var(--accent);
   padding: 16px;
   margin: 18px 0;
-  background: #f3f8f5;
+  background: var(--surface-alt);
 }
 .finance-editor > label,
 .finance-card > label {
@@ -145,27 +150,27 @@
   margin: 16px 0;
 }
 .finance-summary > div {
-  background: #f1f7f4;
+  background: var(--accent-tint);
   padding: 14px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   display: grid;
   gap: 5px;
 }
 .finance-summary span {
   font-size: 12px;
-  color: #46625c;
+  color: var(--text-muted);
 }
 .finance-summary strong {
   font-size: 18px;
   overflow-wrap: anywhere;
 }
 .finance-summary > div:first-child {
-  background: #dceee6;
+  background: var(--accent-tint-strong);
 }
 .finance-muted,
 .school-payments small {
   font-size: 13px;
-  color: #58706b;
+  color: var(--text-muted);
 }
 .finance-scroll {
   overflow-x: auto;
@@ -187,12 +192,12 @@
 .school-payments td {
   text-align: left;
   padding: 10px;
-  border-bottom: 1px solid #d8e6df;
+  border-bottom: 1px solid var(--line);
   vertical-align: top;
   overflow-wrap: anywhere;
 }
 .school-payments th {
-  background: #f2f7f4;
+  background: var(--surface-sunken);
 }
 .finance-account-list {
   display: grid;
@@ -208,14 +213,14 @@
 }
 .finance-account-list span {
   font-size: 12px;
-  color: #506c64;
+  color: var(--text-muted);
 }
 .finance-choices {
   max-height: 250px;
   overflow: auto;
-  border: 1px solid #d0dfda;
+  border: 1px solid var(--line);
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .school-payments .finance-check {
   display: flex;
@@ -229,28 +234,28 @@
   flex-shrink: 0;
 }
 .finance-preview {
-  border: 2px solid #5e9a89;
-  border-radius: 10px;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
   padding: 16px;
   margin: 15px 0;
-  background: #f4faf6;
+  background: var(--info-tint);
 }
 .finance-error {
   padding: 12px;
-  background: #fff0ec;
-  border: 1px solid #ce7968;
-  border-radius: 8px;
-  color: #882d1d;
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  color: var(--danger);
 }
 .finance-notice {
   padding: 12px;
-  background: #e1f2e8;
-  border-radius: 8px;
-  color: #215d42;
+  background: var(--success-tint);
+  border-radius: var(--radius);
+  color: var(--success);
 }
 .school-payments details {
   padding: 12px 0;
-  border-bottom: 1px solid #d4e2dc;
+  border-bottom: 1px solid var(--line);
 }
 .school-payments pre {
   white-space: pre-wrap;
@@ -261,7 +266,7 @@
 }
 .school-payments article {
   padding: 12px 0;
-  border-bottom: 1px solid #d4e2dc;
+  border-bottom: 1px solid var(--line);
 }
 @media (max-width: 600px) {
   .school-payments {

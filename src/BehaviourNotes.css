@@ -1,14 +1,14 @@
 .behaviour {
   width: min(1100px, calc(100vw - 32px));
   max-height: 92dvh;
-  border: 1px solid #ccd5de;
-  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 24px;
-  background: #fff;
-  color: #172c39;
+  background: var(--surface);
+  color: var(--text);
 }
 .behaviour::backdrop {
-  background: #10253588;
+  background: var(--scrim);
 }
 .behaviour header,
 .bn-controls {
@@ -40,8 +40,8 @@
   overflow-wrap: anywhere;
 }
 .bn-form {
-  border: 1px solid #dfe6ec;
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 12px 16px;
   margin: 12px 0;
 }
@@ -52,8 +52,8 @@
   max-height: 220px;
   overflow: auto;
   margin: 12px 0;
-  border: 1px solid #dfe6ec;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 8px;
 }
 .behaviour .bn-pupils label,
@@ -75,25 +75,25 @@
   gap: 10px;
 }
 .bn-note {
-  border: 1px solid #dfe6ec;
-  border-left: 6px solid #6a7d8c;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 10px 14px;
 }
 .bn-praise {
-  border-left-color: #2f8a4a;
+  border-left-color: var(--success);
 }
 .bn-remark {
-  border-left-color: #c0532b;
+  border-left-color: var(--danger);
 }
 .bn-withdrawn {
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .bn-text {
   white-space: pre-wrap;
 }
 .bn-meta {
-  color: #4b5f6d;
+  color: var(--text-muted);
   font-size: 0.92em;
 }
 .bn-totals {
@@ -102,10 +102,10 @@
   font-weight: 600;
 }
 .bn-totals .bn-praise {
-  color: #2f8a4a;
+  color: var(--success);
 }
 .bn-totals .bn-remark {
-  color: #c0532b;
+  color: var(--danger);
 }
 .bn-table {
   border-collapse: collapse;
@@ -113,20 +113,20 @@
 }
 .bn-table th,
 .bn-table td {
-  border-bottom: 1px solid #dfe6ec;
+  border-bottom: 1px solid var(--line);
   padding: 6px 8px;
   text-align: left;
 }
 .bn-history {
   font-size: 0.92em;
-  color: #4b5f6d;
+  color: var(--text-muted);
 }
 .bn-badge {
   display: inline-block;
   margin-left: 8px;
   padding: 0 8px;
-  border-radius: 999px;
-  background: #eef2f5;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   font-size: 0.85em;
 }
 .bn-quick {
@@ -137,12 +137,12 @@
   margin: 8px 0 12px;
 }
 .bn-chip.bn-praise {
-  border-color: #2f8a4a;
-  color: #1f6a35;
+  border-color: var(--success);
+  color: var(--success);
 }
 .bn-chip.bn-remark {
-  border-color: #c0532b;
-  color: #9a3d1c;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .behaviour .bn-wide-row {
   grid-column: 1 / -1;
@@ -164,23 +164,23 @@
   align-items: center;
   min-width: 120px;
   padding: 12px;
-  border-radius: 12px;
-  background: #f4f7f9;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
   text-align: center;
 }
 .bn-podium strong {
   font-size: 1.6em;
 }
 .bn-place-1 {
-  background: #fff4cc;
+  background: var(--warning-line);
   padding-top: 28px;
 }
 .bn-place-2 {
-  background: #eef1f4;
+  background: var(--surface-sunken);
   padding-top: 20px;
 }
 .bn-place-3 {
-  background: #f7e6d9;
+  background: var(--warning-tint);
 }
 @media (max-width: 600px) {
   .behaviour {
@@ -191,8 +191,8 @@
   }
 }
 .bn-letter {
-  border: 1px solid #ccd5de;
-  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 16px 24px;
   margin: 12px 0;
   font-family: Georgia, serif;

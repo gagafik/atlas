@@ -3,18 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#28674f" />
+    <meta name="theme-color" content="#083a81" />
     <title>Атлас · Подключение</title>
     <style>
+      /* Standalone page: it cannot load the app's stylesheet, so it repeats the brand tokens (see DESIGN.md). */
       * {
         box-sizing: border-box;
       }
       body {
         margin: 0;
-        background: #f3f5ef;
-        color: #213d32;
+        background: #f3f5f9;
+        color: #231f20;
         font:
-          17px/1.6 system-ui,
+          500 17px/1.6 "Montserrat Variable",
+          "Montserrat",
+          "Segoe UI",
+          system-ui,
           sans-serif;
         min-height: 100vh;
         display: grid;
@@ -24,27 +28,36 @@
       main {
         max-width: 520px;
         padding: 30px;
-        border-radius: 22px;
-        background: white;
-        border: 1px solid #dae3d9;
+        border-radius: 4px;
+        background: #fefefe;
+        border: 1px solid #dcdfe4;
       }
       h1 {
         font-size: 32px;
+        font-weight: 800;
         margin: 12px 0;
       }
       img {
         width: 64px;
         height: 64px;
-        border-radius: 16px;
+        border-radius: 4px;
       }
       button {
         padding: 13px 20px;
-        background: #28674f;
-        color: white;
+        background: #083a81;
+        color: #fefefe;
         border: 0;
-        border-radius: 10px;
+        border-radius: 4px;
         font: inherit;
+        font-weight: 600;
         cursor: pointer;
+      }
+      button:hover {
+        background: #226bd1;
+      }
+      button:focus-visible {
+        outline: 3px solid #226bd1;
+        outline-offset: 2px;
       }
       p {
         overflow-wrap: anywhere;

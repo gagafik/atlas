@@ -1,14 +1,14 @@
 .lost-found {
   width: min(1200px, calc(100vw - 32px));
   max-height: 92dvh;
-  border: 1px solid #ccd5de;
-  border-radius: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 24px;
-  background: #fff;
-  color: #172c39;
+  background: var(--surface);
+  color: var(--text);
 }
 .lost-found::backdrop {
-  background: #10253588;
+  background: var(--scrim);
 }
 .lost-found header,
 .lf-controls,
@@ -51,11 +51,11 @@
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #b7c8d6;
-  border-radius: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 9px;
   color: inherit;
-  background: #fff;
+  background: var(--surface);
 }
 .lost-found textarea {
   width: 100%;
@@ -65,10 +65,10 @@
 .lost-found button {
   font: inherit;
   cursor: pointer;
-  border: 1px solid #c9d5dc;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 12px;
-  background: #fff;
+  background: var(--surface);
   color: inherit;
 }
 .lost-found button:disabled {
@@ -76,18 +76,20 @@
   cursor: default;
 }
 .lost-found button:hover:enabled {
-  background: #eff8f4;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .lost-found a {
-  color: #17594b;
+  color: var(--accent-strong);
 }
 .lost-found [role="alert"] {
-  background: #fff0ee;
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-line);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .lost-found [role="status"] {
-  color: #17594b;
+  color: var(--success);
 }
 .lf-controls {
   margin: 12px 0;
@@ -98,12 +100,12 @@
 }
 .lf-tabs {
   padding: 12px 0;
-  border-bottom: 1px solid #d8e0e6;
+  border-bottom: 1px solid var(--line);
   margin: 12px 0;
 }
 .lf-tabs [aria-pressed="true"] {
-  border-color: #246a57;
-  background: #edf7f3;
+  border-color: var(--accent);
+  background: var(--accent-tint);
 }
 .lf-grid {
   display: grid;
@@ -124,7 +126,7 @@
   overflow-wrap: anywhere;
 }
 .lf-list span {
-  color: #5e6f7a;
+  color: var(--text-muted);
   font-size: 0.9em;
 }
 .lf-detail,
@@ -140,9 +142,9 @@
 }
 .lf-private {
   padding: 12px;
-  border: 1px solid #d0dfdb;
-  border-radius: 8px;
-  background: #f6faf8;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
 }
 .lf-photos {
   display: flex;
@@ -158,8 +160,8 @@
   max-width: 100%;
   height: 160px;
   object-fit: contain;
-  background: #f3f6f4;
-  border-radius: 8px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
 }
 .lost-found .lf-check {
   display: flex;
@@ -170,16 +172,16 @@
 .lf-claim-form {
   margin-top: 18px;
   padding-top: 12px;
-  border-top: 1px solid #d8e0e6;
+  border-top: 1px solid var(--line);
   display: grid;
   gap: 10px;
 }
 .lf-history {
-  border-top: 1px solid #d8e0e6;
+  border-top: 1px solid var(--line);
   margin-top: 20px;
 }
 .lf-history article {
-  border-bottom: 1px solid #e5eaed;
+  border-bottom: 1px solid var(--line);
   padding: 12px 0;
 }
 .lf-history pre {

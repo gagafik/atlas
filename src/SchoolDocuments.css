@@ -1,14 +1,14 @@
 .school-documents {
   width: min(1180px, calc(100vw - 32px));
   max-height: 92dvh;
-  border: 1px solid #cbd5e1;
-  border-radius: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 24px;
-  color: #1e293b;
-  background: #fff;
+  color: var(--text);
+  background: var(--surface);
 }
 .school-documents::backdrop {
-  background: #0f172a88;
+  background: var(--scrim);
 }
 .school-documents header {
   display: flex;
@@ -36,11 +36,11 @@
   box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #b8c5d4;
-  border-radius: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 8px;
-  background: white;
-  color: #1e293b;
+  background: var(--surface);
+  color: var(--text);
 }
 .school-documents textarea {
   width: 100%;
@@ -82,17 +82,17 @@
   overflow-wrap: anywhere;
 }
 .document-list .selected {
-  border: 2px solid #2563eb;
-  background: #edf4ff;
+  border: 2px solid var(--accent);
+  background: var(--accent-tint);
 }
 .document-list span {
   font-size: 13px;
 }
 .document-paper {
   padding: 24px;
-  border: 1px solid #d2dce8;
-  background: #fff;
-  color: #111;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
 }
 .document-paper pre,
 .document-history pre {
@@ -101,26 +101,26 @@
   font: inherit;
 }
 .document-preview {
-  background: #fff7e5;
+  background: var(--warning-tint);
   padding: 16px;
-  border: 1px solid #eed098;
-  border-radius: 8px;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius);
 }
 .document-error {
-  background: #fff0f0;
-  color: #9b2525;
+  background: var(--danger-tint);
+  color: var(--danger);
   padding: 12px;
 }
 .document-template,
 .document-create {
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--line);
   padding: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   margin: 16px 0;
 }
 .document-templates article,
 .document-history article {
-  border-bottom: 1px solid #d2dce8;
+  border-bottom: 1px solid var(--line);
   padding: 16px 0;
 }
 .school-documents p {
@@ -133,7 +133,7 @@
   margin: 12px 0;
 }
 .school-documents :focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 .document-fields label {

@@ -44,11 +44,11 @@
   gap: 8px;
 }
 .pupil-problem {
-  color: #9a3d1c;
+  color: var(--danger);
   margin: 4px 0;
 }
 .pupil-muted {
-  color: #66706a;
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
 .pupil-sign-line {
@@ -67,23 +67,24 @@
 .pupil-tabs [role="tab"] {
   border: 1px solid transparent;
   border-bottom: 0;
-  border-radius: 8px 8px 0 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   background: transparent;
   padding: 8px 14px;
 }
 .pupil-tabs [role="tab"][aria-selected="true"] {
-  background: #fff;
+  background: var(--surface);
   border-color: var(--line);
-  color: var(--dark);
+  color: var(--primary);
   font-weight: 700;
   margin-bottom: -1px;
+  box-shadow: inset 0 var(--line-width-strong) 0 var(--accent);
 }
 .pupil-count {
   margin-left: 6px;
   padding: 0 7px;
-  border-radius: 999px;
-  background: #fdf1d6;
-  color: #7a4f00;
+  border-radius: var(--radius-sm);
+  background: var(--warning-tint);
+  color: var(--warning);
   font-weight: 700;
 }
 .pupil-panel {
@@ -94,8 +95,8 @@
   overflow-x: auto;
   max-width: 100%;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .pupil-table {
   border-collapse: separate;
@@ -108,10 +109,10 @@
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
 }
 .pupil-table thead th {
-  background: var(--warm);
+  background: var(--surface-alt);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -138,12 +139,12 @@
   min-width: 40px;
   padding: 2px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-weight: 700;
   line-height: 1.5;
 }
 .pupil-chip-new {
-  outline: 2px solid #d99a1e;
+  outline: 2px solid var(--warning);
   outline-offset: 1px;
 }
 .pupil-average {
@@ -153,7 +154,7 @@
 .pupil-info {
   min-width: 24px;
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 .pupil-note-counts {
   display: inline-flex;
@@ -161,11 +162,11 @@
   gap: 4px 10px;
 }
 .pupil-praise {
-  color: #2f6f3e;
+  color: var(--success);
   font-weight: 700;
 }
 .pupil-remark {
-  color: #9a3d1c;
+  color: var(--danger);
   font-weight: 700;
 }
 .pupil-category-share {
@@ -183,9 +184,9 @@
   max-height: 85vh;
   overflow: auto;
   padding: 16px;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 12px 40px rgba(33, 60, 48, 0.25);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
 }
 .pupil-popover header {
   display: flex;
@@ -203,7 +204,7 @@
   margin: 8px 0 0;
 }
 .pupil-details dt {
-  color: #66706a;
+  color: var(--text-muted);
 }
 .pupil-details dd {
   margin: 0;
@@ -221,12 +222,12 @@
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .pupil-mark-list li.pupil-mark-new {
-  border-left-color: #d99a1e;
-  background: #fffaf0;
+  border-left-color: var(--warning-bright);
+  background: var(--warning-tint);
 }
 .pupil-mark-list p {
   margin: 4px 0;
@@ -251,8 +252,9 @@
   gap: 4px;
 }
 .pupil-switch button[aria-pressed="true"] {
-  background: #e3efe8;
-  border-color: #72a995;
+  background: var(--accent-tint-strong);
+  border-color: var(--accent);
+  color: var(--primary);
 }
 .pupil-note-group h3 {
   margin: 14px 0 6px;
@@ -280,11 +282,11 @@
 .pupil-bands {
   position: relative;
   height: 14px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 .pupil-bands-plain {
-  background: #e8ece6;
+  background: var(--surface-sunken);
 }
 .pupil-bands span {
   position: absolute;
@@ -293,7 +295,7 @@
   font-size: 10px;
   line-height: 14px;
   padding-left: 3px;
-  color: #3b4b43;
+  color: var(--text);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -308,8 +310,8 @@
   min-width: 56px;
   min-height: 52px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #f3f5f1;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
   overflow: hidden;
 }
 .pupil-block-fill {
@@ -331,7 +333,7 @@
 }
 .pupil-block-text small {
   font-weight: 500;
-  color: #4d5b53;
+  color: var(--text-muted);
 }
 /* The marker spans the label and the band strip only, so it never cuts through a block's text. */
 .pupil-marker {
@@ -339,7 +341,7 @@
   top: 0;
   height: 32px;
   width: 0;
-  border-left: 2px solid var(--dark);
+  border-left: 2px solid var(--text);
   pointer-events: none;
 }
 .pupil-marker b {
@@ -348,9 +350,9 @@
   left: 4px;
   font-size: 11px;
   white-space: nowrap;
-  background: #fff;
+  background: var(--surface);
   padding: 0 3px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .pupil-totals {
@@ -362,11 +364,11 @@
 .pupil-totals div {
   padding: 8px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .pupil-totals dt {
-  color: #66706a;
+  color: var(--text-muted);
 }
 .pupil-totals dd {
   margin: 2px 0 0;
@@ -386,7 +388,7 @@
 }
 .pupil-grid .pupil-month th {
   text-align: left;
-  background: var(--warm);
+  background: var(--surface-alt);
 }
 .pupil-att {
   display: inline-flex;
@@ -398,7 +400,7 @@
   min-height: 0;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: inherit;
   font-weight: inherit;
@@ -417,10 +419,10 @@ button.pupil-att:hover b {
   display: inline-block;
   min-width: 24px;
   padding: 1px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   line-height: 1.4;
-  background: #eef2ec;
-  color: #3b4b43;
+  background: var(--surface-sunken);
+  color: var(--text);
 }
 .pupil-att small {
   font-size: 10px;
@@ -429,31 +431,31 @@ button.pupil-att:hover b {
 }
 .pupil-att-present b {
   background: transparent;
-  color: #2f6f3e;
+  color: var(--success);
 }
 .pupil-att-absent b {
-  background: #f6d5cc;
-  color: #8a2f14;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .pupil-att-excused b {
-  background: #d8e8f6;
-  color: #1f4f7a;
+  background: var(--info-tint);
+  color: var(--info);
 }
 .pupil-att-late b {
-  background: #fde6b0;
-  color: #7a4f00;
+  background: var(--warning-tint);
+  color: var(--warning);
 }
 .pupil-att-left b {
-  background: #e4dcf3;
-  color: #4a3680;
+  background: var(--accent-tint-strong);
+  color: var(--primary);
 }
 .pupil-att-school b {
-  background: #cfeadf;
-  color: #1d5a43;
+  background: var(--success-tint);
+  color: var(--success);
 }
 .pupil-att-unmarked b {
   background: transparent;
-  border: 1px dashed #9aa39c;
+  border: 1px dashed var(--border-control);
 }
 .pupil-legend {
   display: flex;
@@ -497,11 +499,11 @@ button.pupil-att:hover b {
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .pupil-lesson-focus {
-  outline: 3px solid #d99a1e;
+  outline: 3px solid var(--warning);
   outline-offset: 1px;
 }
 .pupil-lesson-cancelled h3 {
@@ -510,7 +512,7 @@ button.pupil-att:hover b {
 .pupil-lesson-slot {
   display: flex;
   flex-direction: column;
-  color: var(--dark);
+  color: var(--text);
 }
 .pupil-lesson-slot strong {
   font-size: 1.5em;
@@ -533,20 +535,20 @@ button.pupil-att:hover b {
   background: transparent;
 }
 .pupil-status-cancelled {
-  background: #f6d5cc;
-  color: #8a2f14;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .pupil-status-changed,
 .pupil-status-added {
-  background: #fde6b0;
-  color: #7a4f00;
+  background: var(--warning-tint);
+  color: var(--warning);
 }
 
 .month-calendar {
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
   min-width: 0;
 }
 .month-calendar-head {
@@ -562,7 +564,7 @@ button.pupil-att:hover b {
   text-align: center;
 }
 .month-calendar-grid > span {
-  color: #66706a;
+  color: var(--text-muted);
   font-size: 0.85em;
   padding: 2px 0;
 }
@@ -571,22 +573,23 @@ button.pupil-att:hover b {
   height: 32px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
 }
 /* muted, not red: red marks days with unfilled lessons in the teacher's calendar */
 .month-calendar-weekend {
-  color: #8a938d;
+  color: var(--text-subtle);
 }
 .month-calendar-outside {
-  opacity: 0.4;
+  color: var(--text-subtle);
+  font-weight: var(--weight-regular);
 }
 .month-calendar-today {
-  border-color: var(--green);
+  border-color: var(--accent);
 }
 .month-calendar-selected {
-  background: var(--green);
-  color: #fff;
+  background: var(--primary);
+  color: var(--text-on-primary);
 }
 .month-calendar-day:disabled {
   opacity: 0.25;
@@ -618,7 +621,7 @@ button.pupil-att:hover b {
   }
   .pupil-popover {
     width: 100%;
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--radius) var(--radius) 0 0;
   }
   .pupil-tabs [role="tab"] {
     padding: 8px 10px;
