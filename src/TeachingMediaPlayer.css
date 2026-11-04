@@ -9,12 +9,12 @@
 }
 video.teaching-media-player {
   max-height: 52vh;
-  background: #102934;
-  border-radius: 8px;
+  background: var(--surface-inverse-deep);
+  border-radius: var(--radius);
 }
 .teaching-media p {
   font-size: 14px;
-  color: #773923;
+  color: var(--danger);
 }
 .live-projector video.teaching-media-player {
   max-height: 38vh;

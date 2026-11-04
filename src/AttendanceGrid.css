@@ -17,14 +17,15 @@
   gap: 4px;
 }
 .attendance-grid-views button[aria-pressed="true"] {
-  background: #e3efe8;
-  border-color: #72a995;
+  background: var(--accent-tint-strong);
+  border-color: var(--accent);
+  color: var(--primary);
 }
 .attendance-grid-scroll {
   overflow-x: auto;
   max-width: 100%;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .attendance-grid-table {
   border-collapse: separate;
@@ -38,13 +39,13 @@
   padding: 2px 3px;
   text-align: center;
   vertical-align: middle;
-  background: #fff;
-  border-bottom: 1px solid #e6ebf0;
-  border-right: 1px solid #eef1f5;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
   overflow-wrap: normal;
 }
 .attendance-grid-table thead th {
-  background: #f4f7fa;
+  background: var(--surface-alt);
   font-weight: 650;
 }
 .attendance-grid-table .attendance-pupil {
@@ -54,16 +55,16 @@
   min-width: 132px;
   max-width: 200px;
   text-align: left;
-  box-shadow: 1px 0 0 #dce3ea;
+  box-shadow: 1px 0 0 var(--line);
 }
 .attendance-grid-table thead .attendance-pupil {
   z-index: 3;
-  background: #f4f7fa;
+  background: var(--surface-alt);
 }
 .attendance-grid-table small {
   display: block;
   font-weight: 500;
-  color: #5d6a62;
+  color: var(--text-muted);
 }
 .attendance-grid-table .line {
   min-height: 28px;
@@ -74,18 +75,18 @@
   text-align: left;
 }
 .attendance-grid-table .line:hover {
-  background: #e9f1ec;
+  background: var(--accent-tint);
 }
 .attendance-day-head .state {
   display: block;
   font-weight: 600;
 }
 .attendance-day-head .state-confirmed {
-  color: #1f6a35;
+  color: var(--success);
 }
 .attendance-day-head .state-changed,
 .attendance-day-head .state-revoked {
-  color: #8a5a00;
+  color: var(--warning);
 }
 .attendance-day-head button {
   min-height: 28px;
@@ -103,7 +104,7 @@
 }
 .attendance-lesson-head.is-cancelled,
 .attendance-lesson-head.is-archived {
-  opacity: 0.65;
+  color: var(--text-muted);
 }
 .attendance-summary-cell {
   min-width: 52px;
@@ -113,7 +114,7 @@
   min-width: 36px;
   min-height: 36px;
   padding: 0 2px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   border: 1px solid transparent;
   font-weight: 700;
   line-height: 1;
@@ -129,40 +130,40 @@
   cursor: default;
 }
 .attendance-cell.selected {
-  outline: 3px solid #1f5fbf;
+  outline: 3px solid var(--focus);
   outline-offset: -2px;
 }
 .attendance-cell.tone-present {
-  background: #e3f3e8;
-  color: #1f6a35;
+  background: var(--success-tint);
+  color: var(--success);
 }
 .attendance-cell.tone-absent {
-  background: #fbe2e0;
-  color: #9a1c1c;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .attendance-cell.tone-late {
-  background: #fdf1d9;
-  color: #7a4f00;
+  background: var(--warning-tint);
+  color: var(--warning);
 }
 .attendance-cell.tone-excused {
-  background: #e5ecf9;
-  color: #1f4a8a;
+  background: var(--info-tint);
+  color: var(--info);
 }
 .attendance-cell.tone-left {
-  background: #efe7f7;
-  color: #5b2d8a;
+  background: var(--accent-tint-strong);
+  color: var(--primary);
 }
 .attendance-cell.tone-unmarked {
-  background: #eef1f4;
-  color: #56606a;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
 }
 .attendance-cell.tone-none {
-  background: #fff;
-  border: 1px dashed #c9d2da;
-  color: #8a949c;
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  color: var(--text-subtle);
 }
 .attendance-outside {
-  background: #f8f9fa;
+  background: var(--surface-alt);
 }
 .attendance-grid-legend {
   display: flex;
@@ -196,9 +197,8 @@
   gap: 8px 12px;
   margin-top: 10px;
   padding: 10px;
-  background: #fff;
-  border-top: 1px solid #dce3ea;
-  box-shadow: 0 -4px 10px rgba(30, 50, 40, 0.08);
+  background: var(--surface);
+  border-top: var(--line-width-strong) solid var(--line-strong);
 }
 .attendance-grid-actions .field {
   margin: 0;
@@ -211,8 +211,8 @@
 .attendance-grid-trail {
   margin: 10px 0;
   padding: 10px;
-  border: 1px solid #dce3ea;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .attendance-grid-trail ul {
   margin: 6px 0 0;

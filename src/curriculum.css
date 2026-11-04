@@ -8,12 +8,12 @@
   max-height: calc(100dvh - 32px);
   box-sizing: border-box;
   overflow: auto;
-  border: 1px solid #dfe5ec;
-  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 16px;
 }
 .topic-library-dialog::backdrop {
-  background: rgb(15 23 42 / 45%);
+  background: var(--scrim);
 }
 .topic-materials .curriculum-toolbar > span {
   overflow-wrap: anywhere;
@@ -42,11 +42,11 @@
   overflow-wrap: anywhere;
 }
 .curriculum-topic {
-  border: 1px solid #dfe5ec;
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 16px;
   margin: 14px 0;
-  background: #fff;
+  background: var(--surface);
 }
 .curriculum-panel input,
 .curriculum-panel select,
@@ -76,7 +76,7 @@
 .curriculum-table td,
 .curriculum-table th {
   padding: 10px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--line);
   text-align: left;
 }
 .curriculum-table td:first-child {

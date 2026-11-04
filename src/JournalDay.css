@@ -33,6 +33,7 @@
 }
 .teacher-day {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 .teacher-day-row {
@@ -41,13 +42,13 @@
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .teacher-day-slot {
   display: flex;
   flex-direction: column;
-  color: var(--dark);
+  color: var(--text);
 }
 .teacher-day-slot strong {
   font-size: 1.5em;
@@ -60,18 +61,18 @@
 }
 .teacher-day-nothing {
   margin: 0;
-  color: #9aa39d;
+  color: var(--text-subtle);
 }
 .teacher-lesson {
   display: grid;
   gap: 4px;
   min-width: 0;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: #fafbf7;
+  border-radius: var(--radius);
+  background: var(--surface-alt);
 }
 .teacher-lesson-open {
-  outline: 2px solid var(--green);
+  outline: 2px solid var(--focus);
   outline-offset: 0;
 }
 .teacher-lesson-cancelled h3 {
@@ -90,7 +91,7 @@
   font-weight: 600;
 }
 .teacher-homework {
-  color: #4d5b53;
+  color: var(--text-muted);
 }
 .teacher-lesson-line,
 .teacher-lesson-actions {
@@ -107,16 +108,16 @@
   margin: 0;
 }
 .month-calendar-unfilled {
-  background: #f6d5cc;
-  color: #8a2f14;
+  background: var(--danger-tint);
+  color: var(--danger);
   font-weight: 700;
 }
 /* The journal panel colours every pressed button green; the chosen day with unfilled lessons stays red. */
 .journal-panel
   .month-calendar-day.month-calendar-unfilled.month-calendar-selected {
-  background: #9a3d1c;
-  border-color: #9a3d1c;
-  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--text-on-primary);
 }
 .teacher-calendar-note {
   margin: 6px 0 0;

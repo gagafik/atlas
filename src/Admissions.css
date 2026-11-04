@@ -1,7 +1,7 @@
 .admission-ui {
-  --admission-accent: #265b56;
-  color: #192d35;
-  background: #f2f5f5;
+  --admission-accent: var(--primary);
+  color: var(--text);
+  background: var(--bg);
   padding: 24px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -15,7 +15,7 @@
   width: min(1400px, 96vw);
   height: 94vh;
   overflow: auto;
-  border-radius: 16px;
+  border-radius: var(--radius);
 }
 .admission-ui header,
 .admission-toolbar {
@@ -27,7 +27,7 @@
 }
 .admission-ui header {
   margin-bottom: 24px;
-  border-bottom: 1px solid #c9d7d6;
+  border-bottom: 1px solid var(--line);
   padding-bottom: 20px;
 }
 .admission-ui h1 {
@@ -43,7 +43,7 @@
   margin: 24px 0 10px;
 }
 .admission-eyebrow {
-  color: #37665f;
+  color: var(--accent-strong);
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -61,9 +61,9 @@
 .admission-card {
   min-width: 0;
   padding: 22px;
-  background: #fff;
-  border: 1px solid #d8e2e1;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .admission-main {
   display: grid;
@@ -85,10 +85,10 @@
   min-width: 0;
   max-width: 100%;
   padding: 10px;
-  border: 1px solid #9fafaf;
-  border-radius: 7px;
-  background: #fff;
-  color: #192d35;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
 }
 .admission-ui textarea {
@@ -98,15 +98,15 @@
 .admission-ui input:disabled,
 .admission-ui textarea:disabled,
 .admission-ui select:disabled {
-  background: #edf1f1;
-  color: #44595b;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
 }
 .admission-ui button {
-  border: 1px solid #a9bfbb;
-  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 13px;
-  background: #f8fbfa;
-  color: #1b4c46;
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   cursor: pointer;
   max-width: 100%;
@@ -114,23 +114,31 @@
 .admission-ui button.primary {
   background: var(--admission-accent);
   border-color: var(--admission-accent);
-  color: #fff;
+  color: var(--text-on-primary);
+}
+.admission-ui button:hover:enabled {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.admission-ui button.primary:hover:enabled {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 .admission-ui button:disabled {
   opacity: 0.55;
   cursor: default;
 }
 .admission-ui :focus-visible {
-  outline: 3px solid #d28c37;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 .admission-ui a {
-  color: #1e6259;
+  color: var(--accent-strong);
   text-decoration: underline;
 }
 .admission-ui fieldset {
-  border: 1px solid #d7e0de;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 14px;
   margin: 16px 0;
   min-width: 0;
@@ -187,11 +195,11 @@
 }
 .admission-case-button small {
   font-size: 12px;
-  color: #506c68;
+  color: var(--text-muted);
 }
 .admission-case-button.selected {
-  border: 2px solid #33766b;
-  background: #ecf5f1;
+  border: 2px solid var(--accent);
+  background: var(--accent-tint);
 }
 .admission-case-grid {
   display: grid;
@@ -200,44 +208,44 @@
 }
 .admission-badge {
   display: inline-block;
-  background: #e2eeea;
-  color: #214d45;
-  border-radius: 20px;
+  background: var(--accent-tint-strong);
+  color: var(--accent-strong);
+  border-radius: var(--radius-sm);
   font-size: 13px;
   padding: 4px 10px;
   font-weight: 600;
 }
 .admission-error {
-  background: #fff0ef;
-  border: 1px solid #c98f89;
-  color: #7d2923;
+  background: var(--danger-tint);
+  border: 1px solid var(--danger-line);
+  color: var(--danger);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   white-space: pre-wrap;
 }
 .admission-notice {
-  background: #e3f4eb;
-  border: 1px solid #97c6b2;
-  color: #235540;
+  background: var(--success-tint);
+  border: 1px solid var(--success-line);
+  color: var(--success);
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .admission-muted {
   font-size: 13px;
-  color: #566f6a;
+  color: var(--text-muted);
 }
 .admission-pre {
   white-space: pre-wrap;
 }
 .admission-recovery {
-  background: #fff9e9;
-  border: 1px solid #e0c793;
+  background: var(--warning-tint);
+  border: 1px solid var(--warning-line);
   padding: 14px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   margin: 14px 0;
 }
 .admission-file {
-  border-bottom: 1px solid #dde6e2;
+  border-bottom: 1px solid var(--line);
   padding: 10px 0;
 }
 .admission-ui details {
@@ -246,11 +254,11 @@
 .admission-ui summary {
   cursor: pointer;
   font-weight: 600;
-  color: #245e54;
+  color: var(--accent-strong);
 }
 .admission-editor-row {
-  background: #f4f7f5;
-  border-radius: 8px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
   padding: 14px;
   margin: 12px 0;
 }
@@ -258,11 +266,11 @@
   display: grid;
   grid-template-columns: minmax(100px, 1fr) 2fr;
   gap: 12px;
-  border-bottom: 1px solid #e4eae7;
+  border-bottom: 1px solid var(--line);
   padding: 8px 0;
 }
 .admission-submission dt {
-  color: #4a635d;
+  color: var(--text-muted);
 }
 .admission-submission dd {
   margin: 0;
@@ -273,14 +281,14 @@
   list-style: none;
 }
 .admission-history > li {
-  border-left: 3px solid #b5cfc5;
+  border-left: 3px solid var(--accent);
   padding: 8px 14px;
   margin: 12px 0;
-  background: #f7faf8;
+  background: var(--surface-alt);
 }
 .admission-history small {
   display: block;
-  color: #587268;
+  color: var(--text-muted);
   font-size: 12px;
   margin: 5px 0;
 }

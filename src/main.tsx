@@ -1,5 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+// The brand book's fallback font, self-hosted (Cyrillic, Cyrillic Extended for Kazakh, Latin); no CDN, so it works offline.
+import "@fontsource-variable/montserrat";
 import "./styles.css";
 const AuthShell = React.lazy(() => import("./AuthShell"));
 const ApplicantPortal = React.lazy(() => import("./ApplicantPortal"));

@@ -32,9 +32,9 @@
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 50%;
-  background: #e3ede0;
-  color: var(--dark);
+  border-radius: var(--radius-round);
+  background: var(--accent-tint-strong);
+  color: var(--primary);
   font-size: 12px;
   font-weight: 700;
 }
@@ -49,16 +49,16 @@
   padding: 6px 10px;
 }
 .lesson-pupil-status button[aria-pressed="true"] {
-  background: var(--green);
-  border-color: var(--green);
-  color: white;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-on-primary);
 }
 .lesson-pupil-chip {
   margin: 0;
   padding: 4px 10px;
-  border-radius: 999px;
-  background: #eef2ec;
-  color: #566355;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
   font-size: 0.9em;
   justify-self: start;
 }
@@ -74,7 +74,7 @@
 }
 .lesson-pupil-extra small {
   flex: 1 1 100%;
-  color: #697966;
+  color: var(--text-muted);
 }
 .lesson-pupil-grades {
   display: flex;
@@ -101,5 +101,5 @@
 }
 .lesson-quick small {
   flex: 1 1 220px;
-  color: #697966;
+  color: var(--text-muted);
 }

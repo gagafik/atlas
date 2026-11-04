@@ -2,17 +2,15 @@
   width: min(1180px, calc(100vw - 32px));
   max-height: 94dvh;
   box-sizing: border-box;
-  border: 1px solid #bfd0d6;
-  border-radius: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 26px;
-  background: #f3f7f8;
-  color: #233b47;
-  font:
-    15px/1.5 system-ui,
-    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 var(--font);
 }
 .handover-dialog::backdrop {
-  background: #12263188;
+  background: var(--scrim);
 }
 .handover-dialog header,
 .handover-toolbar,
@@ -43,7 +41,7 @@
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: #496f7b;
+  color: var(--accent-strong);
 }
 .handover-body {
   border: 0;
@@ -61,9 +59,9 @@
 .handover-dialog textarea {
   font: inherit;
   color: inherit;
-  background: white;
-  border: 1px solid #a7bec7;
-  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 8px;
   min-width: 0;
   max-width: 100%;
@@ -78,38 +76,44 @@
   font: inherit;
 }
 .handover-dialog button {
-  border: 1px solid #a7bec7;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 13px;
-  background: white;
-  color: #233b47;
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
 }
 .handover-dialog button:hover {
-  background: #e3eef1;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .handover-dialog button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .handover-dialog :is(button, a, input, select, textarea):focus-visible {
-  outline: 3px solid #4d8ba0;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 .handover-dialog a {
-  color: #255d71;
+  color: var(--accent-strong);
   text-underline-offset: 3px;
 }
 .handover-dialog .handover-primary,
 .handover-tabs button[aria-pressed="true"] {
-  background: #28596a;
-  color: white;
-  border-color: #28596a;
+  background: var(--primary);
+  color: var(--text-on-primary);
+  border-color: var(--primary);
+}
+.handover-dialog .handover-primary:hover,
+.handover-tabs button[aria-pressed="true"]:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 .handover-tabs {
   margin: 18px 0;
   padding-bottom: 14px;
-  border-bottom: 1px solid #cedfe4;
+  border-bottom: 1px solid var(--line);
 }
 .handover-toolbar {
   margin: 12px 0;
@@ -137,17 +141,17 @@
   margin: 12px 0;
 }
 .handover-card {
-  border: 1px solid #cfdee3;
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 18px;
-  background: white;
+  background: var(--surface);
   min-width: 0;
 }
 .handover-status {
   display: inline-block;
-  background: #e9f1f3;
+  background: var(--surface-sunken);
   padding: 3px 8px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
 }
 .handover-actions {
@@ -162,7 +166,7 @@
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
-  accent-color: #28596a;
+  accent-color: var(--accent);
 }
 .handover-policy,
 .handover-preserve {
@@ -171,33 +175,33 @@
 }
 .handover-policy {
   padding: 12px;
-  border-left: 3px solid #6998a8;
-  background: #edf4f6;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-tint);
 }
 .handover-review {
-  background: #eaf4e8;
-  border: 1px solid #a7c29c;
-  border-radius: 10px;
+  background: var(--success-tint);
+  border: 1px solid var(--success-line);
+  border-radius: var(--radius);
   padding: 16px;
   margin: 16px 0;
 }
 .handover-error {
   padding: 12px;
-  border: 1px solid #d5a49a;
-  border-radius: 9px;
-  background: #fff0e9;
-  color: #7a3026;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-tint);
+  color: var(--danger);
   white-space: pre-wrap;
 }
 .handover-notice {
   padding: 12px;
-  border: 1px solid #b0c9d1;
-  border-radius: 9px;
-  background: #eaf2f5;
+  border: 1px solid var(--info-line);
+  border-radius: var(--radius);
+  background: var(--info-tint);
 }
 .handover-empty {
   padding: 20px;
-  color: #53717d;
+  color: var(--text-muted);
 }
 .handover-class-grid {
   display: grid;
@@ -211,7 +215,7 @@
 }
 .handover-history li {
   padding: 10px;
-  border-bottom: 1px solid #cedfe4;
+  border-bottom: 1px solid var(--line);
 }
 .handover-dialog summary {
   cursor: pointer;

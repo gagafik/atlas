@@ -2,17 +2,15 @@
   width: min(1200px, calc(100vw - 32px));
   max-height: 94dvh;
   box-sizing: border-box;
-  border: 1px solid #c5d5cb;
-  border-radius: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 26px;
-  background: #f6f8f2;
-  color: #263d2e;
-  font:
-    15px/1.5 system-ui,
-    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 var(--font);
 }
 .canteen-dialog::backdrop {
-  background: #14251c80;
+  background: var(--scrim);
 }
 .canteen-dialog header,
 .canteen-toolbar,
@@ -43,7 +41,7 @@
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.1em;
-  color: #536d3b;
+  color: var(--accent-strong);
 }
 .canteen-body {
   border: 0;
@@ -59,10 +57,10 @@
 .canteen-dialog select,
 .canteen-dialog textarea {
   font: inherit;
-  color: #263d2e;
-  background: white;
-  border: 1px solid #aebfac;
-  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   padding: 8px;
   min-width: 0;
   max-width: 100%;
@@ -77,15 +75,16 @@
   font: inherit;
 }
 .canteen-dialog button {
-  border: 1px solid #a8bca5;
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 9px 13px;
-  background: #fff;
-  color: #263d2e;
+  background: var(--surface);
+  color: var(--text);
   cursor: pointer;
 }
 .canteen-dialog button:hover {
-  background: #e8efdf;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .canteen-dialog button:disabled {
   opacity: 0.5;
@@ -93,23 +92,28 @@
 }
 .canteen-dialog button:focus-visible,
 .canteen-dialog a:focus-visible {
-  outline: 3px solid #6b9341;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 .canteen-dialog a {
-  color: #345b1e;
+  color: var(--accent-strong);
   text-underline-offset: 3px;
 }
 .canteen-dialog .canteen-primary,
 .canteen-tabs button[aria-pressed="true"] {
-  background: #385d2e;
-  color: white;
-  border-color: #385d2e;
+  background: var(--primary);
+  color: var(--text-on-primary);
+  border-color: var(--primary);
+}
+.canteen-dialog .canteen-primary:hover,
+.canteen-tabs button[aria-pressed="true"]:hover {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
 }
 .canteen-tabs {
   margin: 18px 0;
   padding-bottom: 14px;
-  border-bottom: 1px solid #d2dfc8;
+  border-bottom: 1px solid var(--line);
 }
 .canteen-period {
   margin: 12px 0 20px;
@@ -140,9 +144,9 @@
 }
 .canteen-card,
 .canteen-order {
-  border: 1px solid #d4dfcf;
-  background: white;
-  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius);
   padding: 18px;
   margin: 0 0 16px;
 }
@@ -156,20 +160,20 @@
   text-align: left;
 }
 .canteen-menu-list button.selected {
-  border: 2px solid #50733f;
-  background: #edf3e5;
+  border: 2px solid var(--accent);
+  background: var(--accent-tint);
 }
 .canteen-menu-list small,
 .canteen-muted {
-  color: #61745e;
+  color: var(--text-muted);
 }
 .canteen-empty {
   padding: 20px;
-  color: #61745e;
+  color: var(--text-muted);
 }
 .canteen-dish {
   padding: 16px 0;
-  border-top: 1px solid #e0e8da;
+  border-top: 1px solid var(--line);
 }
 .canteen-dish-title {
   justify-content: space-between;
@@ -184,8 +188,8 @@
 .canteen-status {
   display: inline-block;
   font-size: 13px;
-  background: #edf2e8;
-  border-radius: 5px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
   padding: 3px 7px;
 }
 .canteen-actions {
@@ -200,7 +204,7 @@
   flex: 0 0 auto;
   width: 18px;
   height: 18px;
-  accent-color: #385d2e;
+  accent-color: var(--accent);
 }
 .canteen-check-grid {
   display: grid;
@@ -212,8 +216,8 @@
 .canteen-class-choice {
   margin: 12px 0;
   padding: 10px;
-  border: 1px solid #d2dfc8;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .canteen-class-choice summary,
 .canteen-order summary {
@@ -221,8 +225,8 @@
   overflow-wrap: anywhere;
 }
 .canteen-variant {
-  border: 1px solid #c9d8bf;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 15px;
   margin: 16px 0;
   min-width: 0;
@@ -244,15 +248,15 @@
 }
 .canteen-choice-list label {
   padding: 7px;
-  background: #f4f7ef;
-  border-radius: 6px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
   flex-wrap: wrap;
 }
 .canteen-preview {
   padding: 16px;
-  background: #f3f6e3;
-  border: 1px solid #b9ca86;
-  border-radius: 10px;
+  background: var(--info-tint);
+  border: 1px solid var(--info-line);
+  border-radius: var(--radius);
   margin: 14px 0;
 }
 .canteen-preview ul {
@@ -275,7 +279,7 @@
   margin: 0;
 }
 .canteen-copy {
-  border-top: 1px solid #d4dfcf;
+  border-top: 1px solid var(--line);
   padding-top: 16px;
   margin-top: 14px;
 }
@@ -287,8 +291,8 @@
 }
 .canteen-staff-row {
   padding: 12px;
-  border: 1px solid #d4dfcf;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   min-width: 0;
 }
 .canteen-totals {
@@ -302,8 +306,8 @@
   gap: 4px;
   min-width: 105px;
   padding: 13px;
-  background: #eef3e7;
-  border-radius: 8px;
+  background: var(--accent-tint);
+  border-radius: var(--radius);
 }
 .canteen-totals strong {
   font-size: 24px;
@@ -318,35 +322,35 @@
 }
 .canteen-dialog th,
 .canteen-dialog td {
-  border-bottom: 1px solid #d6dfcf;
+  border-bottom: 1px solid var(--line);
   padding: 9px;
   text-align: left;
   vertical-align: top;
 }
 .canteen-dialog th {
   font-size: 13px;
-  background: #f0f5e9;
+  background: var(--surface-sunken);
 }
 .canteen-error {
   padding: 12px;
-  border: 1px solid #d5a49a;
-  border-radius: 9px;
-  background: #fff0e9;
-  color: #7a3026;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-tint);
+  color: var(--danger);
   white-space: pre-wrap;
 }
 .canteen-notice {
   padding: 12px;
-  border: 1px solid #adc6a2;
-  border-radius: 9px;
-  background: #eef5e8;
+  border: 1px solid var(--success-line);
+  border-radius: var(--radius);
+  background: var(--success-tint);
 }
 .canteen-history {
   padding-left: 23px;
 }
 .canteen-history li {
   padding: 10px;
-  border-bottom: 1px solid #d4dfcf;
+  border-bottom: 1px solid var(--line);
 }
 .canteen-history p {
   margin: 4px 0;

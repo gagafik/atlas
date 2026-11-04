@@ -1,4 +1,4 @@
-/* Hall TV board: dark, high contrast, em-sized so it scales from a laptop to a 4K wall. Designed at a 40 px font on 1920x1080. */
+/* Hall TV board: white type on the brand's dark blue, high contrast, em-sized so it scales from a laptop to a 4K wall. Designed at a 40 px font on 1920x1080. */
 .hall-board {
   position: relative;
   box-sizing: border-box;
@@ -9,9 +9,9 @@
   display: flex;
   flex-direction: column;
   padding: 0.6em 0.9em;
-  background: #0b1714;
-  color: #ffffff;
-  font-family: "Manrope", "Segoe UI", sans-serif;
+  background: var(--surface-inverse);
+  color: var(--text-on-primary);
+  font-family: var(--font);
   font-weight: 600;
   font-size: clamp(18px, 2.1vw, 46px);
   line-height: 1.25;
@@ -29,13 +29,18 @@
 .hall-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.8em;
   padding-bottom: 0.4em;
-  border-bottom: 2px solid #2c4a40;
+  border-bottom: 2px solid var(--on-primary-line);
+}
+.hall-head .hall-logo {
+  flex: none;
+  height: 2.4em;
+  margin-right: 0.6em;
 }
 .hall-title {
   display: grid;
+  margin-right: auto;
   gap: 0.1em;
   min-width: 0;
 }
@@ -46,7 +51,7 @@
   white-space: nowrap;
 }
 .hall-title span {
-  color: #d7e4de;
+  color: var(--text-on-primary-muted);
   font-size: 0.6em;
 }
 .hall-clock {
@@ -60,14 +65,14 @@
   font-variant-numeric: tabular-nums;
 }
 .hall-clock span {
-  color: #d7e4de;
+  color: var(--text-on-primary-muted);
   font-size: 0.6em;
 }
 .hall-offline {
   padding: 0.25em 0.6em;
-  border-radius: 0.3em;
-  background: #ff8a80;
-  color: #000000;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bright);
+  color: var(--text);
   font-size: 0.6em;
   font-weight: 800;
 }
@@ -98,7 +103,7 @@
 }
 .hall-day h2 small,
 .hall-notes h2 small {
-  color: #d7e4de;
+  color: var(--text-on-primary-muted);
   font-size: 0.6em;
   font-weight: 600;
 }
@@ -107,20 +112,21 @@
   padding: 0;
   list-style: none;
 }
+/* Montserrat is wide: the row type is 0.66em with the row height kept at 76 px (2.874em x 0.66 x 40 px) for pageSize. The columns hold a two-digit period label, three parallel classes, "Информатика" and a full-name substitution on two lines. */
 .hall-row {
   display: grid;
-  grid-template-columns: 6.6em 5.2em minmax(0, 1fr) 6em minmax(0, 1.7fr);
+  grid-template-columns: 8.7em 5.3em minmax(0, 1fr) 5.6em minmax(0, 2.1fr);
   align-items: center;
-  gap: 0.7em;
+  gap: 0.4em;
   box-sizing: border-box;
-  min-height: 2.71em;
-  max-height: 2.71em;
-  padding: 0 0.5em;
-  border-bottom: 1px solid #2c4a40;
-  font-size: 0.7em;
+  min-height: 2.874em;
+  max-height: 2.874em;
+  padding: 0 0.3em;
+  border-bottom: 1px solid var(--on-primary-line);
+  font-size: 0.66em;
 }
 .hall-row:nth-child(odd) {
-  background: #11231e;
+  background: var(--surface-inverse-deep);
 }
 .hall-time {
   font-variant-numeric: tabular-nums;
@@ -128,7 +134,7 @@
 }
 .hall-time b {
   margin-right: 0.4em;
-  color: #8fd3ff;
+  color: var(--blue-300);
 }
 .hall-class,
 .hall-subject {
@@ -142,36 +148,36 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
-  color: #ffffff;
+  color: var(--text-on-primary);
 }
 .hall-kind {
   justify-self: start;
   padding: 0.1em 0.5em;
-  border-radius: 0.3em;
-  background: #8fd3ff;
-  color: #000000;
+  border-radius: var(--radius-sm);
+  background: var(--blue-300);
+  color: var(--text);
   font-size: 0.85em;
   font-weight: 800;
   white-space: nowrap;
 }
 .hall-kind-substitution {
-  background: #ffd84d;
+  background: var(--warning-bright);
 }
 .hall-kind-cancelled,
 .hall-kind-closed {
-  background: #ff8a80;
+  background: var(--danger-line);
 }
 .hall-kind-moved_out,
 .hall-kind-moved_in {
-  background: #d7c4ff;
+  background: var(--grey-200);
 }
 .hall-kind-added {
-  background: #9be7a4;
+  background: var(--success-line);
 }
 .hall-empty,
 .hall-more {
   padding: 0.4em 0.35em;
-  color: #d7e4de;
+  color: var(--text-on-primary-muted);
   font-size: 0.7em;
 }
 .hall-notes {
@@ -181,9 +187,9 @@
   min-height: 0;
   overflow: hidden;
   padding: 0.5em 0.7em;
-  border: 2px solid #2c4a40;
-  border-radius: 0.5em;
-  background: #11231e;
+  border: 2px solid var(--on-primary-line);
+  border-radius: var(--radius);
+  background: var(--surface-inverse-deep);
 }
 /* The panel is cut off, so long texts are split into parts that fit; the probe measures them in this very layout. */
 .hall-note-view {
@@ -205,7 +211,7 @@
   align-items: baseline;
   justify-content: space-between;
   font-size: 0.7em;
-  color: #d7e4de;
+  color: var(--text-on-primary-muted);
 }
 .hall-notes h3 {
   margin: 0.4em 0 0.3em;
@@ -241,9 +247,17 @@
 }
 .hall-tools button {
   font-size: 0.45em;
-  border: 1px solid #8fd3ff;
-  background: #000000;
-  color: #ffffff;
+  border: 1px solid var(--blue-300);
+  background: var(--surface-inverse-deep);
+  color: var(--text-on-primary);
+}
+/* The global blue ring is only 2.1:1 on this blue; white is 10.8:1. */
+.hall-board :focus-visible {
+  outline-color: var(--focus-on-dark);
+}
+.hall-tools button:hover {
+  background: var(--on-primary-active);
+  border-color: var(--focus-on-dark);
 }
 @media (max-width: 600px) {
   .hall-board:not(.hall-fixed) {
@@ -267,8 +281,8 @@
     max-height: none;
     padding: 0.5em;
     margin-bottom: 0.4em;
-    border: 1px solid #2c4a40;
-    border-radius: 0.4em;
+    border: 1px solid var(--on-primary-line);
+    border-radius: var(--radius);
     font-size: 0.9em;
   }
   .hall-board:not(.hall-fixed) .hall-row > span {

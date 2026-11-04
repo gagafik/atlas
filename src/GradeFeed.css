@@ -2,8 +2,8 @@
   margin: 16px 0;
   padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
+  border-radius: var(--radius);
+  background: var(--surface);
   min-width: 0;
 }
 .grade-feed-head {
@@ -18,13 +18,13 @@
 }
 .grade-feed-count {
   padding: 2px 10px;
-  border-radius: 999px;
-  background: #edf3e7;
-  color: var(--dark);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text);
 }
 .grade-feed-count.grade-feed-count-open {
-  background: #fdf1d6;
-  color: #7a4f00;
+  background: var(--warning-tint);
+  color: var(--warning);
   font-weight: 700;
 }
 .grade-feed p {
@@ -33,11 +33,11 @@
   overflow-wrap: anywhere;
 }
 .grade-feed-meta {
-  color: #66706a;
+  color: var(--text-muted);
   font-size: 0.92em;
 }
 .grade-feed-error {
-  color: #9a3d1c;
+  color: var(--danger);
 }
 .grade-feed-list {
   list-style: none;
@@ -50,12 +50,12 @@
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--line);
-  border-radius: 8px;
-  background: var(--warm);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
 }
 .grade-feed-item.grade-feed-unsigned {
-  border-left-color: #d99a1e;
-  background: #fffaf0;
+  border-left-color: var(--warning-bright);
+  background: var(--warning-tint);
 }
 .grade-feed-item p {
   margin: 2px 0 0;
@@ -70,7 +70,7 @@
 .grade-feed-change,
 .grade-feed-badge {
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-size: 0.85em;
 }
 .grade-feed-change {
@@ -81,27 +81,27 @@
   white-space: nowrap;
 }
 .grade-feed-change {
-  background: #eef2f5;
-  color: #3b4a55;
+  background: var(--surface-sunken);
+  color: var(--text);
 }
 .grade-feed-new .grade-feed-change {
-  background: #e3f3e8;
-  color: #1f6a35;
+  background: var(--success-tint);
+  color: var(--success);
 }
 .grade-feed-changed .grade-feed-change {
-  background: #e6effa;
-  color: #234f86;
+  background: var(--info-tint);
+  color: var(--info);
 }
 .grade-feed-removed .grade-feed-change {
-  background: #fbe9e2;
-  color: #9a3d1c;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .grade-feed-removed .grade-feed-value {
   text-decoration: line-through;
 }
 .grade-feed-badge {
-  background: #fdf1d6;
-  color: #7a4f00;
+  background: var(--warning-tint);
+  color: var(--warning);
 }
 .grade-feed-comment {
   white-space: pre-wrap;
@@ -121,7 +121,7 @@
   text-align: left;
 }
 .grade-feed-table td.grade-feed-open {
-  color: #7a4f00;
+  color: var(--warning);
   font-weight: 700;
 }
 @media print {

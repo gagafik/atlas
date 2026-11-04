@@ -73,6 +73,7 @@ import {
   Wrench,
 } from "lucide-react";
 import NotificationCenter from "./NotificationCenter";
+import SchoolLogo from "./SchoolLogo";
 import { roleNames, type Account } from "./auth";
 import type { JournalPanelName, JournalView } from "./journal";
 import { unreadLabel } from "./messages";
@@ -550,15 +551,17 @@ export default function Shell({
             if (home) select(home);
           }}
         >
-          <div className="brand-symbol">
-            <Grid2X2 size={23} />
-          </div>
-          <div>
-            <strong>
-              атлас<span>•</span>
-            </strong>
-            <small>школьное расписание</small>
-          </div>
+          {rail ? (
+            // The lockup does not fit the folded menu: the Atlas mark stands for the home page there.
+            <>
+              <div className="brand-symbol">
+                <Grid2X2 size={23} />
+              </div>
+              <span>Атлас, главная</span>
+            </>
+          ) : (
+            <SchoolLogo />
+          )}
         </a>
         <nav aria-label="Главное меню">
           {menu.map((block, index) => (

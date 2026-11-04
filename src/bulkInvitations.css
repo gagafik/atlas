@@ -1,8 +1,8 @@
 .bulk-invitations {
   margin: 24px 0;
   padding: 16px;
-  border: 1px solid #dfe5ec;
-  border-radius: 12px;
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
   min-width: 0;
 }
 .bulk-invitations fieldset {

@@ -12,7 +12,7 @@
   font-weight: 400;
 }
 .operations-dialog section {
-  border-bottom: 1px solid #d5dce0;
+  border-bottom: var(--line-width) solid var(--line);
   padding-bottom: 16px;
   margin-bottom: 16px;
 }
@@ -23,9 +23,9 @@
 }
 .operations-error {
   padding: 12px;
-  background: #fff0ec;
-  border: 1px solid #d7afa2;
-  border-radius: 8px;
+  background: var(--danger-tint);
+  border: var(--line-width) solid var(--danger-line);
+  border-radius: var(--radius);
 }
 @media (max-width: 480px) {
   .operations-facts {

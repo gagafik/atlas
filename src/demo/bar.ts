@@ -9,13 +9,15 @@ const LABELS: Record<DemoRole, string> = {
 };
 
 const STYLE = `
+/* White with a dark-blue line: it reads as a note above the app, not as a second top bar (the tokens come from styles.css). */
 .demo-bar{position:fixed;top:0;left:0;right:0;z-index:400;box-sizing:border-box;display:flex;flex-wrap:wrap;
-  align-items:center;gap:2px 10px;padding:5px 12px;background:#1d332a;color:#f2f7f3;
-  font:12px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif}
+  align-items:center;gap:2px 10px;padding:5px 12px;background:var(--surface,#fefefe);color:var(--ink,#231f20);
+  border-bottom:2px solid var(--brand-navy,#083a81);
+  font:12px/1.35 var(--font,"Segoe UI",system-ui,sans-serif)}
 .demo-bar-text{flex:1 1 auto}
 .demo-bar nav{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px}
-.demo-bar a{color:#d3ecdd;padding:3px 8px;border-radius:6px;text-decoration:underline;white-space:nowrap}
-.demo-bar a[aria-current="page"]{background:#f2f7f3;color:#1d332a;text-decoration:none;font-weight:600}
+.demo-bar a{color:var(--accent-strong,#1a56ae);padding:3px 8px;border-radius:2px;text-decoration:underline;white-space:nowrap}
+.demo-bar a[aria-current="page"]{background:var(--brand-navy,#083a81);color:var(--brand-white,#fefefe);text-decoration:none;font-weight:600}
 body{padding-top:var(--demo-bar,0px)}
 .sidebar,.sidebar-backdrop,.modal-backdrop{top:var(--demo-bar,0px)!important}
 .modal{max-height:calc(100dvh - var(--demo-bar,0px) - 50px)}

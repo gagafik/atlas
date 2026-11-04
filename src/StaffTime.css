@@ -1,14 +1,14 @@
 .staff-time {
   width: min(1100px, calc(100vw - 32px));
   max-height: 90dvh;
-  border: 1px solid #cbd5e1;
-  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   padding: 24px;
-  background: var(--surface, #fff);
-  color: var(--text, #1e293b);
+  background: var(--surface);
+  color: var(--text);
 }
 .staff-time::backdrop {
-  background: #0f172a88;
+  background: var(--scrim);
 }
 .staff-time header {
   display: flex;
@@ -21,7 +21,7 @@
 }
 .staff-time header p,
 .time-help {
-  color: #526078;
+  color: var(--text-muted);
 }
 .staff-time fieldset {
   border: 0;
@@ -40,11 +40,11 @@
   max-width: 100%;
   min-width: 0;
   padding: 8px;
-  border: 1px solid #b8c5d4;
-  border-radius: 6px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   box-sizing: border-box;
-  background: #fff;
-  color: #1e293b;
+  background: var(--surface);
+  color: var(--text);
 }
 .staff-time textarea {
   width: 100%;
@@ -70,8 +70,8 @@
   gap: 20px;
   flex-wrap: wrap;
   padding: 16px;
-  background: #edf4ff;
-  border-radius: 8px;
+  background: var(--accent-tint);
+  border-radius: var(--radius);
 }
 .staff-time article,
 .staff-time form,
@@ -79,19 +79,19 @@
 .time-history {
   padding: 16px;
   margin: 16px 0;
-  border: 1px solid #d2dce8;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .staff-time h4 {
   margin: 0;
 }
 .time-preview {
-  background: #fff7e5;
+  background: var(--warning-tint);
 }
 .time-error {
   padding: 12px;
-  background: #fff0f0;
-  color: #9b2525;
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 .time-table {
   overflow: auto;
@@ -104,7 +104,7 @@
 .time-table td {
   padding: 10px;
   text-align: left;
-  border-bottom: 1px solid #d2dce8;
+  border-bottom: 1px solid var(--line);
 }
 .time-history pre {
   white-space: pre-wrap;
@@ -120,7 +120,7 @@
   cursor: pointer;
 }
 .staff-time :focus-visible {
-  outline: 3px solid #2463eb;
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 @media (max-width: 600px) {

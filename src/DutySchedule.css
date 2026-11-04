@@ -58,9 +58,9 @@
 .duty-grid-scroll {
   overflow-x: auto;
   max-width: 100%;
-  border: 1px solid #dce3de;
-  border-radius: 10px;
-  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .duty-grid,
 .duty-fair,
@@ -73,29 +73,29 @@
 .duty-fair th,
 .duty-fair td,
 .duty-people td {
-  border: 1px solid #dce3de;
+  border: 1px solid var(--line);
   padding: 6px 8px;
   text-align: left;
   vertical-align: top;
 }
 .duty-grid thead th,
 .duty-fair thead th {
-  background: #f4f7f4;
+  background: var(--surface-alt);
   white-space: nowrap;
 }
 .duty-grid tbody th {
   position: sticky;
   left: 0;
   min-width: 120px;
-  background: #f8f9f6;
+  background: var(--surface-alt);
   z-index: 1;
 }
 .duty-grid td {
   min-width: 150px;
 }
 .duty-grid .closed {
-  background: #f1f1ef;
-  color: #64716a;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
 }
 .duty-grid small {
   display: block;
@@ -110,7 +110,7 @@
   font-weight: 700;
 }
 .duty-free {
-  color: #9a4b00;
+  color: var(--warning);
   font-weight: 700;
 }
 .duty-fair td {
@@ -137,9 +137,9 @@
   gap: 14px;
   align-items: start;
   padding: 14px 16px;
-  background: #fff;
-  border: 1px solid #dce3de;
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 .duty-card p {
   margin: 4px 0;
@@ -148,23 +148,23 @@
   display: inline-block;
   margin: 2px 6px 2px 0;
   padding: 2px 8px;
-  border-radius: 999px;
-  background: #eef2ee;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
   font-size: 12px;
   font-weight: 700;
 }
 .duty-badge.pending {
-  background: #fdf1d6;
+  background: var(--warning-tint);
 }
 .duty-badge.approved {
-  background: #dcefe3;
+  background: var(--success-tint);
 }
 .duty-badge.rejected,
 .duty-badge.cancelled {
-  background: #f4e2df;
+  background: var(--danger-tint);
 }
 .duty-badge.closed {
-  background: #e4e9f1;
+  background: var(--line);
 }
 /* The shared record list reserves a checkbox column; these lists have none. */
 .commitment-list.duty-template-list article,
