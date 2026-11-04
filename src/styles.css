@@ -69,7 +69,6 @@
   --line-width: 1px;
   --line-width-strong: 2px;
   --shadow-overlay: 0 8px 24px #083a8126;
-  --scrim: #052a5e8c;
   --focus-glow: 0 0 0 3px #226bd133;
   /* On a dark-blue fill (top bar, hall screen): hover and pressed wash of white, and the divider line. */
   --on-primary-hover: #ffffff1f;
@@ -93,6 +92,11 @@
   font-synthesis: none;
   font-weight: var(--weight-medium);
   font-size: 13px;
+}
+/* The dimming behind a dialog. ::backdrop inherits nothing from :root before Chrome 122, Firefox 120 and Safari 17.4, so the token is declared on it too. */
+:root,
+::backdrop {
+  --scrim: #052a5e8c;
 }
 * {
   box-sizing: border-box;
@@ -1326,6 +1330,7 @@ main {
 .cell-add:hover {
   border-color: var(--accent);
   background: var(--accent-tint);
+  color: var(--accent-strong);
 }
 .cell-add span {
   display: none;
@@ -4178,6 +4183,16 @@ main {
   margin-top: 8px;
 }
 .auth-screen > button {
+  margin-top: 12px;
+}
+/* The three actions of the sign-in form are one column across the card, the same height and 12 px apart. */
+.auth-screen form:not([class]) > button,
+.auth-screen form:not([class]) > p > button:only-child {
+  width: 100%;
+  min-height: 42px;
+  line-height: 1.4;
+}
+.auth-screen form:not([class]) > p:has(> button:only-child) {
   margin-top: 12px;
 }
 .auth-password {

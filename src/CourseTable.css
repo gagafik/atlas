@@ -204,7 +204,8 @@
   background: transparent;
   font-size: 13px;
 }
-.course-table td input:focus {
+/* The mark inputs show the active-cell ring instead; the row tick box keeps the global focus ring. */
+.course-table td input:not([type="checkbox"]):focus {
   outline: none;
 }
 /* An unpublished draft mark and a mark with a comment. */

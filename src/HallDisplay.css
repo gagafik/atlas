@@ -112,17 +112,18 @@
   padding: 0;
   list-style: none;
 }
+/* Montserrat is wide: the row type is 0.66em with the row height kept at 76 px (2.874em x 0.66 x 40 px) for pageSize. The columns hold a two-digit period label, three parallel classes, "Информатика" and a full-name substitution on two lines. */
 .hall-row {
   display: grid;
-  grid-template-columns: 7.4em 4.2em minmax(0, 1.3fr) 6.8em minmax(0, 1.7fr);
+  grid-template-columns: 8.7em 5.3em minmax(0, 1fr) 5.6em minmax(0, 2.1fr);
   align-items: center;
-  gap: 0.7em;
+  gap: 0.4em;
   box-sizing: border-box;
-  min-height: 2.71em;
-  max-height: 2.71em;
-  padding: 0 0.5em;
+  min-height: 2.874em;
+  max-height: 2.874em;
+  padding: 0 0.3em;
   border-bottom: 1px solid var(--on-primary-line);
-  font-size: 0.7em;
+  font-size: 0.66em;
 }
 .hall-row:nth-child(odd) {
   background: var(--surface-inverse-deep);
@@ -249,6 +250,10 @@
   border: 1px solid var(--blue-300);
   background: var(--surface-inverse-deep);
   color: var(--text-on-primary);
+}
+/* The global blue ring is only 2.1:1 on this blue; white is 10.8:1. */
+.hall-board :focus-visible {
+  outline-color: var(--focus-on-dark);
 }
 .hall-tools button:hover {
   background: var(--on-primary-active);
