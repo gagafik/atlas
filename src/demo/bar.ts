@@ -35,12 +35,20 @@ dialog:modal{margin-top:calc(var(--demo-bar,0px) + 8px)!important;max-height:cal
 const UNAVAILABLE =
   /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Попробовать на примере|Вернуться в свою школу)$/;
 
+// The absence notes of the school are not in the snapshot of the administrator: that file is at the size limit of the
+// repository (tools/check_repository.py), so the entry that opens them stays out of the demo (the teacher's are there).
+const NOT_IN_SNAPSHOT = /^Записки об отсутствии$/;
+let shownRole: DemoRole | null = null;
+
 function tidy(): void {
   for (const element of document.querySelectorAll<HTMLElement>(
-    ".sidebar nav button, .account-menu button, .start-tiles button",
+    ".sidebar nav button, .account-menu button, .start-tiles button, .launcher-option",
   )) {
     const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
-    if (UNAVAILABLE.test(text) && !element.hasAttribute("data-demo-hidden"))
+    const hide =
+      UNAVAILABLE.test(text) ||
+      (shownRole === "admin" && NOT_IN_SNAPSHOT.test(text));
+    if (hide && !element.hasAttribute("data-demo-hidden"))
       element.setAttribute("data-demo-hidden", "");
   }
   // The built-in example school is not part of the demo.
@@ -54,6 +62,7 @@ function tidy(): void {
 }
 
 export function mountBar(role: DemoRole): void {
+  shownRole = role;
   const style = document.createElement("style");
   style.textContent = STYLE;
   document.head.append(style);

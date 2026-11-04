@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { useLaunch } from "./launch";
 import { csvCell, download } from "./utils";
 import QuizBankPanel from "./QuizBankPanel";
 import QuizBuilder from "./QuizBuilder";
@@ -505,6 +506,8 @@ export default function QuizzesPanel({ workspace }: { workspace: string }) {
   const [busy, setBusy] = useState(true),
     [error, setError] = useState(""),
     [activity, setActivity] = useState<Activity>({ dirty: false, busy: false });
+  // «Создать тест» of the launcher starts the builder like the button of the page.
+  useLaunch(["newTest"], () => edit());
   useEffect(() => {
     const leave = (e: Event) => {
       if (

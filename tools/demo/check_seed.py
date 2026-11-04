@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import names
+from . import names, school
 
 
 def main(argv=None):
@@ -80,6 +80,8 @@ def main(argv=None):
     check('substitution appears on the demo day', 'substitution' in json.dumps(calendar))
     inbox = get('parent', '/api/notifications/inbox')
     check('parent inbox is not empty', len(inbox['items']) > 0, str(len(inbox['items'])))
+    children = [child['id'] for child in get('parent', '/api/journal/options')['students']]
+    check('the showcase guardian has two children and the portal opens on the showcase pupil', children == [meta['showcase']['pupilId'], school.SIBLING_PUPIL], str(children))
     unread = {role: get(role, '/api/notifications/inbox')['unread'] for role in meta['roles']}
     check('only the latest notifications are unread', all(count <= 3 for count in unread.values()), str(unread))
     names_of_subjects = {subject['name'] for subject in state['subjects']}

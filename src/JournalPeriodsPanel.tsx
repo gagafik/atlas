@@ -89,13 +89,16 @@ const actions: Record<string, string> = {
 
 export default function JournalPeriodsPanel({
   workspace,
+  defaultOpen = false,
   onChanged,
 }: {
   workspace: string;
+  // Opened from the menu: the panel starts expanded.
+  defaultOpen?: boolean;
   onChanged: () => void;
 }) {
   const categories = useAssessmentCategories(workspace);
-  const [expanded, setExpanded] = useState(false),
+  const [expanded, setExpanded] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null);
   const [selected, setSelected] = useState<Period | null>(null),
     [name, setName] = useState(""),

@@ -15,6 +15,7 @@ import InvitationForm from "./InvitationForm";
 import SchoolLogo from "./SchoolLogo";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { useLaunch } from "./launch";
 import type { AccountId, ModalId } from "./navigation";
 import type { ShellFrame } from "./Shell";
 const App = lazy(() => import("./App"));
@@ -112,6 +113,10 @@ export default function AuthShell() {
         }
       | undefined
     >();
+  // «Воспитательная мера» of the launcher: the form opens on a measure, for pupils chosen in it.
+  useLaunch(["measure"], () =>
+    setBehaviourPrefill({ studentIds: [], measure: true }),
+  );
   useEffect(() => {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;

@@ -29,15 +29,19 @@ function schoolToday(options: JournalOptions) {
 }
 
 // The journal of a pupil or a parent: one child and one period for the four screens of the menu.
+// A family looks at the child the portal has chosen (`chosen`, empty until the portal knows its children); the staff reading
+// a pupil's report pick the pupil here.
 export default function FamilyJournal({
   workspace,
   options,
+  chosen,
   view,
   focus,
   family = true,
 }: {
   workspace: string;
   options: JournalOptions;
+  chosen?: string;
   view?: JournalView;
   focus?: JournalFocus;
   // False for the staff reading a pupil's report: the same screens over the records the account may read, without what only a family does.
@@ -46,7 +50,7 @@ export default function FamilyJournal({
   const { students } = options;
   const known = (id?: string) =>
     id && students.some((s) => s.id === id) ? id : undefined;
-  const [child, setChild] = useState(
+  const [picked, setPicked] = useState(
     () =>
       known(focus?.studentId) ??
       known(recallChild(workspace)) ??
@@ -54,14 +58,15 @@ export default function FamilyJournal({
       "",
   );
   const pick = (id: string) => {
-    setChild(id);
+    setPicked(id);
     rememberChild(workspace, id);
   };
-  // A notification opened while the journal is on screen points at another child.
+  // A notification opened while the report is on screen points at another pupil.
   useEffect(() => {
     const id = known(focus?.studentId);
-    if (id) pick(id);
+    if (id && chosen === undefined) pick(id);
   }, [focus]);
+  const child = known(chosen) ?? picked;
   const today = schoolToday(options);
   const choices = useMemo(
     () =>
@@ -139,12 +144,14 @@ export default function FamilyJournal({
         {ranged &&
           ` · ${choices.find((c) => c.id === period.id)?.name ?? "Период"}: ${dayText(period.start)} – ${dayText(period.end)}`}
       </p>
-      <ChildPicker
-        students={students}
-        value={child}
-        onChange={pick}
-        label={family ? "Ребёнок" : "Ученик"}
-      />
+      {chosen === undefined && (
+        <ChildPicker
+          students={students}
+          value={child}
+          onChange={pick}
+          label={family ? "Ребёнок" : "Ученик"}
+        />
+      )}
       {screen}
     </div>
   );

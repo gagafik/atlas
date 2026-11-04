@@ -33,6 +33,7 @@ import {
 } from "./courseTable";
 import { finalLabel } from "./finalGrades";
 import { ruDate } from "./journalCoverage";
+import { useLaunch } from "./launch";
 import "./CourseTable.css";
 
 const LEAVE = "В таблице есть несохранённые оценки. Перейти без сохранения?";
@@ -133,6 +134,14 @@ export default function CourseTablePanel({
     };
   }, [dirty]);
 
+  // «Новая оценка / работа» of the launcher: once the table of the course is on screen, «Новая работа» is pressed for the teacher.
+  const [newWorkAsked, setNewWorkAsked] = useState(false);
+  useLaunch(["newWork"], () => setNewWorkAsked(true));
+  useEffect(() => {
+    if (!newWorkAsked || !table) return;
+    setNewWorkAsked(false);
+    if (table.canEdit) void newWork();
+  }, [newWorkAsked, table]);
   useEffect(() => {
     if (!expanded || list) return;
     let live = true;

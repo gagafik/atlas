@@ -219,7 +219,10 @@ export default function App({
       if (!canLeaveHomework()) return;
       if (detail.workspace) setWorkspaceValue(detail.workspace);
       setPageValue(pages[event.type]);
-      setJournalView(undefined);
+      // The absence notes are a part of the journal of their own: the notice opens them alone.
+      setJournalView(
+        event.type === "atlas-open-absences" ? "absences" : undefined,
+      );
       setMessageFocus(
         focusRequest(
           event.type === "atlas-open-messages" ? detail.threadId : undefined,

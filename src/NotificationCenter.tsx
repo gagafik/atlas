@@ -315,6 +315,7 @@ export default function NotificationCenter({ identity }: { identity: string }) {
           "school",
           "POST",
         )) as OpenResult,
+        item.students,
       );
       if (target) {
         window.dispatchEvent(new CustomEvent(target[0], { detail: target[1] }));

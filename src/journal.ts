@@ -354,6 +354,26 @@ export const clockMinutes = (time: string) =>
   Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 export const lessonLength = (lesson: { start: string; end: string }) =>
   clockMinutes(lesson.end) - clockMinutes(lesson.start);
+/** The lesson of the day to start from at `minutes` after midnight: the one on, else the next one, else the last of
+ *  the day; none for a day without lessons. An archived lesson is not one to start from. */
+export function lessonOfNow<
+  T extends { archived?: boolean; lesson: { start: string; end: string } },
+>(lessons: T[], minutes: number): T | undefined {
+  const own = lessons
+    .filter((l) => !l.archived)
+    .sort(
+      (a, b) => clockMinutes(a.lesson.start) - clockMinutes(b.lesson.start),
+    );
+  return (
+    own.find(
+      (l) =>
+        clockMinutes(l.lesson.start) <= minutes &&
+        minutes < clockMinutes(l.lesson.end),
+    ) ??
+    own.find((l) => clockMinutes(l.lesson.start) >= minutes) ??
+    own[own.length - 1]
+  );
+}
 // The part of the lesson missed, at most the whole lesson; short lateness counts in minutes only.
 export function lateShare(minutes: number, start: string, end: string) {
   const length = lessonLength({ start, end });

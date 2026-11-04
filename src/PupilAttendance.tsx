@@ -360,6 +360,7 @@ export default function PupilAttendance({
             workspace={workspace}
             defaultOpen
             studentId={child}
+            pinned={family}
             compose={compose}
           />
         </div>

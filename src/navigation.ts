@@ -200,6 +200,10 @@ const ITEMS: Record<string, Spec> = {
     "attendance",
     "attendanceGrid",
   ),
+  // The other panels the day grid of the journal used to list under itself: each opens alone, where the server offers it.
+  absences: journalPart("Записки об отсутствии", "absences", "absences"),
+  coverage: journalPart("Заполнение журнала", "coverage", "coverage"),
+  periods: journalPart("Периоды журнала", "periods", "periods"),
   curriculum: {
     label: "Планы и заготовки",
     icon: "curriculum",
@@ -401,6 +405,8 @@ const LAYOUTS: Record<string, Layout> = {
     [
       group("learning", "Обучение", "learning", [
         "attendance",
+        "absences",
+        "coverage",
         "staffTime",
         "workload",
       ]),
@@ -425,6 +431,7 @@ const LAYOUTS: Record<string, Layout> = {
       group("control", "Центр управления", "control", [
         "access",
         "settings",
+        "periods",
         "sections",
         "hall",
         "operations",
@@ -460,6 +467,9 @@ const LAYOUTS: Record<string, Layout> = {
       group("learning", "Обучение", "learning", [
         "grades",
         "reports",
+        slot("attendance", "Сетка посещаемости"),
+        "coverage",
+        "periods",
         "curriculum",
         "materials",
         "homework",

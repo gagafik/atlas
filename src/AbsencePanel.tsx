@@ -106,6 +106,7 @@ export default function AbsencePanel({
   workspace,
   defaultOpen = false,
   studentId,
+  pinned = false,
   compose = false,
 }: {
   workspace: string;
@@ -113,6 +114,8 @@ export default function AbsencePanel({
   defaultOpen?: boolean;
   // The child the parent form starts with, when the account has that child.
   studentId?: string;
+  // The portal looks at that child: the form is for them and offers no other.
+  pinned?: boolean;
   // Opened to write a new note: the form is scrolled into view and focused once the options are here.
   compose?: boolean;
 }) {
@@ -506,29 +509,35 @@ export default function AbsencePanel({
                 </p>
               )}
               <fieldset disabled={locks.pick} className="access-fields">
-                <label className="field">
-                  <span>Ребёнок</span>
-                  <select
-                    value={student}
-                    onChange={(e) => {
-                      if (
-                        (reason || files.length) &&
-                        !window.confirm(
-                          "Начать форму для другого ребёнка? Неотправленный текст будет очищен.",
+                {pinned && !!child && child.id === studentId ? (
+                  <p className="info-line">
+                    Ребёнок: <strong>{child.name}</strong>
+                  </p>
+                ) : (
+                  <label className="field">
+                    <span>Ребёнок</span>
+                    <select
+                      value={student}
+                      onChange={(e) => {
+                        if (
+                          (reason || files.length) &&
+                          !window.confirm(
+                            "Начать форму для другого ребёнка? Неотправленный текст будет очищен.",
+                          )
                         )
-                      )
-                        return;
-                      setStudent(e.target.value);
-                      reset();
-                    }}
-                  >
-                    {options.students.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                          return;
+                        setStudent(e.target.value);
+                        reset();
+                      }}
+                    >
+                      {options.students.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 {/* Notes off for this class: only what writes a new notice is locked. */}
                 <fieldset disabled={locks.write} className="access-fields">
                   <div className="dated-fields">

@@ -1,7 +1,11 @@
 // What the shell reads for every role: the unread counter and the journal parts on offer.
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { journalPanels, type JournalPanelName } from "./journal";
+import {
+  journalPanels,
+  type JournalOptions,
+  type JournalPanelName,
+} from "./journal";
 import { startPolling } from "./polling";
 
 export type Unread = { count: number; more: boolean };
@@ -35,22 +39,41 @@ export function useMessageUnread(workspace: string): Unread {
   return unread;
 }
 
+// What the server tells the journal about the account: the parts on offer and the pupils it may read.
+// null while loading or where the account has no journal; `failed` when the request did not succeed.
+export function useJournalOptions(
+  workspace: string,
+  allowed: boolean,
+): { options: JournalOptions | null; failed: boolean } {
+  const [state, setState] = useState<{
+    workspace: string;
+    options: JournalOptions | null;
+    failed: boolean;
+  }>({ workspace, options: null, failed: false });
+  useEffect(() => {
+    setState({ workspace, options: null, failed: false });
+    if (!allowed || !workspace) return;
+    let live = true;
+    api("journal/options", workspace)
+      .then((r) => live && setState({ workspace, options: r, failed: false }))
+      .catch(
+        () => live && setState({ workspace, options: null, failed: true }),
+      );
+    return () => {
+      live = false;
+    };
+  }, [workspace, allowed]);
+  // The answer for the workspace that was left is not the answer for this one.
+  return state.workspace === workspace
+    ? state
+    : { options: null, failed: false };
+}
+
 // The parts of the journal the server has anything for. null while loading or where the account has no journal, [] when the request fails.
 export function useJournalPanels(
   workspace: string,
   allowed: boolean,
 ): JournalPanelName[] | null {
-  const [panels, setPanels] = useState<JournalPanelName[] | null>(null);
-  useEffect(() => {
-    setPanels(null);
-    if (!allowed || !workspace) return;
-    let live = true;
-    api("journal/options", workspace)
-      .then((r) => live && setPanels(journalPanels(r)))
-      .catch(() => live && setPanels([]));
-    return () => {
-      live = false;
-    };
-  }, [workspace, allowed]);
-  return panels;
+  const { options, failed } = useJournalOptions(workspace, allowed);
+  return options ? journalPanels(options) : failed ? [] : null;
 }

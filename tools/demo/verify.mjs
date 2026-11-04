@@ -7,7 +7,9 @@
 // Without --url it serves dist-demo with `vite preview --mode demo`. Exit code 1
 // on a page error, a missed journey step, a snapshot miss inside a journey or a
 // tour (every lesson card, course, thread, homework work ...) or a request that
-// left the browser for /api. --walk also clicks through every menu section the
+// left the browser for /api. It also checks the shell: the menu (flyouts, the folded rail), the child switcher of a parent
+// (the child on the journal, the grades and the start page follows the account menu) and the action launcher of the staff
+// (it opens, narrows, closes, and every action it lists reaches its screen). --walk also clicks through every menu section the
 // way the capture does and lists the sections whose clicks hit a snapshot miss
 // (reported, not a failure: they are the holes to look at).
 import { spawn } from "node:child_process";
@@ -128,6 +130,107 @@ async function menuBehaviour(page, activity, desktop, problems) {
   if (await page.locator(".app-shell.rail").count()) fail("the unfolded menu is not remembered");
 }
 
+// The child switcher of a parent: the account menu lists the children and marks the one on show, the bar names it, and a
+// choice changes the child on the journal and the grades (and on the start page) with no picker of their own on those screens.
+async function childSwitcher(page, kit, problems) {
+  const fail = (text) => problems.push(`child switcher: ${text}`);
+  const chip = page.locator(".topbar-child");
+  const named = async () => ((await chip.count()) ? (await chip.first().innerText()).trim() : "");
+  const printed = async () => ((await page.locator(".pupil-print-head").count()) ? (await page.locator(".pupil-print-head").first().textContent()) || "" : "");
+  await kit.home();
+  await page.locator(".account-toggle").click({ timeout: 3000 });
+  const listed = await page.locator(".account-children button").count();
+  const current = await page.locator('.account-children button[aria-current="true"]').count();
+  if (listed < 2 || current !== 1) fail(`the account menu lists ${listed} children with ${current} marked`);
+  await page.keyboard.press("Escape");
+  const screens = ["Классный журнал", "Оценки", "Посещаемость", "Табели"];
+  const names = [];
+  for (let turn = 0; turn < 2; turn += 1) {
+    const child = await named();
+    names.push(child);
+    if (!child) fail("the bar does not name the child");
+    for (const screen of screens) {
+      if (!(await kit.menu(screen, { optional: screen === "Табели" }))) continue;
+      if (!(await printed()).trim().startsWith(child)) fail(`${screen} shows another child than ${child}`);
+      if (await page.locator(".pupil-picker:has(select)").filter({ hasText: /Ребёнок|Ученик/ }).count()) fail(`${screen} still offers a picker of the child`);
+    }
+    await kit.menu("Начало");
+    if (!(await page.locator(".today-lessons h2").first().innerText()).includes(child.split(",")[0])) fail(`the start page does not show ${child}`);
+    // The choice is made from the page that is on show and keeps the page.
+    await kit.menu("Оценки");
+    const heading = await page.locator("main h1").first().innerText();
+    await kit.otherChild();
+    if ((await page.locator("main h1").first().innerText()) !== heading) fail("choosing a child leaves the screen");
+  }
+  if (names[0] === names[1]) fail("the second choice shows the same child");
+}
+
+// The action launcher of the staff: the button opens it with the field in focus, typing narrows it, the arrows and Enter pick,
+// Esc closes it and returns the focus, and every action it lists reaches its screen (a page of its own or a window).
+async function launcherBehaviour(page, activity, kit, problems, role) {
+  const fail = (text) => problems.push(`launcher: ${text}`);
+  const button = page.locator(".launcher-button");
+  const panel = page.locator(".launcher-panel");
+  const options = page.locator(".launcher-panel [role=option]");
+  const labels = async () => (await options.filter({ visible: true }).allInnerTexts()).map((text) => text.trim());
+  const heading = async () => ((await page.locator("main h1").count()) ? (await page.locator("main h1").first().innerText()).trim() : "");
+  await kit.home();
+  if (!(await button.count())) return fail("no button in the bar");
+  await button.click({ timeout: 3000 });
+  if (!(await panel.isVisible())) return fail("the button does not open the panel");
+  // The demo hides the entries it cannot answer on the frame after they appear.
+  await page.waitForTimeout(300);
+  const all = await labels();
+  if (!all.length) return fail("the panel lists no action");
+  if (!(await page.evaluate(() => document.activeElement?.matches(".launcher-panel input")))) fail("the field does not take the focus");
+  const word = all[0].split(/\s+/)[0].toUpperCase();
+  await page.keyboard.type(word);
+  const narrowed = await labels();
+  if (!narrowed.length || narrowed.length > all.length) fail("typing does not narrow the list");
+  await page.keyboard.press("Control+A");
+  await page.keyboard.type("яяяяя");
+  if ((await options.count()) !== 0) fail("a word nothing has still lists actions");
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  const before = await page.locator(".launcher-panel input").getAttribute("aria-activedescendant");
+  await page.keyboard.press("ArrowDown");
+  if ((await page.locator(".launcher-panel input").getAttribute("aria-activedescendant")) === before) fail("an arrow key does not move the choice");
+  await page.keyboard.press("Escape");
+  if (await panel.count()) fail("Esc does not close the panel");
+  if (!(await button.evaluate((node) => node === document.activeElement))) fail("Esc does not return the focus to the button");
+  // Every action, once, from the start page: the page changes or a window opens, and the panel is gone.
+  const home = await heading();
+  for (const label of [...new Set(all)]) {
+    await kit.home();
+    await button.click({ timeout: 3000 });
+    const option = panel.getByRole("option", { name: label, exact: true }).first();
+    await option.click({ timeout: 3000 }).catch(() => fail(`${label}: cannot be picked`));
+    await waitQuiet(page, activity, 400, 6000, 700);
+    if (await panel.count()) fail(`${label}: the panel stays open`);
+    const reached = (await heading()) !== home || (await page.locator(".modal-backdrop, dialog[open]").count()) > 0;
+    if (!reached) fail(`${label}: reaches no screen`);
+    await closeOverlays(page);
+  }
+  // The actions that start an editor: the editor is on screen when the action has run.
+  const editors = [
+    ["Новое сообщение", ".message-compose"],
+    ["Создать тест", "text=Новый тест"],
+    ["Тема урока и посещаемость", ".journal-editor"],
+    ["Добавить домашнее задание", ".journal-editor"],
+  ];
+  for (const [label, editor] of editors) {
+    // The administrator keeps no lessons of their own, so the day alone opens for the lesson actions.
+    if (!all.includes(label) || (role === "admin" && editor === ".journal-editor")) continue;
+    await kit.home();
+    await button.click({ timeout: 3000 });
+    await page.keyboard.type(label);
+    await page.keyboard.press("Enter");
+    await waitQuiet(page, activity, 400, 6000, 700);
+    await page.waitForSelector(editor, { timeout: 4000 }).catch(() => fail(`${label}: the editor is not opened`));
+    await closeOverlays(page);
+  }
+}
+
 async function verifyRole(browser, base, role, widthName, shots, report, walk) {
   const context = await newContext(browser, { now: NOW, viewport: VIEWPORTS[widthName] });
   const page = await context.newPage();
@@ -154,6 +257,8 @@ async function verifyRole(browser, base, role, widthName, shots, report, walk) {
     await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
     await journeys[role](kit);
     await tours[role]?.(kit);
+    if (role === "parent") await childSwitcher(page, kit, problems);
+    if (role === "teacher" || role === "admin") await launcherBehaviour(page, activity, kit, problems, role);
   } catch (error) {
     problems.push(`journey stopped: ${String(error.message).split(String.fromCharCode(10))[0]}`);
   }
