@@ -876,9 +876,7 @@ export default function PupilGrades({
             <button
               type="button"
               className="primary"
-              disabled={
-                feed.busy || !unsigned || !state.latest || feed.unseen > 0
-              }
+              disabled={feed.busy || !unsigned || !state.latest}
               onClick={() => void feed.sign()}
             >
               {feed.pupil ? "Просмотрено" : "Подписать оценки"}
@@ -886,18 +884,11 @@ export default function PupilGrades({
           )}
         </div>
       </div>
-      {(state?.signedAt || feed.unseen > 0 || feed.error || feed.notice) && (
+      {(state?.signedAt || feed.error || feed.notice) && (
         <div className="pupil-sign-line">
           {state?.signedAt && (
             <span className="pupil-muted">
               Последняя подпись: {stamp(state.signedAt)}
-            </span>
-          )}
-          {feed.unseen > 0 && (
-            <span className="pupil-muted">
-              Ещё {feed.unseen}{" "}
-              {feed.pupil ? "непросмотренных" : "неподписанных"} оценок:
-              откройте вкладку «Новые оценки» и нажмите «Показать ещё».
             </span>
           )}
           {feed.error && (
