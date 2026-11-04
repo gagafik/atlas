@@ -15,9 +15,21 @@ window.addEventListener("appinstalled", () => {
   pendingInstall = null;
   appInstalled = true;
 });
-export default function DeviceTools() {
+// Without props it shows its own «Приложение» button (login screens). With `open` the owner decides when the dialog shows.
+export default function DeviceTools({
+  open: controlled,
+  onClose,
+}: {
+  open?: boolean;
+  onClose?: () => void;
+} = {}) {
   const [online, setOnline] = useState(navigator.onLine),
-    [open, setOpen] = useState(false);
+    [own, setOwn] = useState(false);
+  const open = controlled ?? own;
+  const setOpen = (value: boolean) => {
+    if (controlled === undefined) setOwn(value);
+    else if (!value) onClose?.();
+  };
   const [prompt, setPrompt] = useState<InstallPrompt | null>(pendingInstall),
     [installed, setInstalled] = useState(appInstalled);
   const [error, setError] = useState(""),
@@ -50,7 +62,9 @@ export default function DeviceTools() {
   }, [open]);
   return (
     <>
-      <button onClick={() => setOpen(true)}>Приложение</button>
+      {controlled === undefined && (
+        <button onClick={() => setOpen(true)}>Приложение</button>
+      )}
       {!online && (
         <p className="connection-status" role="status">
           Нет сети. Сохранение и обновление расписания недоступны.

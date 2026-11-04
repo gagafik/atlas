@@ -143,7 +143,7 @@ def register(service, app, Workspace):
             if state.revision != body.revision: raise HTTPException(409, 'Данные изменились. Обновите страницу и повторите действие.')
             c = duty_of(state, row['commitment_id'])
             if not c or row['from_teacher'] not in c.teacherIds: raise HTTPException(409, 'Назначение уже изменилось. Отклоните заявку или обновите список.')
-            if c.locked: raise HTTPException(409, 'Дежурство закреплено. Снимите закрепление в разделе «Бронирования и дежурства».')
+            if c.locked: raise HTTPException(409, 'Дежурство закреплено. Снимите закрепление в разделе «Дежурства и бронирования».')
             if starts_at(c) <= local_now(): raise HTTPException(409, 'Дежурство уже началось.')
             to = body.toTeacherId or row['to_teacher']
             if not to: raise HTTPException(422, 'Выберите заменяющего.')

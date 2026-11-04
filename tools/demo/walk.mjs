@@ -3,18 +3,42 @@
 // refused by the capture's route rules, so clicking cannot change anything.
 import { closeOverlays, waitQuiet } from "./browser-kit.mjs";
 
-const SKIP_MENU = /^(Закрыть|Включить уведомления браузера|Обновить устройства|Прочитать все|Обновить|Прочитано|Открыть|Показать более ранние)$|Выйти|Пароль|Резервные|Принять приглашение|Состояние сервера|Попробовать на примере|Приложение|Информационные экраны/;
+const SKIP_MENU = /^(Закрыть|Включить уведомления браузера|Обновить устройства|Прочитать все|Обновить|Прочитано|Открыть|Показать более ранние)$|Выйти|Пароль|Резервные|Принять приглашение|Состояние сервера|Попробовать на примере|Вернуться в свою школу|Приложение|Информационные экраны/;
 const SKIP_CLICK = /Выйти|Пароль|Резервные|Принять приглашение|Состояние сервера|Попробовать на примере|Удалить|Печать|Скачать|Экспорт|Выгрузить|Импорт|Загрузить|Отозвать|Заархивировать/;
+// The groups of the menu are folded away until opened; the walker opens them all after every reload.
 const MENU_GROUPS = [
-  { name: "sidebar", selector: ".sidebar nav button" },
-  { name: "portal", selector: ".portal-tabs button" },
-  { name: "account", selector: ".account-controls button" },
+  { name: "sidebar", selector: ".sidebar nav button:not([aria-expanded])" },
+  { name: "account", selector: ".account-menu button", opener: ".account-toggle" },
 ];
-const EXCLUDE = ".sidebar, .account-controls, .portal-tabs, .demo-bar";
+const EXCLUDE = ".sidebar, .topbar, .demo-bar";
+
+// On a phone the menu is a drawer behind the menu button.
+async function openDrawer(page) {
+  const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
+  if ((await toggle.count()) && !(await page.locator(".sidebar.open").count())) {
+    await toggle.click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(350);
+  }
+}
+
+async function expandMenu(page) {
+  await openDrawer(page);
+  for (let guard = 0; guard < 12; guard += 1) {
+    const folded = page.locator(".sidebar nav button[aria-expanded=false]").first();
+    if (!(await folded.count())) break;
+    await folded.click({ timeout: 2000 }).catch(() => {});
+  }
+}
+
+async function openGroup(page, group) {
+  if (group.name === "sidebar") await expandMenu(page);
+  else if (!(await page.locator(group.selector).count())) await page.locator(group.opener).click({ timeout: 2000 }).catch(() => {});
+}
 
 export async function menuTexts(page) {
   const found = [];
   for (const group of MENU_GROUPS) {
+    await openGroup(page, group);
     const count = await page.locator(group.selector).count();
     for (let index = 0; index < count; index += 1) {
       const text = (await page.locator(group.selector).nth(index).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -116,7 +140,7 @@ export async function walkRole(page, base, activity, budget, log) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         await page.goto(base, { waitUntil: "domcontentloaded" });
-        await page.waitForSelector(".sidebar nav button, .portal-tabs button", { timeout: 15000 });
+        await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 15000 });
         break;
       } catch (error) {
         if (attempt >= 2) throw error;
@@ -130,6 +154,7 @@ export async function walkRole(page, base, activity, budget, log) {
     if (budget.left <= 0) break;
     try {
       await reload();
+      await openGroup(page, entry.group);
       const button = page.locator(entry.group.selector).nth(entry.index);
       if (!(await button.count())) continue;
       await button.click({ timeout: 3000, noWaitAfter: true }).catch(() => {});

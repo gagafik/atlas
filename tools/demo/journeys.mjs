@@ -14,17 +14,19 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
     // Back to the first screen of the role.
     async home() {
       await page.goto(base, { waitUntil: "domcontentloaded" });
-      await page.waitForSelector(".sidebar nav button, .portal-tabs button", { timeout: 20000 });
+      await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
       await settle(700);
     },
-    // Click a button, tab, summary or link by its text (a string matches the whole text).
+    // Click a button, tab, summary or link of the page by its text (a string matches the whole text).
+    // The menu, the top bar and the account menu have their own steps: menu, bell, account.
     async click(label, { optional = false } = {}) {
       const name = typeof label === "string" ? new RegExp(`^\\s*${escape(label)}\\s*$`) : label;
+      const content = page.locator(":not(.sidebar *, .topbar *)");
       const finders = [
-        page.getByRole("button", { name }),
-        page.getByRole("tab", { name }),
+        page.getByRole("button", { name }).and(content),
+        page.getByRole("tab", { name }).and(content),
         page.locator("summary").filter({ hasText: name }),
-        page.getByRole("link", { name }),
+        page.getByRole("link", { name }).and(content),
         page.locator("[aria-pressed]").filter({ hasText: name }),
       ];
       // Panels load lazily: give the target a few seconds to appear before calling it a miss.
@@ -32,13 +34,6 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
         for (const finder of finders) {
           const target = finder.filter({ visible: true }).first();
           if (await target.count()) {
-            // On a phone the administrator's menu is a drawer behind the menu button.
-            const inDrawer = await target.evaluate((el) => !!el.closest(".sidebar")).catch(() => false);
-            const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
-            if (inDrawer && (await toggle.count()) && !(await page.locator(".sidebar.open").count())) {
-              await toggle.click().catch(() => {});
-              await page.waitForTimeout(350);
-            }
             await target.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
             await target.click({ timeout: 3000, noWaitAfter: true }).catch((error) => log(`click failed: ${label}: ${error.message.split(String.fromCharCode(10))[0]}`));
             await settle();
@@ -50,9 +45,51 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       if (!optional) miss(`not found: ${label}`);
       return false;
     },
-    // A path of clicks from the home screen.
-    async path(...labels) {
+    // An entry of the left menu by its text (a count behind the text is allowed). On a phone the menu is
+    // a drawer behind the menu button, and the groups of the menu are folded until opened.
+    async menu(label, { optional = false } = {}) {
+      const name = new RegExp(`^\\s*${escape(label)}(\\s*\\d+\\+?)?\\s*$`);
+      const entries = page.locator(".sidebar nav button:not([aria-expanded])").filter({ hasText: name });
+      for (let attempt = 0; attempt < (optional ? 4 : 16); attempt += 1) {
+        const entry = entries.first();
+        if (await entry.count()) {
+          const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
+          if ((await toggle.count()) && !(await page.locator(".sidebar.open").count())) {
+            await toggle.click().catch(() => {});
+            await page.waitForTimeout(350);
+          }
+          const head = entry.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' nav-group ')]/button").first();
+          if ((await head.count()) && (await head.getAttribute("aria-expanded")) === "false") {
+            await head.click().catch(() => {});
+            await page.waitForTimeout(150);
+          }
+          await entry.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+          await entry.click({ timeout: 3000, noWaitAfter: true }).catch((error) => log(`click failed: ${label}: ${error.message.split(String.fromCharCode(10))[0]}`));
+          await settle();
+          return true;
+        }
+        await page.waitForTimeout(250);
+      }
+      if (!optional) miss(`menu entry not found: ${label}`);
+      return false;
+    },
+    // The bell of the top bar (the inbox of notifications).
+    async bell() {
+      await page.locator(".notifications-button").first().click({ timeout: 3000, noWaitAfter: true }).catch((error) => miss(`bell: ${error.message.split(String.fromCharCode(10))[0]}`));
+      await settle();
+    },
+    // An entry of the account menu in the top bar.
+    async account(label) {
+      await page.locator(".account-toggle").click({ timeout: 3000 }).catch(() => miss(`no account menu: ${label}`));
+      const entry = page.locator(".account-menu button").filter({ hasText: new RegExp(`^\\s*${escape(label)}\\s*$`) }).first();
+      if (!(await entry.count())) return miss(`account entry not found: ${label}`);
+      await entry.click({ timeout: 3000, noWaitAfter: true }).catch(() => miss(`account entry: ${label}`));
+      await settle();
+    },
+    // A path of clicks from the home screen: an entry of the menu, then buttons of the page.
+    async path(first, ...labels) {
       await kit.home();
+      if (!(await kit.menu(first))) return false;
       for (const label of labels) if (!(await kit.click(label))) return false;
       return true;
     },
@@ -136,9 +173,11 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
 }
 
 // What the presentation shows, per role. Labels are the visible texts of the app.
-const JOURNAL = "Учебный журнал";
-// The tab, with the number of unread threads when there are some (not "Сообщения о происшествиях").
-const MESSAGES = /^Сообщения(\s·\s\d+)?$/;
+const JOURNAL = "Классный журнал";
+// A pupil and a parent read the one report of the journal under the name of the grades.
+const PUPIL_GRADES = "Оценки";
+// The menu entry of the messages; the number of unread threads is a badge behind the text.
+const MESSAGES = "Уведомления";
 const DAY_LESSON = /Математика 7А/;
 const CLASSES = ["7А", "7Б", "8А", "8Б"];
 
@@ -181,8 +220,10 @@ async function homeworkQueue(kit, { filterLabel }) {
 export const journeys = {
   async admin(kit) {
     await kit.home();
+    await kit.snap("home");
+    await kit.path("Расписание");
     await kit.snap("timetable");
-    await kit.path(/^Уведомления/);
+    await kit.bell();
     await kit.snap("notifications");
     await kit.close();
     await kit.click("Учитель", { optional: true });
@@ -192,8 +233,8 @@ export const journeys = {
     await controlScreens(kit);
     await kit.path(JOURNAL, "Сводная посещаемость");
     await attendanceSummary(kit);
-    await kit.path(JOURNAL, "Сетка посещаемости класса");
-    await kit.path(JOURNAL, "Итоговые оценки и табели");
+    await kit.path("Посещаемость (учащиеся)");
+    await kit.path("Табели");
     await kit.click("Открыть готовую ведомость");
     await kit.snap("final-grades-sheet");
     await kit.choose("Период", "Первая четверть");
@@ -205,7 +246,7 @@ export const journeys = {
     await kit.click("Показать табель");
     await kit.path(JOURNAL, "Учебные периоды и закрытие журналов");
     await kit.snap("periods");
-    await kit.path(JOURNAL, "Таблица курса");
+    await kit.path("Оценки");
     for (const course of [/7А · Математика/, /8Б · Физика/]) await kit.choose("Курс", course);
     await kit.snap("course-table");
     await kit.path(JOURNAL, DAY_LESSON);
@@ -213,22 +254,22 @@ export const journeys = {
     // Workload, substitutions, messages, forms.
     await kit.path("Нагрузка учителей");
     await kit.snap("workload");
-    await kit.path("Замены и даты", "Замена на день");
+    await kit.path("Замены", "Замена на день");
     await kit.snap("substitutions");
     for (const tab of ["Занятия на дату", "Отсутствия учителей", "Все изменения", "Итоги замен"]) await kit.click(tab);
     await kit.path(MESSAGES);
     await kit.click(/Родительские собрания/);
     await kit.snap("messages");
     await kit.path(MESSAGES, /Педагогический совет/);
-    await kit.path("Формы и опросы");
+    await kit.path("Регистрация / Опросы");
     await kit.click(/Согласие на экскурсию/);
     await kit.click("Результаты");
     await kit.snap("forms");
-    await kit.path("Табель и отсутствия");
-    await kit.path("Встречи и консультации", "Консультации");
+    await kit.path("Посещаемость учителей");
+    await kit.path("Родительские собрания", "Консультации");
     await kit.click(/Консультации по математике/);
     await kit.snap("consultations");
-    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.path("Родительские собрания", "Собрания классов");
     await kit.snap("class-meetings");
     await kit.path("Журналы регистрации");
     await kit.path("Пользователи и доступ");
@@ -243,17 +284,18 @@ export const journeys = {
   async teacher(kit) {
     await kit.home();
     await kit.snap("home");
-    await kit.path(/^Уведомления/);
+    await kit.bell();
     await kit.close();
     await lessonScreens(kit, "teacher");
     await kit.path(JOURNAL, /Математика 7Б/);
-    await kit.path(JOURNAL, "Таблица курса");
+    await kit.path("Оценки");
     await kit.eachOption("Курс", null, { from: 1, max: 12 });
     await kit.choose("Курс", /7А · Математика/);
     await kit.snap("course-table");
-    await kit.path(JOURNAL, "Итоговые оценки и табели");
-    await kit.click("Открыть готовую ведомость", { optional: true });
-    await kit.path("Работа с классами", "Отсутствия и объяснительные");
+    // Report cards are in the menu only when the teacher has any.
+    await kit.home();
+    if (await kit.menu("Табели", { optional: true })) await kit.click("Открыть готовую ведомость", { optional: true });
+    await kit.path("Посещаемость учащихся", "Отсутствия и объяснительные");
     await kit.click("Сводная посещаемость");
     await attendanceSummary(kit);
     await kit.click("Контроль заполнения журналов");
@@ -269,20 +311,20 @@ export const journeys = {
     await kit.click("Открыть тест");
     await kit.snap("test-results");
     await kit.close();
-    await kit.path("Встречи и консультации", "Консультации");
+    await kit.path("Родительские собрания", "Консультации");
     await kit.snap("consultations");
     await kit.click(/Консультации по математике/);
     await kit.snap("consultation-slots");
     await kit.click("День ведущего", { optional: true });
     await kit.snap("host-day");
     await kit.close();
-    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.path("Родительские собрания", "Собрания классов");
     await kit.snap("class-meetings");
     await kit.path(MESSAGES);
     await kit.click(/Вопрос по домашнему заданию/);
     await kit.snap("messages");
-    await kit.path("Похвалы и замечания");
-    await kit.path("Календарь контрольных");
+    await kit.path("Официальные письма");
+    await kit.path("События");
     await kit.path("Моя нагрузка");
     await kit.path("Расписание");
   },
@@ -290,14 +332,14 @@ export const journeys = {
   async parent(kit) {
     await kit.home();
     await kit.snap("home");
-    await kit.path(/^Уведомления/);
+    await kit.bell();
     await kit.close();
-    await kit.path(JOURNAL);
+    await kit.path(PUPIL_GRADES);
     await kit.snap("journal");
     await kit.click("Открыть домашнюю работу");
     await kit.close();
     await kit.click("Итоговые оценки и табели", { optional: true });
-    await kit.click("Отсутствия и объяснительные", { optional: true });
+    await kit.path("Посещаемость");
     await homeworkQueue(kit, {});
     await kit.click("Посмотреть работу");
     await kit.snap("homework");
@@ -305,12 +347,12 @@ export const journeys = {
     await kit.path("Расписание");
     await kit.choose("Режим просмотра", "Неделя");
     await kit.snap("timetable");
-    await kit.path("Встречи и консультации", "Консультации");
+    await kit.path("Родительские собрания", "Консультации");
     await kit.snap("consultations");
     await kit.click(/Консультации по математике/);
     await kit.snap("consultation-slots");
     await kit.close();
-    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.path("Родительские собрания", "Собрания классов");
     await kit.snap("class-meetings");
     await kit.close();
     await kit.path(MESSAGES);
@@ -319,18 +361,19 @@ export const journeys = {
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.close();
-    await kit.path("Календарь контрольных");
+    await kit.path("События");
     await kit.snap("assessment-calendar");
-    await kit.path("Мои дети и доступ");
-    await kit.path("Формы и опросы");
-    await kit.path("Похвалы и замечания");
-    await kit.path("Выбор курсов");
+    await kit.home();
+    await kit.account("Мои дети и доступ");
+    await kit.path("Регистрация / Опросы");
+    await kit.path("Официальные письма");
+    await kit.path("Учебный план");
   },
 
   async student(kit) {
     await kit.home();
     await kit.snap("home");
-    await kit.path(/^Уведомления/);
+    await kit.bell();
     await kit.close();
     await kit.path("Расписание");
     await kit.choose("Режим просмотра", "Неделя");
@@ -339,16 +382,16 @@ export const journeys = {
     await kit.click("Выполнить задание");
     await kit.snap("homework");
     await kit.close();
-    await kit.path(JOURNAL);
+    await kit.path(PUPIL_GRADES);
     await kit.snap("marks");
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.snap("test");
     await kit.close();
-    await kit.path("Календарь контрольных");
+    await kit.path("События");
     await kit.path(MESSAGES);
     await kit.click(/Вопрос по домашнему заданию/, { optional: true });
-    await kit.path("Выбор курсов");
+    await kit.path("Учебный план");
   },
 };
 
@@ -375,52 +418,52 @@ async function everyThread(kit, back) {
 export const tours = {
   async admin(kit) {
     await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-21"]);
-    await kit.path(JOURNAL, "Таблица курса");
+    await kit.path("Оценки");
     await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 60 });
     await kit.eachOption("Курс", null, { from: 1, max: 60 });
-    await kit.path(JOURNAL, "Итоговые оценки и табели");
+    await kit.path("Табели");
     await kit.click("Открыть готовую ведомость");
     await kit.eachOption("Ученик для табеля", () => kit.click("Показать табель"), { from: 1, max: 20 });
     await everyThread(kit, "Входящие");
-    await kit.path("Формы и опросы");
+    await kit.path("Регистрация / Опросы");
     await kit.eachButton(/Согласие на экскурсию/, () => kit.click("Результаты", { optional: true }), { max: 3 });
-    await kit.path("Встречи и консультации", "Консультации");
+    await kit.path("Родительские собрания", "Консультации");
     await kit.eachButton(/Консультации по математике/, null, { max: 3 });
-    await kit.path("Встречи и консультации", "Собрания классов");
+    await kit.path("Родительские собрания", "Собрания классов");
     await kit.path("Журналы регистрации");
     await kit.path("Пользователи и доступ");
   },
 
   async teacher(kit) {
     await lessonCards(kit, ["2026-11-02", "2026-10-30", "2026-10-29", "2026-10-21", "2026-10-06"]);
-    await kit.path(JOURNAL, "Таблица курса");
+    await kit.path("Оценки");
     await kit.eachOption("Курс", () => kit.choose("Период", 0), { from: 1, max: 20 });
     await kit.eachOption("Курс", null, { from: 1, max: 20 });
     await everyThread(kit, "Входящие");
     await kit.path("Домашние задания");
     await kit.eachButton("Проверить работу", () => kit.close(), { max: 12 });
-    await kit.path("Работа с классами", "Отсутствия и объяснительные");
+    await kit.path("Посещаемость учащихся", "Отсутствия и объяснительные");
     await kit.click("Сводная посещаемость");
-    await kit.path("Календарь контрольных");
+    await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });
   },
 
   async parent(kit) {
-    await kit.path(JOURNAL);
+    await kit.path(PUPIL_GRADES);
     await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
     await homeworkQueue(kit, {});
     await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
     await everyThread(kit, "Входящие");
-    await kit.path("Календарь контрольных");
+    await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });
   },
 
   async student(kit) {
-    await kit.path(JOURNAL);
+    await kit.path(PUPIL_GRADES);
     await kit.eachButton("Открыть домашнюю работу", () => kit.close(), { max: 120 });
     await homeworkQueue(kit, {});
     await kit.eachButton(/Выполнить задание|Посмотреть работу/, () => kit.close(), { max: 40 });
-    await kit.path("Календарь контрольных");
+    await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });
   },
 };

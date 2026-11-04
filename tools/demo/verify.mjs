@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launch, newContext, guardPage, trackActivity, VIEWPORTS } from "./browser-kit.mjs";
+import { launch, newContext, guardPage, trackActivity, closeOverlays, VIEWPORTS } from "./browser-kit.mjs";
 import { createKit, journeys, tours } from "./journeys.mjs";
 import { walkRole } from "./walk.mjs";
 import { isApiPath } from "./read-requests.mjs";
@@ -78,16 +78,21 @@ async function verifyRole(browser, base, role, widthName, shots, report, walk) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const kit = createKit({ page, base: url, activity, miss, log: (text) => notes.push(text), shots: shots && resolve(shots, label.replace("/", "-")) });
   try {
-    await page.waitForSelector(".sidebar nav button, .portal-tabs button", { timeout: 20000 });
+    await page.waitForSelector(".sidebar nav button", { state: "attached", timeout: 20000 });
     await journeys[role](kit);
     await tours[role]?.(kit);
   } catch (error) {
     problems.push(`journey stopped: ${String(error.message).split(String.fromCharCode(10))[0]}`);
   }
-  // Controls that cannot work on a static page must not be offered.
+  // Controls that cannot work on a static page must not be offered (the account menu and the folded groups of the menu included).
+  await closeOverlays(page);
+  await page.locator(".account-toggle").click({ timeout: 2000 }).catch((error) => problems.push(`account menu does not open: ${String(error.message).split(String.fromCharCode(10))[0]}`));
+  // The demo bar hides what cannot work on the next frame.
+  await page.waitForTimeout(400);
+  await page.evaluate(() => document.querySelectorAll(".sidebar nav .nav-group-items[hidden]").forEach((group) => group.removeAttribute("hidden")));
   const offered = await page.evaluate(() =>
     [...document.querySelectorAll("button")]
-      .filter((button) => button.offsetParent !== null && /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера)$/.test((button.textContent || "").trim()))
+      .filter((button) => button.offsetParent !== null && /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Попробовать на примере|Вернуться в свою школу)$/.test((button.textContent || "").trim()))
       .map((button) => button.textContent.trim()),
   );
   for (const name of offered) problems.push(`control that cannot work is offered: ${name}`);

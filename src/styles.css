@@ -240,54 +240,12 @@ small {
   color: #90998d;
   margin-top: 6px;
 }
-.school-switch {
-  margin-top: 35px;
-  min-height: 66px;
-  text-align: left;
-  padding: 10px 9px;
-  justify-content: flex-start;
-  background: #f0f3ec;
-  border-color: #e5e9e0;
-  gap: 9px;
-}
-.school-switch > span {
-  flex: 1;
-  min-width: 0;
-}
-.school-switch strong {
-  font-size: 11px;
-  display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.school-switch small {
-  display: block;
-  font-size: 9px;
-  color: #939a8e;
-  margin-top: 5px;
-}
-.school-avatar {
-  background: #e0e8da;
-  color: #668160;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 33px;
-  border-radius: 7px;
-}
-.nav-label {
-  font-size: 8px;
-  letter-spacing: 1.05px;
-  color: #a0a699;
-  font-weight: 800;
-  margin: 28px 11px 12px;
-}
 .sidebar nav {
   display: grid;
-  gap: 6px;
+  gap: 2px;
   flex: 1;
   min-height: 120px;
+  margin-top: 24px;
   overflow-y: auto;
   align-content: start;
 }
@@ -300,12 +258,16 @@ small {
   background: none;
   border-radius: 6px;
   justify-content: flex-start;
-  padding: 12px 11px;
+  text-align: left;
+  padding: 8px 11px;
   color: #7d887b;
   font-size: 11px;
   gap: 11px;
-  min-height: 42px;
+  min-height: 36px;
   font-weight: 650;
+}
+.sidebar nav button svg {
+  flex: none;
 }
 .sidebar nav button:hover {
   background: #f0f3ec;
@@ -317,7 +279,32 @@ small {
 .nav-divider {
   height: 1px;
   background: var(--line);
-  margin: 16px 9px 10px;
+  margin: 10px 9px 8px;
+}
+.nav-group {
+  display: grid;
+  gap: 2px;
+}
+.nav-arrow {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.nav-count + .nav-arrow {
+  margin-left: 6px;
+}
+.nav-group > button[aria-expanded="true"] .nav-arrow {
+  transform: rotate(90deg);
+}
+.nav-group-items {
+  display: grid;
+  gap: 2px;
+  padding-left: 14px;
+}
+.nav-group-items[hidden] {
+  display: none;
+}
+.sidebar-backdrop {
+  display: none;
 }
 .nav-count {
   margin-left: auto;
@@ -328,20 +315,12 @@ small {
 }
 .sidebar-bottom {
   margin-top: auto;
-  padding-top: 30px;
+  padding-top: 12px;
 }
-.demo-button {
+.school-year {
   font-size: 10px;
-  border: 1px dashed #d7dfd2;
-  background: none;
-  padding: 11px 8px;
-  gap: 7px;
-  text-align: left;
-  width: 100%;
-  color: #71816c;
-}
-.demo-button span {
-  flex: 1;
+  color: #8c9686;
+  padding: 8px 11px 0;
 }
 .local-status {
   font-size: 9px;
@@ -349,7 +328,7 @@ small {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 17px 5px;
+  padding: 8px 11px 4px;
 }
 .status-dot {
   display: inline-block;
@@ -358,32 +337,6 @@ small {
   background: #77a16a;
   border-radius: 100%;
   flex: none;
-}
-.profile {
-  border-top: 1px solid var(--line);
-  padding: 17px 4px 2px;
-  display: flex;
-  gap: 9px;
-  align-items: center;
-}
-.profile strong {
-  font-size: 10px;
-}
-.profile small {
-  display: block;
-  margin-top: 3px;
-  color: #929b8a;
-  font-size: 9px;
-}
-.user-avatar {
-  width: 31px;
-  height: 31px;
-  border-radius: 100%;
-  background: #e6ded0;
-  display: grid;
-  place-items: center;
-  color: #8b765c;
-  font-size: 11px;
 }
 .main-shell {
   margin-left: 222px;
@@ -402,18 +355,82 @@ small {
 .breadcrumb {
   display: flex;
   align-items: center;
-  gap: 13px;
-  font-size: 10px;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11px;
   color: #9aa291;
 }
 .breadcrumb strong {
   color: #5a6859;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.breadcrumb small {
+  white-space: nowrap;
 }
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 17px;
+  gap: 10px;
+}
+.account {
+  position: relative;
+}
+.account-toggle {
+  min-height: 31px;
+  padding: 4px 8px;
+  gap: 6px;
+  max-width: 240px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+}
+.account-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 220px;
+  max-width: calc(100vw - 32px);
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 34px #1d372d26;
+}
+.account-menu button {
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+}
+.account-menu button:hover:not(:disabled) {
+  background: #f0f3ec;
+}
+.account-head {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.account-head small {
+  color: var(--muted);
 }
 .saved {
   font-size: 9px;
@@ -1079,6 +1096,7 @@ main {
   background: white;
 }
 .table-scroll {
+  position: relative;
   overflow-x: auto;
 }
 .data-table {
@@ -1782,7 +1800,7 @@ main {
     gap: 10px;
   }
 }
-@media (max-width: 950px) {
+@media (min-width: 901px) and (max-width: 950px) {
   .sidebar {
     width: 192px;
     padding-left: 12px;
@@ -1791,6 +1809,39 @@ main {
   .main-shell {
     margin-left: 192px;
   }
+}
+@media (max-width: 900px) {
+  /* A closed drawer is hidden for good: its buttons leave the tab order and the reading order of screen readers. */
+  .sidebar {
+    transform: translateX(-100%);
+    visibility: hidden;
+    width: 260px;
+    max-width: 85vw;
+    transition:
+      transform 0.2s,
+      visibility 0s 0.2s;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.2s;
+    box-shadow: 20px 0 70px #1d372d25;
+  }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+    background: #0f1d1659;
+  }
+  .main-shell {
+    margin-left: 0;
+  }
+  .menu-toggle {
+    display: inline-flex;
+  }
+}
+@media (max-width: 950px) {
   main {
     padding: 25px 22px 0;
   }
@@ -1802,12 +1853,6 @@ main {
   }
   .brand strong {
     font-size: 26px;
-  }
-  .school-switch small {
-    font-size: 8px;
-  }
-  .sidebar nav button {
-    font-size: 10px;
   }
   .page-heading {
     flex-direction: column;
@@ -1861,20 +1906,6 @@ main {
 @media (max-width: 650px) {
   .rule-editor .form-grid {
     grid-template-columns: 1fr;
-  }
-  .sidebar {
-    transform: translateX(-100%);
-    width: 222px;
-    box-shadow: 20px 0 70px #1d372d25;
-  }
-  .sidebar.open {
-    transform: translateX(0);
-  }
-  .main-shell {
-    margin-left: 0;
-  }
-  .menu-toggle {
-    display: inline-flex;
   }
   .topbar {
     padding: 0 14px;
@@ -2029,6 +2060,7 @@ main {
     background: white;
   }
   .sidebar,
+  .sidebar-backdrop,
   .topbar,
   .heading-actions,
   .stats-row,
@@ -3686,21 +3718,6 @@ main {
   border: 1px solid #d7afa2;
   max-width: 90vw;
 }
-.account-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.account-controls > span {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.account-controls button {
-  padding: 6px 10px;
-}
 .access-fields {
   border: 0;
   padding: 0;
@@ -3762,15 +3779,8 @@ main {
 }
 .portal {
   max-width: 1100px;
-  margin: auto;
-  padding: 28px;
-}
-.portal > header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 24px;
+  margin: 0 auto;
+  padding: 28px 34px;
 }
 .portal-day {
   margin: 22px 0;
@@ -3789,14 +3799,8 @@ main {
   font-size: 11px;
 }
 @media (max-width: 700px) {
-  .account-controls > span {
-    display: none;
-  }
   .portal {
     padding: 16px;
-  }
-  .portal > header {
-    flex-direction: column;
   }
   .access-audit article > span {
     float: none;
@@ -3810,24 +3814,21 @@ main {
     gap: 8px;
   }
   .topbar .breadcrumb {
-    flex: 1 1 180px;
+    flex: 1 1 120px;
     min-width: 0;
   }
   .topbar-right {
-    flex: 1 1 190px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    flex: 0 1 auto;
+    gap: 4px;
   }
-  .topbar .account-controls {
-    flex-shrink: 1;
-    min-width: 0;
-    max-width: 100%;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+}
+@media (max-width: 650px) {
+  .breadcrumb small,
+  .account-toggle span {
+    display: none;
   }
 }
 @media print {
-  .portal .account-controls,
   .portal .dated-fields,
   .portal .dated-toolbar,
   .portal > .info-line {
@@ -3859,7 +3860,8 @@ main {
   gap: 10px;
 }
 /* Shared inbox and installation controls, including the personal portal. */
-.notifications-button b {
+.notifications-button b,
+.messages-button b {
   display: inline-flex;
   min-width: 22px;
   justify-content: center;
@@ -4020,9 +4022,6 @@ main {
   .notifications-dialog .dated-toolbar {
     align-items: flex-start;
   }
-  .account-controls {
-    flex-wrap: wrap;
-  }
 }
 @media print {
   .connection-status,
@@ -4050,8 +4049,7 @@ main {
   text-align: left;
   white-space: normal;
 }
-.journal-panel button[aria-pressed="true"],
-.portal-tabs button[aria-pressed="true"] {
+.journal-panel button[aria-pressed="true"] {
   background: #e1eee1;
   border-color: #28674f;
   color: #1e503a;
@@ -4240,7 +4238,6 @@ main {
   .journal-admin-panels,
   .journal-savebar,
   .journal-lessons,
-  .portal-tabs,
   .journal-history {
     display: none !important;
   }
@@ -4893,3 +4890,87 @@ main {
 .final-signatures span { flex: 1; min-width: 120px; border-top: 1px solid currentColor; padding-top: 4px; }
 @media (max-width: 600px) { .final-subject { flex-direction: column; } }
 @media print { .final-card { break-after: page; border: 0; } .final-card:last-child { break-after: auto; } }
+/* The start pages: today's bells (administration), today's lessons (everyone else) and the tiles of the main modules. */
+.school-day,
+.today-lessons {
+  min-width: 0;
+  margin-bottom: 22px;
+}
+.school-day {
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.school-day header,
+.today-lessons header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+.school-day header strong,
+.today-lessons header strong {
+  color: var(--green);
+}
+.school-day ol {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+  overflow-x: auto;
+}
+.school-day li {
+  flex: 1 0 74px;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  text-align: center;
+  background: var(--warm);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.school-day li strong {
+  font-size: 16px;
+}
+.school-day li small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.school-day .current,
+.today-lessons .current {
+  background: #e1eee1;
+  border-color: var(--green);
+}
+.start-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.start-feed {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.start-tiles + .start-feed {
+  margin-top: 14px;
+}
+.start-feed > h2,
+.today-lessons > header h2 {
+  margin-bottom: 10px;
+}
+.start-tiles {
+  display: contents;
+}
+.start-tiles button {
+  flex-direction: column;
+  min-height: 96px;
+  padding: 14px 10px;
+  text-align: center;
+  color: var(--dark);
+}
+.start-tiles button svg {
+  color: var(--green);
+}

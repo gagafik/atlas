@@ -102,8 +102,15 @@ const labels: Record<string, string> = {
   recorded: "Внесено школой",
 };
 
-export default function AbsencePanel({ workspace }: { workspace: string }) {
-  const [expanded, setExpanded] = useState(false),
+export default function AbsencePanel({
+  workspace,
+  defaultOpen = false,
+}: {
+  workspace: string;
+  // Opened from the menu: the panel starts expanded.
+  defaultOpen?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
     [serverBusy, setServerBusy] = useState(false),
@@ -410,6 +417,7 @@ export default function AbsencePanel({ workspace }: { workspace: string }) {
   return (
     <details
       className="absence-panel"
+      open={expanded}
       onToggle={(e) => setExpanded(e.currentTarget.open)}
     >
       <summary>Отсутствия и объяснительные</summary>

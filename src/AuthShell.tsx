@@ -9,14 +9,13 @@ import {
 import Portal from "./Portal";
 import { api } from "./api";
 import type { AuthStatus } from "./auth";
-import NotificationCenter from "./NotificationCenter";
 import DeviceTools from "./DeviceTools";
 import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
-import { menuRoles } from "./assessmentCalendar";
-import { sectionVisible } from "./schoolSections";
+import type { AccountId, ModalId } from "./navigation";
+import type { ShellFrame } from "./Shell";
 const App = lazy(() => import("./App"));
 const OperationsPanel = lazy(() => import("./OperationsPanel"));
 const SchoolSectionsPanel = lazy(() => import("./SchoolSectionsPanel"));
@@ -62,7 +61,8 @@ export default function AuthShell() {
   const [recoveryForm, setRecoveryForm] = useState(false),
     [recoveryPanel, setRecoveryPanel] = useState(false),
     [loginNotice, setLoginNotice] = useState("");
-  const [operationsPanel, setOperationsPanel] = useState(false);
+  const [operationsPanel, setOperationsPanel] = useState(false),
+    [appOpen, setAppOpen] = useState(false);
   // Optional sections of the menu; null until the setting is loaded, and then they stay out of sight.
   const [hiddenSections, setHiddenSections] = useState<string[] | null>(null),
     [sectionsPanel, setSectionsPanel] = useState(false);
@@ -236,6 +236,7 @@ export default function AuthShell() {
     setAccountError("");
     setInvitationForm(false);
     setRecoveryPanel(false);
+    setAppOpen(false);
     setOperationsPanel(false);
     setSectionsPanel(false);
     setFormsWorkspace(null);
@@ -446,163 +447,61 @@ export default function AuthShell() {
         />
       </Suspense>
     );
-  const controls = (
-    <div className="account-controls">
-      <DeviceTools />
-      <NotificationCenter
-        key={session.user?.id + ":" + session.user?.version}
-        identity={
-          (session.user?.id || "local") + ":" + (session.user?.version || 0)
-        }
-      />
-      {session.user && (
-        <>
-          <span>{session.user.name}</span>
-          {["parent", "student", "teacher"].includes(session.user.role) && (
-            <button onClick={() => setInvitationForm(true)}>
-              Принять приглашение
-            </button>
-          )}
-          <button
-            onClick={() => {
-              setPasswordForm(true);
-              setAccountError("");
-            }}
-          >
-            Пароль
-          </button>
-          <button disabled={busy} onClick={() => void signOut()}>
-            Выйти
-          </button>
-          <button onClick={() => setRecoveryPanel(true)}>Резервные коды</button>
-          <button onClick={() => setFormsWorkspace("school")}>
-            Формы и опросы
-          </button>
-          {["admin", "teacher", "student", "parent"].includes(
-            session.user.role,
-          ) && (
-            <button onClick={() => setLiveWorkspace("school")}>
-              Интерактивные занятия
-            </button>
-          )}
-          {sectionVisible(hiddenSections, "library") && (
-            <button onClick={() => setLibraryWorkspace("school")}>
-              Библиотека и учебники
-            </button>
-          )}
-          {sectionVisible(hiddenSections, "lost_found") && (
-            <button onClick={() => setLostFoundWorkspace("school")}>
-              Потерянные вещи
-            </button>
-          )}
-          {session.user.role !== "editor" && (
-            <button onClick={() => setBehaviourWorkspace("school")}>
-              Похвалы и замечания
-            </button>
-          )}
-          {menuRoles.includes(session.user.role) && (
-            <button onClick={() => setAssessmentsWorkspace("school")}>
-              Календарь контрольных
-            </button>
-          )}
-          <button onClick={() => setClubsWorkspace("school")}>Кружки</button>
-          {sectionVisible(hiddenSections, "canteen") && (
-            <button onClick={() => setCanteenWorkspace("school")}>
-              Столовая
-            </button>
-          )}
-          {session.user.role !== "student" && (
-            <button onClick={() => setHandoverWorkspace("school")}>
-              Уход детей
-            </button>
-          )}
-          {session.user.role !== "student" &&
-            sectionVisible(hiddenSections, "payments") && (
-              <button onClick={() => setPaymentsWorkspace("school")}>
-                Платежи
-              </button>
-            )}
-          {["admin", "editor", "teacher", "staff"].includes(
-            session.user.role,
-          ) && (
-            <>
-              {sectionVisible(hiddenSections, "admissions") && (
-                <button onClick={() => setAdmissionsWorkspace("school")}>
-                  Приём в школу
-                </button>
-              )}
-              {sectionVisible(hiddenSections, "site") && (
-                <button onClick={() => setSiteWorkspace("school")}>
-                  Сайт школы
-                </button>
-              )}
-            </>
-          )}
-          <button onClick={() => setDocumentsWorkspace("school")}>
-            Документы и архив
-          </button>
-          {["admin", "editor", "teacher", "staff"].includes(
-            session.user.role,
-          ) && (
-            <button onClick={() => setStaffTimeWorkspace("school")}>
-              Табель и отсутствия
-            </button>
-          )}
-          {["admin", "teacher"].includes(session.user.role) && (
-            <button onClick={() => setWorkloadWorkspace("school")}>
-              {session.user.role === "admin"
-                ? "Нагрузка учителей"
-                : "Моя нагрузка"}
-            </button>
-          )}
-          {["admin", "editor", "teacher", "staff", "parent"].includes(
-            session.user.role,
-          ) && (
-            <button onClick={() => setRegistersWorkspace("school")}>
-              {session.user.role === "parent"
-                ? "Сообщения о происшествиях"
-                : "Журналы регистрации"}
-            </button>
-          )}
-          {["admin", "editor", "teacher", "staff", "parent"].includes(
-            session.user.role,
-          ) && (
-            <button
-              onClick={() => {
-                setMeetingsSection(undefined);
-                setMeetingsWorkspace("school");
-              }}
-            >
-              Встречи и консультации
-            </button>
-          )}
-          {pupilConsultations && pupilWorkspace && (
-            <button
-              onClick={() => {
-                setMeetingsSection("consultations");
-                setMeetingsWorkspace(pupilWorkspace);
-              }}
-            >
-              Консультации
-            </button>
-          )}
-          {session.user.role === "admin" && (
-            <>
-              <button onClick={() => setHallWorkspace("school")}>
-                Информационные экраны
-              </button>
-              <button onClick={() => setSectionsPanel(true)}>
-                Разделы школы
-              </button>
-              <button onClick={() => setOperationsPanel(true)}>
-                Состояние сервера
-              </button>
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
+  // A click in the menu: the modals of the school open on the school workspace, like the buttons of the old header.
+  const schoolModals: Partial<Record<ModalId, (workspace: string) => void>> = {
+    forms: setFormsWorkspace,
+    live: setLiveWorkspace,
+    library: setLibraryWorkspace,
+    lostFound: setLostFoundWorkspace,
+    behaviour: setBehaviourWorkspace,
+    assessments: setAssessmentsWorkspace,
+    clubs: setClubsWorkspace,
+    canteen: setCanteenWorkspace,
+    handover: setHandoverWorkspace,
+    payments: setPaymentsWorkspace,
+    admissions: setAdmissionsWorkspace,
+    site: setSiteWorkspace,
+    documents: setDocumentsWorkspace,
+    staffTime: setStaffTimeWorkspace,
+    workload: setWorkloadWorkspace,
+    registers: setRegistersWorkspace,
+    hall: setHallWorkspace,
+  };
+  function openModal(id: ModalId) {
+    if (id === "meetings") {
+      setMeetingsSection(undefined);
+      setMeetingsWorkspace("school");
+    } else if (id === "consultations") {
+      if (!pupilWorkspace) return;
+      setMeetingsSection("consultations");
+      setMeetingsWorkspace(pupilWorkspace);
+    } else if (id === "sections") setSectionsPanel(true);
+    else if (id === "operations") setOperationsPanel(true);
+    else schoolModals[id]?.("school");
+  }
+  function openAccount(id: AccountId) {
+    if (id === "password") {
+      setPasswordForm(true);
+      setAccountError("");
+    } else if (id === "recovery") setRecoveryPanel(true);
+    else if (id === "invitation") setInvitationForm(true);
+    else if (id === "app") setAppOpen(true);
+    else if (id === "signOut") void signOut();
+  }
+  const frame: ShellFrame = {
+    context: {
+      role: session.user?.role ?? null,
+      local: !session.enabled,
+      hiddenSections,
+      pupilConsultations: pupilConsultations && !!pupilWorkspace,
+    },
+    identity:
+      (session.user?.id || "local") + ":" + (session.user?.version || 0),
+    user: session.user,
+    busy,
+    onModal: openModal,
+    onAccount: openAccount,
+  };
   return (
     <>
       {session.user?.role === "staff" ? (
@@ -614,14 +513,14 @@ export default function AuthShell() {
           <StaffWorkspace
             key={session.user.id + ":" + session.user.version}
             session={session}
-            controls={controls}
+            frame={frame}
           />
         </Suspense>
       ) : session.user && !["admin", "editor"].includes(session.user.role) ? (
         <Portal
           key={session.user.id + ":" + session.user.version}
           session={session}
-          controls={controls}
+          frame={frame}
         />
       ) : (
         <Suspense
@@ -635,10 +534,11 @@ export default function AuthShell() {
             onAuthChange={async () => {
               await refresh();
             }}
-            sessionControls={controls}
+            frame={frame}
           />
         </Suspense>
       )}
+      <DeviceTools open={appOpen} onClose={() => setAppOpen(false)} />
       {!passwordForm && (error || accountError) && (
         <p className="auth-error" role="alert">
           {accountError || error}

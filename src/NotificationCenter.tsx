@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Bell } from "lucide-react";
 import { api } from "./api";
 import { startPolling } from "./polling";
 import PushSettings from "./PushSettings";
@@ -81,9 +82,9 @@ const titles: Record<string, string> = {
   "behaviour.pending": "Мера ждёт согласования администрации",
   "behaviour.decided": "Принято решение по вашей мере",
   "assessment.published":
-    "Назначена контрольная работа (СОР, СОЧ или экзамен). Откройте календарь контрольных",
+    "Назначена контрольная работа (СОР, СОЧ или экзамен). Откройте «События»",
   "assessment.moved":
-    "Перенесена контрольная работа. Откройте календарь контрольных",
+    "Перенесена контрольная работа. Откройте «События»",
   "assessment.changed": "Изменён тип контрольной работы",
   "assessment.cancelled": "Отменена контрольная работа",
   "assessment.staff_changed":
@@ -364,11 +365,13 @@ export default function NotificationCenter({ identity }: { identity: string }) {
   return (
     <>
       <button
-        className="notifications-button"
+        className="notifications-button icon-button"
         onClick={() => setOpen(true)}
+        title="Уведомления"
         aria-label={`Уведомления${inbox?.unread ? `, непрочитанных: ${inbox.unread}` : ""}`}
       >
-        Уведомления {inbox && inbox.unread > 0 && <b>{inbox.unread}</b>}
+        <Bell size={18} />
+        {inbox && inbox.unread > 0 && <b>{inbox.unread}</b>}
       </button>
       <dialog
         ref={dialog}
@@ -743,14 +746,14 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                               : item.action.startsWith(
                                                     "absence.",
                                                   )
-                                                ? "Откройте «Отсутствия и объяснительные» в учебном журнале; ответственный учитель — в разделе «Работа с классами»."
+                                                ? "Откройте «Отсутствия и объяснительные»: у родителя — «Посещаемость», у администратора — «Классный журнал»; ответственный учитель — «Посещаемость учащихся»."
                                                 : item.action ===
                                                     "family.updated"
-                                                  ? "Откройте «Мои дети и доступ» в личном кабинете."
+                                                  ? "Откройте «Мои дети и доступ» в меню аккаунта."
                                                   : item.action.startsWith(
                                                         "message.",
                                                       )
-                                                    ? "Откройте раздел сообщений в личном кабинете."
+                                                    ? "Откройте «Уведомления» в левом меню."
                                                     : item.action.startsWith(
                                                           "quiz.",
                                                         )
@@ -758,11 +761,11 @@ export default function NotificationCenter({ identity }: { identity: string }) {
                                                       : item.action.startsWith(
                                                             "homework.",
                                                           )
-                                                        ? "Откройте домашнюю работу в учебном журнале."
+                                                        ? "Откройте «Домашние задания» в левом меню."
                                                         : item.action.startsWith(
                                                               "journal.",
                                                             )
-                                                          ? "Откройте учебный журнал, чтобы проверить опубликованные записи."
+                                                          ? "Откройте «Классный журнал» (у ученика и родителя — «Оценки»), чтобы проверить опубликованные записи."
                                                           : item.action.startsWith(
                                                                 "registers.",
                                                               )

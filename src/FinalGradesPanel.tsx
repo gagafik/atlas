@@ -351,12 +351,15 @@ function ScaleEditor({
 export default function FinalGradesPanel({
   workspace,
   focus,
+  defaultOpen = false,
 }: {
   workspace: string;
   // Set by an opened notification: show the report card of this pupil for this period.
   focus?: { studentId: string; finalsPeriodId?: string };
+  // Opened from the menu: the panel starts open and loads its options like a click on the button.
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false),
+  const [open, setOpen] = useState(defaultOpen),
     [options, setOptions] = useState<Options | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -552,6 +555,9 @@ export default function FinalGradesPanel({
     setDraft({ ...draft, ...update });
     setDirty(true);
   };
+  useEffect(() => {
+    if (defaultOpen) void run(async () => void (await loadOptions()));
+  }, []);
   useEffect(() => {
     const period = focus?.finalsPeriodId;
     if (!focus || !period) return;

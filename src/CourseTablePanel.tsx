@@ -45,11 +45,14 @@ const scopeNotes = {
 export default function CourseTablePanel({
   workspace,
   onOpen,
+  defaultOpen = false,
 }: {
   workspace: string;
   onOpen: (lessonKey: string, day: string) => void;
+  // Opened from the menu: the panel starts expanded.
+  defaultOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false),
+  const [expanded, setExpanded] = useState(defaultOpen),
     [list, setList] = useState<CourseList | null>(null);
   const [course, setCourse] = useState(""),
     [filter, setFilter] = useState("");
