@@ -631,6 +631,43 @@ export const groupOf = (menu: NavMenu, itemId: string): NavGroup | undefined =>
         isGroup(entry) && entry.items.some((item) => item.id === itemId),
     );
 
+/** The tile that takes the focus when an arrow key, Home or End is pressed in a flyout (-1: none has it yet); null for any other key. */
+export function stepIndex(
+  from: number,
+  count: number,
+  key: string,
+): number | null {
+  const forward = key === "ArrowDown" || key === "ArrowRight";
+  const back = key === "ArrowUp" || key === "ArrowLeft";
+  if (!count || !(forward || back || key === "Home" || key === "End"))
+    return null;
+  if (key === "Home" || (forward && from < 0)) return 0;
+  if (key === "End" || (back && from < 0)) return count - 1;
+  return (from + (forward ? 1 : -1) + count) % count;
+}
+
+// Whether the menu is folded to icons is remembered per browser; storage that is blocked or empty means expanded.
+const RAIL_KEY = "atlas:menu-rail";
+export function recallRail(storage?: Pick<Storage, "getItem">): boolean {
+  try {
+    return (storage ?? localStorage).getItem(RAIL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export function rememberRail(
+  folded: boolean,
+  storage?: Pick<Storage, "setItem" | "removeItem">,
+) {
+  try {
+    const store = storage ?? localStorage;
+    if (folded) store.setItem(RAIL_KEY, "1");
+    else store.removeItem(RAIL_KEY);
+  } catch {
+    // Not remembered; the menu is expanded again next time.
+  }
+}
+
 /** The entry to highlight: the exact view and journal part, else the view itself. */
 export function activeItem(
   menu: NavMenu,

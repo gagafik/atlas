@@ -2,9 +2,7 @@
 // miss a drill-down; a journey cannot. capture.mjs runs them against the real
 // backend (so their requests land in the snapshot) and verify.mjs runs the same
 // lists over the built demo (so a missing answer is reported).
-import { closeOverlays, waitQuiet } from "./browser-kit.mjs";
-
-const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+import { closeOverlays, escape, findMenuEntry, waitQuiet } from "./browser-kit.mjs";
 
 export function createKit({ page, base, activity, miss, log = () => {}, shots }) {
   let shot = 0;
@@ -45,24 +43,12 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       if (!optional) miss(`not found: ${label}`);
       return false;
     },
-    // An entry of the left menu by its text (a count behind the text is allowed). On a phone the menu is
-    // a drawer behind the menu button, and the groups of the menu are folded until opened.
+    // An entry of the left menu by its text (a count behind the text is allowed). On a phone the menu is a drawer
+    // behind the menu button and a group unfolds in place; on a desktop a group opens a flyout of tiles.
     async menu(label, { optional = false } = {}) {
-      const name = new RegExp(`^\\s*${escape(label)}(\\s*\\d+\\+?)?\\s*$`);
-      const entries = page.locator(".sidebar nav button:not([aria-expanded])").filter({ hasText: name });
       for (let attempt = 0; attempt < (optional ? 4 : 16); attempt += 1) {
-        const entry = entries.first();
-        if (await entry.count()) {
-          const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
-          if ((await toggle.count()) && !(await page.locator(".sidebar.open").count())) {
-            await toggle.click().catch(() => {});
-            await page.waitForTimeout(350);
-          }
-          const head = entry.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' nav-group ')]/button").first();
-          if ((await head.count()) && (await head.getAttribute("aria-expanded")) === "false") {
-            await head.click().catch(() => {});
-            await page.waitForTimeout(150);
-          }
+        const entry = await findMenuEntry(page, label);
+        if (entry) {
           await entry.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
           await entry.click({ timeout: 3000, noWaitAfter: true }).catch((error) => log(`click failed: ${label}: ${error.message.split(String.fromCharCode(10))[0]}`));
           await settle();

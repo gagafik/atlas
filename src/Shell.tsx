@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -19,6 +21,7 @@ import {
   CalendarClock,
   CalendarDays,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleHelp,
   ClipboardCheck,
@@ -81,9 +84,13 @@ import {
   isGroup,
   menuItems,
   menuTitle,
+  recallRail,
+  rememberRail,
+  stepIndex,
   type AccountId,
   type MenuContext,
   type ModalId,
+  type NavGroup,
   type NavItem,
   type NavMenu,
 } from "./navigation";
@@ -156,6 +163,31 @@ const ICONS: Record<string, Icon> = {
 };
 export const iconOf = (name: string): Icon => ICONS[name] ?? CircleHelp;
 
+// Above this width the menu stays beside the page: groups open as flyouts and the menu can fold to icons.
+// At and below it the menu is the drawer and groups unfold in place (the same width as the media queries in styles.css).
+const DESKTOP = "(min-width: 901px)";
+function useDesktop() {
+  const [desktop, setDesktop] = useState(
+    () => window.matchMedia?.(DESKTOP).matches ?? true,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.(DESKTOP);
+    if (!query) return;
+    const change = () => setDesktop(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  return desktop;
+}
+// A flyout keeps this far from the edge of the screen and holds up to this many tiles in a row.
+const FLYOUT_GAP = 8;
+const FLYOUT_COLUMNS = 3;
+// The tiles of a flyout that are on show: the focus cannot rest on a tile that is hidden (the demo hides the sections its page cannot run).
+const shownTiles = (panel?: Element | null) =>
+  [...(panel?.querySelectorAll("button") ?? [])].filter(
+    (tile) => tile.getClientRects().length > 0,
+  );
+
 /** What AuthShell hands to the screen of a role: the facts the menu depends on and how to act on a click. */
 export interface ShellFrame {
   context: Omit<MenuContext, "journalPanels">;
@@ -206,13 +238,20 @@ export default function Shell({
   const accounts = accountMenu(context);
   const active = activeItem(menu, view, journalView);
   const title = menuTitle(menu, accounts, view, journalView);
+  const desktop = useDesktop();
   const [drawer, setDrawer] = useState(false),
     [accountOpen, setAccountOpen] = useState(false),
-    [openGroups, setOpenGroups] = useState<string[]>([]);
+    [openGroups, setOpenGroups] = useState<string[]>([]),
+    // Desktop only: the group whose flyout is open.
+    [flyout, setFlyout] = useState<string | null>(null),
+    [folded, setFolded] = useState(recallRail);
+  const rail = desktop && folded;
   const accountBox = useRef<HTMLDivElement>(null),
     accountToggle = useRef<HTMLButtonElement>(null),
     sidebar = useRef<HTMLElement>(null),
     menuToggle = useRef<HTMLButtonElement>(null),
+    // The group of the open flyout: its button comes first, the panel after it.
+    flyoutBox = useRef<HTMLDivElement>(null),
     shown = useRef(false);
   // The group of the screen on show is open, wherever the screen was reached from.
   const activeGroup = active ? groupOf(menu, active.id)?.id : undefined;
@@ -276,9 +315,69 @@ export default function Shell({
       document.removeEventListener("mousedown", outside);
     };
   }, [drawer, accountOpen]);
+  // The drawer and the flyouts are two forms of one menu: a width that changes the form puts the other one away.
+  useEffect(() => {
+    if (desktop) setDrawer(false);
+    else setFlyout(null);
+  }, [desktop]);
+  // The focus goes to the active tile of a flyout, else to its first.
+  function focusFlyout() {
+    const tiles = shownTiles(flyoutBox.current?.querySelector(".nav-flyout"));
+    (
+      tiles.find((tile) => tile.matches('[aria-current="page"]')) ?? tiles[0]
+    )?.focus();
+  }
+  // Closing from the keyboard returns the focus to the group button.
+  function closeFlyout(back = false) {
+    if (back) (flyoutBox.current?.firstElementChild as HTMLElement)?.focus();
+    setFlyout(null);
+  }
+  // The panel is fixed to the screen: it stands level with its group, higher when the screen is too short for it.
+  function placeFlyout() {
+    const group = flyoutBox.current?.firstElementChild;
+    const panel = flyoutBox.current?.querySelector<HTMLElement>(".nav-flyout");
+    if (!group || !panel) return;
+    const room = window.innerHeight - panel.offsetHeight - FLYOUT_GAP;
+    panel.style.top = `${Math.max(FLYOUT_GAP, Math.min(group.getBoundingClientRect().top, room))}px`;
+  }
+  useLayoutEffect(placeFlyout, [flyout]);
+  useEffect(() => {
+    if (!flyout) return;
+    focusFlyout();
+    const nav = sidebar.current?.querySelector("nav");
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeFlyout(true);
+    };
+    const outside = (event: MouseEvent) => {
+      if (!flyoutBox.current?.contains(event.target as Node)) closeFlyout();
+    };
+    // Tab out of the panel leaves the flyout.
+    const focused = (event: FocusEvent) => {
+      if (!flyoutBox.current?.contains(event.target as Node)) closeFlyout();
+    };
+    document.addEventListener("keydown", keys);
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("focusin", focused);
+    // A menu that scrolls or a window that changes moves the group away from the panel.
+    nav?.addEventListener("scroll", placeFlyout);
+    window.addEventListener("resize", placeFlyout);
+    return () => {
+      document.removeEventListener("keydown", keys);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("focusin", focused);
+      nav?.removeEventListener("scroll", placeFlyout);
+      window.removeEventListener("resize", placeFlyout);
+    };
+  }, [flyout]);
+  function toggleRail() {
+    setFlyout(null);
+    setFolded(!folded);
+    rememberRail(!folded);
+  }
   function select(item: NavItem) {
     closeDrawer();
     setAccountOpen(false);
+    setFlyout(null);
     const { target } = item;
     if (target.kind === "view") onView(target.view, target.journal);
     else if (target.kind === "modal") frame.onModal(target.modal);
@@ -289,13 +388,16 @@ export default function Shell({
     unread && (unread.count || unread.more)
       ? unreadLabel(unread.count, unread.more)
       : "";
+  const badgeOf = (item: NavItem) =>
+    badges?.[item.id] ?? (item.id === "notices" ? unreadText : "");
   function entry(item: NavItem) {
     const Icon = iconOf(item.icon),
-      badge = badges?.[item.id] ?? (item.id === "notices" ? unreadText : "");
+      badge = badgeOf(item);
     return (
       <button
         key={item.id}
         className={item === active ? "active" : ""}
+        title={rail ? item.label : undefined}
         aria-current={item === active ? "page" : undefined}
         onClick={() => select(item)}
       >
@@ -303,6 +405,120 @@ export default function Shell({
         <span>{item.label}</span>
         {!!badge && <span className="nav-count">{badge}</span>}
       </button>
+    );
+  }
+  // An entry of a flyout: the same choice as the entry of the menu, and the focus goes back to the group.
+  function tile(item: NavItem) {
+    const Icon = iconOf(item.icon),
+      badge = badgeOf(item);
+    return (
+      <button
+        key={item.id}
+        className={item === active ? "active" : ""}
+        aria-current={item === active ? "page" : undefined}
+        onClick={() => {
+          const group = flyoutBox.current?.firstElementChild as HTMLElement;
+          select(item);
+          group?.focus();
+        }}
+      >
+        <Icon size={26} />
+        <span>{item.label}</span>
+        {!!badge && <span className="nav-count">{badge}</span>}
+      </button>
+    );
+  }
+  function tileKeys(event: ReactKeyboardEvent<HTMLElement>) {
+    const tiles = shownTiles(event.currentTarget);
+    const to = stepIndex(
+      tiles.indexOf(document.activeElement as HTMLButtonElement),
+      tiles.length,
+      event.key,
+    );
+    if (to === null) return;
+    event.preventDefault();
+    tiles[to].focus();
+  }
+  function groupEntry(item: NavGroup) {
+    const Icon = iconOf(item.icon),
+      id = `nav-group-${item.id}`,
+      open = desktop ? flyout === item.id : openGroups.includes(item.id),
+      holds = item.items.some((child) => child === active),
+      // The group of the current page says so (to the screen reader too); the entry itself is in the page only in a group unfolded in the drawer.
+      lit = holds && (desktop || !open),
+      // A folded group still tells that something inside it waits; a flyout leaves the group folded.
+      waiting =
+        !desktop && open
+          ? 0
+          : item.items.reduce(
+              (sum, child) => sum + (badges?.[child.id] ?? 0),
+              0,
+            );
+    return (
+      <div
+        className="nav-group"
+        key={item.id}
+        ref={desktop && open ? flyoutBox : undefined}
+      >
+        <button
+          className={lit ? "active" : ""}
+          aria-current={lit ? "true" : undefined}
+          title={rail ? item.label : undefined}
+          aria-expanded={open}
+          aria-controls={open || !desktop ? id : undefined}
+          onClick={() => {
+            if (!desktop)
+              setOpenGroups(
+                open
+                  ? openGroups.filter((group) => group !== item.id)
+                  : [...openGroups, item.id],
+              );
+            else if (open) closeFlyout();
+            else setFlyout(item.id);
+          }}
+          onKeyDown={(event) => {
+            if (!desktop || event.key !== "ArrowRight") return;
+            event.preventDefault();
+            if (open) focusFlyout();
+            else setFlyout(item.id);
+          }}
+        >
+          <Icon size={18} />
+          <span>{item.label}</span>
+          {!!waiting && <span className="nav-count">{waiting}</span>}
+          <ChevronRight className="nav-arrow" size={14} />
+        </button>
+        {!desktop ? (
+          <div className="nav-group-items" id={id} hidden={!open}>
+            {item.items.map(entry)}
+          </div>
+        ) : (
+          open && (
+            <div
+              className="nav-flyout"
+              id={id}
+              role="group"
+              aria-label={item.label}
+              tabIndex={-1}
+              onKeyDown={tileKeys}
+            >
+              <div className="nav-flyout-title" aria-hidden="true">
+                {item.label}
+              </div>
+              <div
+                className="nav-flyout-tiles"
+                style={
+                  {
+                    "--tiles": Math.min(item.items.length, FLYOUT_COLUMNS),
+                  } as CSSProperties
+                }
+              >
+                {item.items.map(tile)}
+              </div>
+            </div>
+          )
+        )}
+      </div>
     );
   }
   const signOut = accounts.find((item) => item.id === "signOut");
@@ -320,7 +536,7 @@ export default function Shell({
     );
   };
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${rail ? "rail" : ""}`}>
       <aside
         id="shell-sidebar"
         ref={sidebar}
@@ -348,54 +564,26 @@ export default function Shell({
           {menu.map((block, index) => (
             <Fragment key={index}>
               {index > 0 && <div className="nav-divider" />}
-              {block.map((item) => {
-                if (!isGroup(item)) return entry(item);
-                const open = openGroups.includes(item.id),
-                  Icon = iconOf(item.icon),
-                  holds = item.items.some((child) => child === active),
-                  // A folded group still tells that something inside it waits.
-                  waiting = open
-                    ? 0
-                    : item.items.reduce(
-                        (sum, child) => sum + (badges?.[child.id] ?? 0),
-                        0,
-                      );
-                return (
-                  <div className="nav-group" key={item.id}>
-                    <button
-                      className={holds && !open ? "active" : ""}
-                      aria-expanded={open}
-                      aria-controls={`nav-group-${item.id}`}
-                      onClick={() =>
-                        setOpenGroups(
-                          open
-                            ? openGroups.filter((id) => id !== item.id)
-                            : [...openGroups, item.id],
-                        )
-                      }
-                    >
-                      <Icon size={18} />
-                      <span>{item.label}</span>
-                      {!!waiting && (
-                        <span className="nav-count">{waiting}</span>
-                      )}
-                      <ChevronRight className="nav-arrow" size={14} />
-                    </button>
-                    <div
-                      className="nav-group-items"
-                      id={`nav-group-${item.id}`}
-                      hidden={!open}
-                    >
-                      {item.items.map(entry)}
-                    </div>
-                  </div>
-                );
-              })}
+              {block.map((item) =>
+                isGroup(item) ? groupEntry(item) : entry(item),
+              )}
             </Fragment>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          {year && <div className="school-year">{year} учебный год</div>}
+          <div className="sidebar-foot">
+            {year && <div className="school-year">{year} учебный год</div>}
+            {desktop && (
+              <button
+                className="rail-toggle"
+                title={rail ? "Развернуть меню" : "Свернуть меню в значки"}
+                aria-label={rail ? "Развернуть меню" : "Свернуть меню в значки"}
+                onClick={toggleRail}
+              >
+                {rail ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+              </button>
+            )}
+          </div>
           {footer}
         </div>
       </aside>

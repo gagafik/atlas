@@ -86,3 +86,62 @@ export async function closeOverlays(page) {
     await page.waitForTimeout(150);
   }
 }
+
+// The left menu. On a phone it is a drawer behind the menu button and a group of it unfolds in place. On a desktop
+// a group opens a flyout of tiles beside the menu, one at a time, and a closed flyout is not in the page.
+const PLAIN = ".sidebar nav > button";
+const HEADS = ".sidebar nav .nav-group > button";
+const TILES = ".nav-flyout button, .nav-group-items button";
+export const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Opens the drawer of a phone; true if it was closed before.
+export async function openDrawer(page) {
+  const toggle = page.locator(".menu-toggle").filter({ visible: true }).first();
+  if (!(await toggle.count()) || (await page.locator(".sidebar.open").count())) return false;
+  await toggle.click({ timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(350);
+  return true;
+}
+
+// Unfold the group at position `group` among the groups of the menu; gives the locator of its entries.
+export async function openGroup(page, group) {
+  const head = page.locator(HEADS).nth(group);
+  if ((await head.getAttribute("aria-expanded")) === "false") {
+    await head.click({ timeout: 2000 });
+    await page.waitForTimeout(150);
+  }
+  return page.locator(".sidebar nav .nav-group").nth(group).locator(TILES);
+}
+
+// Every entry of the menu as {group, index, text}: group is -1 for an entry outside the groups, else its position.
+export async function menuEntries(page) {
+  await openDrawer(page);
+  const texts = async (locator) => (await locator.allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim());
+  const found = (await texts(page.locator(PLAIN))).map((text, index) => ({ group: -1, index, text }));
+  const groups = await page.locator(HEADS).count();
+  for (let group = 0; group < groups; group += 1)
+    found.push(...(await texts(await openGroup(page, group))).map((text, index) => ({ group, index, text })));
+  return found;
+}
+
+// The button of an entry given by menuEntries (its group is opened on the way).
+export async function menuButton(page, entry) {
+  await openDrawer(page);
+  return entry.group < 0 ? page.locator(PLAIN).nth(entry.index) : (await openGroup(page, entry.group)).nth(entry.index);
+}
+
+// The entry whose text is `label` (a count behind the text is allowed), looked for outside the groups first; null if none.
+export async function findMenuEntry(page, label) {
+  const name = new RegExp(`^\\s*${escape(label)}(\\s*\\d+\\+?)?\\s*$`);
+  const opened = await openDrawer(page);
+  const plain = page.locator(PLAIN).filter({ hasText: name });
+  if (await plain.count()) return plain.first();
+  const groups = await page.locator(HEADS).count();
+  for (let group = 0; group < groups; group += 1) {
+    const found = (await openGroup(page, group)).filter({ hasText: name });
+    if (await found.count()) return found.first();
+  }
+  // A drawer opened for nothing would stay over the page.
+  if (opened) await page.keyboard.press("Escape");
+  return null;
+}

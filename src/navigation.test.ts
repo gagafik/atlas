@@ -10,7 +10,10 @@ import {
   eventViews,
   isGroup,
   menuItems,
+  recallRail,
+  rememberRail,
   startTiles,
+  stepIndex,
   targetKey,
   type MenuContext,
 } from "./navigation";
@@ -312,6 +315,65 @@ describe("the parts of the journal in the menu", () => {
     expect(shown("finalGrades")).toBe("view:journal#finalGrades");
     expect(shown()).toBe("view:journal");
     expect(shown("periods")).toBe("view:journal");
+  });
+});
+
+describe("the flyout of a group", () => {
+  const TILES = 4;
+  const last = TILES - 1;
+
+  it("moves the focus from tile to tile and round the ends", () => {
+    for (const key of ["ArrowDown", "ArrowRight"]) {
+      expect(stepIndex(0, TILES, key)).toBe(1);
+      expect(stepIndex(last, TILES, key)).toBe(0);
+    }
+    for (const key of ["ArrowUp", "ArrowLeft"]) {
+      expect(stepIndex(last, TILES, key)).toBe(last - 1);
+      expect(stepIndex(0, TILES, key)).toBe(last);
+    }
+    // Home and End jump from where a single step would not reach the same tile.
+    expect(stepIndex(last, TILES, "Home")).toBe(0);
+    expect(stepIndex(1, TILES, "End")).toBe(last);
+  });
+
+  it("starts at an end when no tile has the focus, and leaves other keys alone", () => {
+    expect(stepIndex(-1, TILES, "ArrowDown")).toBe(0);
+    expect(stepIndex(-1, TILES, "ArrowUp")).toBe(last);
+    for (const key of ["Tab", "Enter", " ", "a", "Escape"])
+      expect(stepIndex(0, TILES, key)).toBeNull();
+    expect(stepIndex(-1, 0, "ArrowDown")).toBeNull();
+  });
+});
+
+describe("the menu folded to icons", () => {
+  const memory = () => {
+    const data = new Map<string, string>();
+    return {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+      removeItem: (key: string) => void data.delete(key),
+    };
+  };
+  // Storage that a private window or a blocked-cookies setting makes throw.
+  const blocked = () => {
+    const fail = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    return { getItem: fail, setItem: fail, removeItem: fail };
+  };
+
+  it("is remembered, and expanded again once the choice is taken back", () => {
+    const storage = memory();
+    expect(recallRail(storage)).toBe(false);
+    rememberRail(true, storage);
+    expect(recallRail(storage)).toBe(true);
+    rememberRail(false, storage);
+    expect(recallRail(storage)).toBe(false);
+  });
+
+  it("falls back to the expanded menu when the storage cannot be used", () => {
+    expect(recallRail(blocked())).toBe(false);
+    expect(() => rememberRail(true, blocked())).not.toThrow();
   });
 });
 
