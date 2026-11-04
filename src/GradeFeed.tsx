@@ -182,7 +182,8 @@ export function useFamilyFeed(
     }
   }
   async function sign() {
-    // Only grades already on screen are signed: the newest one of the first page.
+    // One click signs everything up to the newest grade of the loaded list, as in EduPage, even pages not opened yet;
+    // grades published after the list was loaded stay unsigned.
     if (!feed?.latest || busy) return;
     const token = ++sequence.current;
     setBusy(true);
@@ -234,9 +235,9 @@ export function useFamilyFeed(
     }
   }
   const unsigned = feed?.unsigned ?? 0;
-  // Unsigned grades are the newest ones; all of them must be on screen before signing.
-  // Once every page is loaded nothing at or below `latest` is left unseen, even if
-  // grades were corrected or signed elsewhere between pages.
+  // Unsigned grades below the loaded pages, shown as a hint only. Once every page is loaded
+  // nothing at or below `latest` is left unseen, even if grades were corrected or signed
+  // elsewhere between pages.
   const unseen = feed?.nextBefore
     ? unsigned - feed.items.filter((i) => !i.signed).length
     : 0;
@@ -296,7 +297,7 @@ export function FamilyFeedView({
           <button
             type="button"
             className="primary"
-            disabled={busy || !unsigned || !feed.latest || unseen > 0}
+            disabled={busy || !unsigned || !feed.latest}
             onClick={() => void state.sign()}
           >
             {pupil ? "Просмотрено" : "Подписать оценки"}
@@ -305,9 +306,8 @@ export function FamilyFeedView({
       </header>
       {unseen > 0 && (
         <p className="grade-feed-meta">
-          Ещё {unseen} {pupil ? "непросмотренных" : "неподписанных"} ниже:
-          откройте их кнопкой «Показать ещё», чтобы{" "}
-          {pupil ? "отметить" : "подписать"}.
+          Ещё {unseen} {pupil ? "непросмотренных" : "неподписанных"} ниже, под
+          кнопкой «Показать ещё».
         </p>
       )}
       {feed?.signedAt && (
