@@ -332,12 +332,20 @@ async function homeworkQueue(kit, { filterLabel }) {
 }
 
 // The second child of a parent: the whole portal follows the child chosen in the account menu, so the start page, the
-// screens of the journal and the timetable are shown again for the sibling; the first child is chosen back at the end.
+// screens of the journal, the homework and tests of the family and the timetable are shown again for the sibling (the window
+// of the pick-up opens on her); the first child is chosen back at the end.
 async function siblingScreens(kit) {
   await kit.home();
   await kit.otherChild();
   await kit.snap("sibling-home");
   await familyScreens(kit, { notes: true });
+  await homeworkQueue(kit, {});
+  await kit.snap("sibling-homework");
+  await kit.path("Контрольные и тесты");
+  await kit.snap("sibling-tests");
+  await kit.path("Забрать из школы");
+  await kit.snap("sibling-pickup");
+  await kit.close();
   await kit.path("Расписание");
   await kit.choose("Режим просмотра", "Неделя");
   await kit.snap("sibling-timetable");

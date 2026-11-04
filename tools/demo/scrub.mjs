@@ -67,14 +67,6 @@ function adjustStatus(body) {
   return result;
 }
 
-// A part of the journal the snapshot holds no data for is not offered: the administrator's file is at the size limit of the
-// repository, so the absence notes of the school are not in it, and the menu and the launcher must not lead to a screen of misses.
-function adjustJournalOptions(body, entries) {
-  const unanswered = (part) => !Object.keys(entries).some((key) => key.startsWith(`GET /api/journal/${part}`));
-  if (!body?.panels?.absences || !unanswered("absences")) return body;
-  return { ...body, panels: { ...body.panels, absences: false } };
-}
-
 export function scrubSnapshot(snapshot, osUser) {
   const entries = {};
   for (const [key, entry] of Object.entries(snapshot.entries)) {
@@ -85,8 +77,6 @@ export function scrubSnapshot(snapshot, osUser) {
       body = { ...body, server: "локальный сервер модели" };
     entries[key] = { s: entry.s, b: body };
   }
-  const options = entries["GET /api/journal/options"];
-  if (options) entries["GET /api/journal/options"] = { s: options.s, b: adjustJournalOptions(options.b, entries) };
   const clean = { ...snapshot, entries };
   const leaks = findLeaks(clean, osUser);
   if (leaks.length)

@@ -14,13 +14,16 @@ from .resources import teacher_ids
 def register(app,quizzes,Workspace):
     @app.get('/api/journal/quizzes')
     def listing(request:Request,workspace:Workspace='school',history:bool=False,search:str=Query(default='',max_length=120),
-                cursor:str|None=Query(default=None,max_length=64),limit:int=Query(default=30,ge=1,le=50)):
+                cursor:str|None=Query(default=None,max_length=64),limit:int=Query(default=30,ge=1,le=50),
+                studentId:str|None=Query(default=None,max_length=100)):
         user=quizzes.journal.scope(request,workspace);snap=quizzes.snapshots.get(workspace);staff=user['role'] in ['admin','teacher']
+        # A family portal looks at one child: the list narrows to them, and only to a child the account is linked to.
+        if studentId and not staff and studentId not in user_ids(user,workspace,'student'):raise HTTPException(403,'Нет действующего доступа к этому ребёнку.')
         def read(db):
             quizzes.journal.recheck_account(db,user)
             if db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()!=(snap.state.revision,):raise HTTPException(409,'Расписание изменилось. Обновите тесты.')
             generation=db.execute('SELECT version FROM quiz_catalog_versions WHERE workspace=?',(workspace,)).fetchone()
-            token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),snap.state.revision,generation,history,search]).encode()).hexdigest()
+            token=hashlib.sha256(encoded([workspace,user['id'],permission_key(user),snap.state.revision,generation,history,search,studentId]).encode()).hexdigest()
             after=None
             if cursor:
                 with quizzes.cursor_lock:found=quizzes.cursors.get(cursor)
@@ -30,6 +33,7 @@ def register(app,quizzes,Workspace):
             student="''" if staff else 'm.student_id';name="''" if staff else 'm.name'
             join='' if staff else 'JOIN quiz_members m ON m.workspace=q.workspace AND m.quiz_id=q.id'
             if not staff:clauses.append('m.student_id IN (SELECT value FROM json_each(?))');args.append(encoded(sorted(user_ids(user,workspace,'student'))))
+            if studentId and not staff:clauses.append('m.student_id=?');args.append(studentId)
             if user['role']=='teacher':
                 own=sorted(user_ids(user,workspace,'teacher'))
                 pairs=sorted({w.groupId+'\x1f'+w.subjectId for w in snap.state.workloads if set(own)&set(teacher_ids(w))})

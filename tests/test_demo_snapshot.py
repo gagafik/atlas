@@ -2,6 +2,8 @@
 import gzip
 import json
 import re
+import shutil
+import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -106,10 +108,16 @@ def test_the_parent_can_switch_between_two_children_with_their_screens_in_the_sn
     for child in children:
         assert any(key.startswith('GET /api/journal/report') and f'studentId={child}' in key for key in entries), child
         assert any(key.startswith('GET /api/journal/pupil-period') and f'studentId={child}' in key for key in entries), child
+        # The lists of the family hold the child on show only, so the visitor never sees the sibling's work among them.
+        for path in ['/api/journal/homework-queue', '/api/journal/quizzes']:
+            lists = [entry['b']['items'] for key, entry in entries.items() if key.startswith(f'GET {path}?') and f'studentId={child}' in key and entry['s'] == 200]
+            assert lists, (child, path)
+            assert all(item['studentId'] == child for items in lists for item in items), (child, path)
 
 
 # The route each part of the journal opens with. The menu offers a part when `journal/options` says the account has it, so a part
-# without any answer in the snapshot would lead a visitor to a screen of misses.
+# without any answer in the snapshot would lead a visitor to a screen of misses. The demo serves the snapshot through
+# tools/demo/served.mjs, which withdraws such a part (the administrator's file is at the size limit, without the absence notes).
 PART_ROUTES = {
     'absences': '/api/journal/absences', 'coverage': '/api/journal/coverage', 'attendance': '/api/journal/attendance',
     'attendanceGrid': '/api/journal/attendance', 'finalGrades': '/api/final-grades', 'periods': '/api/journal/periods',
@@ -117,9 +125,18 @@ PART_ROUTES = {
 }
 
 
+def served(role):
+    """The snapshot of a role as the built demo serves it."""
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node.js is needed to build the demo')
+    result = subprocess.run([node, str(SNAPSHOTS.parent / 'served.mjs'), role], capture_output=True, check=True, timeout=60)
+    return json.loads(result.stdout.decode('utf-8'))
+
+
 @pytest.mark.parametrize('role', ['admin', 'teacher'])
 def test_every_part_of_the_journal_the_menu_offers_has_answers_in_the_snapshot(role):
-    entries = load(role)['entries']
+    entries = served(role)['entries']
     panels = entries[get_key('/api/journal/options')]['b']['panels']
     for part, route in PART_ROUTES.items():
         if panels.get(part):

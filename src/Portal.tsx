@@ -284,6 +284,10 @@ export default function Portal({
   const child = withChild
     ? currentChild(children, chosenChild ?? remembered)
     : "";
+  // The lists of homework and tests are the parent's children as the server lists them, so they wait for the children to be
+  // known and then show the one chosen; a pupil's lists are their own.
+  const listChild = role === "parent" ? child : undefined;
+  const listsReady = role !== "parent" || !!journal || failed;
   function chooseChild(id: string) {
     if (id === child || !children.some((c) => c.id === id)) return;
     if (!canLeaveHomework()) return;
@@ -581,10 +585,21 @@ export default function Portal({
                     key={workspace}
                     workspace={workspace}
                   />
+                ) : (section === "quizzes" || section === "homework") &&
+                  !listsReady ? (
+                  <p role="status">Загружаем список…</p>
                 ) : section === "quizzes" ? (
-                  <QuizzesPanel key={workspace} workspace={workspace} />
+                  <QuizzesPanel
+                    key={`${workspace}:${listChild}`}
+                    workspace={workspace}
+                    child={listChild}
+                  />
                 ) : section === "homework" ? (
-                  <HomeworkQueuePanel key={workspace} workspace={workspace} />
+                  <HomeworkQueuePanel
+                    key={`${workspace}:${listChild}`}
+                    workspace={workspace}
+                    child={listChild}
+                  />
                 ) : (
                   <JournalPanel
                     key={workspace}

@@ -55,8 +55,11 @@ const dateLabel = (value: string) => value.split("-").reverse().join(".");
 
 export default function HomeworkQueuePanel({
   workspace,
+  child,
 }: {
   workspace: string;
+  // The child a parent's portal looks at: the queue lists their work only.
+  child?: string;
 }) {
   const [fields, setFields] = useState(initial),
     [applied, setApplied] = useState(initial);
@@ -87,7 +90,10 @@ export default function HomeworkQueuePanel({
     setBusy(true);
     setError("");
     setResult(null);
-    api(`journal/homework-queue?${queueParams(applied, cursor)}`, workspace)
+    api(
+      `journal/homework-queue?${queueParams(applied, cursor, child)}`,
+      workspace,
+    )
       .then((r: Result) => {
         if (!live) return;
         setResult(r);
@@ -110,7 +116,7 @@ export default function HomeworkQueuePanel({
     return () => {
       live = false;
     };
-  }, [workspace, applied, cursor, epoch]);
+  }, [workspace, child, applied, cursor, epoch]);
   function refresh() {
     setCursor("");
     setEpoch((v) => v + 1);
@@ -261,7 +267,9 @@ export default function HomeworkQueuePanel({
               "Сначала ближайшие сроки, затем более поздние. "}
             {result.staff
               ? "Личные черновики учеников здесь не показываются."
-              : "Показаны только доступные вам ученики."}
+              : child
+                ? "Показаны работы выбранного ребёнка."
+                : "Показаны только доступные вам ученики."}
           </p>
           {!result.items.length && (
             <p className="info-line">

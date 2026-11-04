@@ -22,6 +22,8 @@ import "./SchoolPayments.css";
 type PaymentsProps = {
   user: Account;
   initialWorkspace: string;
+  // The child a family portal showed: their account is the one opened.
+  studentId?: string;
   onClose: () => void;
 };
 
@@ -54,6 +56,7 @@ export default function SchoolPayments(props: PaymentsProps) {
 
 function PaymentsWorkspace({
   onClose,
+  studentId,
   workspace,
   spaces,
   onWorkspaceChange,
@@ -85,7 +88,8 @@ function PaymentsWorkspace({
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
     auxSequence = useRef(0),
-    replay = useRef({ key: "", id: "" });
+    replay = useRef({ key: "", id: "" }),
+    wanted = useRef(studentId);
   const money = (v: string | number) =>
     formatMoney(
       v,
@@ -105,11 +109,22 @@ function PaymentsWorkspace({
   ) {
     const token = ++sequence.current;
     try {
-      const [opts, list, detail] = await Promise.all([
+      const [opts, list, first] = await Promise.all([
         read("options"),
         read(`accounts?offset=${start}&q=${encodeURIComponent(search)}`),
         id ? read("accounts/" + id) : Promise.resolve(null),
       ]);
+      if (token !== sequence.current) return;
+      // A family opens on the account of the child the portal showed, when the list has it.
+      const child = wanted.current;
+      wanted.current = undefined;
+      const detail =
+        !id &&
+        child &&
+        !opts.canManage &&
+        list.items.some((a: any) => a.id === child)
+          ? await read("accounts/" + child)
+          : first;
       if (token !== sequence.current) return;
       setOptions(opts);
       setAccounts(list);

@@ -154,8 +154,25 @@ async function childSwitcher(page, kit, problems) {
       if (!(await printed()).trim().startsWith(child)) fail(`${screen} shows another child than ${child}`);
       if (await page.locator(".pupil-picker:has(select)").filter({ hasText: /Ребёнок|Ученик/ }).count()) fail(`${screen} still offers a picker of the child`);
     }
+    // The lists of the family hold the child on show only: the queue of homework and the tests assigned.
+    const first = child.split(",")[0];
+    await kit.menu("Домашние задания");
+    await kit.click("Весь учебный год", { optional: true });
+    const works = await page.locator(".homework-queue-card > div > p").allInnerTexts();
+    if (!works.length) fail(`the homework list of ${child} is empty`);
+    else if (works.some((text) => !text.startsWith(first))) fail(`the homework list shows another child than ${child}`);
+    if (await kit.menu("Контрольные и тесты", { optional: true })) {
+      const tests = await page.locator(".quiz-card > p:first-of-type").allInnerTexts();
+      if (tests.some((text) => !text.includes(first))) fail(`the tests list shows another child than ${child}`);
+    }
+    // A window of the menu starts on the child on show.
+    if (await kit.menu("Забрать из школы", { optional: true })) {
+      const chosen = await page.locator("dialog label:has-text('Ребёнок') select").first().evaluate((select) => select.selectedOptions[0]?.textContent || "").catch(() => "");
+      if (!chosen.startsWith(first)) fail(`the pick-up window does not start on ${child} (${chosen})`);
+      await closeOverlays(page);
+    }
     await kit.menu("Начало");
-    if (!(await page.locator(".today-lessons h2").first().innerText()).includes(child.split(",")[0])) fail(`the start page does not show ${child}`);
+    if (!(await page.locator(".today-lessons h2").first().innerText()).includes(first)) fail(`the start page does not show ${child}`);
     // The choice is made from the page that is on show and keeps the page.
     await kit.menu("Оценки");
     const heading = await page.locator("main h1").first().innerText();

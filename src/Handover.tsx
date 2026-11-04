@@ -18,7 +18,13 @@ import {
 } from "./HandoverEditors";
 import "./Handover.css";
 
-type Props = { user: Account; initialWorkspace: string; onClose: () => void };
+type Props = {
+  user: Account;
+  initialWorkspace: string;
+  // The child a family portal showed: the lists start with them.
+  studentId?: string;
+  onClose: () => void;
+};
 type Editor = {
   kind: "proposal" | "decision" | "pickup" | "action" | "transfer";
   row?: any;
@@ -51,6 +57,7 @@ export default function Handover(p: Props) {
 }
 function HandoverWorkspace({
   onClose,
+  studentId,
   workspace,
   spaces,
   changeWorkspace,
@@ -79,7 +86,8 @@ function HandoverWorkspace({
   const dialog = useRef<HTMLDialogElement>(null),
     sequence = useRef(0),
     busyRef = useRef(false),
-    replay = useRef({ key: "", id: "" });
+    replay = useRef({ key: "", id: "" }),
+    wanted = useRef(studentId);
   const leave = () =>
     !busyRef.current &&
     (!dirty ||
@@ -101,6 +109,19 @@ function HandoverWorkspace({
       )
         throw new Error("Выберите период от 1 до 31 дня.");
       const opts = await read("options");
+      if (token !== sequence.current) return;
+      // The window opens on the child the portal showed, once the account's children are known; it then loads for them.
+      const first = wanted.current;
+      wanted.current = undefined;
+      if (
+        first &&
+        first !== student &&
+        opts.students.some((s: any) => s.id === first)
+      ) {
+        setOptions(opts);
+        setStudent(first);
+        return;
+      }
       const params = new URLSearchParams({
         studentId: student,
         status,

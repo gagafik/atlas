@@ -542,9 +542,11 @@ const GROUPINGS: [NoteGrouping, string][] = [
 ];
 function NotesTab({
   workspace,
+  child,
   behaviour,
 }: {
   workspace: string;
+  child: string;
   behaviour: ReturnType<typeof useBehaviour>;
 }) {
   const [by, setBy] = useState<NoteGrouping>("subject");
@@ -581,7 +583,7 @@ function NotesTab({
           onClick={() =>
             window.dispatchEvent(
               new CustomEvent("atlas-open-behaviour", {
-                detail: { workspace },
+                detail: { workspace, studentId: child },
               }),
             )
           }
@@ -961,7 +963,7 @@ export default function PupilGrades({
           <DateTab marks={data.data.marks} categories={categories} />
         )}
         {tab === "notes" && notesShown && (
-          <NotesTab workspace={workspace} behaviour={behaviour} />
+          <NotesTab workspace={workspace} child={child} behaviour={behaviour} />
         )}
         {data.data && tab === "chart" && (
           <ChartTab

@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { servedText } from "./served.mjs";
 
 const SNAPSHOT_DIR = new URL("./snapshot/", import.meta.url);
 
 /**
  * Vite plugin for the GitHub Pages demo build only (`vite build --mode demo`).
  * It points index.html at the demo entry and publishes the committed per-role
- * snapshots as static assets. The normal build never loads this file.
+ * snapshots as static assets (served.mjs withdraws the parts of the journal
+ * they hold no answers for). The normal build never loads this file.
  */
 export function demoPages() {
   return {
@@ -26,7 +28,7 @@ export function demoPages() {
         this.emitFile({
           type: "asset",
           fileName: `demo-data/${name}`,
-          source: readFileSync(new URL(name, SNAPSHOT_DIR)),
+          source: servedText(readFileSync(new URL(name, SNAPSHOT_DIR), "utf8")),
         });
       }
     },

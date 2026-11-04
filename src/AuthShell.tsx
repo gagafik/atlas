@@ -75,11 +75,15 @@ export default function AuthShell() {
   const [handoverWorkspace, setHandoverWorkspace] = useState<string | null>(
     null,
   );
+  // The child a window of the menu starts on; a notice that names a child opens the window on them, any other opening on none.
+  const [modalChild, setModalChild] = useState<string | undefined>();
   useEffect(() => {
-    const open = (event: Event) =>
+    const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setHandoverWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
       );
+    };
     window.addEventListener("atlas-open-handover", open);
     return () => window.removeEventListener("atlas-open-handover", open);
   }, []);
@@ -120,6 +124,7 @@ export default function AuthShell() {
   useEffect(() => {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;
+      setModalChild(detail?.studentId);
       setBehaviourPrefill(detail?.prefill);
       setBehaviourWorkspace(detail?.workspace || "school");
     };
@@ -129,13 +134,13 @@ export default function AuthShell() {
   const [assessmentsWorkspace, setAssessmentsWorkspace] = useState<
     string | null
   >(null);
-  // The child the family portal showed when a window of the menu was opened: the window starts on them.
-  const [modalChild, setModalChild] = useState<string | undefined>();
   useEffect(() => {
-    const open = (event: Event) =>
+    const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setAssessmentsWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
       );
+    };
     window.addEventListener("atlas-open-assessments", open);
     return () => window.removeEventListener("atlas-open-assessments", open);
   }, []);
@@ -202,6 +207,7 @@ export default function AuthShell() {
   const [meetingsSection, setMeetingsSection] = useState<string | undefined>();
   useEffect(() => {
     const open = (event: Event) => {
+      setModalChild((event as CustomEvent).detail?.studentId);
       setMeetingsSection((event as CustomEvent).detail?.section);
       setMeetingsWorkspace(
         (event as CustomEvent).detail?.workspace || "school",
@@ -646,6 +652,7 @@ export default function AuthShell() {
             key={`${session.user.id}:${session.user.version}`}
             user={session.user}
             initialWorkspace={paymentsWorkspace}
+            studentId={modalChild}
             onClose={() => setPaymentsWorkspace(null)}
           />
         </Suspense>
@@ -656,6 +663,7 @@ export default function AuthShell() {
             key={`${session.user.id}:${session.user.version}`}
             user={session.user}
             initialWorkspace={handoverWorkspace}
+            studentId={modalChild}
             onClose={() => setHandoverWorkspace(null)}
           />
         </Suspense>
@@ -807,6 +815,7 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={meetingsWorkspace}
             initialSection={meetingsSection}
+            studentId={modalChild}
             onClose={() => setMeetingsWorkspace(null)}
           />
         </Suspense>

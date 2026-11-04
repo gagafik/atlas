@@ -67,11 +67,14 @@ export default function ParentMeetings({
   user,
   initialWorkspace,
   initialSection,
+  studentId,
   onClose,
 }: {
   user: Account;
   initialWorkspace: string;
   initialSection?: string;
+  // The child a family portal showed: a booking starts with them.
+  studentId?: string;
   onClose: () => void;
 }) {
   const sections = sectionsOf[user.role] || (["events", "day"] as Section[]);
@@ -289,10 +292,13 @@ export default function ParentMeetings({
     const n = ++optionsSequence.current;
     setOptions(blankOptions);
     api("meetings/options", workspace)
-      .then((o) => {
+      .then((o: Options) => {
         if (n !== optionsSequence.current) return;
         setOptions(o);
-        setStudent(o.students[0]?.id || "");
+        setStudent(
+          (o.students.find((s) => s.id === studentId) ?? o.students[0])?.id ||
+            "",
+        );
       })
       .catch((e) => {
         if (n === optionsSequence.current) setError(e.message);
