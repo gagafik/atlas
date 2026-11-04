@@ -142,30 +142,50 @@ function useBehaviour(
 }
 
 // The published period finals of the pupil by subject, for the period being shown.
+// A staff member reads the same report within the rights of the report cards (the administrator, the class teacher of
+// the pupil); `shown` is false for the rest, and the column is left out instead of standing empty.
 function useFinals(
   workspace: string,
   studentId: string,
   periodId: string,
-  // The report cards of a staff member are in «Табели».
-  enabled = true,
+  staff = false,
 ) {
-  const [periods, setPeriods] = useState<Set<string> | null>(null);
+  const [access, setAccess] = useState<{
+    periods: Set<string>;
+    admin: boolean;
+    pupils: Set<string>;
+  } | null>(null);
   useEffect(() => {
-    if (!enabled) return setPeriods(new Set());
     let live = true;
     api("final-grades/options", workspace)
-      .then((r: { periods?: { id: string }[] }) => {
-        if (live) setPeriods(new Set((r.periods ?? []).map((p) => p.id)));
-      })
+      .then(
+        (r: {
+          admin?: boolean;
+          periods?: { id: string }[];
+          students?: { id: string }[];
+        }) => {
+          if (live)
+            setAccess({
+              periods: new Set((r.periods ?? []).map((p) => p.id)),
+              admin: !!r.admin,
+              pupils: new Set((r.students ?? []).map((s) => s.id)),
+            });
+        },
+      )
       .catch(() => {
-        if (live) setPeriods(new Set());
+        if (live)
+          setAccess({ periods: new Set(), admin: false, pupils: new Set() });
       });
     return () => {
       live = false;
     };
-  }, [workspace, enabled]);
+  }, [workspace]);
+  const shown =
+    !staff || (!!access && (access.admin || access.pupils.has(studentId)));
+  // Known to be closed to this account, not merely still loading.
+  const denied = staff && !!access && !shown;
   const [finals, setFinals] = useState<Record<string, FinalMark>>({});
-  const has = !!periods?.has(periodId);
+  const has = shown && !!access?.periods.has(periodId);
   useEffect(() => {
     setFinals({});
     if (!has) return;
@@ -195,7 +215,7 @@ function useFinals(
       live = false;
     };
   }, [workspace, studentId, periodId, has]);
-  return finals;
+  return { finals, shown, denied };
 }
 
 const chipText = (m: PupilMark) =>
@@ -356,6 +376,7 @@ function Average({
 function SummaryTab({
   rows,
   behaviour,
+  finalsShown,
   notesShown,
   categories,
   pupil,
@@ -363,6 +384,7 @@ function SummaryTab({
 }: {
   rows: SubjectRow[];
   behaviour: { praise: number; remark: number } | null;
+  finalsShown: boolean;
   notesShown: boolean;
   categories: CategoryConfig | null;
   pupil: boolean;
@@ -382,7 +404,7 @@ function SummaryTab({
             </th>
             <th scope="col">Оценки</th>
             <th scope="col">Среднее</th>
-            <th scope="col">Итог</th>
+            {finalsShown && <th scope="col">Итог</th>}
             {notesShown && <th scope="col">Заметки</th>}
           </tr>
         </thead>
@@ -394,7 +416,7 @@ function SummaryTab({
               </th>
               <td className="pupil-muted">—</td>
               <td className="pupil-muted">—</td>
-              <td className="pupil-muted">—</td>
+              {finalsShown && <td className="pupil-muted">—</td>}
               <td>
                 <NoteCounts
                   praise={behaviour.praise}
@@ -425,7 +447,7 @@ function SummaryTab({
               <td>
                 <Average row={row} categories={categories} />
               </td>
-              <td>{row.final?.label || "—"}</td>
+              {finalsShown && <td>{row.final?.label || "—"}</td>}
               {notesShown && (
                 <td>
                   <NoteCounts
@@ -752,7 +774,11 @@ export default function PupilGrades({
     period.end,
     family,
   );
-  const finals = useFinals(workspace, child, period.id, family);
+  const {
+    finals,
+    shown: finalsShown,
+    denied: finalsDenied,
+  } = useFinals(workspace, child, period.id, !family);
   const [tab, setTab] = useState<Tab>("summary");
   const [mark, setMark] = useState<PupilMark | null>(null);
   const [problem, setProblem] = useState("");
@@ -927,11 +953,18 @@ export default function PupilGrades({
           <SummaryTab
             rows={rows}
             behaviour={behaviourRow(behaviour.family)}
+            finalsShown={finalsShown}
             notesShown={notesShown}
             categories={categories}
             pupil={feed.pupil}
             onMark={setMark}
           />
+        )}
+        {data.data && tab === "summary" && finalsDenied && !!rows.length && (
+          <p className="pupil-muted">
+            Итоги периода по этому ученику вам не открыты: итоги своих курсов и
+            классов — в «Табелях».
+          </p>
         )}
         {data.data && tab === "date" && (
           <DateTab marks={data.data.marks} categories={categories} />
