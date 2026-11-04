@@ -12,6 +12,7 @@ import type { AuthStatus } from "./auth";
 import DeviceTools from "./DeviceTools";
 import { startPolling } from "./polling";
 import InvitationForm from "./InvitationForm";
+import SchoolLogo from "./SchoolLogo";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
 import type { AccountId, ModalId } from "./navigation";
@@ -352,6 +353,10 @@ export default function AuthShell() {
   if (session.enabled && !session.user)
     return (
       <main className="auth-screen">
+        <header className="auth-brand">
+          <SchoolLogo />
+          <p>Атлас · школьная платформа</p>
+        </header>
         {recoveryForm ? (
           <Suspense fallback={<p>Открываю восстановление доступа…</p>}>
             <RecoveryForm

@@ -1,15 +1,107 @@
+/* Design tokens of the Quantum STEM School brand book (see DESIGN.md). Components use the roles below, not the raw colours.
+   Layout follows EduPage; only colour, type and shape come from the brand. */
 :root {
-  font-family: "Manrope", "Segoe UI", sans-serif;
-  color: #263830;
-  background: #f6f7f5;
+  /* Brand palette, as printed in the book (pages 9 and 10). Dark blue is for large solid fills only. */
+  --brand-navy: #083a81;
+  --brand-blue: #226bd1;
+  --brand-white: #fefefe;
+  --brand-grey: #4d494a;
+  --brand-silver: #bdbfc1;
+  /* Derived shades (the supporting palette, page 11, has no codes): the blues step from the two brand blues, the greys from the two accents. */
+  --navy-900: #052a5e;
+  --navy-700: #0d4796;
+  --blue-700: #1a56ae;
+  --blue-600: #1d60c0;
+  --blue-300: #8fb4ea;
+  --blue-200: #bcd3f3;
+  --blue-100: #d6e5fa;
+  --blue-50: #eaf1fc;
+  --blue-25: #f4f8fe;
+  --ink: #231f20;
+  --grey-600: #5a5758;
+  --grey-500: #66686b;
+  --grey-400: #878a91;
+  --grey-200: #dcdfe4;
+  --grey-100: #eceef2;
+  --grey-50: #f3f5f9;
+  /* Surfaces */
+  --bg: var(--grey-50);
+  --surface: var(--brand-white);
+  --surface-alt: #f8f9fc;
+  --surface-sunken: var(--grey-100);
+  --surface-inverse: var(--brand-navy);
+  /* Lines: hairlines for cards and tables; the control border is dark enough (3:1) to find an empty field. */
+  --line: var(--grey-200);
+  --border: var(--line);
+  --line-strong: var(--brand-silver);
+  --border-control: var(--grey-400);
+  /* Text */
+  --text: var(--ink);
+  --text-muted: var(--grey-600);
+  --text-subtle: var(--grey-500);
+  --text-on-primary: var(--brand-white);
+  --text-on-primary-muted: #c9d8f0;
+  /* Primary fill is dark blue; hover and pressed go to the brand blue. The accent is for icons, links, indicators and focus. */
+  --primary: var(--brand-navy);
+  --primary-hover: var(--brand-blue);
+  --primary-active: var(--blue-700);
+  --accent: var(--brand-blue);
+  --accent-strong: var(--blue-700);
+  --accent-tint: var(--blue-50);
+  --accent-tint-strong: var(--blue-100);
+  --focus: var(--brand-blue);
+  --focus-on-dark: var(--brand-white);
+  /* Status keeps its meaning: green present/done, amber warning/late, red absent/unfilled/error, blue is information. */
+  --success: #1b7a46;
+  --success-tint: #e4f3ea;
+  --success-line: #a6d4b8;
+  --warning: #8f5f00;
+  --warning-bright: #f0a800;
+  --warning-tint: #fdf2d9;
+  --warning-line: #ebcb86;
+  --danger: #c0262d;
+  --danger-tint: #fce9ea;
+  --danger-line: #edb3b6;
+  --info: var(--blue-700);
+  --info-tint: var(--blue-50);
+  --info-line: #b9d1f3;
+  /* Shape: square modules, radii of 0-4 px, one soft shadow for what floats above the page. */
+  --radius-none: 0;
+  --radius-sm: 2px;
+  --radius: 4px;
+  --radius-round: 50%;
+  --line-width: 1px;
+  --line-width-strong: 2px;
+  --shadow-overlay: 0 8px 24px #083a8126;
+  --scrim: #052a5e8c;
+  --focus-glow: 0 0 0 3px #226bd133;
+  /* On a dark-blue fill (top bar, hall screen): hover and pressed wash of white, and the divider line. */
+  --on-primary-hover: #ffffff1f;
+  --on-primary-active: #ffffff33;
+  --on-primary-line: #ffffff40;
+  /* The school's logo: its height in the menu header. The sign is about three quarters of it; the clear space around the lockup is half the sign (x). */
+  --logo-h: 52px;
+  /* Type: Montserrat stands in for Mont and TT Norms Pro; the weights are the book's Regular, Medium, Bold and Heavy. */
+  --font:
+    "Montserrat Variable", "Montserrat", "Segoe UI", system-ui, -apple-system,
+    sans-serif;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --weight-heavy: 800;
+  /* The old names stay as aliases until every stylesheet is moved to the roles above. */
+  --green: var(--primary);
+  --dark: var(--text);
+  --muted: var(--text-muted);
+  --warm: var(--surface-alt);
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  accent-color: var(--accent);
   font-synthesis: none;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   font-size: 13px;
-  --green: #28674f;
-  --dark: #213c30;
-  --line: #e4e8e2;
-  --muted: #899189;
-  --warm: #f8f9f6;
 }
 * {
   box-sizing: border-box;
@@ -31,48 +123,58 @@ button {
   gap: 8px;
   min-height: 37px;
   padding: 9px 14px;
-  border: 1px solid #dfe5dd;
-  background: white;
-  border-radius: 7px;
-  color: #3b4a40;
-  font-weight: 650;
+  border: var(--line-width) solid var(--line-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
   transition:
     background 0.15s,
     border-color 0.15s,
     box-shadow 0.15s;
 }
 button:hover {
-  background: #f3f6ef;
-  border-color: #c1d0c4;
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 button:focus-visible,
-a:focus-visible {
-  outline: 3px solid #72a995;
+a:focus-visible,
+summary:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 input,
 select,
 textarea {
-  color: #2e4135;
-  background: white;
-  border: 1px solid #dce3da;
-  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: var(--line-width) solid var(--border-control);
+  border-radius: var(--radius);
   padding: 10px 11px;
   outline: none;
   min-width: 0;
 }
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-subtle);
+  opacity: 1;
+}
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: #60937c;
-  box-shadow: 0 0 0 3px #6b9f7b16;
+  border-color: var(--focus);
+  box-shadow: var(--focus-glow);
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
 }
 input[type="checkbox"] {
-  accent-color: var(--green);
+  accent-color: var(--accent);
   width: 15px;
   height: 15px;
   flex: none;
@@ -85,25 +187,36 @@ input[type="color"] {
 a {
   color: inherit;
 }
+/* Links in running text are blue; a link inside a button or a styled block keeps the colour around it. */
+a:not([class]) {
+  color: var(--accent-strong);
+}
+button a:not([class]) {
+  color: inherit;
+}
 h1,
 h2,
 h3,
 p {
   margin: 0;
 }
+h1,
+h2,
+h3 {
+  font-weight: var(--weight-heavy);
+}
 h1 {
   font-size: 30px;
-  letter-spacing: -1.15px;
-  font-weight: 800;
+  letter-spacing: -0.6px;
   line-height: 1.3;
 }
 h2 {
   font-size: 19px;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.2px;
 }
 h3 {
   font-size: 14px;
-  letter-spacing: -0.1px;
+  font-weight: var(--weight-bold);
 }
 p {
   line-height: 1.7;
@@ -112,14 +225,17 @@ small {
   font-size: 11px;
 }
 .primary {
-  background: var(--green);
-  border-color: var(--green);
-  color: white;
-  box-shadow: 0 2px 3px #224a2412;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-on-primary);
 }
 .primary:hover {
-  background: #20583f;
-  border-color: #20583f;
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+.primary:active {
+  background: var(--primary-active);
+  border-color: var(--primary-active);
 }
 .icon-button {
   border: 0;
@@ -127,10 +243,11 @@ small {
   min-width: 31px;
   min-height: 31px;
   padding: 7px;
-  color: #758178;
+  color: var(--text-muted);
 }
 .icon-button:hover {
-  background: #ebf0e8;
+  background: var(--accent-tint);
+  color: var(--accent-strong);
 }
 .announce-button {
   position: relative;
@@ -141,20 +258,21 @@ small {
   right: 4px;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
-  background: #c0392b;
+  border-radius: var(--radius-round);
+  background: var(--danger);
 }
 .text-button {
   border: none;
   background: none;
   padding: 4px 0;
   min-height: auto;
-  color: var(--green);
+  color: var(--accent-strong);
   font-size: 11px;
 }
 .text-button:hover {
   background: none;
-  color: #153e2a;
+  color: var(--primary-hover);
+  text-decoration: underline;
 }
 .full-width {
   width: 100%;
@@ -165,7 +283,7 @@ small {
   flex-wrap: wrap;
 }
 .muted {
-  color: #849084;
+  color: var(--text-muted);
 }
 .small {
   font-size: 11px;
@@ -198,48 +316,37 @@ small {
 }
 .sidebar {
   width: var(--sidebar-w);
-  background: #fbfcf9;
-  border-right: 1px solid var(--line);
+  background: var(--surface);
+  border-right: var(--line-width) solid var(--line);
   position: fixed;
   inset: 0 auto 0 0;
   display: flex;
   flex-direction: column;
-  padding: 29px 17px 17px;
+  padding: 24px 17px 17px;
   z-index: 20;
 }
+/* The school's logo, as it comes (see DESIGN.md): never recoloured, cropped or stretched; the padding of the sidebar and of the menu below keep its clear space. */
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
   text-decoration: none;
-  padding: 0 10px;
+  padding: 0 4px;
 }
+.school-logo {
+  display: block;
+  height: var(--logo-h);
+  width: auto;
+  max-width: 100%;
+}
+/* The Atlas mark: in the folded menu, where the lockup does not fit, and on the loading screen. */
 .brand-symbol {
-  background: var(--green);
-  color: #fff;
+  background: var(--primary);
+  color: var(--text-on-primary);
   display: grid;
   place-items: center;
   width: 38px;
   height: 40px;
-  border-radius: 11px;
-  box-shadow: inset 0 0 0 1px #ffffff18;
-}
-.brand strong {
-  font-size: 28px;
-  line-height: 1;
-  font-weight: 800;
-  letter-spacing: -1.3px;
-}
-.brand strong span {
-  color: #c5a365;
-  margin-left: 2px;
-}
-.brand small {
-  display: block;
-  font-size: 8px;
-  letter-spacing: 0.35px;
-  color: #90998d;
-  margin-top: 6px;
+  border-radius: var(--radius);
 }
 .sidebar nav {
   display: grid;
@@ -257,28 +364,32 @@ small {
   width: 100%;
   border: 0;
   background: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   justify-content: flex-start;
   text-align: left;
   padding: 8px 11px;
-  color: #7d887b;
+  color: var(--text);
   font-size: 11px;
   gap: 11px;
   min-height: 36px;
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
 }
 .sidebar nav button svg {
   flex: none;
+  color: var(--accent);
 }
 .sidebar nav button:hover {
-  background: #f0f3ec;
+  background: var(--accent-tint);
 }
+/* The page on show, and the group that holds it: a tint and a bar of the brand blue on the left. */
 .sidebar nav button.active {
-  background: #e4ece0;
-  color: #2e6146;
+  background: var(--accent-tint-strong);
+  color: var(--primary);
+  font-weight: var(--weight-bold);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .nav-divider {
-  height: 1px;
+  height: var(--line-width);
   background: var(--line);
   margin: 10px 9px 8px;
 }
@@ -315,25 +426,27 @@ small {
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   padding: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 12px 34px #1d372d26;
+  background: var(--surface);
+  border: var(--line-width) solid var(--line);
+  border-top: var(--line-width-strong) solid var(--primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-overlay);
   outline: none;
 }
 .nav-flyout-title {
   padding: 0 4px 8px;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: var(--weight-heavy);
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: #939e8d;
+  color: var(--text-subtle);
 }
 .nav-flyout-tiles {
   display: grid;
   grid-template-columns: repeat(var(--tiles, 3), 104px);
   gap: 6px;
 }
+/* A tile is a white square on thin lines with a blue icon; it fills with blue on hover and focus. */
 .sidebar nav .nav-flyout button {
   position: relative;
   flex-direction: column;
@@ -342,22 +455,35 @@ small {
   gap: 8px;
   min-height: 84px;
   padding: 12px 4px 10px;
-  border-radius: 10px;
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
   text-align: center;
   line-height: 1.25;
-  color: #4b5a49;
-  background: #f6f8f3;
+  color: var(--text);
+  background: var(--surface);
   overflow-wrap: anywhere;
+  box-shadow: none;
 }
-.sidebar nav .nav-flyout button svg {
-  color: #4c7a62;
+.sidebar nav .nav-flyout button:hover,
+.sidebar nav .nav-flyout button:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-primary);
 }
-.sidebar nav .nav-flyout button:hover {
-  background: #eaf0e5;
+.sidebar nav .nav-flyout button:hover svg,
+.sidebar nav .nav-flyout button:focus-visible svg {
+  color: var(--text-on-primary);
 }
 .sidebar nav .nav-flyout button.active {
-  background: #e4ece0;
-  color: #2e6146;
+  background: var(--accent-tint-strong);
+  border-color: var(--accent);
+  color: var(--primary);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.sidebar nav .nav-flyout button.active:hover,
+.sidebar nav .nav-flyout button.active:focus-visible {
+  background: var(--accent);
+  color: var(--text-on-primary);
 }
 .nav-flyout .nav-count {
   position: absolute;
@@ -367,7 +493,7 @@ small {
 }
 @media (min-width: 901px) {
   .sidebar nav .nav-group > button[aria-expanded="true"]:not(.active) {
-    background: #f0f3ec;
+    background: var(--accent-tint);
   }
   /* The menu folded to icons: labels stay for screen readers and the tooltip; counts sit on the icons. */
   .app-shell.rail {
@@ -383,7 +509,7 @@ small {
   }
   .rail .sidebar nav > button > span:not(.nav-count),
   .rail .nav-group > button > span:not(.nav-count),
-  .rail .brand > div:last-child {
+  .rail .brand > span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -429,12 +555,15 @@ small {
     gap: 0;
   }
 }
+/* A count of what waits: a solid dark-blue chip, readable on white, on a tint and on a blue tile. */
 .nav-count {
   margin-left: auto;
-  background: #d5e2cf;
-  border-radius: 4px;
+  background: var(--primary);
+  color: var(--text-on-primary);
+  border-radius: var(--radius-sm);
   padding: 0 5px;
   font-size: 10px;
+  font-weight: var(--weight-bold);
 }
 .sidebar-bottom {
   margin-top: auto;
@@ -448,7 +577,7 @@ small {
 }
 .school-year {
   font-size: 10px;
-  color: #8c9686;
+  color: var(--text-subtle);
   padding: 8px 11px 0;
 }
 .rail-toggle {
@@ -460,15 +589,15 @@ small {
   padding: 0;
   border: 0;
   background: none;
-  color: #8c9686;
+  color: var(--accent-strong);
 }
 .rail-toggle:hover {
-  background: #f0f3ec;
-  color: #2e6146;
+  background: var(--accent-tint-strong);
+  color: var(--primary);
 }
 .local-status {
   font-size: 9px;
-  color: #8c9686;
+  color: var(--text-subtle);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -478,8 +607,8 @@ small {
   display: inline-block;
   width: 5px;
   height: 5px;
-  background: #77a16a;
-  border-radius: 100%;
+  background: var(--success);
+  border-radius: var(--radius-round);
   flex: none;
 }
 .main-shell {
@@ -487,14 +616,19 @@ small {
   flex: 1;
   min-width: 0;
 }
+/* The top bar is a solid dark-blue band, as EduPage shows the school colour: white text and icons, white focus rings. */
 .topbar {
   height: 65px;
-  border-bottom: 1px solid var(--line);
-  background: #fcfdfb;
+  background: var(--surface-inverse);
+  color: var(--text-on-primary);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 34px;
+}
+.topbar :focus-visible {
+  outline-color: var(--focus-on-dark);
 }
 .breadcrumb {
   display: flex;
@@ -502,11 +636,11 @@ small {
   gap: 10px;
   min-width: 0;
   font-size: 11px;
-  color: #9aa291;
+  color: var(--text-on-primary-muted);
 }
 .breadcrumb strong {
-  color: #5a6859;
-  font-weight: 700;
+  color: var(--text-on-primary);
+  font-weight: var(--weight-bold);
   font-size: 13px;
   min-width: 0;
   overflow: hidden;
@@ -520,6 +654,41 @@ small {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+.topbar .icon-button,
+.topbar .account-toggle {
+  color: var(--text-on-primary);
+}
+.topbar .icon-button:hover,
+.topbar .account-toggle:hover {
+  background: var(--on-primary-hover);
+  border-color: transparent;
+  color: var(--text-on-primary);
+}
+.topbar .icon-button[aria-expanded="true"],
+.topbar .account-toggle[aria-expanded="true"] {
+  background: var(--on-primary-active);
+}
+.topbar .badge {
+  background: var(--on-primary-hover);
+  color: var(--text-on-primary);
+}
+/* Amber on the dark band is a solid amber chip with dark text: the warning keeps its colour and stays readable. */
+.topbar .badge.amber {
+  background: var(--warning-bright);
+  color: var(--ink);
+}
+.topbar .badge.green {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.topbar .notifications-button b,
+.topbar .messages-button b {
+  background: var(--surface);
+  color: var(--primary);
+}
+.topbar .announce-dot {
+  box-shadow: 0 0 0 2px var(--surface-inverse);
 }
 .account {
   position: relative;
@@ -549,10 +718,16 @@ small {
   display: grid;
   gap: 2px;
   padding: 6px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 12px 34px #1d372d26;
+  background: var(--surface);
+  color: var(--text);
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-overlay);
+}
+/* The menu of the account and the notification dialog are white panels inside the band: their rings stay blue. */
+.topbar .account-menu :focus-visible,
+.topbar .notifications-dialog :focus-visible {
+  outline-color: var(--focus);
 }
 .account-menu button {
   justify-content: flex-start;
@@ -561,24 +736,25 @@ small {
   padding: 6px 10px;
   border: 0;
   background: none;
+  color: var(--text);
 }
 .account-menu button:hover:not(:disabled) {
-  background: #f0f3ec;
+  background: var(--accent-tint);
 }
 .account-head {
   display: grid;
   gap: 3px;
   padding: 8px 10px 10px;
   margin-bottom: 4px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--line-width) solid var(--line);
   overflow-wrap: anywhere;
 }
 .account-head small {
-  color: var(--muted);
+  color: var(--text-muted);
 }
 .saved {
   font-size: 9px;
-  color: #8e9988;
+  color: var(--text-on-primary-muted);
   display: flex;
   align-items: center;
   gap: 5px;
@@ -732,10 +908,11 @@ main {
   justify-content: space-between;
   border-bottom: 1px solid #edf0e9;
 }
+/* Tabs: a row on a thin line; the chosen one is solid dark blue with white type. */
 .segmented {
   display: inline-flex;
-  background: #f1f4ed;
-  border-radius: 6px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
   padding: 3px;
   gap: 2px;
   max-width: 100%;
@@ -747,21 +924,29 @@ main {
   font-size: 10px;
   min-height: 29px;
   white-space: nowrap;
-  color: #87907f;
+  color: var(--text-muted);
   padding: 7px 14px;
-  font-weight: 650;
-  border-radius: 4px;
+  font-weight: var(--weight-semibold);
+  border-radius: var(--radius-sm);
+}
+.segmented button:hover {
+  background: var(--accent-tint);
+  color: var(--primary);
 }
 .segmented button.selected {
-  background: #fff;
-  color: #3d5f46;
-  box-shadow: 0 1px 4px #253c2711;
+  background: var(--primary);
+  color: var(--text-on-primary);
 }
 .segmented button span {
-  background: #e6ebe1;
+  background: var(--line);
+  color: var(--text);
   font-size: 9px;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
+}
+.segmented button.selected span {
+  background: var(--on-primary-active);
+  color: var(--text-on-primary);
 }
 .toolbar-buttons {
   display: flex;
@@ -826,12 +1011,18 @@ main {
   border: 0;
   background: transparent;
   font-size: 9px;
-  color: #96a18b;
-  font-weight: 600;
+  color: var(--text-muted);
+  font-weight: var(--weight-semibold);
+  border-radius: var(--radius-sm);
+}
+.grade-tabs button:hover {
+  background: var(--accent-tint);
+  color: var(--primary);
 }
 .grade-tabs button.chosen {
-  background: #ebf1e5;
-  color: #607749;
+  background: var(--accent-tint-strong);
+  color: var(--primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .timetable-scroll {
   overflow: auto;
@@ -1188,18 +1379,18 @@ main {
   align-items: center;
   white-space: nowrap;
   padding: 4px 7px;
-  border-radius: 5px;
-  color: #7b8973;
-  background: #eef2e9;
-  font-weight: 600;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  font-weight: var(--weight-semibold);
 }
 .badge.green {
-  background: #e6f0e7;
-  color: #4e8059;
+  background: var(--success-tint);
+  color: var(--success);
 }
 .badge.amber {
-  background: #f5ecdb;
-  color: #a88346;
+  background: var(--warning-tint);
+  color: var(--warning);
 }
 .page-footer {
   display: flex;
@@ -1619,14 +1810,14 @@ main {
 }
 .field > span {
   font-size: 11px;
-  font-weight: 700;
-  color: #687a5c;
+  font-weight: var(--weight-bold);
+  color: var(--text-muted);
 }
 .field > small {
   font-size: 10px;
-  color: #9ba88e;
+  color: var(--text-subtle);
   line-height: 1.7;
-  font-weight: 400;
+  font-weight: var(--weight-regular);
 }
 .field input,
 .field select,
@@ -1851,10 +2042,10 @@ main {
 .loading-screen p {
   max-width: 450px;
   text-align: center;
-  color: #8fa27d;
+  color: var(--text-muted);
 }
 .loading-screen > .spin {
-  color: #87a478;
+  color: var(--accent);
 }
 @media (min-width: 1600px) {
   .app-shell {
@@ -1895,9 +2086,6 @@ main {
   }
   .note-panel p {
     font-size: 12px;
-  }
-  .brand small {
-    font-size: 9px;
   }
 }
 @media (max-width: 1250px) {
@@ -1965,14 +2153,14 @@ main {
     transform: translateX(0);
     visibility: visible;
     transition: transform 0.2s;
-    box-shadow: 20px 0 70px #1d372d25;
+    box-shadow: 20px 0 70px #083a8133;
   }
   .sidebar-backdrop {
     display: block;
     position: fixed;
     inset: 0;
     z-index: 19;
-    background: #0f1d1659;
+    background: var(--scrim);
   }
   .main-shell {
     margin-left: 0;
@@ -1991,12 +2179,6 @@ main {
   }
   .topbar {
     padding: 0 22px;
-  }
-  .brand {
-    padding: 0 8px;
-  }
-  .brand strong {
-    font-size: 26px;
   }
   .page-heading {
     flex-direction: column;
@@ -3836,13 +4018,28 @@ main {
   justify-content: center;
   padding: 24px;
 }
+/* The school's logo above the sign-in form, then the product: the logo keeps its clear space (half the sign, here 22 px) free of text. */
+.auth-brand {
+  width: min(440px, 100%);
+  margin-bottom: 28px;
+}
+.auth-brand .school-logo {
+  height: 60px;
+}
+.auth-brand p {
+  margin-top: 22px;
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  color: var(--primary);
+}
 .auth-screen form,
 .auth-password {
   width: min(440px, 100%);
-  background: white;
-  border: 1px solid #d9e2dc;
+  background: var(--surface);
+  border: var(--line-width) solid var(--line);
+  border-top: var(--line-width-strong) solid var(--primary);
   padding: 28px;
-  border-radius: 16px;
+  border-radius: var(--radius);
 }
 .auth-screen .field,
 .auth-password .field {
@@ -5042,9 +5239,9 @@ main {
 }
 .school-day {
   padding: 14px 16px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  background: var(--surface);
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
 }
 .school-day header,
 .today-lessons header {
@@ -5057,7 +5254,7 @@ main {
 }
 .school-day header strong,
 .today-lessons header strong {
-  color: var(--green);
+  color: var(--accent-strong);
 }
 .school-day ol {
   display: flex;
@@ -5073,21 +5270,22 @@ main {
   gap: 3px;
   padding: 8px;
   text-align: center;
-  background: var(--warm);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  background: var(--surface-alt);
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
 }
 .school-day li strong {
   font-size: 16px;
 }
 .school-day li small {
-  color: var(--muted);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 .school-day .current,
 .today-lessons .current {
-  background: #e1eee1;
-  border-color: var(--green);
+  background: var(--accent-tint-strong);
+  border-color: var(--accent);
+  box-shadow: inset 0 -3px 0 var(--accent);
 }
 .start-grid {
   display: grid;
@@ -5108,13 +5306,27 @@ main {
 .start-tiles {
   display: contents;
 }
+/* A tile is a white square on a thin line with a blue icon; hover and focus fill it with blue and turn its content white. */
 .start-tiles button {
   flex-direction: column;
   min-height: 96px;
   padding: 14px 10px;
   text-align: center;
-  color: var(--dark);
+  color: var(--text);
+  background: var(--surface);
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
 }
 .start-tiles button svg {
-  color: var(--green);
+  color: var(--accent);
+}
+.start-tiles button:hover,
+.start-tiles button:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-primary);
+}
+.start-tiles button:hover svg,
+.start-tiles button:focus-visible svg {
+  color: var(--text-on-primary);
 }
