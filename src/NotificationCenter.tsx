@@ -81,6 +81,9 @@ const titles: Record<string, string> = {
   "behaviour.acknowledged": "Родитель ознакомился с замечанием",
   "behaviour.pending": "Мера ждёт согласования администрации",
   "behaviour.decided": "Принято решение по вашей мере",
+  "behaviour.commission_planned": "Вы назначены в комиссию экзамена",
+  "behaviour.commission_held": "Комиссия внесла результат экзамена",
+  "behaviour.commission_letter": "Решение комиссионного экзамена",
   "assessment.published":
     "Назначена контрольная работа (СОР, СОЧ или экзамен). Откройте «События»",
   "assessment.moved":

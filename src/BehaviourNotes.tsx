@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Account } from "./auth";
 import { measureCategory } from "./behaviourMeasure";
+import CommissionExams from "./CommissionExams";
 import "./BehaviourNotes.css";
 
 type Kind = "praise" | "remark";
@@ -32,6 +33,8 @@ type Options = {
   remarkAck: boolean;
   categories: Category[];
   pending: number;
+  // The commission exams screen: the server says who may open it (administrator, commission member, family of a decided exam).
+  commission?: { manage: boolean; member: boolean; family: boolean } | null;
   configVersion: number | null;
   classes: { id: string; name: string }[];
   students: Student[];
@@ -144,6 +147,7 @@ export default function BehaviourNotes({
   initialWorkspace,
   studentId,
   prefill,
+  initialTab,
   onClose,
 }: {
   user: Account;
@@ -158,6 +162,8 @@ export default function BehaviourNotes({
     subjectId?: string;
     subject?: string;
   };
+  // A notification leads to a section of the records: «commission».
+  initialTab?: string;
   onClose: () => void;
 }) {
   const spaces =
@@ -212,7 +218,9 @@ export default function BehaviourNotes({
     sequence = useRef(0),
     request = useRef({ key: "", id: "" }),
     // The prefill is applied once, when the options first arrive.
-    prefilled = useRef(false);
+    prefilled = useRef(false),
+    tabOpened = useRef(false);
+  const [commissionDirty, setCommissionDirty] = useState(false);
   // The subject of the course the pupils were marked in; the author may let it go for a note that is about something else.
   const course =
     prefill?.subjectId && workspace === initialWorkspace
@@ -224,6 +232,10 @@ export default function BehaviourNotes({
     return () => dialog.current?.close();
   }, []);
   const staff = Boolean(options && (options.canWrite || options.admin));
+  // A commission member may have no pupils in scope: the modal then holds the commission tab only.
+  const commissionTab = Boolean(
+    options?.commission && (options.commission.manage || options.commission.member),
+  );
   const dirty = Boolean(form.text.trim() || form.students.length);
   const usable = (options?.categories || []).filter(
     (c) => c.active && options?.myLevels.includes(c.level),
@@ -277,6 +289,18 @@ export default function BehaviourNotes({
       const opts: Options = await api("behaviour/options", workspace);
       if (token !== sequence.current) return;
       setOptions(opts);
+      const commissioner = Boolean(
+        opts.commission && (opts.commission.manage || opts.commission.member),
+      );
+      if (
+        commissioner &&
+        ((initialTab === "commission" && !tabOpened.current) ||
+          (!opts.canWrite && !opts.admin))
+      ) {
+        tabOpened.current = true;
+        setTab("commission");
+        view = "commission";
+      }
       setCategories(opts.categories);
       setRemarkAck(opts.remarkAck);
       const wanted = prefill && !prefilled.current ? prefill : null;
@@ -330,7 +354,8 @@ export default function BehaviourNotes({
       }
       if (view === "board") await loadBoard(boardKind);
       else if (view === "summary") await loadSummary();
-      else if (view !== "config") await loadNotes(opts, view);
+      else if (view !== "config" && view !== "commission")
+        await loadNotes(opts, view);
     } catch (e: any) {
       if (token === sequence.current) {
         setOptions(null);
@@ -374,8 +399,12 @@ export default function BehaviourNotes({
   }
   function leave() {
     return (
-      !dirty ||
-      window.confirm("Новая запись не сохранена. Отбросить её и закрыть?")
+      (!dirty && !commissionDirty) ||
+      window.confirm(
+        dirty
+          ? "Новая запись не сохранена. Отбросить её и закрыть?"
+          : "Форма экзамена не сохранена. Отбросить её и закрыть?",
+      )
     );
   }
   async function submit(categoryId = form.categoryId, text = form.text) {
@@ -514,6 +543,7 @@ export default function BehaviourNotes({
   function open(view: string) {
     if (view !== tab && !leave()) return;
     setTab(view);
+    setLetterView(null);
     setHistory(null);
     void run(() => load(view), "");
   }
@@ -538,8 +568,12 @@ export default function BehaviourNotes({
       : []),
     ["board", "Табло"],
     ["summary", "Сводка"],
+    ...(commissionTab
+      ? [["commission", "Комиссионные экзамены"] as [string, string]]
+      : []),
     ...(options?.admin ? [["config", "Категории"] as [string, string]] : []),
   ];
+  const shownTabs = staff ? tabs : tabs.filter(([id]) => id === "commission");
   const periodFilters = (
     <>
       <label>
@@ -665,9 +699,9 @@ export default function BehaviourNotes({
           </label>
           <button onClick={() => void run(() => load(), "")}>Обновить</button>
         </div>
-        {options && staff && (
+        {options && (staff || commissionTab) && (
           <nav className="bn-controls" aria-label="Разделы">
-            {tabs.map(([id, title]) => (
+            {shownTabs.map(([id, title]) => (
               <button
                 key={id}
                 aria-pressed={tab === id}
@@ -678,7 +712,7 @@ export default function BehaviourNotes({
             ))}
           </nav>
         )}
-        {options && !staff && !options.students.length && (
+        {options && !staff && !commissionTab && !options.students.length && (
           <p>
             Для этой учётной записи нет доступных учеников. Похвалы и замечания
             видят учителя учеников, классные руководители и семьи.
@@ -708,6 +742,15 @@ export default function BehaviourNotes({
               <span className="bn-remark">Замечаний: {totals.remark}</span>
             </p>
           </section>
+        )}
+        {options?.commission?.family && !staff && filters.studentId && (
+          <CommissionExams
+            workspace={workspace}
+            flags={options.commission}
+            studentId={filters.studentId}
+            hideDocument={Boolean(letterView)}
+            onDocument={() => setLetterView(null)}
+          />
         )}
 
         {options && staff && tab === "notes" && options.canWrite && (
@@ -1129,6 +1172,16 @@ export default function BehaviourNotes({
             </table>
             {!summary.length && <p>Записей за период нет.</p>}
           </section>
+        )}
+
+        {options && commissionTab && tab === "commission" && (
+          <CommissionExams
+            workspace={workspace}
+            flags={options.commission!}
+            hideDocument={Boolean(letterView)}
+            onDocument={() => setLetterView(null)}
+            onDirty={setCommissionDirty}
+          />
         )}
 
         {options?.admin && tab === "config" && (
