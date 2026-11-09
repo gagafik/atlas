@@ -8,18 +8,41 @@ export function printNode(
   if (!win) return false;
   win.opener = null;
   win.document.title = title;
+  // The print window is about:blank: relative paths such as /brand/... resolve against this page.
+  const base = win.document.createElement("base");
+  base.href = document.baseURI;
+  win.document.head.appendChild(base);
   const copy = node?.cloneNode(true);
   if (copy) win.document.body.appendChild(copy);
   const style = win.document.createElement("style");
   style.textContent = css;
   win.document.head.appendChild(style);
-  win.print();
+  // The logo must be loaded before the print dialog takes the page; a broken image or 3 s ends the wait.
+  const loading = [...win.document.images]
+    .filter((image) => !image.complete)
+    .map(
+      (image) =>
+        new Promise<void>((done) => {
+          image.addEventListener("load", () => done(), { once: true });
+          image.addEventListener("error", () => done(), { once: true });
+        }),
+    );
+  const timer = new Promise<void>((done) => setTimeout(done, 3000));
+  void Promise.race([Promise.all(loading), timer]).then(() => {
+    if (!win.closed) win.print();
+  });
   return true;
 }
 
+// The letterhead in a print window: the window has no app stylesheet, so the print colours are written out (DESIGN.md).
+export const LETTERHEAD_PRINT =
+  ".letterhead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:18px 24px;padding-bottom:20px;margin-bottom:20px;border-bottom:1px solid #083a81}.letterhead img{display:block;height:48px;width:auto}.letterhead p{margin:0;font-weight:bold}";
+
 export const PERSONAL_PRINT =
+  LETTERHEAD_PRINT +
   "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}";
 
 // One card per page; the signature lines are drawn with borders so they print without any form controls.
 export const CLASS_PRINT =
+  LETTERHEAD_PRINT +
   "body{font:14px sans-serif;padding:24px;color:#111}article.final-card{break-after:page;padding:8px 0}article.final-card:last-child{break-after:auto}h2,h3,h4,p{margin:8px 0}.final-subject{display:flex;justify-content:space-between;gap:16px;border-top:1px solid #ccc;padding:6px 0}.final-subject p{margin:0}.final-preview{font-weight:bold}.final-stale{display:block;font-weight:bold}.final-signatures{display:flex;gap:32px;margin-top:48px}.final-signatures span{flex:1;border-top:1px solid #111;padding-top:4px}";

@@ -1,4 +1,5 @@
 import { forwardRef } from "react";
+import Letterhead from "./Letterhead";
 import { finalLabel } from "./finalGrades";
 import type { ClassReport, Gpa, Measure } from "./finalGradesTypes";
 
@@ -42,7 +43,7 @@ const ReportCards = forwardRef<HTMLDivElement, { report: ClassReport }>(
       <div className="final-cards" ref={ref}>
         {report.pupils.map((pupil) => (
           <article className="final-card" key={pupil.id}>
-            <p>{report.school}</p>
+            <Letterhead school={report.school} />
             <h3>
               Табель · {report.period.name}
               {report.preview && (

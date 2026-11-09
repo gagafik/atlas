@@ -333,6 +333,48 @@ small {
   width: auto;
   max-width: 100%;
 }
+/* The brand book's modular grid (p. 15): the container colour shows through the gaps as the division lines, at most 2 px on screens. */
+.brand-grid {
+  --module: 24px;
+  display: grid;
+  grid-auto-rows: var(--module);
+  justify-content: end;
+  gap: var(--grid-line-width, var(--line-width));
+  padding: var(--grid-line-width, var(--line-width));
+  background: var(--grid-line, var(--line-strong));
+  overflow: hidden;
+  pointer-events: none;
+}
+.brand-grid-navy {
+  background: var(--brand-navy);
+}
+.brand-grid-blue {
+  background: var(--brand-blue);
+}
+.brand-grid-white {
+  background: var(--brand-white);
+}
+.brand-grid-deep {
+  background: var(--surface-inverse-deep);
+}
+/* The letterhead (DESIGN.md): logo at 48 px with its clear space (x = 18 px) kept free by the gaps and the padding above the line; prints as it shows. */
+.letterhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px 24px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: var(--line-width) solid var(--brand-navy);
+}
+.letterhead .school-logo {
+  height: 48px;
+}
+.letterhead p {
+  margin: 0;
+  font-weight: var(--weight-bold);
+}
 /* The Atlas mark: in the folded menu, where the lockup does not fit, and on the loading screen. */
 .brand-symbol {
   background: var(--primary);
@@ -4145,12 +4187,41 @@ main {
   text-decoration: none;
 }
 .auth-screen {
+  position: relative;
   min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(0, 440px);
   align-content: center;
   justify-content: center;
   padding: 24px;
+}
+/* The brand grid: two corner blocks on a computer (the 3-module block is 220 px, the side space at 1024 px is 292 px), one band above the logo below that. */
+.login-grid-top {
+  position: absolute;
+  top: 0;
+  right: 0;
+  --module: 72px;
+}
+.login-grid-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  --module: 72px;
+}
+.login-grid-band {
+  width: 100%;
+  margin-bottom: 28px;
+}
+@media (max-width: 1023px) {
+  .login-grid-top,
+  .login-grid-bottom {
+    display: none;
+  }
+}
+@media (min-width: 1024px) {
+  .login-grid-band {
+    display: none;
+  }
 }
 /* The school's logo above the sign-in form, then the product: the logo keeps its clear space (half the sign, here 22 px) free of text. */
 .auth-brand {
@@ -4307,6 +4378,17 @@ main {
   .topbar .breadcrumb {
     flex: 1 1 120px;
     min-width: 0;
+  }
+  /* A long school name wraps to two lines one step smaller instead of being cut. */
+  .topbar .breadcrumb strong {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: break-word;
+    font-size: 12px;
+    line-height: 1.25;
   }
   .topbar-right {
     flex: 0 1 auto;
