@@ -38,6 +38,9 @@ const Handover = lazy(() => import("./Handover"));
 const LiveLessons = lazy(() => import("./LiveLessons"));
 const LiveProjector = lazy(() => import("./LiveProjector"));
 const HallScreens = lazy(() => import("./HallScreens"));
+const LoginJournal = lazy(() => import("./LoginJournal"));
+const FireDrill = lazy(() => import("./FireDrill"));
+const SafetyBriefings = lazy(() => import("./SafetyBriefings"));
 const SchoolDocuments = lazy(() => import("./SchoolDocuments"));
 const StaffWorkspace = lazy(() => import("./StaffWorkspace"));
 const Registers = lazy(() => import("./Registers"));
@@ -64,6 +67,7 @@ export default function AuthShell() {
     [recoveryPanel, setRecoveryPanel] = useState(false),
     [loginNotice, setLoginNotice] = useState("");
   const [operationsPanel, setOperationsPanel] = useState(false),
+    [loginsPanel, setLoginsPanel] = useState(false),
     [appOpen, setAppOpen] = useState(false);
   // Optional sections of the menu; null until the setting is loaded, and then they stay out of sight.
   const [hiddenSections, setHiddenSections] = useState<string[] | null>(null),
@@ -184,6 +188,8 @@ export default function AuthShell() {
     null,
   );
   const [hallWorkspace, setHallWorkspace] = useState<string | null>(null);
+  const [drillWorkspace, setDrillWorkspace] = useState<string | null>(null),
+    [briefingsWorkspace, setBriefingsWorkspace] = useState<string | null>(null);
   useEffect(() => {
     const open = (event: Event) =>
       setHallWorkspace((event as CustomEvent).detail?.workspace || "school");
@@ -263,6 +269,9 @@ export default function AuthShell() {
     setRecoveryPanel(false);
     setAppOpen(false);
     setOperationsPanel(false);
+    setLoginsPanel(false);
+    setDrillWorkspace(null);
+    setBriefingsWorkspace(null);
     setSectionsPanel(false);
     setFormsWorkspace(null);
     setMeetingsWorkspace(null);
@@ -498,6 +507,8 @@ export default function AuthShell() {
     workload: setWorkloadWorkspace,
     registers: setRegistersWorkspace,
     hall: setHallWorkspace,
+    drill: setDrillWorkspace,
+    briefings: setBriefingsWorkspace,
   };
   function openModal(id: ModalId, child?: string) {
     setModalChild(child);
@@ -510,6 +521,7 @@ export default function AuthShell() {
       setMeetingsWorkspace(pupilWorkspace);
     } else if (id === "sections") setSectionsPanel(true);
     else if (id === "operations") setOperationsPanel(true);
+    else if (id === "logins") setLoginsPanel(true);
     else schoolModals[id]?.("school");
   }
   function openAccount(id: AccountId) {
@@ -614,6 +626,14 @@ export default function AuthShell() {
           <OperationsPanel
             key={session.user.id + ":" + session.user.version}
             onClose={() => setOperationsPanel(false)}
+          />
+        </Suspense>
+      )}
+      {loginsPanel && session.user?.role === "admin" && (
+        <Suspense fallback={<p role="status">Открываю журнал входов…</p>}>
+          <LoginJournal
+            key={session.user.id + ":" + session.user.version}
+            onClose={() => setLoginsPanel(false)}
           />
         </Suspense>
       )}
@@ -829,6 +849,28 @@ export default function AuthShell() {
             user={session.user}
             initialWorkspace={hallWorkspace}
             onClose={() => setHallWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {drillWorkspace && session.user?.role === "admin" && (
+        <Suspense
+          fallback={<p role="status">Открываю противопожарные учения…</p>}
+        >
+          <FireDrill
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={drillWorkspace}
+            onClose={() => setDrillWorkspace(null)}
+          />
+        </Suspense>
+      )}
+      {briefingsWorkspace && session.user?.role === "admin" && (
+        <Suspense fallback={<p role="status">Открываю инструктажи…</p>}>
+          <SafetyBriefings
+            key={session.user.id + ":" + session.user.version}
+            user={session.user}
+            initialWorkspace={briefingsWorkspace}
+            onClose={() => setBriefingsWorkspace(null)}
           />
         </Suspense>
       )}

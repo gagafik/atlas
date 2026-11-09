@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import ConfigDict, Field, SecretStr, model_validator, field_validator
+from .login_journal import record as journal_login
 from .models import Model
 
 Role = Literal['admin', 'editor', 'teacher', 'student', 'parent', 'viewer', 'staff']
@@ -244,29 +245,33 @@ class Access:
 
         @app.post('/api/auth/login')
         def login(body: Login,request: Request,response: Response):
-            client = request.client.host if request.client else 'unknown'
+            # Rate-limit rows hold digests only: neither the address nor a typed login stays readable.
+            client = digest(request.client.host if request.client else 'unknown')
             normalized = body.login.lower()
+            key = digest(normalized)
             with self.lock,self.connect() as db:
                 self.tables(db)
                 cutoff=(now()-timedelta(minutes=15)).isoformat()
                 db.execute('DELETE FROM login_attempts WHERE created<?',(cutoff,))
-                count=db.execute('SELECT count(*) FROM login_attempts WHERE client=? AND login=?',(client,normalized)).fetchone()[0]
+                count=db.execute('SELECT count(*) FROM login_attempts WHERE client=? AND login=?',(client,key)).fetchone()[0]
                 total=db.execute('SELECT count(*) FROM login_attempts WHERE client=?',(client,)).fetchone()[0]
                 if count>=8 or total>=40: raise HTTPException(429,'Слишком много попыток. Повторите через 15 минут.')
                 # Reserve the attempt before hashing to bound parallel attempts too.
-                db.execute('INSERT INTO login_attempts (client,login,created) VALUES (?,?,?)',(client,normalized,now().isoformat()))
+                db.execute('INSERT INTO login_attempts (client,login,created) VALUES (?,?,?)',(client,key,now().isoformat()))
                 row=db.execute('SELECT * FROM accounts WHERE login=?',(normalized,)).fetchone()
             valid=password_matches(body.password.get_secret_value(),row[6] if row else self.dummy)
             if not row or not row[4] or not valid:
                 with self.lock,self.connect() as db:
-                    self.record(db,'account.login_failed',detail=normalized,principal=dict(id='anonymous',name='Неавторизованный вход'))
+                    self.record(db,'account.login_failed',detail=row[1] if row else '',principal=dict(id='anonymous',name='Неавторизованный вход'))
+                    journal_login(db,request,'failed',row)
                 raise HTTPException(401,'Неверный логин или пароль.')
             with self.lock,self.connect() as db:
                 current=db.execute('SELECT * FROM accounts WHERE id=?',(row[0],)).fetchone()
                 if current != row: raise HTTPException(409,'Учётная запись изменилась. Повторите вход.')
-                db.execute('DELETE FROM login_attempts WHERE client=? AND login=?',(client,normalized))
+                db.execute('DELETE FROM login_attempts WHERE client=? AND login=?',(client,key))
                 self.issue_session(db,row[0],response,request)
                 self.record(db,'account.signed_in',principal=self.public(row))
+                journal_login(db,request,'success',row)
             return dict(enabled=True,user=self.public(row))
 
         @app.post('/api/auth/logout')

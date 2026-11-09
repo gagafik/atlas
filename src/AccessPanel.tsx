@@ -728,6 +728,9 @@ export default function AccessPanel({
                       "account.signed_in": "Вход в систему",
                       "account.signed_out": "Выход из системы",
                       "account.login_failed": "Неудачная попытка входа",
+                      "safety.briefing_created": "Записан инструктаж",
+                      "safety.briefing_updated": "Изменён инструктаж",
+                      "safety.briefing_withdrawn": "Инструктаж отозван",
                     } as Record<string, string>
                   )[a.action] || a.action}
                   {a.workspace
