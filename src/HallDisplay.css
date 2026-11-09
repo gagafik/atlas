@@ -38,6 +38,14 @@
   height: 2.4em;
   margin-right: 0.6em;
 }
+/* The brand grid in the header: 2 x 1.2em, the logo's height, so the header and pageSize keep their size; it gives way first when the school name is long. */
+.hall-head .hall-grid {
+  --module: 1.2em;
+  --grid-line: var(--on-primary-line);
+  --grid-line-width: var(--line-width-strong);
+  flex: 0 1000 auto;
+  min-width: 0;
+}
 .hall-title {
   display: grid;
   margin-right: auto;
@@ -112,7 +120,7 @@
   padding: 0;
   list-style: none;
 }
-/* Montserrat is wide: the row type is 0.66em with the row height kept at 76 px (2.874em x 0.66 x 40 px) for pageSize. The columns hold a two-digit period label, three parallel classes, "Информатика" and a full-name substitution on two lines. */
+/* Montserrat is wide: the row type is 0.66em with the row height kept at 76 px (2.874em x 0.66 x 40 px) for pageSize. Class and subject cells take two lines (2 x 1.25em = 2.5em), which fits inside it, so pageSize did not change. The columns hold a two-digit period label, three parallel classes, "Информатика" and a full-name substitution on two lines. */
 .hall-row {
   display: grid;
   grid-template-columns: 8.7em 5.3em minmax(0, 1fr) 5.6em minmax(0, 2.1fr);
@@ -139,8 +147,16 @@
 .hall-class,
 .hall-subject {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: break-word;
+}
+/* A cell that still does not fit two lines steps the type down once (measured in HallBoard). */
+.hall-class[data-tight],
+.hall-subject[data-tight] {
+  font-size: 0.8em;
 }
 .hall-what {
   overflow: hidden;
@@ -269,6 +285,9 @@
   }
   .hall-board:not(.hall-fixed) .hall-head {
     flex-wrap: wrap;
+  }
+  .hall-board:not(.hall-fixed) .hall-grid {
+    display: none;
   }
   .hall-board:not(.hall-fixed) .hall-clock time {
     font-size: 2em;

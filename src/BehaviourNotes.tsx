@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Account } from "./auth";
 import { measureCategory } from "./behaviourMeasure";
 import CommissionExams from "./CommissionExams";
+import Letterhead from "./Letterhead";
 import "./BehaviourNotes.css";
 
 type Kind = "praise" | "remark";
@@ -640,7 +641,7 @@ export default function BehaviourNotes({
       </header>
       {letterView && (
         <section className="bn-letter" aria-label="Письмо-решение">
-          <p>{letterView.school}</p>
+          <Letterhead school={letterView.school} />
           <h3>
             {letterView.kind}: {letterView.title}
           </h3>

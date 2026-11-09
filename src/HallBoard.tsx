@@ -15,6 +15,7 @@ import {
   schoolClock,
   type HallPayload,
 } from "./hallScreen";
+import BrandGrid, { HALL_GRID } from "./BrandGrid";
 import SchoolLogo from "./SchoolLogo";
 import "./HallDisplay.css";
 
@@ -124,6 +125,19 @@ export default function HallBoard({
       ? fit.slides
       : notes.map((n) => ({ title: n.title, text: n.text }));
   const note = slides.length ? slides[page % slides.length] : null;
+  // A class list or subject that does not fit two lines steps the type down once (DESIGN.md, «Экран холла»).
+  useLayoutEffect(() => {
+    for (const cell of board.current?.querySelectorAll<HTMLElement>(
+      ".hall-class, .hall-subject",
+    ) ?? []) {
+      cell.removeAttribute("data-tight");
+      if (
+        cell.scrollHeight > cell.clientHeight + 1 ||
+        cell.scrollWidth > cell.clientWidth + 1
+      )
+        cell.setAttribute("data-tight", "");
+    }
+  }, [data, page, rows, layout]);
   return (
     <main
       ref={board}
@@ -144,6 +158,7 @@ export default function HallBoard({
               : "данных нет"}
           </p>
         )}
+        <BrandGrid className="hall-grid" rows={HALL_GRID} />
         <div className="hall-clock">
           <time>{now.time}</time>
           <span>{now.date}</span>

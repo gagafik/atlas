@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Account } from "./auth";
 import { displayTime } from "./meetings";
 import DocumentTemplateEditor from "./DocumentTemplateEditor";
+import Letterhead from "./Letterhead";
 import { kinds, statuses, actions, blankTemplate } from "./documentTypes";
 import type {
   Item,
@@ -894,7 +895,7 @@ export default function SchoolDocuments({
 function DocumentPaper({ snapshot }: { snapshot: Snapshot }) {
   return (
     <article className="document-paper">
-      <p>{snapshot.schoolName}</p>
+      <Letterhead school={snapshot.schoolName} />
       <h4>{snapshot.title}</h4>
       <p>
         № {snapshot.number} · {snapshot.date}
