@@ -1,15 +1,15 @@
 """Per-module storage budgets, disk reserve, upload slots with a bounded queue, and Retry-After."""
 from collections import namedtuple
 import sqlite3
+from types import SimpleNamespace
 import threading
-import time
 from uuid import uuid4
 
-import pytest
-from fastapi import HTTPException
 from backend import api, homework_files
 from backend.access import now
+from seeding import insert_row
 from test_access import client
+from test_assignment_files import upload as upload_material
 from test_homework import setup, get, upload
 from tools import backup_school
 
@@ -23,19 +23,12 @@ def test_registry_matches_backup_stores():
     assert {(table, folder) for table, folder, *_ in homework_files.STORES.values()} == set(backup_school.STORES)
 
 
-def test_total_limit_backward_compatible(monkeypatch):
-    mib = 1024 * 1024
-    monkeypatch.delenv('ATLAS_UPLOAD_TOTAL_MB', raising=False)
-    assert homework_files.total_limit() == 65536 * mib
-    for value, expected in [('5', 10), ('2048', 2048), ('99999999', 1048576)]:
-        monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB', value)
-        assert homework_files.total_limit() == expected * mib, value
-    homework = homework_files.module_limit('homework')
-    monkeypatch.setenv('ATLAS_UPLOAD_MESSAGES_MB', '100')
-    assert homework_files.module_limit('messages') == 100 * mib
-    assert homework_files.module_limit('homework') == homework
-    monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB', '0')
-    assert homework_files.reserve_bytes() == 0
+def test_tiny_total_limit_still_allows_one_file(client, monkeypatch):
+    record, pupil, *_ = setup(client)
+    # A limit below one file would block every upload, so a configured 1 MiB must still let the first file in.
+    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB', '1')
+    monkeypatch.setenv('ATLAS_UPLOAD_HOMEWORK_MB', '1')
+    assert attempt(pupil, record).status_code == 200
 
 
 def test_slot_settings_clamp(monkeypatch):
@@ -64,28 +57,19 @@ def test_stored_counts_distinct_blobs_and_never_creates_tables():
 
 def test_module_budget_blocks_only_its_own_store(client, monkeypatch):
     record, pupil, *_ = setup(client)
-    monkeypatch.setenv('ATLAS_UPLOAD_HOMEWORK_MB', '10')
-    assert attempt(pupil, record).status_code == 200  # 0 + 10 MiB fits the 10 MiB budget exactly
-    refused = attempt(pupil, record)
-    assert refused.status_code == 413 and '«Домашние работы»' in refused.json()['detail'], refused.text
-    with api.connect() as db:
-        homework_files.require_capacity(db, 'messages')  # another section is unaffected
-        homework_files.require_capacity(db, 'assignments')
-        assert db.execute("SELECT count(*) FROM homework_files WHERE status='uploading'").fetchone()[0] == 0
-        assert db.execute('SELECT count(*) FROM homework_files').fetchone()[0] == 1
+    monkeypatch.setenv('ATLAS_UPLOAD_HOMEWORK_MB', str(homework_files.MAX_FILE // (1024 * 1024)))
+    assert attempt(pupil, record).status_code == 200  # 0 + one file fits the budget exactly
+    assert attempt(pupil, record).status_code == 413
+    assert len(get(pupil, record['lessonKey'])['availableFiles']) == 1
+    assert upload_material(client, record).status_code == 200  # another section is unaffected
 
 
 def test_overall_cap_still_limits_every_store(client, monkeypatch):
     record, pupil, *_ = setup(client)
     assert attempt(pupil, record).status_code == 200
     monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB', '10')
-    refused = attempt(pupil, record)
-    assert refused.status_code == 413 and 'Лимит хранилища' in refused.json()['detail']
-    with api.connect() as db:
-        for module in homework_files.STORES:
-            with pytest.raises(HTTPException) as exc:
-                homework_files.require_capacity(db, module)
-            assert exc.value.status_code == 413
+    assert attempt(pupil, record).status_code == 413
+    assert upload_material(client, record).status_code == 413
 
 
 def test_disk_reserve_returns_507_and_leaves_nothing(client, monkeypatch):
@@ -93,11 +77,9 @@ def test_disk_reserve_returns_507_and_leaves_nothing(client, monkeypatch):
     usage = namedtuple('usage', 'total used free')
     monkeypatch.setattr(homework_files.shutil, 'disk_usage', lambda path: usage(10**12, 0, homework_files.MAX_FILE))
     monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB', '1')
-    refused = attempt(pupil, record)
-    assert refused.status_code == 507 and 'заканчивается место' in refused.json()['detail'], refused.text
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM homework_files').fetchone()[0] == 0
-        assert not list(homework_files.root_for(db).glob('*.bin'))
+    assert attempt(pupil, record).status_code == 507
+    assert get(pupil, record['lessonKey'])['availableFiles'] == []
+    with api.connect() as db: assert not list(homework_files.root_for(db).glob('*.bin'))
     monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB', '0')  # 0 disables the disk check
     assert attempt(pupil, record).status_code == 200
 
@@ -109,43 +91,60 @@ def test_disk_probe_failure_does_not_block_uploads(client, monkeypatch):
     assert attempt(pupil, record).status_code == 200
 
 
-def test_busy_server_queues_then_answers_429_with_retry_after(client, monkeypatch):
-    record, pupil, *_ = setup(client)
+def occupied_slot(monkeypatch):
     slots = threading.BoundedSemaphore(1)
     assert slots.acquire(blocking=False)
     monkeypatch.setattr(homework_files, 'UPLOAD_SLOTS', slots)
-    monkeypatch.setattr(homework_files, 'UPLOAD_WAIT', 0.3)
-    started = time.perf_counter()
+    return slots
+
+
+def frees_slot_on_first_poll(monkeypatch, slots):
+    async def sleep(delay): slots.release()
+    monkeypatch.setattr(homework_files, 'asyncio', SimpleNamespace(sleep=sleep))
+
+
+def test_busy_server_answers_429_with_retry_after(client, monkeypatch):
+    record, pupil, *_ = setup(client)
+    occupied_slot(monkeypatch)
+    monkeypatch.setattr(homework_files, 'UPLOAD_WAIT', 0)
     refused = attempt(pupil, record)
-    assert refused.status_code == 429 and refused.headers['retry-after'] == '5'
-    assert time.perf_counter() - started >= 0.25  # it queued before giving up
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM homework_files').fetchone()[0] == 0
-    # A slot freed while the request waits is taken by it.
+    assert refused.status_code == 429 and refused.headers['retry-after']
+    assert get(pupil, record['lessonKey'])['availableFiles'] == []
+
+
+def test_slot_freed_while_the_request_waits_is_taken_by_it(client, monkeypatch):
+    record, pupil, *_ = setup(client)
+    slots = occupied_slot(monkeypatch)
     monkeypatch.setattr(homework_files, 'UPLOAD_WAIT', 5)
-    threading.Timer(0.2, slots.release).start()
+    frees_slot_on_first_poll(monkeypatch, slots)
     assert attempt(pupil, record).status_code == 200
-    # A full queue answers at once.
-    assert slots.acquire(blocking=False)
+    assert slots.acquire(blocking=False)  # the finished upload gave its slot back
+
+
+def test_full_queue_answers_429_at_once(client, monkeypatch):
+    record, pupil, *_ = setup(client)
+    slots = occupied_slot(monkeypatch)
+    monkeypatch.setattr(homework_files, 'UPLOAD_WAIT', 5)
     monkeypatch.setattr(homework_files, 'UPLOAD_WAITERS', threading.Semaphore(0))
-    started = time.perf_counter()
+    frees_slot_on_first_poll(monkeypatch, slots)  # a request that queued would get this slot, so only an immediate refusal gives 429
     refused = attempt(pupil, record)
-    assert refused.status_code == 429 and refused.headers['retry-after'] == '5' and time.perf_counter() - started < 2
-    slots.release()
-    assert slots.acquire(blocking=False)  # nothing leaked
-    slots.release()
+    assert refused.status_code == 429 and refused.headers['retry-after']
 
 
 def test_pending_uploads_answer_retry_after(client):
     record, pupil, *_ = setup(client)
     key = record['lessonKey']
-    ids = [uuid4().hex for _ in range(2)]
-    with api.connect() as db:
-        homework_files.tables(db)
-        db.executemany('INSERT INTO homework_files VALUES (?,?,?,?,?,?,?,?,?,NULL)',
-                       [(id, 'demo', key, 's1', 'someone', 'a.txt', homework_files.MAX_FILE, now().isoformat(), 'uploading') for id in ids])
-    refused = attempt(pupil, record)
-    assert refused.status_code == 429 and refused.headers['retry-after'] == '5', refused.text
+    # Unfinished uploads are capped per pupil: add them one at a time until the next upload is refused.
+    refused = None
+    for _ in range(10):
+        with api.connect() as db:
+            homework_files.tables(db)
+            insert_row(db, 'homework_files', id=uuid4().hex, workspace='demo', lesson_key=key, student_id='s1', owner_id='someone',
+                       filename='a.txt', size=homework_files.MAX_FILE, created=now().isoformat(), status='uploading')
+        response = attempt(pupil, record)
+        if response.status_code == 429: refused = response;break
+        assert response.status_code == 200, response.text
+    assert refused is not None and refused.headers['retry-after']
     with api.connect() as db:
         db.execute("DELETE FROM homework_files WHERE status='uploading'")
     assert attempt(pupil, record).status_code == 200

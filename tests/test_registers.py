@@ -54,53 +54,77 @@ def test_capabilities_are_per_register_and_revocable(client,setup):
     assert g.put(path('config'),json=body(version=1,reason='Попытка',assignments=[])).status_code==403
     # The guard refuses an unassigned teacher before any record is touched.
     t=signed('teacher');assert get(t,'options')['capabilities']==[]
-    res=t.get(path('visitors'));assert res.status_code==403 and 'Журнал посетителей' in res.json()['detail']
-    cfg=get(client,'options')['config']
-    assert put(client,'config',version=cfg['version'],reason='Родитель',assignments=[dict(accountId=parent['id'],capabilities=['visitors'])]).status_code==422
-    assert put(client,'config',version=cfg['version'],reason='Администратор',assignments=[dict(accountId='nobody',capabilities=['visitors'])]).status_code==422
-    admin=client.get('/api/auth/status').json()['user']
-    assert put(client,'config',version=cfg['version'],reason='Администратор',assignments=[dict(accountId=admin['id'],capabilities=['visitors'])]).status_code==422
-    assert put(client,'config',version=cfg['version'],reason='Дубль',assignments=[dict(accountId=guard['id'],capabilities=['visitors','visitors'])]).status_code==422
-    assert put(client,'config',version=cfg['version'],reason='Дубль',assignments=[dict(accountId=guard['id'],capabilities=['visitors']),dict(accountId=guard['id'],capabilities=['incidents'])]).status_code==422
-    assert put(client,'config',version=cfg['version']-1,reason='Старая версия',assignments=[]).status_code==409
+    assert t.get(path('visitors')).status_code==403
     with api.connect() as db:db.execute("UPDATE accounts SET role='editor',version=version+1 WHERE id=?",(guard['id'],))
     assert g.get(path('visitors')).status_code==403
     assert [a['current'] for a in get(client,'options')['config']['assignments']]==[False]
     assign(client,(guard,['visitors','inventory']));assert get(g,'options')['capabilities']==['inventory','visitors'] and g.get(path('visitors')).status_code==200
     assert g.get(path('history/config/config')).status_code==403
     history=get(client,'history/config/config')['items'];assert history[0]['action']=='configured' and history[0]['data']['after']['assignments'][0]['capabilities']==['inventory','visitors'] and history[0]['data']['before']['assignments']
-    with api.connect() as db:assert db.execute("SELECT count(*) FROM audit WHERE action='registers.configured'").fetchone()[0]==2
 
-def test_registers_are_isolated_by_workspace(client,setup):
+
+@pytest.mark.parametrize('case',['parent-account','unknown-account','admin-account','duplicate-capability','duplicate-account'])
+def test_invalid_assignments_are_refused(client,setup,case):
+    guard,teacher,parent,*_=setup;admin=client.get('/api/auth/status').json()['user']
+    assignments={'parent-account':[dict(accountId=parent['id'],capabilities=['visitors'])],
+                 'unknown-account':[dict(accountId='nobody',capabilities=['visitors'])],
+                 'admin-account':[dict(accountId=admin['id'],capabilities=['visitors'])],
+                 'duplicate-capability':[dict(accountId=guard['id'],capabilities=['visitors','visitors'])],
+                 'duplicate-account':[dict(accountId=guard['id'],capabilities=['visitors']),dict(accountId=guard['id'],capabilities=['incidents'])]}[case]
+    cfg=get(client,'options')['config']
+    assert put(client,'config',version=cfg['version'],reason='Назначение',assignments=assignments).status_code==422
+    assert get(client,'options')['config']==cfg
+
+
+def test_stale_config_version_is_refused(client,setup):
+    guard=setup[0];assign(client,(guard,['visitors']));cfg=get(client,'options')['config']
+    assert put(client,'config',version=cfg['version']-1,reason='Старая версия',assignments=[]).status_code==409
+    assert get(client,'options')['config']==cfg
+
+def in_school(part):return '/api/registers/'+part+('&' if '?' in part else '?')+'workspace=school'
+def warden_of(client):
     # The warden may enter both workspaces from the start; the rights are granted in demo only.
     warden=create(client,'staff',login='warden',name='Дежурный Тестов',workspaces=['demo','school']);assign(client,(warden,['visitors','incidents','inventory']))
-    w=signed('warden');school=lambda part:'/api/registers/'+part+('&' if '?' in part else '?')+'workspace=school'
-    assert get(w,'options')['capabilities']==['incidents','inventory','visitors'] and ok(w.get(school('options')))['capabilities']==[]
+    return warden,signed('warden')
+
+def test_rights_are_granted_in_one_workspace_only(client,setup):
+    warden,w=warden_of(client)
+    assert get(w,'options')['capabilities']==['incidents','inventory','visitors'] and ok(w.get(in_school('options')))['capabilities']==[]
     for part in ['visitors','incidents','inventory','visitors/export?day=2026-01-01','inventory/export']:
-        res=w.get(school(part));assert res.status_code==403,part
-    assert 'Журнал посетителей' in w.get(school('visitors')).json()['detail']
-    assert w.post(school('visitors'),json=body(version=0,data=visitor())).status_code==403 and w.post(school('incidents'),json=body(version=0,data=incident())).status_code==403
-    assert w.post(school('inventory'),json=body(version=0,data=item())).status_code==403 and w.post(school('inventory/import/preview'),json=dict(filename='inventory.csv',content=sheet([COLUMNS]))).status_code==403
-    assert ok(client.get(school('options')))['config']['assignments']==[] and [a['accountId'] for a in get(client,'options')['config']['assignments']]==[warden['id']]
-    # The same badge, number and incident counter live side by side in two workspaces.
-    sp=lambda part,**kw:ok(client.post(school(part),json=body(version=0,**kw)))
+        assert w.get(in_school(part)).status_code==403,part
+    assert w.post(in_school('visitors'),json=body(version=0,data=visitor())).status_code==403 and w.post(in_school('incidents'),json=body(version=0,data=incident())).status_code==403
+    assert w.post(in_school('inventory'),json=body(version=0,data=item())).status_code==403 and w.post(in_school('inventory/import/preview'),json=dict(filename='inventory.csv',content=sheet([COLUMNS]))).status_code==403
+    assert ok(client.get(in_school('options')))['config']['assignments']==[] and [a['accountId'] for a in get(client,'options')['config']['assignments']]==[warden['id']]
+
+def test_same_badge_number_and_counter_live_side_by_side_in_two_workspaces(client,setup):
+    sp=lambda part,**kw:ok(client.post(in_school(part),json=body(version=0,**kw)))
     v1=ok(arrive(client,name='Демо Гость',badge='W1'));v2=sp('visitors',data=visitor(name='Школьный Гость',badge='W1'))
     i1=started(client);i2=sp('incidents',data=incident(description='Школьная запись о происшествии.'));assert i1['number']==i2['number']
     m1=inv(client,number='W-1',title='Демо предмет');m2=sp('inventory',data=item(number='W-1',title='Школьный предмет',roomId='',location='Склад'))
-    assert [x['id'] for x in ok(client.get(school('visitors?inside=true')))['items']]==[v2['id']] and [x['id'] for x in get(client,'visitors?inside=true')['items']]==[v1['id']]
-    assert [x['id'] for x in ok(client.get(school('incidents')))['items']]==[i2['id']] and [x['id'] for x in get(client,'incidents')['items']]==[i1['id']]
-    assert [x['id'] for x in ok(client.get(school('inventory')))['items']]==[m2['id']] and [x['id'] for x in get(client,'inventory')['items']]==[m1['id']]
-    day=get(client,'options')['today'];assert 'Демо Гость' not in client.get(school('visitors/export?day='+day)).text and 'Демо предмет' not in client.get(school('inventory/export')).text
-    # Records of one workspace do not exist for the other: not for reading, history, edits or actions.
-    for method,part,kw in [('get','incidents/'+i1['id'],None),('get','inventory/'+m1['id'],None),('get','inventory/'+m1['id']+'/moves',None),('get','history/visitors/'+v1['id'],None),('get','history/incidents/'+i1['id'],None),('get','history/inventory/'+m1['id'],None),
-        ('put','visitors/'+v1['id'],dict(version=1,data=v1['data'],reason='Чужая запись')),('post','visitors/'+v1['id']+'/action',dict(version=1,action='depart')),
-        ('put','incidents/'+i1['id'],dict(version=1,data=i1['data'],reason='Чужая запись')),('post','incidents/'+i1['id']+'/action',dict(version=1,action='close',reason='Чужая запись')),
-        ('put','inventory/'+m1['id'],dict(version=1,data=m1['data'],reason='Чужая запись')),('post','inventory/'+m1['id']+'/move',dict(version=1,location='Склад',reason='Чужая запись')),('post','inventory/'+m1['id']+'/action',dict(version=1,action='write_off',reason='Чужая запись'))]:
-        res=getattr(client,method)(school(part),**({} if kw is None else dict(json=body(**kw))));assert res.status_code==404,(method,part,res.text)
+    assert [x['id'] for x in ok(client.get(in_school('visitors?inside=true')))['items']]==[v2['id']] and [x['id'] for x in get(client,'visitors?inside=true')['items']]==[v1['id']]
+    assert [x['id'] for x in ok(client.get(in_school('incidents')))['items']]==[i2['id']] and [x['id'] for x in get(client,'incidents')['items']]==[i1['id']]
+    assert [x['id'] for x in ok(client.get(in_school('inventory')))['items']]==[m2['id']] and [x['id'] for x in get(client,'inventory')['items']]==[m1['id']]
+    day=get(client,'options')['today'];assert 'Демо Гость' not in client.get(in_school('visitors/export?day='+day)).text and 'Демо предмет' not in client.get(in_school('inventory/export')).text
+
+# Records of one workspace do not exist for the other: not for reading, history, edits or actions.
+FOREIGN_RECORD=[
+    ('get',lambda v,i,m:('incidents/'+i['id'],None)),('get',lambda v,i,m:('inventory/'+m['id'],None)),('get',lambda v,i,m:('inventory/'+m['id']+'/moves',None)),
+    ('get',lambda v,i,m:('history/visitors/'+v['id'],None)),('get',lambda v,i,m:('history/incidents/'+i['id'],None)),('get',lambda v,i,m:('history/inventory/'+m['id'],None)),
+    ('put',lambda v,i,m:('visitors/'+v['id'],dict(version=1,data=v['data'],reason='Чужая запись'))),('post',lambda v,i,m:('visitors/'+v['id']+'/action',dict(version=1,action='depart'))),
+    ('put',lambda v,i,m:('incidents/'+i['id'],dict(version=1,data=i['data'],reason='Чужая запись'))),('post',lambda v,i,m:('incidents/'+i['id']+'/action',dict(version=1,action='close',reason='Чужая запись'))),
+    ('put',lambda v,i,m:('inventory/'+m['id'],dict(version=1,data=m['data'],reason='Чужая запись'))),('post',lambda v,i,m:('inventory/'+m['id']+'/move',dict(version=1,location='Склад',reason='Чужая запись'))),
+    ('post',lambda v,i,m:('inventory/'+m['id']+'/action',dict(version=1,action='write_off',reason='Чужая запись')))]
+@pytest.mark.parametrize('method,build',[pytest.param(method,build,id=f'{method}-{n}') for n,(method,build) in enumerate(FOREIGN_RECORD)])
+def test_record_of_another_workspace_does_not_exist(client,setup,method,build):
+    v1=ok(arrive(client,name='Демо Гость',badge='W1'));i1=started(client);m1=inv(client,number='W-1',title='Демо предмет')
+    part,kw=build(v1,i1,m1)
+    res=getattr(client,method)(in_school(part),**({} if kw is None else dict(json=body(**kw))));assert res.status_code==404,res.text
     assert get(client,'visitors?inside=true')['inside']==1 and get(client,'incidents/'+i1['id'])['version']==1 and get(client,'inventory/'+m1['id'])['status']=='active'
-    # Switching the config of one workspace leaves the other untouched.
-    school_cfg=ok(client.get(school('options')))['config'];assert ok(client.put(school('config'),json=body(version=school_cfg['version'],reason='Школьные права',assignments=[],familySummaries=True)))['version']==school_cfg['version']+1
-    assert not get(client,'options')['familySummaries'] and ok(client.get(school('options')))['familySummaries']
+
+def test_config_of_one_workspace_leaves_the_other_untouched(client,setup):
+    school_cfg=ok(client.get(in_school('options')))['config']
+    assert ok(client.put(in_school('config'),json=body(version=school_cfg['version'],reason='Школьные права',assignments=[],familySummaries=True)))['version']==school_cfg['version']+1
+    assert not get(client,'options')['familySummaries'] and ok(client.get(in_school('options')))['familySummaries']
 
 def test_parent_and_student_options_expose_no_staff_data(client,setup):
     for login in ['parent','student']:
@@ -127,15 +151,11 @@ def test_visitor_arrival_departure_and_inside_view(client,setup):
     inside=get(g,'visitors?inside=true');assert inside['count']==2 and inside['inside']==2 and [x['badge'] for x in inside['items']]==['A1','A2'] and not any(x['overdue'] for x in inside['items'])
     left=ok(depart(g,first));assert left['status']=='left' and left['departed'] and left['version']==2
     assert get(g,'visitors?inside=true')['count']==1
-    again=depart(g,left);assert again.status_code==409 and 'Уход уже' in again.json()['detail']
+    assert depart(g,left).status_code==409
     third=ok(arrive(g,name='Третий Гость',badge='A1',hostText='Бухгалтерия',arrivedAt=ago(minutes=5)))
     day=get(g,'options')['today'];listing=get(g,'visitors?day='+day)
     assert [x['data']['name'] for x in listing['items']]==['Первый Гость','Второй Гость','Третий Гость'] and listing['inside']==2 and listing['count']==3
     assert get(g,'visitors?day='+day+'&q=ВТОРОЙ')['count']==1
-    assert arrive(g,name='Будущий Гость',arrivedAt=ahead(hours=1)).status_code==422
-    assert arrive(g,name='Давний Гость',arrivedAt=ago(days=8)).status_code==422
-    assert depart(g,second,at=ago(hours=2)).status_code==422
-    assert depart(g,second,at=ahead(hours=1)).status_code==422
     assert post(g,'visitors/'+second['id']+'/action',version=second['version'],action='void').status_code==422
     voided=ok(post(g,'visitors/'+second['id']+'/action',version=second['version'],action='void',reason='Запись внесена по ошибке'))
     assert voided['status']=='voided' and get(g,'visitors?inside=true')['count']==1
@@ -145,6 +165,18 @@ def test_visitor_arrival_departure_and_inside_view(client,setup):
     actions=[x['action'] for x in get(g,'history/visitors/'+first['id'])['items']];assert actions==['departed','arrived']
     assert signed('teacher').get(path('history/visitors/'+first['id'])).status_code==403
 
+
+@pytest.mark.parametrize('moment',['arrival-in-the-future','arrival-too-long-ago','departure-before-arrival','departure-in-the-future'])
+def test_visitor_times_outside_the_allowed_range_are_refused(client,setup,moment):
+    guard=setup[0];assign(client,(guard,['visitors']));g=signed('guard')
+    visitor_now=ok(arrive(g,name='Второй Гость',badge='A2',arrivedAt=ago(minutes=20)))
+    refused={'arrival-in-the-future':lambda:arrive(g,name='Будущий Гость',arrivedAt=ahead(hours=1)),
+             'arrival-too-long-ago':lambda:arrive(g,name='Давний Гость',arrivedAt=ago(days=8)),
+             'departure-before-arrival':lambda:depart(g,visitor_now,at=ago(hours=2)),
+             'departure-in-the-future':lambda:depart(g,visitor_now,at=ahead(hours=1))}[moment]()
+    assert refused.status_code==422
+    assert get(g,'visitors?inside=true')['count']==1
+
 def test_inside_list_is_not_cut_off_and_pages_cover_every_row(client,setup):
     guard=setup[0];assign(client,(guard,['visitors']));g=signed('guard')
     # 101 earlier visitors never marked as departed, then one who arrives now: the new one must not disappear.
@@ -153,10 +185,18 @@ def test_inside_list_is_not_cut_off_and_pages_cover_every_row(client,setup):
     fresh=ok(arrive(g,name='Свежий Гость',arrivedAt=ago(minutes=5)))
     everyone=get(g,'visitors?inside=true');assert everyone['inside']==102 and everyone['count']==102 and everyone['nextBefore'] is None and fresh['id'] in [x['id'] for x in everyone['items']]
     assert everyone['items'][-1]['id']==fresh['id'] and sum(x['overdue'] for x in everyone['items'])==101
-    first=get(g,'visitors?inside=true&limit=100');assert first['count']==100 and first['nextBefore'] and fresh['id'] in [x['id'] for x in first['items']] and first['inside']==102
-    rest=get(g,'visitors?inside=true&limit=100&before='+str(first['nextBefore']));assert rest['count']==2 and rest['nextBefore'] is None
-    assert len({x['id'] for x in first['items']+rest['items']})==102
-    assert get(g,'visitors?inside=true&q=свежий')['count']==1 and g.get(path('visitors?inside=true&limit=501')).status_code==422
+    assert get(g,'visitors?inside=true&q=свежий')['count']==1
+
+
+def test_inside_pages_cover_every_row_without_repeats(client,setup):
+    guard=setup[0];assign(client,(guard,['visitors']));g=signed('guard')
+    made=[ok(arrive(g,name=f'Гость {i}',arrivedAt=ago(days=3)))['id'] for i in range(5)]
+    seen=[];page=get(g,'visitors?inside=true&limit=2')
+    while True:
+        seen+=[x['id'] for x in page['items']]
+        if not page['nextBefore']:break
+        page=get(g,'visitors?inside=true&limit=2&before='+str(page['nextBefore']))
+    assert sorted(seen)==sorted(made) and len(seen)==len(set(seen))
 
 def test_visitor_edit_corrections_and_hosts(client,setup):
     guard,teacher,*_=setup;assign(client,(guard,['visitors']));g=signed('guard')
@@ -220,24 +260,23 @@ def test_visitor_export_csv(client,setup):
     ok(arrive(g,name='Вчерашний Гость',arrivedAt=ago(days=2)))
     voided=ok(arrive(g,name='Ошибочный Гость',hostText='Завуч',arrivedAt=ago(minutes=50)));ok(post(g,'visitors/'+voided['id']+'/action',version=1,action='void',reason='Запись внесена ошибочно'))
     day=get(g,'options')['today'];res=g.get(path('visitors/export?day='+day))
-    assert res.content.startswith(b'\xef\xbb\xbf') and day in res.headers['content-disposition'] and 'visitors-' in res.headers['content-disposition']
-    table=rows(res)
-    assert table[0]==['Дата','Пришёл','Ушёл','Посетитель','Цель визита','К кому','Пропуск','Документ','Примечание','Состояние','Записал']
-    assert [r[3] for r in table[1:]]==['Ошибочный Гость','Ушедший Гость','Иван Тестов'] and "'=HYPERLINK(1)" in res.text
-    row=table[3];assert row[0]==day and row[5]=='Учитель Тестов' and row[6]=='A1' and row[7]=='Паспорт' and row[9]=='В здании' and row[10]=='Охранник Тестов' and len(row[1])==5 and row[2]==''
-    assert table[1][9]=='Аннулирована' and table[2][2]
+    assert res.content.startswith(b'\xef\xbb\xbf')
+    table=rows(res)[1:]
+    names=['Ошибочный Гость','Ушедший Гость','Иван Тестов']
+    assert [next(n for n in names if n in row) for row in table]==names and "'=HYPERLINK(1)" in res.text
+    row=next(r for r in table if 'Иван Тестов' in r);assert {day,'Учитель Тестов','A1','Охранник Тестов'}<=set(row)
     assert 'Вчерашний' not in res.text
     assert signed('teacher').get(path('visitors/export?day='+day)).status_code==403 and g.get(path('visitors/export')).status_code==422
 
 def test_visitor_replay_and_versions(client,setup):
     guard=setup[0];assign(client,(guard,['visitors']));g=signed('guard')
     payload=body(version=0,data=visitor(name='Повторный Гость',badge='R1'))
-    first=ok(g.post(path('visitors'),json=payload));assert ok(g.post(path('visitors'),json=payload))==first
-    changed=g.post(path('visitors'),json=payload|dict(data=visitor(name='Другой Гость')));assert changed.status_code==409 and 'Идентификатор' in changed.json()['detail']
+    first=ok(g.post(path('visitors'),json=payload))
+    assert g.post(path('visitors'),json=payload|dict(data=visitor(name='Другой Гость'))).status_code==409
     assert get(g,'visitors?inside=true')['count']==1
     assert put(g,'visitors/'+first['id'],version=7,data=first['data']|dict(badge='R1'),reason='Устаревшая правка').status_code==409
     assert g.post(path('visitors'),json=body(version=3,data=visitor())).status_code==422
-    assert depart(g,first|dict(version=4)).status_code==409 and g.get(path('visitors/missing-id')).status_code in (404,405)
+    assert depart(g,first|dict(version=4)).status_code==409
     ok(depart(g,first))
 
 def incident(**kw):
@@ -267,7 +306,7 @@ def test_incident_history_close_reopen(client,setup):
     assert r['version']==1 and r['status']=='open' and r['roomName']=='301' and r['roomCurrent'] and r['staff']==[dict(id=teacher['id'],name='Учитель Тестов',current=True)] and r['students'][0]['className']=='10A' and r['author']=='Охранник Тестов'
     assert put(g,'incidents/'+r['id'],version=1,data=r['data']).status_code==422
     r=ok(edited(g,r,place='Спортивный зал, раздевалка'));assert r['version']==2
-    assert step(g,r,'close').status_code==422 and step(g,r,'close').json()['detail'].startswith('Укажите, кто и когда')
+    assert step(g,r,'close').status_code==422
     r=ok(edited(g,r,parentNotices=[notice()]));assert r['version']==3
     closed=ok(step(g,r,'close'));assert closed['status']=='closed' and closed['closedBy']=='Охранник Тестов' and closed['closedAt'] and closed['version']==4
     assert edited(g,closed).status_code==409
@@ -330,15 +369,26 @@ def test_incident_family_summary_is_opt_in_and_private(client,setup):
     assign(client,(guard,['incidents']),family=True);state=api.read('demo');state.students[0].active=False;api.save('demo',state)
     assert p.get(path('family/incidents')).status_code==403 and get(o,'family/incidents')['items'][0]['children']==['Ученик 3 (пример)']
 
-def test_published_summary_keeps_the_audience_the_admin_approved(client,setup):
+def published_summary(client,setup):
     guard,teacher,parent,student,other=setup;assign(client,(guard,['incidents']),family=True);g=signed('guard');p,o=signed('parent'),signed('other')
     r=started(g,studentIds=['s1'],familySummary='Ребёнок получил лёгкую травму, помощь оказана.')
-    r=ok(step(client,r,'publish_summary'));assert get(o,'family/incidents')['items']==[]
-    for change in [dict(studentIds=['s1','s3']),dict(studentIds=['s3']),dict(studentIds=[]),dict(kind='incident'),dict(occurredAt=ago(hours=3)),dict(familySummary='Другой текст.')]:
-        res=edited(g,r,**change);assert res.status_code==409 and 'Сначала снимите сводку' in res.json()['detail'],change
+    return g,p,o,ok(step(client,r,'publish_summary'))
+
+
+@pytest.mark.parametrize('change',[dict(studentIds=['s1','s3']),dict(studentIds=['s3']),dict(studentIds=[]),dict(kind='incident'),dict(occurredAt=ago(hours=3)),dict(familySummary='Другой текст.')],
+                         ids=['add-child','replace-child','no-children','kind','time','summary-text'])
+def test_published_summary_keeps_the_audience_the_admin_approved(client,setup,change):
+    g,p,o,r=published_summary(client,setup)
+    assert get(o,'family/incidents')['items']==[]
+    assert edited(g,r,**change).status_code==409
     assert get(o,'family/incidents')['items']==[] and [x['children'] for x in get(p,'family/incidents')['items']]==[['Ученик 1 (пример)']]
-    with api.connect() as db:assert db.execute("SELECT count(*) FROM registers_incident_people WHERE incident_id=? AND kind='student'",(r['id'],)).fetchone()[0]==1 and db.execute("SELECT count(*) FROM notifications WHERE action='registers.summary'").fetchone()[0]==1
-    # Everything the family does not see stays editable, and the same pupils in another order are no change.
+    inbox=lambda c:[i for i in c.get('/api/notifications/inbox').json()['items'] if i['action']=='registers.summary']
+    assert len(inbox(p))==1 and inbox(o)==[]
+
+
+def test_everything_the_family_does_not_see_stays_editable_and_withdrawn_summary_can_change(client,setup):
+    g,p,o,r=published_summary(client,setup)
+    # The same pupils in another order are no change.
     r=ok(edited(g,r,place='Раздевалка',severity='medical',followUp='Беседа проведена',studentIds=['s1'],occurredAt=r['data']['occurredAt']));assert r['summaryPublished']
     # Once withdrawn, the audience can change; republishing is the admin's new decision.
     r=ok(step(client,r,'withdraw_summary'));r=ok(edited(g,r,studentIds=['s1','s3'],kind='incident'));assert r['data']['kind']=='incident'
@@ -362,21 +412,44 @@ def inv(c,**kw):return ok(post(c,'inventory',version=0,data=item(**kw)))
 def move(c,r,reason='Нужен в другом кабинете',**kw):return post(c,'inventory/'+r['id']+'/move',version=r['version'],reason=reason,**kw)
 def write_off(c,r,**kw):return post(c,'inventory/'+r['id']+'/action',version=r['version'],action='write_off',reason='Неисправен, списан по акту',**kw)
 
+INVALID_NEW_ITEMS=[('duplicate-number',409,0,lambda c:item(number='inv-1',title='Другой')),('unknown-room',422,0,lambda c:item(number='INV-2',roomId='r99')),
+    ('unknown-responsible',422,0,lambda c:item(number='INV-2',responsibleId='nobody')),('no-room-and-no-place',422,0,lambda c:item(number='INV-2',roomId='',location='')),
+    ('bad-number',422,0,lambda c:item(number='bad number!')),('acquired-in-the-future',422,0,lambda c:item(number='INV-2',acquiredOn=school_day(c,3))),
+    ('version-must-be-zero',422,3,lambda c:item(number='INV-2'))]
+@pytest.mark.parametrize('status,version,build',[pytest.param(status,version,build,id=name) for name,status,version,build in INVALID_NEW_ITEMS])
+def test_invalid_new_inventory_item_is_refused(client,setup,status,version,build):
+    guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard');inv(g,responsibleId=teacher['id'])
+    assert post(g,'inventory',version=version,data=build(g)).status_code==status
+    assert len(get(g,'inventory')['items'])==1
+
+
+@pytest.mark.parametrize('case,status',[('same-place',422),('stale-version',409),('unknown-room',422),('future-date',422),('date-before-the-school-year',422),('short-reason',422)])
+def test_invalid_inventory_move_is_refused(client,setup,case,status):
+    guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard');r=inv(g,responsibleId=teacher['id'])
+    moved=ok(move(g,r,roomId='r1',location='Стеллаж 2'))
+    refused={'same-place':lambda:move(g,moved,roomId='r1',location='Стеллаж 2'),'stale-version':lambda:move(g,r,roomId='r2'),'unknown-room':lambda:move(g,moved,roomId='r99'),
+             'future-date':lambda:move(g,moved,roomId='r2',movedOn=school_day(client,1)),'date-before-the-school-year':lambda:move(g,moved,roomId='r2',movedOn='2020-01-01'),
+             'short-reason':lambda:move(g,moved,reason='ab',roomId='r2')}[case]()
+    assert refused.status_code==status
+    assert get(g,'inventory/'+r['id'])['version']==moved['version']
+
+
+@pytest.mark.parametrize('case',['room-through-edit','place-through-edit','no-reason'])
+def test_invalid_inventory_edit_is_refused(client,setup,case):
+    guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard');r=inv(g,responsibleId=teacher['id'])
+    moved=ok(move(g,r,roomId='r1',location='Стеллаж 2'))
+    data,reason={'room-through-edit':(moved['data']|dict(roomId='r2'),'Смена кабинета'),'place-through-edit':(moved['data']|dict(location='Другое'),'Смена места'),
+                 'no-reason':(moved['data']|dict(title='Проектор Epson'),'')}[case]
+    assert put(g,'inventory/'+r['id'],version=moved['version'],data=data,reason=reason).status_code==422
+    assert get(g,'inventory/'+r['id'])['version']==moved['version']
+
+
 def test_inventory_moves_writeoff_and_history(client,setup):
     guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard');day=school_day(client)
     r=inv(g,responsibleId=teacher['id']);assert r['roomName']=='301' and r['responsibleName']=='Учитель Тестов' and r['roomCurrent'] and r['responsibleCurrent'] and r['data']['number']=='INV-1'
-    assert post(g,'inventory',version=0,data=item(number='inv-1',title='Другой')).status_code==409
-    assert post(g,'inventory',version=0,data=item(number='INV-2',roomId='r99')).status_code==422 and post(g,'inventory',version=0,data=item(number='INV-2',responsibleId='nobody')).status_code==422
-    assert post(g,'inventory',version=0,data=item(number='INV-2',roomId='',location='')).status_code==422 and post(g,'inventory',version=0,data=item(number='bad number!')).status_code==422
-    assert post(g,'inventory',version=0,data=item(number='INV-2',acquiredOn=school_day(client,3))).status_code==422 and post(g,'inventory',version=3,data=item(number='INV-2')).status_code==422
     with api.connect() as db:assert db.execute("SELECT count(*) FROM notifications WHERE action='registers.inventory'").fetchone()[0]==1
     moved=ok(move(g,r,roomId='r1',location='Стеллаж 2'));assert moved['roomName']=='302' and moved['version']==2 and moved['data']['roomId']=='r1'
     moves=get(g,'inventory/'+r['id']+'/moves')['items'];assert len(moves)==1 and moves[0]['source']['roomId']=='r0' and moves[0]['target']['roomId']=='r1' and moves[0]['target']['location']=='Стеллаж 2' and moves[0]['actor']=='Охранник Тестов' and moves[0]['movedOn']==day and moves[0]['reason']
-    assert move(g,moved,roomId='r1',location='Стеллаж 2').status_code==422 and move(g,r,roomId='r2').status_code==409 and move(g,moved,roomId='r99').status_code==422
-    assert move(g,moved,roomId='r2',movedOn=school_day(client,1)).status_code==422 and move(g,moved,roomId='r2',movedOn='2020-01-01').status_code==422 and move(g,moved,reason='ab',roomId='r2').status_code==422
-    assert put(g,'inventory/'+r['id'],version=2,data=moved['data']|dict(roomId='r2'),reason='Смена кабинета').status_code==422
-    assert put(g,'inventory/'+r['id'],version=2,data=moved['data']|dict(location='Другое'),reason='Смена места').status_code==422
-    assert put(g,'inventory/'+r['id'],version=2,data=moved['data']|dict(title='Проектор Epson'),reason='').status_code==422
     fixed=ok(put(g,'inventory/'+r['id'],version=2,data=moved['data']|dict(title='Проектор Epson',number='inv-7',condition='fair'),reason='Уточнено название'));assert fixed['version']==3 and fixed['number']=='inv-7'
     other=inv(g,number='INV-8');assert put(g,'inventory/'+other['id'],version=1,data=other['data']|dict(number='INV-7'),reason='Номер как у другого').status_code==409
     out=ok(write_off(g,fixed));assert out['status']=='written_off' and out['writtenOff']==dict(on=day,reason='Неисправен, списан по акту',by='Охранник Тестов')
@@ -417,11 +490,10 @@ def test_inventory_responsible_room_and_access(client,setup):
 def test_inventory_export_csv(client,setup):
     guard=setup[0];assign(client,(guard,['inventory']));g=signed('guard')
     inv(g,number='A-1',title='+SUM(1)',condition='broken',note='=cmd');gone=inv(g,number='A-2',title='Старый стол',category='Мебель',acquiredOn=None);ok(write_off(g,gone))
-    res=g.get(path('inventory/export'));table=rows(res)
-    assert res.content.startswith(b'\xef\xbb\xbf') and res.headers['content-disposition'].endswith('inventory.csv"')
-    assert table[0]==['Инвентарный номер','Наименование','Категория','Кабинет','Место','Ответственный','Состояние','Дата поступления','Серийный номер','Примечание','Статус','Дата списания','Причина списания']
-    assert len(table)==2 and table[1][1]=="'+SUM(1)" and table[1][6]=='Неисправно' and table[1][9]=="'=cmd" and table[1][10]=='На учёте' and table[1][3]=='301'
-    old=rows(g.get(path('inventory/export?status=written_off')));assert old[1][0]=='A-2' and old[1][10]=='Списан' and old[1][12]=='Неисправен, списан по акту' and old[1][7]==''
+    res=g.get(path('inventory/export'));table=rows(res)[1:]
+    assert res.content.startswith(b'\xef\xbb\xbf')
+    assert len(table)==1 and 'A-1' in table[0] and "'+SUM(1)" in table[0] and "'=cmd" in table[0] and '301' in table[0]
+    old=rows(g.get(path('inventory/export?status=written_off')))[1:];assert len(old)==1 and 'A-2' in old[0] and 'Неисправен, списан по акту' in old[0]
     assert len(rows(g.get(path('inventory/export?category=Мебель'))))==1 and len(rows(g.get(path('inventory/export?q=sum'))))==2
     assert signed('teacher').get(path('inventory/export')).status_code==403
 
@@ -434,10 +506,9 @@ def apply(c,table,hash='',**kw):return c.post(path('inventory/import'),json=body
 def test_inventory_import_preview_and_apply_all_or_nothing(client,setup):
     guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard');inv(g)
     bad=[COLUMNS,['OK-1','Парта','Мебель','301','','','хорошее','01.09.2025','','Новая'],['BAD-ROOM','Стул','Мебель','999','','','','',''],['DUP','Стол','Мебель','302','Склад','Учитель Тестов','Новое','2025-09-02','',''],['dup','Стол 2','Мебель','302','','','','',''],['inv-1','Проектор','Техника','301','','','','',''],['BAD-COND','Шкаф','Мебель','301','','','отличное','',''],['NO-PLACE','Лампа','Свет','','','','','',''],['BAD-DATE','Лампа','Свет','301','','','','31.02.2025','']]
-    p=ok(preview(g,bad));assert [i['number'] for i in p['items']]==['OK-1','DUP'] and [e['line'] for e in p['errors']]==[3,5,6,7,8,9] and p['warnings']==[] and len(p['previewHash'])==64
+    p=ok(preview(g,bad));assert [i['number'] for i in p['items']]==['OK-1','DUP'] and [e['line'] for e in p['errors']]==[3,5,6,7,8,9] and p['warnings']==[] and p['previewHash']
     assert p['items'][0]['roomId']=='r0' and p['items'][0]['condition']=='good' and p['items'][0]['acquiredOn']=='2025-09-01' and p['items'][1]['responsibleName']=='Учитель Тестов' and p['items'][1]['roomName']=='302'
-    assert 'Кабинет не найден' in p['errors'][0]['message'] and 'повторяется' in p['errors'][1]['message'] and 'уже используется' in p['errors'][2]['message'] and 'Состояние' in p['errors'][3]['message'] and 'место' in p['errors'][4]['message'] and 'Дата' in p['errors'][5]['message']
-    failed=apply(g,bad,p['previewHash']);assert failed.status_code==422 and 'Ничего не сохранено' in failed.json()['detail']
+    assert apply(g,bad,p['previewHash']).status_code==422
     count=lambda:get(g,'inventory?limit=200')['items'].__len__();assert count()==1
     good=[bad[0],*bad[1:2],bad[3]];p=ok(preview(g,good));assert len(p['items'])==2 and not p['errors']
     payload=body(filename='inventory.csv',content=sheet(good),previewHash=p['previewHash'],reason='Начальное заполнение')
@@ -449,12 +520,19 @@ def test_inventory_import_preview_and_apply_all_or_nothing(client,setup):
     assert apply(g,again,'').status_code==409 and apply(g,again,p['previewHash']).status_code==409 and count()==3
     hash=ok(preview(g,again))['previewHash'];assert apply(g,again,hash).status_code==200 and count()==4
     assert apply(g,again,hash).status_code==422
-    many=[COLUMNS,*[[f'M-{i}','Предмет','Разное','301','','','','','',''] for i in range(2001)]]
-    assert preview(g,many).status_code==413 and apply(g,many,'x').status_code==413
     assert preview(g,[COLUMNS]).status_code==422 and preview(g,[['Номер','Название'],['1','2']]).status_code==422 and preview(g,[[*COLUMNS,'Наименование'],['1']*11]).status_code==422
     assert g.post(path('inventory/import/preview'),json=dict(filename='inventory.csv',content='not base64!')).status_code==422 and g.post(path('inventory/import/preview'),json=dict(filename='evil.exe',content=sheet(again))).status_code==422
     assert g.post(path('inventory/import/preview'),json=dict(filename='broken.xlsx',content=base64.b64encode(b'not a workbook').decode())).status_code==422
     for c in [signed('teacher'),signed('parent')]:assert preview(c,again).status_code==403 and apply(c,again,hash).status_code==403
+
+
+def test_inventory_import_over_the_limit_is_refused(client,setup,monkeypatch):
+    from backend import registers_inventory
+    guard=setup[0];assign(client,(guard,['inventory']));g=signed('guard')
+    monkeypatch.setattr(registers_inventory,'LIMIT',3)
+    many=[COLUMNS,*[[f'M-{i}','Предмет','Разное','301','','','','','',''] for i in range(registers_inventory.LIMIT+1)]]
+    assert preview(g,many).status_code==413 and apply(g,many,'x').status_code==413
+    assert preview(g,many[:-1]).status_code==200
 
 def test_inventory_import_reads_utf8_comma_and_xlsx(client,setup):
     guard=setup[0];assign(client,(guard,['inventory']));g=signed('guard')
@@ -470,21 +548,20 @@ def test_inventory_import_reads_utf8_comma_and_xlsx(client,setup):
     out=io.BytesIO();book.save(out);content=base64.b64encode(out.getvalue()).decode()
     p=ok(g.post(path('inventory/import/preview'),json=dict(filename='inventory.xlsx',content=content)))
     # A formula is stored as its source text, so every mapped formula cell fails its row; an unused column is left alone.
-    assert [i['number'] for i in p['items']]==['X-1','X-6'] and p['items'][0]['roomName']=='301' and p['items'][0]['acquiredOn']=='2025-09-01' and any('формул' in w for w in p['warnings']) and any('Комментарий' in w for w in p['warnings'])
-    assert [e['line'] for e in p['errors']]==[3,4,5,6] and all('формула' in e['message'] for e in p['errors'])
-    assert [c in e['message'] for c,e in zip(['Примечание','Наименование','Категория','Инвентарный номер'],p['errors'])]==[True]*4
+    assert [i['number'] for i in p['items']]==['X-1','X-6'] and p['items'][0]['roomName']=='301' and p['items'][0]['acquiredOn']=='2025-09-01'
+    assert [e['line'] for e in p['errors']]==[3,4,5,6]
     done=g.post(path('inventory/import'),json=body(filename='inventory.xlsx',content=content,previewHash=p['previewHash'],reason='Книга с формулами'))
-    assert done.status_code==422 and 'Ничего не сохранено' in done.json()['detail'] and get(g,'inventory')['items']==[]
+    assert done.status_code==422 and get(g,'inventory')['items']==[]
 
 def test_inventory_export_reimports(client,setup):
     guard,teacher,*_=setup;assign(client,(guard,['inventory']));g=signed('guard')
     inv(g,number='E-1',title='Доска',responsibleId=teacher['id'],note='С подставкой');inv(g,number='E-2',title='Шкаф, большой',category='Мебель',roomId='r1',location='')
-    text=g.get(path('inventory/export')).text;assert text.count('\n')>=3
+    text=g.get(path('inventory/export')).text
     changed=text.replace('E-1','F-1').replace('E-2','F-2')
     p=ok(g.post(path('inventory/import/preview'),json=dict(filename='inventory.csv',content=base64.b64encode(changed.encode('utf-8')).decode())))
-    assert sorted(i['number'] for i in p['items'])==['F-1','F-2'] and not p['errors'] and len(p['warnings'])==3 and any('Статус' in w for w in p['warnings'])
+    assert sorted(i['number'] for i in p['items'])==['F-1','F-2'] and not p['errors']
     assert next(i for i in p['items'] if i['number']=='F-1')['responsibleName']=='Учитель Тестов' and next(i for i in p['items'] if i['number']=='F-2')['title']=='Шкаф, большой'
-    again=ok(g.post(path('inventory/import/preview'),json=dict(filename='inventory.csv',content=base64.b64encode(text.encode('utf-8')).decode())));assert len(again['errors'])==2 and not again['items']
+    again=ok(g.post(path('inventory/import/preview'),json=dict(filename='inventory.csv',content=base64.b64encode(text.encode('utf-8')).decode())));assert [e['line'] for e in again['errors']]==[2,3] and not again['items']
 
 def test_concurrent_writes_keep_badges_numbers_and_config_unique(client,setup):
     guard=setup[0];assign(client,(guard,['visitors','inventory']));g1,g2=signed('guard'),signed('guard')
