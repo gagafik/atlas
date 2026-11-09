@@ -336,7 +336,7 @@ async function verifyRole(browser, base, role, widthName, shots, report, walk) {
   const lookForOffered = async () => {
     const names = await page.evaluate(() =>
       [...document.querySelectorAll("button")]
-        .filter((button) => button.offsetParent !== null && /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Попробовать на примере|Вернуться в свою школу|Новый учебный год)$/.test((button.textContent || "").trim()))
+        .filter((button) => button.offsetParent !== null && /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Противопожарные учения|Инструктажи по ТБ|Журнал входов|Попробовать на примере|Вернуться в свою школу|Новый учебный год)$/.test((button.textContent || "").trim()))
         .map((button) => button.textContent.trim()),
     );
     for (const name of names) offered.add(name);

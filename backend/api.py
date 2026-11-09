@@ -508,6 +508,11 @@ hall_screen.register(app, Workspace)
 from .registers import Registers
 registers = Registers(access, notifications, portal_stamp)
 registers.register(app, Workspace)
+from .login_journal import register as register_login_journal
+register_login_journal(app, access)
+from .safety import Safety
+safety = Safety(access, portal_stamp)
+safety.register(app, Workspace)
 from .school_sections import register as register_school_sections
 register_school_sections(app, access)
 from .school_years import SchoolYears
