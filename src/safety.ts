@@ -67,6 +67,7 @@ export interface SafetyOptions {
   now: string;
   yearStart: string;
   yearEnd: string;
+  school: string;
   kinds: { id: string; label: string }[];
   classes: { id: string; name: string }[];
   teachers: { id: string; name: string }[];

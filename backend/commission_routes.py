@@ -7,6 +7,7 @@ import uuid
 from fastapi import HTTPException,Query,Request
 from .commission_exams import NewExam,EditExam,Cancel,Result,Decide,Letter,KINDS,STATES,PAGE,stamp,today,conflict,has_table
 from .natural import natural
+from . import school_years
 from .notifications import encoded,student_ids
 
 BASE='/api/behaviour/commission-exams'
@@ -32,6 +33,10 @@ def register(service,app,Workspace):
 
     def label(day):return date.fromisoformat(day).strftime('%d.%m.%Y')
 
+    def sealed(db,workspace,period_id):
+        """An exam of an archived year is read-only: its final grade is frozen, so no new fact may be written about it (409 archivedYear)."""
+        if has_table(db,'journal_periods'):school_years.require_current(db,workspace,service.finals.periods.find(db,workspace,period_id)['start'])
+
     def plan(db,snap,workspace,body):
         """Validate a plan against the school as it is now; returns the stored document."""
         pupil=snap.entities['student'].get(body.studentId)
@@ -42,6 +47,7 @@ def register(service,app,Workspace):
         if any(id not in names['teachers'] for id in people):raise HTTPException(422,'Комиссию составляют учителя школы.')
         if not has_table(db,'journal_periods'):raise HTTPException(404,'Учебный период не найден.')
         period=service.finals.periods.find(db,workspace,body.periodId)
+        school_years.require_current(db,workspace,period['start'])
         if body.day>today()+timedelta(days=366) or body.day<today()-timedelta(days=366):raise HTTPException(422,'Дата экзамена — не дальше года от сегодняшнего дня.')
         return dict(kind=body.kind,reason=body.reason.strip(),student=pupil.name,className=names['classes'].get(pupil.classId,''),subject=names['subjects'][body.subjectId],period=period['name'],
                     start=body.start,end=body.end,roomId=body.roomId,room=names['rooms'][body.roomId],chairmanId=body.chairmanId,examinerId=body.examinerId,memberIds=list(body.memberIds),
@@ -59,7 +65,7 @@ def register(service,app,Workspace):
                    (version,stamp(),status,encoded(data),columns.get('day',row['day']),encoded(members_of(data)),row['workspace'],row['id']))
 
     def staff_card(db,user,snap,workspace,id):
-        return service.public(service.exam(db,workspace,id),snap,user)
+        return service.public(service.exam(db,workspace,id),snap,user,service.sealed(db,workspace))
 
     @app.get(BASE+'/options')
     def options(request:Request,workspace:Workspace='school'):
@@ -94,8 +100,8 @@ def register(service,app,Workspace):
             for column,value in [('status',status),('period_id',periodId),('class_id',classId)]:
                 if value:clause+=f' AND {column}=?';params.append(value)
             if before:clause+=' AND seq<?';params.append(before)
-            rows=db.execute(f'SELECT * FROM commission_exams WHERE {clause} ORDER BY seq DESC LIMIT {PAGE+1}',params).fetchall()
-            return dict(items=[service.public(dict(r)|dict(data=json.loads(r['document'])),snap,user) for r in rows[:PAGE]],nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)
+            rows=db.execute(f'SELECT * FROM commission_exams WHERE {clause} ORDER BY seq DESC LIMIT {PAGE+1}',params).fetchall();locked=service.sealed(db,workspace)
+            return dict(items=[service.public(dict(r)|dict(data=json.loads(r['document'])),snap,user,locked) for r in rows[:PAGE]],nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)
 
     @app.post(BASE)
     def create(body:NewExam,request:Request,workspace:Workspace='school'):
@@ -114,7 +120,7 @@ def register(service,app,Workspace):
     @app.put(BASE+'/{id}')
     def edit(id:str,body:EditExam,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
-            admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'planned')
+            admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'planned');sealed(db,workspace,row['period_id'])
             data=plan(db,snap,workspace,body);duplicate(db,workspace,body,id)
             pupil=snap.entities['student'][body.studentId];version=row['version']+1
             before=members_of(row['data'])
@@ -128,6 +134,7 @@ def register(service,app,Workspace):
     def cancel(id:str,body:Cancel,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
             admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'planned','held')
+            if row['status']=='held':sealed(db,workspace,row['period_id'])
             data=row['data']|dict(cancelReason=body.reason.strip());version=row['version']+1
             save(db,row,data,'cancelled',version)
             service.history(db,workspace,user,id,'cancelled',body.reason.strip(),dict(version=version))
@@ -137,7 +144,7 @@ def register(service,app,Workspace):
     def result(id:str,body:Result,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
             if user['role']=='admin':raise HTTPException(403,'Результат вносит комиссия.')
-            row=service.staff_exam(db,user,snap,workspace,id);check(row,body.version);need(row,'planned','held')
+            row=service.staff_exam(db,user,snap,workspace,id);check(row,body.version);need(row,'planned','held');sealed(db,workspace,row['period_id'])
             if date.fromisoformat(row['day'])>today():raise conflict('not_yet','Результат вносят в день экзамена или позже.')
             scale=None
             if body.outcome=='graded':
@@ -159,10 +166,10 @@ def register(service,app,Workspace):
             admin(user)
             key,previous=service.replay(db,user,body,id)
             if previous:return previous
-            row=service.exam(db,workspace,id);check(row,body.version);need(row,'held')
+            row=service.exam(db,workspace,id);check(row,body.version);need(row,'held');sealed(db,workspace,row['period_id'])
             if body.writeFinal and row['data']['result']['outcome']!='graded':raise HTTPException(422,'Не явившемуся итог не ставится: отметьте «без записи в итог» и укажите причину.')
             final=service.write_final(db,workspace,user,row,body) if body.writeFinal else dict(status='skipped',reason=body.reason.strip())
-            data=row['data']|dict(decision=dict(decidedBy=user['name'],decidedAt=stamp(),final=final,reason=body.reason.strip()));version=row['version']+1
+            data=row['data']|dict(decision=dict(decidedBy=user['name'],decidedAt=stamp(),final=final,reason=body.reason.strip(),className=service.public(row,snap,user)['className']));version=row['version']+1
             save(db,row,data,'decided',version)
             service.history(db,workspace,user,id,'decided',body.reason.strip(),dict(final=final,version=version))
             return service.remember(db,user,body,key,staff_card(db,user,snap,workspace,id)|dict(final=final))
@@ -172,7 +179,7 @@ def register(service,app,Workspace):
         with service.context(request,workspace,True) as (db,user,snap):
             admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'decided')
             number=service.behaviour.letter_number(db,workspace);sent=stamp();version=row['version']+1
-            data=row['data']|dict(letter=dict(number=number,sentAt=sent,sentBy=user['name']))
+            data=row['data']|dict(letter=dict(number=number,sentAt=sent,sentBy=user['name'],className=row['data']['decision'].get('className',service.public(row,snap,user)['className'])))
             save(db,row,data,'letter_sent',version)
             service.history(db,workspace,user,id,'letter_sent','',dict(number=number,version=version))
             pupil=snap.entities['student'].get(row['student_id']);name=pupil.name if pupil else data['student']
@@ -201,7 +208,7 @@ def register(service,app,Workspace):
             if row['status']=='cancelled':raise conflict('status','Экзамен отменён.')
             card=service.public(row,snap,user)
             keys=['kindTitle','reason','student','className','subject','period','day','start','end','room','chairman','examiner','members']
-            return {k:card[k] for k in keys}|dict(school=snap.state.settings.name,result=card['result'])
+            return {k:card[k] for k in keys}|dict(className=(row['data'].get('decision') or {}).get('className',row['data'].get('className',card['className'])),school=snap.state.settings.name,result=card['result'])
 
     @app.get(BASE+'/{id}/letter')
     def letter_text(id:str,request:Request,workspace:Workspace='school'):
@@ -209,7 +216,7 @@ def register(service,app,Workspace):
             row=service.family_exam(db,user,snap,workspace,id) if user['role'] in ['parent','student'] else service.staff_exam(db,user,snap,workspace,id)
             if row['status']!='letter_sent':raise conflict('status','Письмо ещё не отправлено.')
             data=row['data'];card=service.public(row,snap,dict(role='admin'))
-            return dict(school=snap.state.settings.name,number=data['letter']['number'],sentAt=data['letter']['sentAt'],student=card['student'],className=card['className'],subject=card['subject'],
+            return dict(school=snap.state.settings.name,number=data['letter']['number'],sentAt=data['letter']['sentAt'],student=card['student'],className=data['letter'].get('className',card['className']),subject=card['subject'],
                         period=card['period'],kindTitle=card['kindTitle'],day=row['day'],outcome=data['result']['outcome'],label=data['result']['label'],passed=data['result']['passed'],
                         chairman=card['chairman']['name'],decidedBy=data['decision']['decidedBy'])
 

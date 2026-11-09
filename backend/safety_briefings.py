@@ -9,6 +9,7 @@ from pydantic import Field,model_validator
 from .models import Model
 from .notifications import encoded
 from .safety import ZONE
+from . import school_years
 
 KINDS=[('introductory','Вводный'),('primary','Первичный'),('repeated','Повторный'),('unscheduled','Внеплановый'),('targeted','Целевой')]
 # Only these two kinds meet the requirement that every person is briefed again in the period.
@@ -84,9 +85,11 @@ def register(s,app,Workspace):
         history=[dict(action=h['action'],actor=h['actor_name'],created=h['created'],reason=h['reason']) for h in db.execute('SELECT * FROM safety_history WHERE workspace=? AND briefing_id=? ORDER BY seq DESC LIMIT 20',(workspace,row['id']))]
         count=[sum(p['present'] for p in people),sum(not p['present'] for p in people)]
         return short(row,count)|dict(status=row['status'],note=doc['note'],conductorTeacherId=doc['conductor']['teacherId'],people=people,history=history)
-    def checked(snap,data):
+    def checked(db,workspace,snap,data):
+        # Not in the future and after the archived years; before the first rollover also not before the year start. Summer briefings between two years are recordable.
         today=s.today();state=snap.state
-        if data.heldOn>today or not state.settings.yearStart<=data.heldOn<=state.settings.yearEnd:raise HTTPException(422,'Дата инструктажа — не в будущем и в пределах учебного года.')
+        if data.heldOn>today or (not school_years.archived(db,workspace) and data.heldOn<state.settings.yearStart):raise HTTPException(422,'Дата инструктажа — не в будущем и не раньше начала учебного года.')
+        school_years.require_current(db,workspace,data.heldOn.isoformat())
         if data.conductorTeacherId:
             found=snap.entities['teacher'].get(data.conductorTeacherId)
             if not found:raise HTTPException(422,'Преподаватель не найден в расписании.')
@@ -97,7 +100,7 @@ def register(s,app,Workspace):
     def options(request:Request,workspace:Workspace='school'):
         with s.context(request,workspace) as (db,u,snap):
             s.admin(u);state=snap.state;local=s.now().astimezone(ZONE)
-            return dict(today=s.today().isoformat(),now=local.strftime('%Y-%m-%dT%H:%M'),yearStart=state.settings.yearStart.isoformat(),yearEnd=state.settings.yearEnd.isoformat(),
+            return dict(today=s.today().isoformat(),now=local.strftime('%Y-%m-%dT%H:%M'),yearStart=state.settings.yearStart.isoformat(),yearEnd=state.settings.yearEnd.isoformat(),school=state.settings.name,
                         kinds=[dict(id=k,label=l) for k,l in KINDS],classes=[dict(id=c.id,name=c.name) for c in state.classes],
                         teachers=sorted((dict(id=t.id,name=t.name) for t in state.teachers),key=lambda t:t['name']))
 
@@ -113,7 +116,7 @@ def register(s,app,Workspace):
         with s.context(request,workspace,True) as (db,u,snap):
             s.admin(u);key,old=s.replay(db,u,body,'create:'+workspace)
             if old:return old
-            conductor=checked(snap,body);people=[]
+            conductor=checked(db,workspace,snap,body);people=[]
             if body.audience=='class':
                 found=snap.entities['class_'].get(body.classId)
                 if not found:raise HTTPException(422,'Класс не найден.')
@@ -162,7 +165,8 @@ def register(s,app,Workspace):
             if old:return old
             row=stored(db,workspace,id)
             if row['version']!=body.version or row['status']!='active':raise HTTPException(409,'Запись изменилась. Обновите данные перед действием.')
-            conductor=checked(snap,body)
+            school_years.require_current(db,workspace,row['held_on'])
+            conductor=checked(db,workspace,snap,body)
             members={r['person_id']:r['present'] for r in db.execute('SELECT person_id,present FROM safety_briefing_people WHERE briefing_id=?',(id,))}
             if set(body.absentIds)-members.keys():raise HTTPException(422,'Отсутствующие должны быть среди участников.')
             doc=json.loads(row['document']);before=dict(kind=row['kind'],heldOn=row['held_on'],topic=doc['topic'],absentIds=sorted(i for i,p in members.items() if not p))
@@ -180,6 +184,7 @@ def register(s,app,Workspace):
             if old:return old
             row=stored(db,workspace,id)
             if row['version']!=body.version or row['status']!='active':raise HTTPException(409,'Запись изменилась. Обновите данные перед действием.')
+            school_years.require_current(db,workspace,row['held_on'])
             db.execute("UPDATE safety_briefings SET version=version+1,status='withdrawn',updated=? WHERE workspace=? AND id=?",(s.now().isoformat(),workspace,id))
             s.history(db,workspace,id,u,'withdrawn',body.reason,{})
             s.access.record(db,'safety.briefing_withdrawn',workspace,detail=id,principal=u)

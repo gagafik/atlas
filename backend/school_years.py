@@ -264,6 +264,18 @@ class SchoolYears:
         except sqlite3.OperationalError as error:
             missing(error); return []
 
+    def pending_exams(self, db, workspace, state):
+        """Commission exams of the ending year still waiting for a decision: afterwards their final grade cannot be written."""
+        try:
+            rows = db.execute("SELECT e.document FROM commission_exams e JOIN journal_periods p ON p.workspace=e.workspace AND p.id=e.period_id WHERE e.workspace=? AND e.status IN ('planned','held') AND p.start_day>=? AND p.end_day<=? ORDER BY e.seq",
+                              (workspace, state.settings.yearStart.isoformat(), state.settings.yearEnd.isoformat())).fetchall()
+        except sqlite3.OperationalError as error:
+            missing(error); return []
+        found = []
+        for (document,) in rows:
+            d = json.loads(document); found.append(f"{d['student']} ({d['className']}): {d['subject']}, {d['period']}")
+        return found
+
     def draft(self, db, workspace):
         try: row = db.execute('SELECT version,document FROM school_year_plans WHERE workspace=?', (workspace,)).fetchone()
         except sqlite3.OperationalError as error:
@@ -333,7 +345,7 @@ class SchoolYears:
             state = self.access.read(workspace)
             if state.revision != body.revision: raise HTTPException(409, 'Данные изменились в другом окне. Обновите страницу.')
             with self.access.read_connect() as db:
-                db.execute('BEGIN'); warnings = dict(openPeriods=self.open_periods(db, workspace, state))
+                db.execute('BEGIN'); warnings = dict(openPeriods=self.open_periods(db, workspace, state), commissionExams=self.pending_exams(db, workspace, state))
             candidate, summary, problems = next_state(state, body.plan)
             return dict(summary=summary, problems=problems, warnings=warnings, canApply=not problems, canStart=today() > state.settings.yearEnd)
 
@@ -358,7 +370,8 @@ class SchoolYears:
                 candidate, summary, problems = next_state(before, body.plan)
                 if problems: raise refusal(422, 'План нового года не готов к запуску.', 'plan', problems=problems)
                 open_names = self.open_periods(db, workspace, before)
-                if open_names and not body.acknowledgeWarnings: raise refusal(422, 'Есть открытые периоды текущего года.', 'warnings', warnings=dict(openPeriods=open_names))
+                exam_names = self.pending_exams(db, workspace, before)
+                if (open_names or exam_names) and not body.acknowledgeWarnings: raise refusal(422, 'Есть открытые периоды или нерешённые комиссионные экзамены текущего года.', 'warnings', warnings=dict(openPeriods=open_names, commissionExams=exam_names))
                 old = current(db, workspace, before)
                 stamp = now().isoformat()
                 db.execute('INSERT INTO history (workspace,created,document) VALUES (?,?,?)', (workspace, datetime.now(timezone.utc).isoformat(), found[1]))

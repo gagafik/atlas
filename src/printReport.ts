@@ -53,4 +53,5 @@ export const DRILL_PRINT =
 
 // The register page of a briefing: the signature column stays empty and is drawn with borders.
 export const BRIEFING_PRINT =
+  LETTERHEAD_PRINT +
   "body{font:14px sans-serif;padding:24px;color:#000;background:#fff}h2,h3,p{margin:8px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:6px 8px;text-align:left}.sf-sign{display:table-cell;width:30%;height:28px}.sf-printonly{display:block}thead{display:table-header-group}tr{break-inside:avoid}button{display:none}";

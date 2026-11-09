@@ -293,6 +293,10 @@ export default function Shell({
   const yearNow = years?.items.find((y) => y.current),
     yearShown = years?.items.find((y) => y.id === years.selected);
   const archive = !!yearNow && !!yearShown && yearShown.id !== yearNow.id;
+  // The choice is offered only to a role that has a screen with a past year in its menu (the editor and the viewer have none).
+  const pastYears = menuItems(menu).some(
+    (item) => yearScreen(item.target, frame.context.role) === "shown",
+  );
   useEffect(() => setNotice(null), [years?.selected]);
   const accountBox = useRef<HTMLDivElement>(null),
     accountToggle = useRef<HTMLButtonElement>(null),
@@ -668,7 +672,7 @@ export default function Shell({
               <PanelLeftClose size={19} />
             </button>
             <strong>{school || "Атлас"}</strong>
-            {years && years.items.length > 1 ? (
+            {years && years.items.length > 1 && pastYears ? (
               <select
                 className="year-switch"
                 aria-label="Учебный год"
@@ -678,7 +682,6 @@ export default function Shell({
                 {years.items.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
-                    {item.current ? " (текущий)" : ""}
                   </option>
                 ))}
               </select>

@@ -11,6 +11,7 @@ from .access import now
 from .journal import user_ids
 from .models import Model
 from .notifications import encoded,late_opener,student_ids
+from . import school_years
 
 KINDS={'reexam':'Пересдача после неудовлетворительной итоговой оценки','family':'Семейное или домашнее обучение','transfer':'После перевода','appeal':'Апелляция оценки'}
 STATES={'planned':'Запланирован','held':'Проведён','decided':'Решение принято','letter_sent':'Письмо отправлено','cancelled':'Отменён'}
@@ -143,9 +144,14 @@ class CommissionExams:
 
     def person(self,id,data,names):return dict(id=id,name=names['teachers'].get(id) or data.get('names',{}).get(id,''))
 
-    def public(self,row,snap,user):
+    def sealed(self,db,workspace):
+        """Ids of the periods lying in archived years; their exams offer no actions."""
+        until=school_years.archived_until(db,workspace) if has_table(db,'journal_periods') else None
+        return {r[0] for r in db.execute('SELECT id FROM journal_periods WHERE workspace=? AND start_day<=?',(workspace,until))} if until else set()
+
+    def public(self,row,snap,user,sealed=frozenset()):
         data=row['data'];names=self.names(snap);pupil=snap.entities['student'].get(row['student_id']);members=json.loads(row['members'])
-        mine=self.mine(user,snap,row['workspace']) & set(members);admin=user['role']=='admin';status=row['status']
+        mine=self.mine(user,snap,row['workspace']) & set(members);locked=row['period_id'] in sealed;admin=user['role']=='admin';status=row['status']
         result=data.get('result');decision=data.get('decision')
         return dict(id=row['id'],version=row['version'],status=status,statusTitle=STATES[status],kind=data['kind'],kindTitle=KINDS[data['kind']],reason=data['reason'],
             studentId=row['student_id'],student=pupil.name if pupil else data['student'],classId=row['class_id'],className=names['classes'].get(row['class_id'],data['className']),
@@ -155,8 +161,8 @@ class CommissionExams:
             result=None if not result else {k:result[k] for k in ['outcome','label','passed','tasks','notes','by','at']}|dict(scaleName=result['scale']['name'] if result.get('scale') else ''),
             decision=None if not decision else {k:decision[k] for k in ['decidedBy','decidedAt','final','reason']},
             letter=data.get('letter'),cancelReason=data.get('cancelReason',''),
-            canEdit=admin and status=='planned',canCancel=admin and status in ['planned','held'],canResult=bool(mine) and status in ['planned','held'],
-            canDecide=admin and status=='held',canSendLetter=admin and status=='decided')
+            canEdit=admin and status=='planned' and not locked,canCancel=admin and (status=='planned' or (status=='held' and not locked)),canResult=bool(mine) and status in ['planned','held'] and not locked,
+            canDecide=admin and status=='held' and not locked,canSendLetter=admin and status=='decided')
 
     def family_view(self,row,snap):
         data=row['data'];result=data['result'];decision=data['decision'];letter=data.get('letter')
