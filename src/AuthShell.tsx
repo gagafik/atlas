@@ -15,6 +15,7 @@ import InvitationForm from "./InvitationForm";
 import SchoolLogo from "./SchoolLogo";
 import { logoutPushFingerprint, unsubscribeBrowser } from "./push";
 import { canLeaveHomework } from "./homeworkNavigation";
+import { LoginGrid } from "./BrandGrid";
 import { useLaunch } from "./launch";
 import type { AccountId, ModalId } from "./navigation";
 import type { ShellFrame } from "./Shell";
@@ -378,6 +379,7 @@ export default function AuthShell() {
   if (session.enabled && !session.user)
     return (
       <main className="auth-screen">
+        <LoginGrid />
         <header className="auth-brand">
           <SchoolLogo />
           <p>Атлас · школьная платформа</p>

@@ -154,7 +154,7 @@ def register(s,app,Workspace):
             row=s.document(db,workspace,id);s.require(db,row,user,snap,workspace)
             if row['status'] not in ['issued','revoked']:raise HTTPException(409,'Печать доступна после выдачи документа.')
             html=s.html(row)
-        return HTMLResponse(html,headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':('attachment' if download else 'inline')+f'; filename="document-{row["id"]}.html"','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox allow-modals"})
+        return HTMLResponse(html,headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':('attachment' if download else 'inline')+f'; filename="document-{row["id"]}.html"','Content-Security-Policy':"default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox allow-modals"})
 
     @app.get('/api/documents/export')
     def export(request:Request,year:int=Query(ge=1,le=9998),workspace:Workspace='school'):

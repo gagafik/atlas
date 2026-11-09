@@ -5,6 +5,7 @@ import hashlib,json,sqlite3
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from .access import now
+from .letterhead import CSS as LETTERHEAD_CSS, letterhead
 from .portal_cache import PortalSnapshots
 from .school_forms import enabled,grant_ids
 from .notifications import encoded,permission_key
@@ -195,7 +196,7 @@ class SchoolDocuments:
     def html(self,row):
         snapshot=row['content']['snapshot'];revoked=row['status']=='revoked'
         warning='<aside><strong>ДОКУМЕНТ ОТОЗВАН</strong><p>'+escape(row['content'].get('revocationReason',''))+'</p></aside>' if revoked else ''
-        return '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(snapshot['title'])+'</title><style>body{font:16px/1.5 serif;margin:24px auto;padding:20px;max-width:800px;color:#111}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}aside{border:3px solid #a00;padding:16px;color:#a00}header{border-bottom:1px solid #777}footer{font-size:12px;color:#555;margin-top:32px}@media print{body{margin:0;padding:0}aside{color:#000;border-color:#000}}</style><body>'+warning+'<header><p>'+escape(snapshot['schoolName'])+'</p><h1>'+escape(snapshot['title'])+'</h1><p>№ '+escape(snapshot['number'])+' · '+escape(snapshot['date'])+'</p></header><pre>'+escape(snapshot['text'])+'</pre><footer>Сохранённая копия из Атласа. Статус выдачи следует проверять в школьном архиве. Электронная подпись не добавлена.</footer></body></html>'
+        return '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(snapshot['title'])+'</title><style>body{font:16px/1.5 serif;margin:24px auto;padding:20px;max-width:800px;color:#111}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}aside{border:3px solid #a00;padding:16px;color:#a00}header:not(.letterhead){border-bottom:1px solid #777}footer{font-size:12px;color:#555;margin-top:32px}@media print{body{margin:0;padding:0}aside{color:#000;border-color:#000}}'+LETTERHEAD_CSS+'</style><body>'+warning+letterhead(snapshot['schoolName'])+'<header><h1>'+escape(snapshot['title'])+'</h1><p>№ '+escape(snapshot['number'])+' · '+escape(snapshot['date'])+'</p></header><pre>'+escape(snapshot['text'])+'</pre><footer>Сохранённая копия из Атласа. Статус выдачи следует проверять в школьном архиве. Электронная подпись не добавлена.</footer></body></html>'
 
     def register(self,app,Workspace):
         from .document_routes import register

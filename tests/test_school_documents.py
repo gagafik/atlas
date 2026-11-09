@@ -104,8 +104,10 @@ def test_plain_text_html_escape_csv_formula_and_required_fields(client,setup):
     t,*_=setup;item=new(client,t)
     assert client.get(path('items/'+item['id']+'/preview')).status_code==422
     assert client.put(path('items/'+item['id']),json=body(version=item['version'],values=dict(personName='forged'))).status_code==422
+    state=api.read('demo');state.settings.name='<i>Школа</i> & Co';api.save('demo',state)
     item=save(client,item,purpose='<script>alert(1)</script> & secret');item=ok(issue(client,item));html=client.get(path('items/'+item['id']+'/print')).text
     assert '&lt;script&gt;' in html and '<script>' not in html
+    assert '&lt;i&gt;Школа&lt;/i&gt; &amp; Co' in html and '<i>Школа' not in html
     t=ok(client.post(path('templates'),json=body(version=0,definition=definition(title='=SECRET()'),active=True)));new(client,t)
     csv=client.get(path('export?year=2026'));assert csv.content.startswith(b'\xef\xbb\xbf') and "'=SECRET()" in csv.text
     assert signed('parent').get(path('export?year=2026')).status_code==403
