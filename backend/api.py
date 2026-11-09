@@ -471,6 +471,8 @@ lost_found.register(app, Workspace)
 from .behaviour import Behaviour
 behaviour = Behaviour(access, notifications, portal_stamp)
 behaviour.register(app, Workspace)
+from .commission_exams import CommissionExams
+CommissionExams(behaviour, final_grades).register(app, Workspace)
 from .assessment_calendar import AssessmentCalendar
 assessment_calendar = AssessmentCalendar(access, notifications, portal_stamp)
 assessment_calendar.register(app, Workspace)

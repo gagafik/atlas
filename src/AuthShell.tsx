@@ -121,11 +121,14 @@ export default function AuthShell() {
   useLaunch(["measure"], () =>
     setBehaviourPrefill({ studentIds: [], measure: true }),
   );
+  // The section of the records a notification leads to («commission»).
+  const [behaviourSection, setBehaviourSection] = useState<string>();
   useEffect(() => {
     const open = (event: Event) => {
       const detail = (event as CustomEvent).detail;
       setModalChild(detail?.studentId);
       setBehaviourPrefill(detail?.prefill);
+      setBehaviourSection(detail?.section);
       setBehaviourWorkspace(detail?.workspace || "school");
     };
     window.addEventListener("atlas-open-behaviour", open);
@@ -736,9 +739,11 @@ export default function AuthShell() {
             initialWorkspace={behaviourWorkspace}
             studentId={modalChild}
             prefill={behaviourPrefill}
+            initialTab={behaviourSection}
             onClose={() => {
               setBehaviourWorkspace(null);
               setBehaviourPrefill(undefined);
+              setBehaviourSection(undefined);
               // The counts of the gradebook follow the notes written in the form.
               window.dispatchEvent(new Event("atlas-behaviour-closed"));
             }}

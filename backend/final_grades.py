@@ -255,6 +255,38 @@ class FinalGrades:
         row['status']='submitted' if submit else 'draft';self.save(db,workspace,row,user,'submitted' if submit else 'saved')
         return row
 
+    def step(self,db,workspace,user,row,action,teacherId='',reason=''):
+        """One row through one action; the commission exams module writes its final grade with the same step. Returns the notify key of a publication or a withdrawal."""
+        key=None
+        book=self.book(db,workspace,row['bookId'],action!='withdraw')
+        if action=='assign':
+            if row['status']!='draft':raise HTTPException(409,'Назначение меняется только в черновике.')
+            row['assigned']=teacherId
+        elif action=='approve':
+            if row['status']!='submitted':raise HTTPException(409,'Утверждать можно только отправленные итоги.')
+            row['status']='approved';row['proposal']['approval']=dict(actor=user['name'],created=now().isoformat())
+        elif action in ['return','reopen']:
+            allowed=['submitted','approved'] if action=='return' else ['published']
+            if row['status'] not in allowed:raise HTTPException(409,'Статус не позволяет это действие.')
+            row['status']='draft'
+            if row['proposal']:row['proposal'].pop('approval',None)
+        elif action=='publish':
+            if row['status']!='approved':raise HTTPException(409,'Публиковать можно только утверждённые итоги.')
+            public=public_result(row,book)
+            db.execute('INSERT INTO final_results VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace,period_id,student_id,subject_id) DO UPDATE SET row_id=excluded.row_id,version=excluded.version,document=excluded.document',(workspace,book['period']['id'],row['studentId'],row['subjectId'],row['id'],row['version']+1,encoded(public)))
+            row['status']='published';key=(book['period']['id'],book['period']['name'],row['studentId'],row['source']['student']['name'],row['source']['subject'])
+        elif action=='withdraw':
+            school_years.require_current(db,workspace,book['period']['start'])
+            current=db.execute('SELECT row_id FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId'])).fetchone()
+            if not current or current[0]!=row['id']:raise HTTPException(409,'У этой строки нет действующей публикации.')
+            db.execute('DELETE FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId']))
+            row['status']='draft'
+            if row['proposal']:row['proposal'].pop('approval',None)
+            key=(book['period']['id'],book['period']['name'],row['studentId'],row['source']['student']['name'],row['source']['subject'])
+        # Only these actions carry a reason; approve, publish and assign never store a stale one.
+        self.save(db,workspace,row,user,action,reason if action in ['return','reopen','withdraw'] else '')
+        return key
+
     def notify(self,db,workspace,withdrawn,revision,period_id,period_name,student,name,subjects):
         """One entry per child and period. The title names the subjects and, for a publication, the grades; a withdrawal names neither a grade nor a reason and leads nowhere."""
         def listing(head,parts):return head+(': '+', '.join(parts[:3])+(f' и ещё {len(parts)-3}' if len(parts)>3 else '') if parts else '')
@@ -434,33 +466,9 @@ class FinalGrades:
                 if body.action=='assign' and body.teacherId and body.teacherId not in {t['id'] for t in self.teachers(db,workspace,snap)}:raise HTTPException(422,'Выберите действующую учётную запись учителя.')
                 changed={};results=[]
                 for item in body.rows:
-                    row=self.row(db,workspace,item.id,user,item.version);book=self.book(db,workspace,row['bookId'],body.action!='withdraw')
-                    if body.action=='assign':
-                        if row['status']!='draft':raise HTTPException(409,'Назначение меняется только в черновике.')
-                        row['assigned']=body.teacherId
-                    elif body.action=='approve':
-                        if row['status']!='submitted':raise HTTPException(409,'Утверждать можно только отправленные итоги.')
-                        row['status']='approved';row['proposal']['approval']=dict(actor=user['name'],created=now().isoformat())
-                    elif body.action in ['return','reopen']:
-                        allowed=['submitted','approved'] if body.action=='return' else ['published']
-                        if row['status'] not in allowed:raise HTTPException(409,'Статус не позволяет это действие.')
-                        row['status']='draft'
-                        if row['proposal']:row['proposal'].pop('approval',None)
-                    elif body.action=='publish':
-                        if row['status']!='approved':raise HTTPException(409,'Публиковать можно только утверждённые итоги.')
-                        public=public_result(row,book)
-                        db.execute('INSERT INTO final_results VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace,period_id,student_id,subject_id) DO UPDATE SET row_id=excluded.row_id,version=excluded.version,document=excluded.document',(workspace,book['period']['id'],row['studentId'],row['subjectId'],row['id'],row['version']+1,encoded(public)))
-                        row['status']='published';changed.setdefault((book['period']['id'],book['period']['name'],row['studentId'],row['source']['student']['name']),[]).append(row['source']['subject'])
-                    elif body.action=='withdraw':
-                        school_years.require_current(db,workspace,book['period']['start'])
-                        current=db.execute('SELECT row_id FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId'])).fetchone()
-                        if not current or current[0]!=row['id']:raise HTTPException(409,'У этой строки нет действующей публикации.')
-                        db.execute('DELETE FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId']))
-                        row['status']='draft'
-                        if row['proposal']:row['proposal'].pop('approval',None)
-                        changed.setdefault((book['period']['id'],book['period']['name'],row['studentId'],row['source']['student']['name']),[]).append(row['source']['subject'])
-                    # Only these actions carry a reason; approve, publish and assign never store a stale one.
-                    self.save(db,workspace,row,user,body.action,body.reason if body.action in ['return','reopen','withdraw'] else '');results.append(row)
+                    row=self.row(db,workspace,item.id,user,item.version);key=self.step(db,workspace,user,row,body.action,body.teacherId,body.reason)
+                    if key:changed.setdefault(key[:4],[]).append(key[4])
+                    results.append(row)
                 for (period_id,period_name,student,name),subjects in changed.items():
                     self.notify(db,workspace,body.action=='withdraw',max(r['version'] for r in results),period_id,period_name,student,name,subjects)
                 return dict(items=results)

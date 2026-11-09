@@ -126,6 +126,7 @@ class Behaviour:
     def __init__(self,access,notifications,stamp):
         self.access,self.notifications=access,notifications
         self.snapshots=PortalSnapshots(access.read,stamp)
+        self.commission=None  # set by the commission exams module, which builds on this one
 
     def prepare(self):
         with closing(self.access.read_connect()) as db:

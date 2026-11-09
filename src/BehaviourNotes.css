@@ -203,6 +203,18 @@
 .bn-sign {
   margin-top: 24px !important;
 }
+.bn-signatures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px 24px;
+  margin-top: 40px;
+}
+.bn-signatures span {
+  flex: 1 1 220px;
+  border-top: 1px solid var(--text);
+  padding-top: 4px;
+  font-size: 0.9em;
+}
 @media print {
   body * {
     visibility: hidden;
@@ -212,6 +224,15 @@
     max-height: none;
     border: 0;
     padding: 0;
+    background: white;
+    color: black;
+  }
+  .bn-letter {
+    background: white;
+    color: black;
+  }
+  .bn-signatures span {
+    border-top-color: black;
   }
   .bn-letter,
   .bn-letter * {

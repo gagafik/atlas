@@ -4,9 +4,9 @@ export function errorText(detail: unknown): string {
     return detail
       .map((x: any) => String(x?.msg ?? "").replace(/^Value error, /, ""))
       .join("\n");
-  // Refusals with a reason (an archived school year) carry the sentence next to the code.
-  if (detail && typeof (detail as { message?: unknown }).message === "string")
-    return (detail as { message: string }).message;
+  // Refusals with a code (an archived school year, a commission conflict) carry the sentence next to it: the screen reads the code, the person reads the message.
+  if (detail && typeof detail === "object" && "message" in detail)
+    return String((detail as { message: unknown }).message);
   return "Не удалось выполнить действие.";
 }
 export async function api(
