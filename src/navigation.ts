@@ -27,7 +27,10 @@ export type ModalId =
   | "consultations"
   | "hall"
   | "sections"
-  | "operations";
+  | "operations"
+  | "drill"
+  | "briefings"
+  | "logins";
 export type AccountId =
   "family" | "invitation" | "password" | "recovery" | "app" | "signOut";
 export type Container = "app" | "portal" | "staff";
@@ -347,6 +350,15 @@ const ITEMS: Record<string, Spec> = {
   operations: dialog("Состояние сервера", "operations", "operations", (ctx) =>
     signed(ctx, ["admin"]),
   ),
+  logins: dialog("Журнал входов", "logins", "logins", (ctx) =>
+    signed(ctx, ["admin"]),
+  ),
+  drill: dialog("Противопожарные учения", "drill", "drill", (ctx) =>
+    signed(ctx, ["admin"]),
+  ),
+  briefings: dialog("Инструктажи по ТБ", "briefings", "briefings", (ctx) =>
+    signed(ctx, ["admin"]),
+  ),
 };
 
 // A slot of a layout is an item id, or an item with another label or target for this role.
@@ -433,9 +445,12 @@ const LAYOUTS: Record<string, Layout> = {
         "rooms",
         "subjects",
         "registers",
+        "briefings",
       ]),
       group("control", "Центр управления", "control", [
         "access",
+        "logins",
+        "drill",
         "settings",
         "school-year",
         "periods",
