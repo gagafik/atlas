@@ -50,7 +50,7 @@ interface Problem {
 interface Preview {
   summary: Summary | null;
   problems: Problem[];
-  warnings: { openPeriods: string[] };
+  warnings: { openPeriods: string[]; commissionExams?: string[] };
   canApply: boolean;
   canStart: boolean;
 }
@@ -242,8 +242,9 @@ export default function SchoolYearPanel({
     .reduce((n, c) => n + c.pupils, 0);
   const summary = preview?.summary;
   const warnings = preview?.warnings.openPeriods ?? [];
+  const exams = preview?.warnings.commissionExams ?? [];
   const ready =
-    !!preview?.canApply && !!preview.canStart && (!warnings.length || ack);
+    !!preview?.canApply && !!preview.canStart && (!(warnings.length || exams.length) || ack);
   return (
     <section className="year-wizard" aria-label="Новый учебный год">
       <p className="info-line">
@@ -552,15 +553,18 @@ export default function SchoolYearPanel({
                   </p>
                 </div>
               )}
-              {!!warnings.length && (
+              {!!(warnings.length || exams.length) && (
                 <label className="year-ack">
                   <input
                     type="checkbox"
                     checked={ack}
                     onChange={(e) => setAck(e.target.checked)}
                   />{" "}
-                  Понимаю: открытые периоды текущего года после запуска изменить
-                  нельзя ({warnings.join(", ")})
+                  Понимаю: после запуска нельзя изменить
+                  {!!warnings.length &&
+                    ` открытые периоды текущего года (${warnings.join(", ")})`}
+                  {!!exams.length &&
+                    ` и записать итоговую оценку по нерешённым комиссионным экзаменам (${exams.join("; ")})`}
                 </label>
               )}
               {!preview.canStart && (
