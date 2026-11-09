@@ -51,7 +51,7 @@ def register(service,app,Workspace):
             pending=db.execute("SELECT count(*) FROM behaviour_notes WHERE workspace=? AND status='pending'",(workspace,)).fetchone()[0] if user['role']=='admin' else 0
             return dict(admin=user['role']=='admin',canWrite=bool(allowed),family=bool(own) and not allowed,canAcknowledge=user['role']=='parent',
                         today=today().isoformat(),kinds=KINDS,levels=LEVELS,myLevels=sorted(service.levels(db,user,snap,workspace)),
-                        myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,
+                        myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,commission=service.commission.flags(db,user,snap,workspace) if service.commission else None,
                         configVersion=cfg['version'] if user['role']=='admin' else None,
                         classes=[dict(id=id,name=name) for id,name in classes.items() if any(s.classId==id for s in pupils)],
                         students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes.get(s.classId,'')) for s in pupils])

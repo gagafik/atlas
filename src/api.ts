@@ -4,6 +4,9 @@ export function errorText(detail: unknown): string {
     return detail
       .map((x: any) => String(x?.msg ?? "").replace(/^Value error, /, ""))
       .join("\n");
+  // Some conflicts carry a code next to the message: the screen reads the code, the person reads the message.
+  if (detail && typeof detail === "object" && "message" in detail)
+    return String((detail as { message: unknown }).message);
   return "Не удалось выполнить действие.";
 }
 export async function api(
@@ -31,6 +34,7 @@ export async function api(
       window.dispatchEvent(new Event("atlas-auth-required"));
     throw Object.assign(new Error(errorText(result.detail)), {
       status: response.status,
+      detail: result.detail,
     });
   }
   return result;
