@@ -161,7 +161,7 @@ class CommissionExams:
             result=None if not result else {k:result[k] for k in ['outcome','label','passed','tasks','notes','by','at']}|dict(scaleName=result['scale']['name'] if result.get('scale') else ''),
             decision=None if not decision else {k:decision[k] for k in ['decidedBy','decidedAt','final','reason']},
             letter=data.get('letter'),cancelReason=data.get('cancelReason',''),
-            canEdit=admin and status=='planned' and not locked,canCancel=admin and status in ['planned','held'],canResult=bool(mine) and status in ['planned','held'] and not locked,
+            canEdit=admin and status=='planned' and not locked,canCancel=admin and (status=='planned' or (status=='held' and not locked)),canResult=bool(mine) and status in ['planned','held'] and not locked,
             canDecide=admin and status=='held' and not locked,canSendLetter=admin and status=='decided')
 
     def family_view(self,row,snap):

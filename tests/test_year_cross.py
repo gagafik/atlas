@@ -59,6 +59,20 @@ def test_a_decision_made_before_the_start_keeps_its_letter_and_class_name(client
     assert ok(people['mother'].get(url(f"/{sent['id']}/letter")))['className']==name
 
 
+def test_a_letter_sent_after_the_start_keeps_the_class_name_and_a_held_exam_cannot_be_cancelled(client,clocks):
+    p,b,s,people=school(client)
+    decided=ok(decide(client,ok(result(people['member'],ok(plan(client,p)),s,'4'))))
+    held=ok(result(people['other'],ok(plan(client,p,studentId='s2',chairmanId='t3',examinerId='t0',memberIds=['t2'])),s,'5'))
+    name=ok(people['chair'].get(url(f"/{decided['id']}/protocol")))['className']
+    before=ok(client.get(url(f"/{held['id']}/protocol")))['className']
+    started(client);clocks['at']=SUMMER
+    sent=ok(letter(client,decided))
+    assert ok(people['mother'].get(url(f"/{sent['id']}/letter")))['className']==name
+    assert ok(client.get(url(f"/{held['id']}/protocol")))['className']==before
+    archived(client.post(url(f"/{held['id']}/cancel"),json=dict(version=held['version'],reason='Отмена после перехода')))
+    assert not next(c for c in listing(client) if c['id']==held['id'])['canCancel']
+
+
 def test_the_start_warns_about_undecided_commission_exams(client,clocks):
     p,b,s,people=school(client)
     ok(plan(client,p))

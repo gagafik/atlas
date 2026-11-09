@@ -134,6 +134,7 @@ def register(service,app,Workspace):
     def cancel(id:str,body:Cancel,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
             admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'planned','held')
+            if row['status']=='held':sealed(db,workspace,row['period_id'])
             data=row['data']|dict(cancelReason=body.reason.strip());version=row['version']+1
             save(db,row,data,'cancelled',version)
             service.history(db,workspace,user,id,'cancelled',body.reason.strip(),dict(version=version))
