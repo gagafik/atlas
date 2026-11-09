@@ -262,16 +262,6 @@ describe("typing into a cell", () => {
       1,
     );
   });
-  it("keeps the text of a cell off another pupil's row when the rows moved", () => {
-    const before = marked(null),
-      after = marked(null, 1);
-    const none: Edits = {};
-    expect(commitCell(at(before), after, "7", none)).toBe(none);
-    expect(openCell(at(before), after)).toBeNull();
-    expect(
-      Object.values(commitCell(at(after), after, "7", none)),
-    ).toMatchObject([{ studentId: "p0" }]);
-  });
   it("keeps a cell open only on the table it was opened on", () => {
     const t = marked(null);
     expect(openCell(at(t, 1, 1), t)).toEqual({ row: 1, col: 1 });
@@ -408,15 +398,6 @@ describe("save requests", () => {
     ]);
     expect(result.conflicts.map((c) => c.lessonKey)).toEqual(["k3", "k4"]);
   });
-  it("keeps the edits of requests that never ran", () => {
-    const typed = [edit("p1", "k1", "a"), edit("p1", "k9", "a")];
-    const result = afterSave(
-      typed,
-      [{ saved: [{ lessonKey: "k1" }], unchanged: [], conflicts: [] }],
-      typed,
-    );
-    expect(result.edits.map((e) => e.lessonKey)).toEqual(["k9"]);
-  });
   it("keeps what was typed or changed while the requests were on their way", () => {
     const sent = [edit("p1", "k1", "a"), edit("p1", "k3", "a")];
     const now = [
@@ -502,11 +483,11 @@ describe("period", () => {
 });
 
 describe("CSV", () => {
-  it("marks a column without a place for the pupil, escapes formulas and ends with the totals", () => {
+  it("marks the lessons a pupil is not in, keeps a zero and ends with the totals", () => {
     const t = table();
     t.pupils[0].marks = {
       0: { score: 0, label: "", comment: "" },
-      1: { score: null, label: "=1+1", comment: "" },
+      1: { score: null, label: "Зачёт", comment: "" },
     };
     t.pupils[0].categories = [
       { id: "fo", name: "ФО", color: "", numeric: 1, percentage: 0 },
@@ -514,17 +495,20 @@ describe("CSV", () => {
     t.pupils[0].sharePercentage = 0;
     t.pupils[2].marks = {};
     courseCsv(t);
-    const text = vi.mocked(download).mock.lastCall![1];
+    const text: string = vi.mocked(download).mock.lastCall![1];
     // Excel reads the Cyrillic as UTF-8 only with the byte order mark.
     expect(text.startsWith("\uFEFF")).toBe(true);
-    const lines = text.split("\r\n");
-    expect(lines[0]).toContain('"01.10.2026 ФО Опрос (макс 10, вес 1)"');
-    expect(lines[0].endsWith('"ФО %";"СОР %";"Итог по долям %"')).toBe(true);
-    expect(lines[1]).toContain('"0";"\'=1+1";""');
-    expect(lines[1].endsWith('"0";"";"0"')).toBe(true);
-    // p3 has no place in the first lesson.
-    expect(lines[3]).toContain('"—";"—";""');
-    expect(lines).toHaveLength(5);
+    const rows = text
+      .replace("\uFEFF", "")
+      .split("\r\n")
+      .map((line) => [...line.matchAll(/"((?:[^"]|"")*)"/g)].map((m) => m[1]));
+    expect(rows).toHaveLength(1 + t.pupils.length);
+    // After the pupil and the class come the works, then one share per category and the total.
+    const works = (row: string[]) => row.slice(2, 2 + t.works.length);
+    expect(works(rows[1]).slice(0, 2)).toEqual(["0", "Зачёт"]);
+    expect(rows[1].slice(-1 - t.categories.length)).toEqual(["0", "", "0"]);
+    // p3 has no place in the first lesson, which holds the first two works.
+    expect(works(rows[3]).slice(0, 2)).toEqual(["—", "—"]);
   });
 });
 

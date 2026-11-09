@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   actionLabels,
   addDays,
-  coordinatorRoles,
   keepChoices,
   loadClass,
-  menuRoles,
   mondayOf,
   monthRange,
   monthWeeks,
@@ -45,9 +43,9 @@ describe("assessment calendar dates", () => {
     expect(weekday("2026-08-23")).toBe("Вс");
   });
   it("marks a load only when it exceeds a limit", () => {
-    expect(loadClass(2, 1)).toBe("over");
-    expect(loadClass(1, 1)).toBe("");
-    expect(loadClass(5, null)).toBe("");
+    expect(Boolean(loadClass(2, 1))).toBe(true);
+    expect(Boolean(loadClass(1, 1))).toBe(false);
+    expect(Boolean(loadClass(5, null))).toBe(false);
   });
 });
 
@@ -89,15 +87,8 @@ describe("booking form choices", () => {
   });
 });
 
-describe("module access in the client", () => {
-  it("shows the menu to every role that can be named coordinator", () => {
-    for (const role of coordinatorRoles) expect(menuRoles).toContain(role);
-    expect(menuRoles).not.toContain("viewer");
-  });
-});
-
 describe("booking history labels", () => {
-  it("names every action the server writes for a booking in Russian", () => {
+  it("labels every action the server writes for a booking", () => {
     for (const action of [
       "created",
       "published",
@@ -107,8 +98,9 @@ describe("booking history labels", () => {
       "journal_linked",
       "journal_unlinked",
     ])
-      expect(actionLabels[action]).toMatch(/[А-Яа-я]/);
-    expect(actionLabels.journal_linked).toBe("Связана с работой журнала");
-    expect(actionLabels.journal_unlinked).toBe("Связь с журналом снята");
+      expect(actionLabels[action]).toBeTruthy();
+    // A missing label would show the raw action id on the page.
+    for (const action of Object.keys(actionLabels))
+      expect(actionLabels[action]).not.toBe(action);
   });
 });

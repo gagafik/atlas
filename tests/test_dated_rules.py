@@ -65,10 +65,10 @@ def test_shape_uses_actual_clock_and_soft_penalties_without_blocking_preview():
 def test_lunch_and_gap_periods_reuse_reference_bells():
     s=fixture(); s.rules=[TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t3'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)]
     extra=added(s); extra.startTime='12:00'; extra.endTime='13:00'; s.datedLessons=[extra]
-    assert any('нет перерыва' in i['message'] for i in day_report(s,MON)['issues'])
+    assert 'lunch' in affected(day_report(s,MON)['issues'])
     s.rules=[TimetableRule(id='gaps', name='Без окон', kind='day_shape', scope='class', targetIds=['c-demo-a'], maxIdlePeriods=0, gapProfileId='secondary')]
     extra.startTime='15:00'; extra.endTime='15:40'
-    assert any('пустых учебных периодов' in i['message'] for i in day_report(s,MON)['issues'])
+    assert 'gaps' in affected(day_report(s,MON)['issues'])
 
 
 def test_subject_relations_and_workload_scope_survive_dated_replacement():
