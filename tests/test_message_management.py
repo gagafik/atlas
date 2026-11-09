@@ -59,26 +59,27 @@ def test_add_exposes_history_only_after_confirmation_and_current_scope(client):
 def test_transfer_keeps_authorship_and_survives_departure_and_deactivation_of_creator(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
     next_user=create(client,'teacher',login='next',name='Новый учитель');successor=signed('next')
-    assert add(teacher,thread,[next_user['id']],1).status_code==200
-    assert transfer(teacher,thread,people['parent']['id'],2).status_code==422
-    assert transfer(parent,thread,next_user['id'],2).status_code==403
-    assert transfer(teacher,thread,people['teacher']['id'],2).status_code==422
-    request=str(uuid4())
-    assert transfer(teacher,thread,next_user['id'],2,requestId=request).status_code==200
-    assert transfer(teacher,thread,next_user['id'],2,requestId=request).status_code==200
+    version=lambda user=teacher:detail(user,thread)['version']
+    assert add(teacher,thread,[next_user['id']],version()).status_code==200
+    assert transfer(teacher,thread,people['parent']['id'],version()).status_code==422
+    assert transfer(parent,thread,next_user['id'],version()).status_code==403
+    assert transfer(teacher,thread,people['teacher']['id'],version()).status_code==422
+    request=str(uuid4());before=version()
+    assert transfer(teacher,thread,next_user['id'],before,requestId=request).status_code==200
+    assert transfer(teacher,thread,next_user['id'],before,requestId=request).status_code==200
     value=detail(successor,thread)
     assert value['canManage'] and value['managerId']==next_user['id'] and value['authorId']==people['teacher']['id']
     assert value['posts'][0]['authorId']==people['teacher']['id']
     assert not detail(teacher,thread)['canManage']
     assert roster(teacher,thread).status_code==403
-    assert teacher.post(url('threads/'+thread+'/change'),json=dict(version=3,action='close')).status_code==403
-    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove')).status_code==403
-    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['teacher']['id'],action='leave')).status_code==200
+    assert teacher.post(url('threads/'+thread+'/change'),json=dict(version=version(),action='close')).status_code==403
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=version(),userId=people['parent']['id'],action='remove')).status_code==403
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=version(),userId=people['teacher']['id'],action='leave')).status_code==200
     assert detail(teacher,thread)['readOnly']
     body={k:v for k,v in people['teacher'].items() if k!='id'}|dict(active=False)
     assert client.put('/api/access/users/'+people['teacher']['id'],json=body).status_code==200
     assert detail(parent,thread)['managerId']==next_user['id'] and detail(successor,thread)['canManage']
-    assert successor.post(url('threads/'+thread+'/change'),json=dict(version=4,action='close')).status_code==200
+    assert successor.post(url('threads/'+thread+'/change'),json=dict(version=version(successor),action='close')).status_code==200
 
 
 def test_family_group_transfer_keeps_all_teachers_and_child_scope(client):
@@ -154,52 +155,52 @@ def test_add_and_handoff_roll_back_if_notification_fails(client,monkeypatch):
 
 def test_concurrent_add_reply_and_handoff_removal_are_versioned(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
-    next_user=create(client,'teacher',login='next')
+    next_user=create(client,'teacher',login='next');first=detail(teacher,thread)['version']
     with ThreadPoolExecutor(max_workers=2) as pool:
-        addition=pool.submit(add,teacher,thread,[next_user['id']],1)
-        reply=pool.submit(parent.post,url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Одновременный ответ'))
+        addition=pool.submit(add,teacher,thread,[next_user['id']],first)
+        reply=pool.submit(parent.post,url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=first,text='Одновременный ответ'))
         results=[addition.result(),reply.result()]
     # A reply neither waits for nor invalidates the membership change: both are stored.
     assert [r.status_code for r in results]==[200,200]
-    value=detail(teacher,thread);assert value['version']==2 and len(value['posts'])==3
+    value=detail(teacher,thread);assert value['version']>first and len(value['posts'])==3
     version=detail(teacher,thread)['version']
     with ThreadPoolExecutor(max_workers=2) as pool:
         handoff=pool.submit(transfer,teacher,thread,next_user['id'],version)
         remove=pool.submit(teacher.post,url('threads/'+thread+'/participants'),json=dict(version=version,userId=next_user['id'],action='remove'))
         results=[handoff.result(),remove.result()]
     assert sorted(r.status_code for r in results)==[200,409]
-    assert detail(teacher,thread)['version']==version+1
+    assert detail(teacher,thread)['version']>version
     value=detail(signed('next'),thread);assert value['readOnly']==(results[1].status_code==200)
 
 
 def test_candidate_pages_reach_every_eligible_account_among_many_out_of_scope_ones(client):
     people=setup(client);teacher=signed('teacher');thread=group(teacher)
+    # Both sets are bigger than one page of candidates, and the out-of-scope names sort first.
+    foreign,late=130,120
     with api.connect() as db:
         template=read_row(db,'accounts',id=people['parent']['id'])
-        for prefix,pupil,count in [('foreign','s3',4000),('late','s1',120)]:
+        for prefix,pupil,count in [('foreign','s3',foreign),('late','s1',late)]:
             perms=encoded(dict(workspaces=[],grants=[dict(workspace='demo',view='student',entityIds=[pupil])]))
             for i in range(count):insert_row(db,'accounts',template,id=f'{prefix}{i}',login=f'{prefix}{i}',name=f'Кандидат {prefix} {i:04d}',role='parent',permissions=perms)
         # Old excluded memberships must not hide eligible people either.
-        for i in range(4000):
+        for i in range(foreign):
             insert_row(db,'message_members',thread_id=thread,user_id=f'foreign{i}',role='parent',scope_students=encoded(['s3']))
             insert_row(db,'message_exclusions',thread_id=thread,user_id=f'foreign{i}',action='remove',created=now().isoformat())
     page=candidates(teacher,thread,q='КАНДИДАТ').json();ids=[];assert page['items']
-    for _ in range(200):
+    for _ in range(late+foreign):
         ids+=[p['id'] for p in page['items']]
         if page['nextOffset'] is None:break
         page=candidates(teacher,thread,q='КАНДИДАТ',offset=page['nextOffset']).json()
     else:pytest.fail('candidate paging never ended')
-    assert sorted(ids)==sorted(f'late{i}' for i in range(120))
+    assert sorted(ids)==sorted(f'late{i}' for i in range(late))
 
 
-def test_new_manager_scope_checked_after_assignment_change_and_backup(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_new_manager_scope_checked_after_assignment_change(client):
     people=setup(client);teacher=signed('teacher');thread=group(teacher);parent=signed('parent')
     next_user=create(client,'teacher',login='next');successor=signed('next')
-    assert add(teacher,thread,[next_user['id']],1).status_code==200
-    assert transfer(teacher,thread,next_user['id'],2).status_code==200
-    source=api.DB;target=tmp_path/'management-backup'
-    create_backup(source,target);monkeypatch.setattr(api,'DB',target/source.name)
+    version=lambda:detail(teacher,thread)['version']
+    assert add(teacher,thread,[next_user['id']],version()).status_code==200
+    assert transfer(teacher,thread,next_user['id'],version()).status_code==200
     assert detail(successor,thread)['canManage'] and detail(parent,thread)['managerId']==next_user['id']
     state=api.read('demo')
     for workload in state.workloads:
@@ -208,7 +209,7 @@ def test_new_manager_scope_checked_after_assignment_change_and_backup(client,tmp
     api.save('demo',state)
     assert detail(parent,thread)['readOnly']
     assert roster(successor,thread).status_code==404
-    assert add(successor,thread,[people['staff']['id']],3).status_code==404
+    assert add(successor,thread,[people['staff']['id']],version()).status_code==404
 
 
 def leave_class():
@@ -266,11 +267,12 @@ def test_every_post_path_advances_only_the_members_with_a_live_link(client):
 def test_leaving_or_removal_in_a_pre_migration_group_keeps_its_history(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');student=signed('student');thread=group(teacher)
     with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL')
-    assert parent.post(url('threads/'+thread+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='leave')).status_code==200
-    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=2,userId=people['student']['id'],action='remove')).status_code==200
+    version=lambda:detail(teacher,thread)['version']
+    assert parent.post(url('threads/'+thread+'/participants'),json=dict(version=version(),userId=people['parent']['id'],action='leave')).status_code==200
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=version(),userId=people['student']['id'],action='remove')).status_code==200
     # Both were linked when they went, so their bound is the last post before their own notice.
     for user,count in [(parent,1),(student,2)]:
-        value=detail(user,thread);assert value['readOnly'] and len(value['posts'])==count and value['latestId']==count
+        value=detail(user,thread);assert value['readOnly'] and len(value['posts'])==count and value['latestId']==value['posts'][-1]['id']
         assert [t['id'] for t in user.get(url()).json()['items']]==[thread]
 
 

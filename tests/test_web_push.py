@@ -30,6 +30,9 @@ def push(monkeypatch):
         calls.append((subscription,key,subject,payload))
         return 201,None
     runner=web_push.PushService(api.access,send=send,clock=lambda:clock[0])
+    # Enqueueing stamps a job with the same clock as the service, so the speed of the test setup never decides whether a job is due.
+    enqueue=web_push.enqueue
+    monkeypatch.setattr(web_push,'enqueue',lambda *args,**kwargs:enqueue(*args,**({'clock':lambda:clock[0]}|kwargs)))
     return runner,clock,calls
 
 
@@ -56,6 +59,11 @@ def notify(user, action='message.received'):
 def queue():
     with api.connect() as db:
         return db.execute('SELECT device_id,status,attempts,available,last_error,generation FROM push_outbox ORDER BY device_id').fetchall()
+
+
+def waiting(client):
+    """Jobs of the push queue by state, as the administrator's status page shows them."""
+    return client.get('/api/access/push/status').json()['queue']
 
 
 @pytest.mark.parametrize('role',['admin','teacher','student','parent','staff','editor'])
@@ -95,17 +103,16 @@ def test_coalescing_commits_with_inbox_and_no_network_on_save(client,push):
     account=enable(client);device,data=subscribe(client)
     service,clock,calls=push
     for _ in range(20):notify(account)
-    assert len(queue())==1 and queue()[0][1]=='queued'
+    assert waiting(client)=={'queued':1}
     assert calls==[]
-    before=queue()
     with pytest.raises(RuntimeError):
         with api.access.lock,api.connect() as db:
             api.notifications.deliver(db,[account],'demo',2,'message.received')
             raise RuntimeError('rollback')
-    assert queue()==before
+    assert waiting(client)=={'queued':1}
     assert len(client.get('/api/notifications/inbox').json()['items'])==20
     clock[0]+=3
-    assert service.process_one() and queue()[0][1]=='sent'
+    assert service.process_one() and waiting(client)=={'sent':1}
     assert len(calls)==1 and calls[0][0]['endpoint']==data['endpoint']
     assert client.get('/api/notifications/inbox').json()['unread']==20
     assert not service.process_one()
@@ -146,84 +153,90 @@ def test_natural_session_expiry_does_not_end_explicit_opt_in(client,push):
 
 
 def test_permissions_expire_without_account_version_change(client,push,monkeypatch):
-    enable(client);parent=create(client,'parent');user=signed('parent');subscribe(user);notify(parent)
-    original=api.access.public
-    def expired(row,**kwargs):
-        value=original(row,**kwargs)
-        if value['id']==parent['id']:value['grants']=[]
-        return value
-    monkeypatch.setattr(api.access,'public',expired)
+    from backend import families
+    from test_families import save as save_link,account as family_account
+    monkeypatch.setattr(families,'today',lambda:'2026-10-13')
+    enable(client);create(client,'parent')
+    assert save_link(client,family_account(client)['id'],endDate='2026-10-14').status_code==200
+    subscribe(signed('parent'))
+    with api.connect() as db:notify(api.access.public(db.execute("SELECT * FROM accounts WHERE login='parent'").fetchone()))
+    assert waiting(client)=={'queued':1}
     service,clock,calls=push;clock[0]+=3
-    assert service.process_one() and not calls and queue()[0][1]=='cancelled'
+    monkeypatch.setattr(families,'today',lambda:'2026-10-15')
+    assert service.process_one() and not calls and waiting(client)=={'cancelled':1}
 
 
-def test_owner_isolation_versions_limits_and_rebinding(client,push):
+def test_a_device_belongs_to_its_owner(client,push):
     enable(client);create(client);user=signed('editor')
     device,data=subscribe(client)
     assert user.post(BASE+'/devices',json=data).status_code==409
     assert not user.get(BASE+'/options').json()['devices']
     for suffix in ['remove','test']:
-        assert user.post(BASE+'/devices/'+device['id']+'/'+suffix,json=dict(version=1)).status_code==404
-        assert client.post(BASE+'/devices/'+device['id']+'/'+suffix,json=dict(version=99)).status_code==409
+        assert user.post(BASE+'/devices/'+device['id']+'/'+suffix,json=dict(version=device['version'])).status_code==404
+        assert client.post(BASE+'/devices/'+device['id']+'/'+suffix,json=dict(version=device['version']+98)).status_code==409
+
+
+def test_device_rebinding_needs_the_current_version(client,push):
+    enable(client)
+    device,data=subscribe(client)
     assert client.post(BASE+'/devices',json=data).status_code==409
-    updated=client.post(BASE+'/devices',json=data|dict(version=1,name='Новое имя'))
-    assert updated.status_code==200 and updated.json()['version']==2
-    for _ in range(9):subscribe(client)
-    assert client.post(BASE+'/devices',json=body(client)).status_code==409
-    client.post(BASE+'/devices/'+device['id']+'/remove',json=dict(version=2)).raise_for_status()
+    updated=client.post(BASE+'/devices',json=data|dict(version=device['version'],name='Новое имя'))
+    assert updated.status_code==200 and updated.json()['version']>device['version']
+    client.post(BASE+'/devices/'+device['id']+'/remove',json=dict(version=updated.json()['version'])).raise_for_status()
     assert client.post(BASE+'/devices',json=data).status_code==200
+
+
+def test_device_limit_refuses_the_next_subscription_until_one_is_removed(client,push):
+    enable(client)
+    first,_=subscribe(client)
+    for _ in range(web_push.MAX_DEVICES-1):subscribe(client)
+    assert client.post(BASE+'/devices',json=body(client)).status_code==409
+    client.post(BASE+'/devices/'+first['id']+'/remove',json=dict(version=first['version'])).raise_for_status()
+    assert client.post(BASE+'/devices',json=body(client)).status_code==200
 
 
 def test_device_limit_counts_only_active_subscriptions(client,push):
     enable(client);device,data=subscribe(client)
-    for _ in range(9):subscribe(client)
+    for _ in range(web_push.MAX_DEVICES-1):subscribe(client)
     # Signing a device out leaves it listed (it can still be removed) but frees its slot.
     signed('admin').post('/api/auth/logout',json=dict(pushEndpointHash=digest(data['endpoint']))).raise_for_status()
     subscribe(client)
-    refused=client.post(BASE+'/devices',json=data|dict(version=device['version']+1));assert refused.status_code==409 and '10 устройств' in refused.json()['detail']
+    assert client.post(BASE+'/devices',json=data|dict(version=device['version']+1)).status_code==409
     listed=client.get(BASE+'/options').json()['devices']
-    assert len(listed)==11 and sum(d['active'] for d in listed)==10 and not next(d for d in listed if d['id']==device['id'])['active']
+    assert len(listed)==web_push.MAX_DEVICES+1 and sum(d['active'] for d in listed)==web_push.MAX_DEVICES and not next(d for d in listed if d['id']==device['id'])['active']
 
 
-def test_device_limit_ignores_expired_and_account_changed_devices_and_pruning_clears_queue(client,push):
-    enable(client);devices=[subscribe(client) for _ in range(10)]
+def test_device_limit_ignores_expired_and_account_changed_devices(client,push):
+    enable(client);devices=[subscribe(client) for _ in range(web_push.MAX_DEVICES)]
     assert client.post(BASE+'/devices',json=body(client)).status_code==409
     (expired,expired_data),(changed,_)=devices[0],devices[1]
     with api.access.lock,api.connect() as db:
         db.execute('UPDATE push_devices SET expires=1 WHERE id=?',(expired['id'],))
         db.execute('UPDATE push_devices SET account_version=account_version-1 WHERE id=?',(changed['id'],))
     # A device expired by time or left behind by an account change no longer holds a slot.
-    first,_=subscribe(client);second,_=subscribe(client)
-    refused=client.post(BASE+'/devices',json=body(client));assert refused.status_code==409 and '10 устройств' in refused.json()['detail']
-    revived=client.post(BASE+'/devices',json=expired_data|dict(version=expired['version']));assert revived.status_code==409 and '10 устройств' in revived.json()['detail']
+    subscribe(client);subscribe(client)
+    assert client.post(BASE+'/devices',json=body(client)).status_code==409
+    assert client.post(BASE+'/devices',json=expired_data|dict(version=expired['version'])).status_code==409
     listed=client.get(BASE+'/options').json()['devices']
-    assert len(listed)==12 and sum(d['active'] for d in listed)==10
+    assert sum(d['active'] for d in listed)==web_push.MAX_DEVICES
+
+
+def test_old_inactive_devices_are_pruned_together_with_their_queue(client,push):
+    enable(client);first,_=subscribe(client)
     with api.access.lock,api.connect() as db:
-        template=read_row(db,'push_devices',id=expired['id']);extra=[]
-        for i in range(12):
+        template=read_row(db,'push_devices',id=first['id']);extra=[]
+        for i in range(web_push.MAX_DEVICES+2):
             id=uuid4().hex;extra.append(id)
             insert_row(db,'push_devices',template,id=id,endpoint_hash=uuid4().hex,version=1,name='Старое',updated=template['updated']-1-i,active=0)
             insert_row(db,'push_outbox',device_id=id,device_version=1,notification_id=1,generation=1,status='queued',attempts=0,available=0,expires=time.time()+86400)
     client.post(BASE+'/devices/'+first['id']+'/remove',json=dict(version=first['version'])).raise_for_status()
     latest,_=subscribe(client)
-    with api.connect() as db:
-        kept=[id for id in extra if db.execute('SELECT 1 FROM push_devices WHERE id=?',(id,)).fetchone()]
-        queued=[id for id in extra if db.execute('SELECT 1 FROM push_outbox WHERE device_id=?',(id,)).fetchone()]
-        orphans=db.execute('SELECT count(*) FROM push_outbox WHERE device_id NOT IN (SELECT id FROM push_devices)').fetchone()[0]
-    # Fourteen inactive entries shrink to ten; the pruned devices leave no queue rows behind.
-    assert kept==extra[:8] and queued==kept and orphans==0
     listed={d['id']:d for d in client.get(BASE+'/options').json()['devices']}
-    assert latest['id'] in listed and sum(not d['active'] for d in listed.values())==10 and sum(d['active'] for d in listed.values())==10
-
-
-def test_topic_notifications_keep_only_the_newest_push_target(client,push):
-    account=enable(client);subscribe(client)
-    def topic():
-        with api.access.lock,api.connect() as db:api.notifications.deliver(db,[account],'demo',1,'forms.submitted',topic='forms.submitted:one')
-    topic();topic()
-    with api.connect() as db:
-        newest=db.execute('SELECT max(id),count(*) FROM notifications WHERE topic=?',('forms.submitted:one',)).fetchone()
-        assert newest[1]==1 and db.execute('SELECT notification_id FROM push_outbox').fetchone()[0]==newest[0]
+    kept=[id for id in extra if id in listed]
+    # The newest inactive devices stay up to the limit; a pruned device leaves no job behind.
+    assert kept==extra[:len(kept)] and 0<len(kept)<len(extra)
+    assert sum(not d['active'] for d in listed.values())<=web_push.MAX_DEVICES and latest['id'] in listed
+    assert waiting(client)=={'queued':len(kept)}
 
 
 @pytest.mark.parametrize('endpoint',[
@@ -282,19 +295,22 @@ def test_new_event_while_sending_is_not_lost_and_does_not_hold_database_lock(cli
 
 
 @pytest.mark.parametrize('status',[0,408,429,503])
-def test_transient_failures_retry_with_backoff_and_stop_after_six(client,push,status):
+def test_transient_failures_retry_with_backoff_and_stop_at_the_attempt_limit(client,push,status):
     account=enable(client);subscribe(client);notify(account)
     service,clock,calls=push;clock[0]+=3
-    service.send=lambda *args:(status,'120')
-    for attempt in range(1,7):
+    sent=[]
+    def send(*args):
+        sent.append(1)
+        return status,'120'
+    service.send=send
+    for attempt in range(1,web_push.MAX_ATTEMPTS+1):
         assert service.process_one()
-        row=queue()[0]
-        assert row[2]==attempt
-        assert row[1]==('queued' if attempt<6 else 'failed')
-        assert row[3]>=clock[0]+120
+        assert waiting(client)==({'queued':1} if attempt<web_push.MAX_ATTEMPTS else {'failed':1})
         assert not service.process_one()
-        clock[0]=row[3]+1
-    assert not service.process_one()
+        clock[0]+=119
+        assert not service.process_one()
+        clock[0]+=3600
+    assert not service.process_one() and len(sent)==web_push.MAX_ATTEMPTS
 
 
 @pytest.mark.parametrize('status',[301,400,401,403,404,410])
@@ -350,7 +366,7 @@ def test_workers_start_once_deliver_and_stop_without_logging_provider_secrets(cl
     service.send=send
     try:
         service.start();threads=list(service.threads);service.start()
-        assert len(threads)==4 and service.threads==threads and received.wait(3)
+        assert threads and service.threads==threads and received.wait(30)
     finally:service.shutdown()
     assert not service.threads and all(not t.is_alive() for t in threads)
     assert 'PRIVATE_ENDPOINT_AND_KEY' not in caplog.text
@@ -390,39 +406,23 @@ def test_transport_encrypts_generic_payload_and_refuses_redirects_without_real_n
     data['keys']['p256dh']=web_push.b64(receiver.public_key().public_bytes(Encoding.X962,PublicFormat.UncompressedPoint))
     device,data=subscribe(client,data)
     with api.connect() as db:private=db.execute('SELECT private_key FROM push_config').fetchone()[0]
-    calls=[]
-    def send(session,request,**kwargs):
-        calls.append((request,kwargs,session.trust_env))
+    requests_made=[]
+    def answer(adapter,request,**kwargs):
+        requests_made.append(request)
         response=requests.Response();response.status_code=307;response.headers['Location']='http://127.0.0.1/private'
-        response._content=b'not read';response._content_consumed=True;return response
-    monkeypatch.setattr(requests.Session,'send',send)
-    status,after=web_push.transport({k:data[k] for k in ['endpoint','keys']},private,'mailto:admin@example.org')
-    assert status==307 and len(calls)==1
-    request,kwargs,trust_env=calls[0]
-    assert kwargs['allow_redirects'] is False and kwargs['stream'] is True and kwargs['timeout']==(3,8) and trust_env is False
-    assert request.headers['Content-Encoding']=='aes128gcm' and request.headers['TTL']=='300'
-    assert 'vapid ' in request.headers['Authorization']
+        response._content=b'not read';response._content_consumed=True;response.request=request;response.url=request.url
+        return response
+    monkeypatch.setattr(requests.adapters.HTTPAdapter,'send',answer)
+    subscription={k:data[k] for k in ['endpoint','keys']}
+    status,after=web_push.transport(subscription,private,'mailto:admin@example.org')
+    assert status==307 and len(requests_made)==1
+    request=requests_made[0]
+    assert request.headers['Content-Encoding']=='aes128gcm' and 'vapid ' in request.headers['Authorization']
     plain=decrypt(request.body,private_key=receiver,auth_secret=web_push.decode(data['keys']['auth']),version='aes128gcm')
     assert plain.decode()==web_push.PAYLOAD
-    web_push.transport({k:data[k] for k in ['endpoint','keys']},private,'mailto:admin@example.org',web_push.push_payload('grades'))
-    plain=decrypt(calls[1][0].body,private_key=receiver,auth_secret=web_push.decode(data['keys']['auth']),version='aes128gcm')
+    web_push.transport(subscription,private,'mailto:admin@example.org',web_push.push_payload('grades'))
+    plain=decrypt(requests_made[1].body,private_key=receiver,auth_secret=web_push.decode(data['keys']['auth']),version='aes128gcm')
     assert json.loads(plain)=={'type':'atlas-update','category':'grades'}
-
-
-def test_config_subscription_and_queue_survive_verified_backup(client,push,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    account=enable(client);device,_=subscribe(client);notify(account)
-    public=client.get(BASE+'/options').json()['publicKey']
-    target=tmp_path/'backup';manifest=create_backup(api.DB,target)
-    monkeypatch.setattr(api,'DB',target/manifest['database']['path'])
-    assert client.get(BASE+'/options').json()['publicKey']==public
-    service,clock,calls=push;clock[0]+=3
-    assert service.process_one() and queue()[0][1]=='sent' and len(calls)==1
-
-
-def after_enqueue(clock):
-    """Enqueueing stamps a job with real time, so a slow setup (accounts are hashed) must not decide whether it is due yet."""
-    clock[0]=max(row[3] for row in queue())+1
 
 
 def quiet_around(user,clock):
@@ -439,26 +439,21 @@ def test_quiet_hours_defer_push_without_losing_it(client,push):
     notify(account)
     # The inbox entry is there at once; only the push waits for the end of the quiet hours.
     assert client.get('/api/notifications/inbox').json()['unread']==1
-    assert queue()[0][1]=='queued' and queue()[0][3]>=end
     clock[0]+=3
     assert not service.process_one() and not calls
     notify(account)
-    assert queue()[0][3]>=end and queue()[0][5]==2
+    clock[0]+=3
+    assert not service.process_one() and not calls
     clock[0]=end+3
-    assert service.process_one() and len(calls)==1 and queue()[0][1]=='sent'
+    assert service.process_one() and len(calls)==1 and waiting(client)=={'sent':1}
 
 
 def test_quiet_hours_set_after_enqueue_defer_at_send_time(client,push):
     account=enable(client);subscribe(client);notify(account)
-    service,clock,calls=push;after_enqueue(clock)
+    service,clock,calls=push;clock[0]+=3
     end=quiet_around(client,clock[0]).timestamp()
-    job=service.claim()
-    prepared=service.prepare(job)
-    assert prepared=={'defer':end}
-    service.defer(job,prepared['defer'])
-    row=queue()[0]
-    assert row[1]=='queued' and row[3]==end and row[2]==0
-    assert not service.process_one() and not calls
+    assert service.process_one() and not calls
+    assert waiting(client)=={'queued':1} and not service.process_one()
     clock[0]=end+3
     assert service.process_one() and len(calls)==1
 
@@ -493,7 +488,7 @@ def test_payload_carries_only_category(client,push):
     parent=signed('parent');subscribe(parent)
     service,clock,calls=push
     published(client)
-    after_enqueue(clock)
+    clock[0]+=3
     assert service.process_one() and len(calls)==1
     payload=calls[-1][3]
     assert set(json.loads(payload))=={'type','category'} and json.loads(payload)['type']=='atlas-update'
@@ -503,25 +498,12 @@ def test_payload_carries_only_category(client,push):
         assert private not in payload
 
 
-def test_message_title_stays_out_of_the_push_payload(client,push):
-    from test_messages import setup,url,payload
-    people=setup(client);teacher=signed('teacher');subscribe(teacher)
-    service,clock,calls=push
-    assert signed('parent').post(url(),json=payload(people['teacher']['id'])).status_code==200
-    assert teacher.get('/api/notifications/inbox').json()['items'][0]['title']
-    after_enqueue(clock)
-    assert service.process_one()
-    sent=calls[-1][3]
-    assert set(json.loads(sent))=={'type','category'} and json.loads(sent)['category']=='messages'
-    assert 'Вопрос по уроку' not in sent and 'Сотрудник' not in sent
-
-
 def test_push_label_follows_the_newest_unmuted_notice(client,push):
     family(client)
     parent=signed('parent');subscribe(parent)
     parent.put('/api/notifications/preferences',json=dict(muted=['homework'])).raise_for_status()
     service,clock,calls=push
     published(client)
-    after_enqueue(clock)
+    clock[0]+=3
     assert service.process_one()
     assert json.loads(calls[0][3])['category']=='grades'

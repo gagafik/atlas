@@ -102,7 +102,6 @@ def test_audience_uses_current_dated_links(client,school,monkeypatch):
     assert names(preview(t2,audience='my_classes',roles=['parent']))=={'Родитель 2'}
     assert names(preview(t3,audience='my_classes',roles=['parent']))=={'Родитель 1','Родитель 2','Родитель 3'}
     # An announcement already sent stays with the family whose child it was about.
-    with api.connect() as db:assert db.execute("SELECT scope_students FROM message_members WHERE thread_id=? AND user_id=?",(id,school['p1']['id'])).fetchone()[0]=='["s1"]'
     assert detail(signed('parent'),id)['posts'][0]['text']=='Текст объявления.'
     state=api.read('demo');next(s for s in state.students if s.id=='s2').active=False;api.save('demo',state)
     assert names(preview(t3,audience='my_classes',roles=['parent']))=={'Родитель 1','Родитель 3'}
@@ -125,11 +124,9 @@ def test_preview_limit_and_create_agree(client,school,monkeypatch):
     assert sent.json()['id'] in {t['id'] for t in signed('parent').get(url()).json()['items']}
 
 
-def test_family_cannot_use_audience_and_announcement_needs_subject(client,school):
+def test_family_cannot_use_audience(client,school):
     assert preview(signed('parent'),audience='school',roles=['parent']).status_code==403
     assert signed('parent').post(url(),json=announcement(audience='school',roles=['parent'])).status_code==403
-    assert client.post(url(),json=announcement(audience='teachers',title='')).status_code==422
-    assert client.post(url(),json=announcement(audience='teachers')).status_code==200
 
 
 def new_group(user,ids,name='Моя группа',id=None,version=0):

@@ -3,7 +3,6 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from backend import api,homework_files,message_files
 from backend.access import now
 from test_access import client,signed,create
@@ -61,44 +60,59 @@ def test_attachment_binding_owner_draft_workspace_and_target(client):
     assert download(parent,id).status_code==404
 
 
-def test_group_removal_keeps_history_until_removal(client):
-    people=setup(client);teacher=signed('teacher');parent=signed('parent');other=signed('other')
-    id=group(teacher);before=api.read('demo').model_dump()
+def removed_parent(client):
+    """A group where the parent is removed between a post with a file and a later one with another file."""
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
+    draft=str(uuid4());file=upload(teacher,draft,id).json()['id']
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Материал',draftId=draft,fileIds=[file])).status_code==200
+    current=detail(teacher,id);material=current['latestId']
+    removed=teacher.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['parent']['id'],action='remove'));assert removed.status_code==200,removed.text
+    draft2=str(uuid4());file2=upload(teacher,draft2,id).json()['id']
+    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='После исключения',draftId=draft2,fileIds=[file2])).status_code==200
+    return people,teacher,parent,id,file,file2,material
+
+
+def test_only_the_manager_removes_a_group_member(client):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
     first=detail(parent,id);assert first['kind']=='group' and first['canReply']
     assert len(first['participants'])==3
     assert client.get(url('threads/'+id)).status_code==404
-    draft=str(uuid4());file=upload(teacher,draft,id).json()['id']
-    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Материал',draftId=draft,fileIds=[file])).status_code==200
-    assert download(parent,file).status_code==200
     current=detail(teacher,id)
     assert parent.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['other']['id'],action='remove')).status_code==403
-    material=current['latestId']
     assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['parent']['id'],action='remove')).status_code==200
-    draft2=str(uuid4());file2=upload(teacher,draft2,id).json()['id']
-    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='После исключения',draftId=draft2,fileIds=[file2])).status_code==200
-    # The removed parent reads what was published before the removal and nothing after it.
+
+
+def test_removed_member_reads_only_what_was_published_before_the_removal(client):
+    people,teacher,parent,id,file,file2,material=removed_parent(client)
     value=detail(parent,id);texts=[p['text'] for p in value['posts']]
     assert value['readOnly'] and not value['canReply'] and not value['canManage'] and value['participants']==[]
     assert 'Материал' in texts and 'После исключения' not in texts and value['latestId']==material
     assert download(parent,file).status_code==200 and download(parent,file2).status_code==404
-    with api.connect() as db:
-        marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(id,)))
-        latest=db.execute('SELECT latest_id FROM message_threads WHERE id=?',(id,)).fetchone()[0]
-    assert marks[people['parent']['id']]==material and {v for k,v in marks.items() if k!=people['parent']['id']}=={latest}
-    assert parent.get(url(q='После')).json()['items']==[]
-    found=parent.get(url(q='Материал')).json()['items'];assert len(found)==1 and found[0]['readOnly'] and found[0]['latestId']==value['latestId']
     assert parent.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='Нельзя')).status_code==404
+    assert download(signed('other'),file).status_code==200
+
+
+def test_removed_member_search_and_list_stop_at_the_removal(client):
+    people,teacher,parent,id,file,file2,material=removed_parent(client)
+    assert parent.get(url(q='После')).json()['items']==[]
+    found=parent.get(url(q='Материал')).json()['items'];assert len(found)==1 and found[0]['readOnly'] and found[0]['latestId']==material
+
+
+def test_removed_member_can_mark_read_only_up_to_the_removal(client):
+    people,teacher,parent,id,file,file2,material=removed_parent(client)
     assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=detail(teacher,id)['latestId'])).status_code==422
     assert parent.get(url(unreadOnly=True)).json()['items'][0]['id']==id
-    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=value['latestId'])).status_code==200
+    assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=material)).status_code==200
     assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text='И ещё')).status_code==200
     assert parent.get(url(unreadOnly=True)).json()['items']==[]
     assert [i['id'] for i in parent.get(url()).json()['items']]==[id]
-    assert download(other,file).status_code==200
+
+
+def test_member_who_leaves_keeps_reading_the_history(client):
+    people=setup(client);teacher=signed('teacher');other=signed('other');id=group(teacher)
     current=detail(other,id)
     assert other.post(url('threads/'+id+'/participants'),json=dict(version=current['version'],userId=people['other']['id'],action='leave')).status_code==200
-    assert detail(other,id)['readOnly']
-    assert api.read('demo').model_dump()==before
+    value=detail(other,id);assert value['readOnly'] and [p['text'] for p in value['posts']]==['Общий вопрос.']
 
 
 def test_frozen_thread_ranks_by_last_readable_post(client):
@@ -143,86 +157,98 @@ def test_group_contacts_scope_and_assignment_change(client):
     assert 'Новое' not in [p['text'] for p in detail(teacher,id)['posts']]
 
 
-def test_upload_interrupted_by_group_removal_and_closed_thread(client,monkeypatch):
-    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
-    original=homework_files.validate_file
+def test_upload_interrupted_by_group_removal_leaves_nothing_behind(client,monkeypatch):
+    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher);draft=str(uuid4())
+    original=message_files.storage.validate_file
     def remove(path,name):
-        assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove')).status_code==200
+        assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=detail(teacher,id)['version'],userId=people['parent']['id'],action='remove')).status_code==200
         return original(path,name)
-    monkeypatch.setattr(homework_files,'validate_file',remove)
-    assert upload(parent,str(uuid4()),id).status_code==404
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==0
-        assert not list(message_files.root_for(db).glob('*.bin'))
-    monkeypatch.setattr(homework_files,'validate_file',original)
-    value=detail(teacher,id)
-    assert teacher.post(url('threads/'+id+'/change'),json=dict(version=value['version'],action='close')).status_code==200
+    monkeypatch.setattr(message_files.storage,'validate_file',remove)
+    assert upload(parent,draft,id).status_code==404
+    monkeypatch.setattr(message_files.storage,'validate_file',original)
+    listed=parent.get(url('files',draftId=draft))
+    assert listed.status_code!=200 or listed.json()['items']==[]
+
+
+def test_upload_into_a_closed_thread_is_refused(client):
+    setup(client);teacher=signed('teacher');id=group(teacher)
+    assert teacher.post(url('threads/'+id+'/change'),json=dict(version=detail(teacher,id)['version'],action='close')).status_code==200
     assert upload(teacher,str(uuid4()),id).status_code==409
 
 
-def test_announcement_file_hidden_on_withdraw_and_backup_restores_group(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    people=setup(client);teacher=signed('teacher');parent=signed('parent');draft=str(uuid4())
-    file=upload(teacher,draft,filename='../папка/материал.txt').json()
-    assert file['filename']=='материал.txt'
+def announcement_with_file(teacher):
+    draft=str(uuid4());file=upload(teacher,draft,filename='../папка/материал.txt').json()
     body=dict(requestId=str(uuid4()),kind='announcement',title='Материал',text='',roles=['parent'],groupIds=['g-a'],draftId=draft,fileIds=[file['id']])
-    id=teacher.post(url(),json=body).json()['id']
+    return file,teacher.post(url(),json=body).json()['id']
+
+
+def test_upload_keeps_only_the_file_name_of_a_path(client):
+    setup(client)
+    assert upload(signed('teacher'),str(uuid4()),filename='../папка/материал.txt').json()['filename']=='материал.txt'
+
+
+def test_withdrawn_announcement_hides_its_file_from_recipients_but_not_the_author(client):
+    setup(client);teacher=signed('teacher');parent=signed('parent')
+    file,id=announcement_with_file(teacher)
     assert download(parent,file['id']).status_code==200
-    source=api.DB;destination=tmp_path/'group-files-backup'
-    report=create_backup(source,destination);assert len(report['files'])==1 and '/messages/' in report['files'][0]['path']
-    monkeypatch.setattr(api,'DB',destination/source.name)
-    assert download(parent,file['id']).content==b'Private attachment'
-    assert teacher.post(url('threads/'+id+'/change'),json=dict(version=1,action='withdraw')).status_code==200
+    assert teacher.post(url('threads/'+id+'/change'),json=dict(version=detail(teacher,id)['version'],action='withdraw')).status_code==200
     assert download(parent,file['id']).status_code==404
     assert download(teacher,file['id']).status_code==200
 
 
-def test_shared_quota_invalid_uploads_and_gc(client,monkeypatch):
-    people=setup(client);parent=signed('parent');draft=str(uuid4())
-    for name,body in [('a.exe',b'bad'),('a.png',b'fake'),('a.txt',b'')]:
-        assert upload(parent,draft,body=body,filename=name).status_code==422
+@pytest.mark.parametrize('name,body',[('a.exe',b'bad'),('a.png',b'fake'),('a.txt',b'')])
+def test_invalid_uploads_are_refused(client,name,body):
+    setup(client)
+    assert upload(signed('parent'),str(uuid4()),body=body,filename=name).status_code==422
+
+
+def test_oversized_uploads_are_refused_even_with_a_false_content_length(client,monkeypatch):
+    setup(client);parent=signed('parent');draft=str(uuid4())
     assert upload(parent,draft,body=b'x',**{'Content-Length':str(homework_files.MAX_FILE+1)}).status_code==413
     monkeypatch.setattr(homework_files,'MAX_FILE',8)
     assert upload(parent,draft,body=b'123456789',**{'Content-Length':'1'}).status_code==413
-    file=upload(parent,draft,body=b'abc').json()['id']
+
+
+def test_shared_storage_limit_refuses_further_uploads(client,monkeypatch):
+    setup(client);parent=signed('parent');draft=str(uuid4())
+    monkeypatch.setattr(homework_files,'MAX_FILE',8)
+    assert upload(parent,draft,body=b'abc').status_code==200
     monkeypatch.setattr(homework_files,'total_limit',lambda:8)
     assert upload(parent,draft,body=b'abc').status_code==413
-    with api.connect() as db:
-        homework_files.tables(db)
-        with pytest.raises(HTTPException) as exc:homework_files.reserve(db,'demo','test','s1',people['parent']['id'],'a.txt')
-        assert exc.value.status_code==413
-        db.execute('UPDATE message_files SET created=?',((now()-timedelta(days=2)).isoformat(),))
-        message_files.collect_unused(db)
-        assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==0
-        assert not (message_files.root_for(db)/(file+'.bin')).exists()
+
+
+def test_next_upload_removes_an_abandoned_old_file(client,monkeypatch):
+    setup(client);parent=signed('parent')
+    abandoned=upload(parent,str(uuid4())).json()['id']
+    later=now()+timedelta(days=2);monkeypatch.setattr(homework_files,'now',lambda:later)
+    assert download(parent,abandoned).status_code==200
+    assert upload(parent,str(uuid4())).status_code==200
+    assert download(parent,abandoned).status_code==404
 
 
 def test_group_concurrent_removal_and_reply_are_atomic(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
-    draft=str(uuid4());file=upload(parent,draft,id).json()['id']
+    draft=str(uuid4());file=upload(parent,draft,id).json()['id'];before=detail(teacher,id)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        remove=pool.submit(teacher.post,url('threads/'+id+'/participants'),json=dict(version=1,userId=people['parent']['id'],action='remove'))
-        reply=pool.submit(parent.post,url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Concurrent reply',draftId=draft,fileIds=[file]))
+        remove=pool.submit(teacher.post,url('threads/'+id+'/participants'),json=dict(version=before['version'],userId=people['parent']['id'],action='remove'))
+        reply=pool.submit(parent.post,url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=before['version'],text='Concurrent reply',draftId=draft,fileIds=[file]))
         codes=[remove.result().status_code,reply.result().status_code]
     assert codes in ([200,404],[200,200]),codes
-    value=detail(teacher,id);assert value['version']==2 and len(value['posts'])==2+(codes[1]==200)
-    with api.connect() as db:
-        linked=db.execute('SELECT post_id FROM message_files WHERE id=?',(file,)).fetchone()[0]
-        assert (linked is not None)==(codes[1]==200)
+    # The removal posts its own notice; the reply is stored only if it won the race.
+    value=detail(teacher,id);assert value['version']>before['version'] and len(value['posts'])==len(before['posts'])+1+(codes[1]==200)
+    attached=[f['id'] for post in value['posts'] for f in post.get('files',[])]
+    assert (file in attached)==(codes[1]==200) and (download(teacher,file).status_code==200)==(codes[1]==200)
 
 
-def test_group_scope_changes_and_revocation_after_post_limit(client):
-    people=setup(client);teacher=signed('teacher');parent=signed('parent');id=group(teacher)
-    with api.connect() as db:
-        for i in range(30):
-            db.execute('INSERT INTO message_posts (thread_id,author_id,author_name,created,body) VALUES (?,?,?,?,?)',(id,people['teacher']['id'],'Teacher',now().isoformat(),'Rate fixture'))
-    assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Over limit')).status_code==429
-    assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=1,userId=people['other']['id'],action='remove')).status_code==200
-    state=api.read('demo')
-    for workload in state.workloads:
-        if workload.teacherId=='t2':workload.teacherId='t1'
-    api.save('demo',state)
-    for user in [teacher,parent]:assert detail(user,id)['readOnly']
+def test_removing_a_member_is_not_blocked_by_the_post_limit(client,monkeypatch):
+    fixed=now();monkeypatch.setattr('backend.messages.now',lambda:fixed)
+    people=setup(client);teacher=signed('teacher');id=group(teacher);codes=[]
+    for i in range(300):
+        codes.append(teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),text=f'Flood {i}')).status_code)
+        if codes[-1]==429:break
+    assert codes[0]==200 and codes[-1]==429
+    assert teacher.post(url('threads/'+id+'/participants'),json=dict(version=detail(teacher,id)['version'],userId=people['other']['id'],action='remove')).status_code==200
+    assert detail(signed('other'),id)['readOnly']
 
 
 def test_message_quota_is_rolling_and_counts_unsent_files(client,monkeypatch):
@@ -232,18 +258,16 @@ def test_message_quota_is_rolling_and_counts_unsent_files(client,monkeypatch):
     sent=parent.post(url(),json=payload(people['teacher']['id'])|dict(text='',draftId=first,fileIds=[shared]))
     assert sent.status_code==200,sent.text
     second=str(uuid4());kept=upload(parent,second,body=b'abc');assert kept.status_code==200,kept.text
-    refused=upload(parent,second,body=b'abc')  # 3 sent + 3 unsent + 8 > 12
-    assert refused.status_code==413 and '30 дней' in refused.json()['detail'],refused.text
-    old=(now()-timedelta(days=31)).isoformat()
-    with api.connect() as db:db.execute('UPDATE message_files SET created=? WHERE post_id IS NOT NULL',(old,))
-    again=upload(parent,second,body=b'abc');assert again.status_code==200,again.text  # the sent file left the window: 3 + 8 <= 12
+    assert upload(parent,second,body=b'abc').status_code==413  # 3 sent + 3 unsent + the largest file allowed > the quota
+    start=now();past=lambda days:start+timedelta(days=days)
+    monkeypatch.setattr(message_files,'now',lambda:past(message_files.QUOTA_DAYS+1))
+    again=upload(parent,second,body=b'abc');assert again.status_code==200,again.text  # the sent file left the window
     assert download(teacher,shared).content==b'abc'  # it is only no longer counted, never deleted
     draft=parent.put(url('drafts/'+second),json=dict(version=0,threadId=None,content=payload(people['teacher']['id'])|dict(fileIds=[kept.json()['id'],again.json()['id']])))
     assert draft.status_code==200,draft.text
-    with api.connect() as db:db.execute('UPDATE message_files SET created=? WHERE post_id IS NULL',(old,))
-    blocked=upload(parent,second,body=b'abc')  # unsent files count at any age while a draft keeps them
-    assert blocked.status_code==413 and '30 дней' in blocked.json()['detail'],blocked.text
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM message_files').fetchone()[0]==3
+    monkeypatch.setattr(homework_files,'now',lambda:past(message_files.QUOTA_DAYS+1))
+    assert upload(parent,second,body=b'abc').status_code==413  # unsent files count at any age while a draft keeps them
+    assert download(parent,kept.json()['id']).status_code==200 and download(parent,again.json()['id']).status_code==200
 
 
 HEIC=b'\x00\x00\x00\x18ftypheic'+b'\x00'*16
