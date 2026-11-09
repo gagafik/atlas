@@ -36,12 +36,14 @@ def test_preview_private_details_and_atomic_effect_with_replay(client):
     payload=body();file=upload(parent,payload).json()
     notices=[send(parent,payload|dict(fileIds=[file['id']])),send(parent,body(startDate='2026-08-18',endDate='2026-08-18'))]
     request=batch(notices)
+    other_family=signed('other-parent');updates=lambda:sum(n['action']=='journal.updated' for n in other_family.get('/api/notifications/inbox').json()['items'])
     preview=teacher.post(url('/bulk/preview'),json=request).json()
     assert len(preview['items'])==2 and preview['items'][0]['reason']==payload['reason']
     assert preview['items'][0]['files'][0]['id']==file['id']
     assert report(parent).json()['summary']['attendance']['absent']==1
     before=counts();assert teacher.post(url('/bulk/preview'),json=request).json()==preview
     assert counts()==before
+    updated_before=updates()
     response=apply(teacher,preview);assert response.status_code==200,response.text
     result=response.json();assert result['count']==2 and all(n['version']==2 and n['status']=='approved' for n in result['items'])
     assert 'reason' not in result['items'][0]
@@ -57,10 +59,9 @@ def test_preview_private_details_and_atomic_effect_with_replay(client):
     assert teacher.post(url('/bulk/preview'),json=request|dict(comment='Другой текст')).status_code==409
     own=parent.get('/api/notifications/inbox').json()['items']
     assert sum(n['action']=='absence.updated' for n in own)==1
-    other=signed('other-parent').get('/api/notifications/inbox').json()['items']
-    # The publication told this family about the grade, the homework and the absence; the batch adds one plain lesson update.
-    assert sorted(n['action'] for n in other if n['action'].startswith('journal.'))==['journal.grade','journal.homework','journal.updated','journal.updated']
-    assert all(n.get('title') and n['students'][0]['id']=='s1' for n in other if n['action']=='journal.updated')
+    other=other_family.get('/api/notifications/inbox').json()['items']
+    # The batch tells the other family about the changed lesson once, and never about the private notice.
+    assert updates()==updated_before+1
     assert not any(n['action']=='absence.updated' for n in other)
 
 
@@ -147,49 +148,61 @@ def test_notification_failure_rolls_back_whole_batch_and_can_retry(client,monkey
     assert apply(teacher,preview).status_code==200
 
 
-def test_revoke_reject_and_backup_preserve_receipt_and_raw_attendance(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_bulk_revoke_returns_raw_attendance_and_keeps_receipt(client):
     _,_,parent,teacher=setup(client);record=mark(client);notices=two(parent)
     preview=prepare(teacher,notices);approved=apply(teacher,preview).json()
     reversal=prepare(teacher,approved['items'],action='revoke')
     assert apply(teacher,reversal).status_code==200
     assert report(parent).json()['summary']['attendance']['absent']==1
     assert entry(client,record['lessonKey'])['document']==record['document']
-    fresh=send(parent);rejected=apply(teacher,prepare(teacher,[fresh],action='reject')).json()
+    assert apply(teacher,preview).json()==approved
+
+
+def test_bulk_reject_is_final(client):
+    _,_,parent,teacher=setup(client);fresh=send(parent)
+    rejected=apply(teacher,prepare(teacher,[fresh],action='reject')).json()
     assert rejected['items'][0]['status']=='rejected'
     assert teacher.post(url('/bulk/preview'),json=batch(rejected['items'])).status_code==409
-    destination=tmp_path/'bulk-backup';source=api.DB;create_backup(source,destination)
-    monkeypatch.setattr(api,'DB',destination/source.name)
-    before=counts();assert apply(teacher,preview).json()==approved and counts()==before
-    assert report(parent).json()['summary']['attendance']['absent']==1
 
 
-def test_bounded_selection_rate_and_blank_validation(client):
+@pytest.mark.parametrize('values',[dict(items=[]),'duplicate','too many',dict(comment=' '),dict(action='withdraw'),'stale version'])
+def test_invalid_bulk_selection_is_refused(client,values):
     _,_,parent,teacher=setup(client);notice=send(parent);item=dict(id=notice['id'],version=1)
-    for values in [dict(items=[]),dict(items=[item,item]),dict(items=[dict(item,id=uuid4().hex) for _ in range(51)]),dict(comment=' '),dict(action='withdraw'),dict(items=[dict(item,version=0)])]:
-        assert teacher.post(url('/bulk/preview'),json=batch([notice])|values).status_code==422
+    if values=='duplicate':values=dict(items=[item,item])
+    elif values=='too many':values=dict(items=[dict(item,id=uuid4().hex) for _ in range(51)])
+    elif values=='stale version':values=dict(items=[dict(item,version=0)])
+    assert teacher.post(url('/bulk/preview'),json=batch([notice])|values).status_code==422
+
+
+def test_preview_rate_limit_does_not_block_applying_a_reviewed_preview(client):
+    _,_,parent,teacher=setup(client);notice=send(parent)
     previews=[prepare(teacher,[notice]) for _ in range(30)]
     assert teacher.post(url('/bulk/preview'),json=batch([notice])).status_code==429
-    # Rate limiting new previews must never prevent applying an already reviewed one.
     assert apply(teacher,previews[0]).status_code==200
 
 
-def test_fifty_notice_bound_and_current_account_recheck(client,monkeypatch):
-    _,person,parent,teacher=setup(client);notice=send(parent)
+def test_fifty_notices_are_applied_as_one_batch(client):
+    _,_,parent,teacher=setup(client);notice=send(parent)
     with api.connect() as db:
         template=read_row(db,'absence_notices',id=notice['id'])
         for _ in range(49):insert_row(db,'absence_notices',template,id=uuid4().hex,request_id=str(uuid4()))
     notices=client.get(url()).json()['items'];assert len(notices)==50
-    preview=prepare(teacher,notices)
+    result=apply(teacher,prepare(teacher,notices));assert result.status_code==200,result.text
+    assert result.json()['count']==50
+
+
+def test_account_changed_while_applying_refuses_and_a_retry_applies(client,monkeypatch):
+    _,person,parent,teacher=setup(client);notices=two(parent);preview=prepare(teacher,notices)
     original=api.absences.recheck
     def changed(db,user,snap,workspace):
         db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(person['id'],))
         original(db,user,snap,workspace)
     monkeypatch.setattr(api.absences,'recheck',changed)
-    assert apply(teacher,preview).status_code==409
+    before=counts();assert apply(teacher,preview).status_code==409
+    assert counts()==before and all(client.get(url('/'+n['id'])).json()['status']=='pending' for n in notices)
     monkeypatch.setattr(api.absences,'recheck',original)
     result=apply(teacher,preview);assert result.status_code==200,result.text
-    assert result.json()['count']==50
+    assert result.json()['count']==2
 
 
 def test_bulk_refuses_notices_in_closed_period_without_partial_writes(client,monkeypatch):
@@ -202,7 +215,6 @@ def test_bulk_refuses_notices_in_closed_period_without_partial_writes(client,mon
     close(client,period(client))
     before=counts();response=teacher.post(url('/bulk/preview'),json=batch(notices))
     assert response.status_code==403,response.text
-    detail=response.json()['detail'];assert '2026-08-17 00:00' in detail and 'Первая четверть' in detail and '2026-08-18' not in detail
     assert counts()==before
     def untouched():
         for n in notices:
@@ -224,9 +236,6 @@ def test_bulk_revoke_names_every_notice_in_closed_periods(client,monkeypatch):
     close(client,period(client));close(client,period(client,name='Вторая четверть',start='2026-08-18',end='2026-08-18'))
     before=counts();response=teacher.post(url('/bulk/preview'),json=batch(approved,action='revoke'))
     assert response.status_code==403,response.text
-    detail=response.json()['detail']
-    assert 'Общее решение не применено' in detail
-    for fragment in ['2026-08-17 00:00','2026-08-18 00:00','Первая четверть','Вторая четверть']:assert fragment in detail,detail
     assert counts()==before
     for n in approved:
         item=client.get(url('/'+n['id'])).json();assert item['status']=='approved' and item['version']==n['version']

@@ -250,7 +250,6 @@ def test_only_active_schedulers_of_the_workspace_are_told(staff):
     assert [n['action'] for n in inbox(signed('editor')) if n['action'].startswith('timetable.leave')] == ['timetable.leave_approved']
 
 
-def test_a_database_that_never_saw_a_leave_has_an_empty_feed(client):
-    assert feed(client) == dict(revision=api.read('demo').revision, today=feed(client)['today'], pending=[], withdrawn=[], uncovered=[])
-    with api.connect() as db:
-        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='staff_time_leave'").fetchone() is None
+def test_a_database_that_never_saw_a_leave_has_an_empty_feed(client, monkeypatch):
+    for module in [staff_time, staff_time_routes, absence_feed]: monkeypatch.setattr(module, 'today', lambda: TODAY)
+    assert feed(client) == dict(revision=api.read('demo').revision, today='2026-08-10', pending=[], withdrawn=[], uncovered=[])

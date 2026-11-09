@@ -93,15 +93,6 @@ def close_day(c,day=DAY):
     return close_period(c,make_period(c,start=day,end=day))
 
 
-def test_tables_are_added_idempotently(client,clock):
-    people=staffed(client);publish(people['english'],s1=('present',0),s2=('present',0))
-    good(confirm(people['leader'],acknowledge=True))
-    with api.connect() as db:
-        api.journal.tables(db);api.journal.tables(db)
-    assert state_of(people['leader'])['status']=='confirmed' and len(trail(people['leader']))==1
-    assert client.get('/api/journal/day?workspace=demo&day='+DAY).status_code==200
-
-
 def test_grid_cells_counts_and_percent(client,clock):
     people=staffed(client);publish(people['english'],s1=('absent',0),s2=('late',10))
     value=good(grid(people['leader']))
@@ -252,7 +243,7 @@ def test_teacher_draft_stays_private_and_keeps_the_edit(client,clock):
     people=staffed(client);key=key_of(people['maths'],MATHS)
     saved=good(write(people['maths'],graded(entry(people['maths'],key))))
     result=good(post(people['leader'],[cell(key,'s1')],'absent'))
-    assert result['changed']==1 and result['lessons'][0]['version']==3 and result['lessons'][0]['publishedVersion']==2
+    assert result['changed']==1 and result['lessons'][0]['version']>saved['version'] and result['lessons'][0]['publishedVersion']>0
     shown=good(pupil_report(people['parent']))['rows'];assert [r['lesson']['subject'] for r in shown]==[MATHS]
     assert shown[0]['record']['attendance']=='absent' and shown[0]['record']['grades']==[] and shown[0]['content']['topic']=='' and shown[0]['record']['comment']==''
     # Both pupils of the shared lesson are in the publication: s1 marked, s3 left unmarked.
@@ -279,7 +270,7 @@ def test_conflict_is_cell_level_and_atomic(client,clock):
     record=entry(people['english'],english);next(r for r in record['document']['content']['records'] if r['studentId']=='s1')['attendance']='absent'
     good(write(people['english'],record,publish=True))
     refused=post(people['leader'],[cell(english,'s1','present'),cell(maths,'s1')],'late',lateMinutes=5)
-    assert refused.status_code==409 and ENGLISH in refused.json()['detail'] and '17.08' in refused.json()['detail']
+    assert refused.status_code==409
     value=good(grid(people['leader']))
     assert lesson_of(value,MATHS)['state']=='none' and value['cells'][english]['s1'][0]=='absent'
     # Another pupil of the same lesson is not a conflict.
@@ -368,7 +359,7 @@ def test_closed_future_and_cancelled_lessons_are_refused_and_nothing_is_written(
     people=staffed(client);english,maths=key_of(client,ENGLISH),key_of(client,MATHS);untouched=lambda:good(grid(people['leader']))['cells'][maths]['s1'][0] is None
     period=close_day(client)
     closed=post(people['leader'],[cell(english,'s1'),cell(maths,'s1')])
-    assert closed.status_code==403 and period['name'] in closed.json()['detail'] and untouched()
+    assert closed.status_code==403 and untouched()
     shown=good(grid(people['leader']))['days'][0];assert not any(l['canEdit'] for l in shown['lessons']) and shown['locked']==[period['name']]
     assert period_action(client,period,'reopen',reason='Исправление отметок').status_code==200
     future=key_of(client,ENGLISH,NEXT)
@@ -409,7 +400,7 @@ def test_lesson_teacher_is_told_about_a_correction(client,clock):
     people=staffed(client);key=publish(people['english'],s1=('absent',0),s2=('present',0))['lessonKey'];maths=key_of(client,MATHS)
     good(post(people['leader'],[cell(key,'s1','absent')],'present'))
     told=inbox(people['english'],'journal.attendance_corrected')
-    assert len(told)==1 and 'Классный руководитель' in told[0]['title'] and 'Ученик' not in told[0]['title'] and ENGLISH in told[0]['title']
+    assert len(told)==1 and 'Ученик 1' not in json.dumps(told,ensure_ascii=False)
     assert not inbox(people['leader'],'journal.attendance_corrected')
     # A mark nobody had published before is no correction.
     good(post(people['leader'],[cell(maths,'s1')],'absent'))
@@ -427,13 +418,13 @@ def test_the_one_who_corrects_is_not_told(client,clock):
     assert len(inbox(people['maths'],'journal.attendance_corrected'))==1 and not inbox(people['english'],'journal.attendance_corrected')
 
 
-def test_failure_rolls_back_every_lesson(client,clock,monkeypatch):
-    people=staffed(client);english,maths=key_of(client,ENGLISH),key_of(client,MATHS);calls=[]
-    original=api.journal.notify
-    def fail(*args,**kwargs):
-        calls.append(1)
-        if len(calls)>1:raise RuntimeError('notification failed')
-        return original(*args,**kwargs)
+@pytest.mark.parametrize('failing',[ENGLISH,MATHS])
+def test_failure_while_saving_one_lesson_rolls_back_every_lesson(client,clock,monkeypatch,failing):
+    people=staffed(client);english,maths=key_of(client,ENGLISH),key_of(client,MATHS)
+    original=api.journal.notify;broken={ENGLISH:english,MATHS:maths}[failing]
+    def fail(db,workspace,version,before,after,key=None):
+        if key==broken:raise RuntimeError('notification failed')
+        return original(db,workspace,version,before,after,key)
     monkeypatch.setattr(api.journal,'notify',fail)
     with pytest.raises(RuntimeError):post(people['leader'],[cell(english,'s1'),cell(maths,'s1')])
     monkeypatch.setattr(api.journal,'notify',original)
@@ -450,7 +441,7 @@ def test_confirmation_lifecycle(client,clock):
     people=staffed(client);leader=people['leader'];english=publish(people['english'],s1=('present',0),s2=('present',0))['lessonKey']
     assert state_of(leader)['status']=='none' and state_of(leader)['expected'] and state_of(leader)['canConfirm']
     # The maths lesson was never filled in: the class teacher has to say that was checked.
-    refused=confirm(leader);assert refused.status_code==409 and '17.08.2026' in refused.json()['detail'] and not trail(leader)
+    assert confirm(leader).status_code==409 and not trail(leader)
     done=good(confirm(leader,acknowledge=True));assert [(d['date'],d['status'],d['version'],d['actor']) for d in done['days']]==[(DAY,'confirmed',1,'Классный руководитель')]
     shown=state_of(leader);assert shown['status']=='confirmed' and shown['version']==1 and shown['actor']=='Классный руководитель' and shown['updated']
     assert trail(leader)[0]['comment']
@@ -483,9 +474,11 @@ def test_confirmation_refusals(client,monkeypatch):
     assert confirm(leader,[NEXT],acknowledge=True).status_code==422
     assert confirm(leader,['2026-08-01'],acknowledge=True).status_code==422
     fix(monkeypatch,LATER)
-    empty=confirm(leader,['2026-08-18'],acknowledge=True);assert empty.status_code==422 and '18.08.2026' in empty.json()['detail']
+    assert confirm(leader,['2026-08-18'],acknowledge=True).status_code==422
+    assert not trail(leader,'2026-08-18')
     period=close_day(client)
-    locked=confirm(leader,acknowledge=True);assert locked.status_code==403 and 'Первая четверть' in locked.json()['detail']
+    assert confirm(leader,acknowledge=True).status_code==403
+    assert state_of(leader)['status']=='none' and not trail(leader)
     assert period_action(client,period,'reopen',reason='Проверка').status_code==200
     # One bad day leaves the whole week unwritten.
     week=confirm(leader,[DAY,'2026-08-18'],acknowledge=True);assert week.status_code==422

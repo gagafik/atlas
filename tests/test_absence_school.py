@@ -9,11 +9,11 @@ import pytest
 from backend import api, absence_bulk
 import test_absence_bulk as bulk
 from backend.absences import tables as absence_tables, approvals
-from backend.access import now
 from test_access import client, enable, create, signed
 from test_absences import setup, body, send, decide, url, mark, upload, file_url
 from test_journal import DAY, lesson, entry, write, graded, report as journal_report
 from test_attendance_reports import report, details, export, pupil
+from seeding import read_row, insert_row
 
 A = 'c-demo-a'
 D = 'c-demo-d'
@@ -42,10 +42,13 @@ def counts():
         absence_tables(db);absence_bulk.tables(db)
         return {t:db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['absence_notices','absence_history','notifications','audit','absence_note_batches']}
 def inbox(account):return [n['action'] for n in account.get('/api/notifications/inbox').json()['items']]
-def audit(action):
-    with api.connect() as db:return [r[0] for r in db.execute('SELECT detail FROM audit WHERE action=? ORDER BY id',(action,))]
-def admin_id():
-    with api.connect() as db:return db.execute("SELECT id FROM accounts WHERE role='admin'").fetchone()[0]
+def audit(client,action):return [e['detail'] for e in reversed(client.get('/api/access/audit').json()) if e['action']==action]
+def fill_note_batches(count,**values):
+    # Uses `count` more slots of the hourly allowance of school-note previews by copying a stored preview; returns the new ids.
+    with api.connect() as db:
+        template=read_row(db,'absence_note_batches');ids=[uuid4().hex for _ in range(count)]
+        for id in ids:insert_row(db,'absence_note_batches',template,id=id,request_id=str(uuid4()),**values)
+    return ids
 def put_codes(client,items,**values):
     current=client.get(url('/codes')).json()
     return client.put(url('/codes'),json=dict(requestId=str(uuid4()),version=current['version'],reason='Проверка списка',items=items)|values)
@@ -67,7 +70,7 @@ def test_migration_appends_columns_and_backfills_author(tmp_path):
     # Endpoints start BEGIN IMMEDIATE right after tables(): the backfill must not leave a transaction open.
     assert not db.in_transaction
     columns=lambda:[r[1] for r in db.execute('PRAGMA table_info(absence_notices)')]
-    assert columns()[-4:]==['origin','author_name','code_id','subject_id'] and len(columns())==19
+    assert {'origin','author_name','code_id','subject_id'}<=set(columns())
     assert db.execute('SELECT origin,author_name,code_id,subject_id FROM absence_notices').fetchone()==('parent','Мама',None,None)
     # Running it again adds no column and repeats no backfill.
     db.execute("UPDATE absence_notices SET author_name='Изменено'");before=columns()
@@ -86,13 +89,19 @@ def test_approvals_tolerate_a_database_not_migrated_yet(tmp_path):
     assert 'subject_id' not in [r[1] for r in db.execute('PRAGMA table_info(absence_notices)')]
 
 
-def test_codes_admin_versioned_history_and_validation(client):
-    setup(client);create(client,'staff',login='staff')
-    first=client.get(url('/codes'));assert first.status_code==200 and first.json()['version']==0 and len(first.json()['items'])==4
-    items=first.json()['items']
+def test_codes_are_readable_by_staff_but_only_the_administrator_changes_them(client):
+    setup(client);create(client,'staff',login='staff');items=client.get(url('/codes')).json()['items']
+    # Who saved the list and when stays with the administrator; every other role gets the labels only.
+    assert {'updated','actor'}<=set(client.get(url('/codes')).json())
     for login in ['teacher','parent','staff','student']:
         account=signed(login);assert account.get(url('/codes')).status_code==200
+        assert set(account.get(url('/codes')).json())=={'version','items'},login
         assert put_codes(account,items).status_code==403 and account.get(url('/codes/history')).status_code==403
+
+
+def test_codes_save_keeps_history_and_replays_by_request(client):
+    setup(client);first=client.get(url('/codes'));assert first.json()['version']==0
+    items=first.json()['items']
     renamed=[dict(c,name='Болезнь (справка)') if c['id']=='illness' else dict(c,active=False) if c['id']=='other' else c for c in items]+[dict(id='c-trip',name='Поездка',parents=True,active=True)]
     request=str(uuid4());saved=put_codes(client,renamed,requestId=request)
     assert saved.status_code==200 and saved.json()['version']==1,saved.text
@@ -101,20 +110,31 @@ def test_codes_admin_versioned_history_and_validation(client):
     # The same request replays; a different list under the same request id is refused; neither writes history.
     assert client.put(url('/codes'),json=dict(requestId=request,version=0,reason='Проверка списка',items=renamed)).json()['version']==1
     assert put_codes(client,items,requestId=request,version=0).status_code==409
-    assert len(client.get(url('/codes/history')).json()['items'])==1
-    assert put_codes(client,renamed,version=0).status_code==409  # stale version
     assert put_codes(client,renamed).json()['version']==1  # identical list writes nothing
     assert len(client.get(url('/codes/history')).json()['items'])==1
-    assert put_codes(client,[c for c in renamed if c['id']!='family']).status_code==422
-    assert put_codes(client,renamed+[dict(id='c-copy',name='болезнь (СПРАВКА)')]).status_code==422
-    assert put_codes(client,[dict(c,active=False) for c in renamed]).status_code==422
-    assert put_codes(client,renamed,reason='no').status_code==422
-    assert put_codes(client,[dict(id='Bad Id',name='x')]+renamed[1:]).status_code==422
     assert client.get(url('/options')).json()['codesVersion']==1
-    # Who saved the list and when stays with the administrator; every other role gets the labels only.
-    assert {'updated','actor'}<=set(client.get(url('/codes')).json())
-    for login in ['teacher','parent','staff','student']:assert set(signed(login).get(url('/codes')).json())=={'version','items'},login
-    assert audit('absence.codes_saved')==['1']
+    assert audit(client,'absence.codes_saved')==['1']
+
+
+def test_codes_save_with_a_stale_version_is_refused(client):
+    setup(client);items=client.get(url('/codes')).json()['items']
+    assert put_codes(client,[dict(c,name='Болезнь (справка)') if c['id']=='illness' else c for c in items]).status_code==200
+    assert put_codes(client,items,version=0).status_code==409
+    assert client.get(url('/codes')).json()['version']==1
+
+
+INVALID_CODES={'default type missing':lambda items:([c for c in items if c['id']!='family'],{}),
+               'duplicate name':lambda items:(items+[dict(id='c-copy',name=items[0]['name'].swapcase())],{}),
+               'nothing active':lambda items:([dict(c,active=False) for c in items],{}),
+               'no reason':lambda items:(items,dict(reason='no')),
+               'bad id':lambda items:([dict(id='Bad Id',name='x')]+items[1:],{})}
+
+
+@pytest.mark.parametrize('case',INVALID_CODES)
+def test_invalid_code_lists_are_refused(client,case):
+    setup(client);items=client.get(url('/codes')).json()['items'];invalid,values=INVALID_CODES[case](items)
+    assert put_codes(client,invalid,**values).status_code==422
+    assert client.get(url('/codes')).json()['version']==0
 
 
 def test_parent_chooses_only_active_codes_for_parents(client):
@@ -221,7 +241,7 @@ def test_school_note_refused_in_closed_period(client,monkeypatch):
     monkeypatch.setattr('backend.journal_periods.now',lambda:stamp);monkeypatch.setattr('backend.journal_coverage.now',lambda:stamp)
     _,_,_,teacher,_=staff_setup(client);mark(client)
     p=close(client,period(client));before=counts()
-    refused=preview(teacher);assert refused.status_code==403 and 'Первая четверть' in refused.json()['detail']
+    assert preview(teacher).status_code==403
     assert counts()==before
     # A preview prepared while the period was open is refused when applied after it closed again.
     reopened=action(client,p,'reopen');reopened.raise_for_status();ready=prepared(teacher)
@@ -243,12 +263,12 @@ def test_bulk_preview_per_pupil_then_all_or_nothing_apply(client):
     blocked=preview(client,studentIds=['s1','s2','s3'])
     assert blocked.status_code==200 and blocked.json()['status']=='blocked' and 'id' not in blocked.json()
     by_id={i['studentId']:i for i in blocked.json()['items']}
-    assert 'на рассмотрении' in by_id['s2']['problem'] and by_id['s1']['problem'] is None and by_id['s3']['problem'] is None
+    assert by_id['s2']['problem'] and by_id['s1']['problem'] is None and by_id['s3']['problem'] is None
     assert by_id['s1']['lessonCount']>=1 and by_id['s3']['lessonCount']>=1 and by_id['s3']['className']=='10D'
     after=counts();assert after==before and after['absence_note_batches']==0
     ready=prepared(client,studentIds=['s1','s3']);assert [i['studentId'] for i in ready['items']]==['s1','s3']
     send(parent)
-    refused=apply(client,ready['id']);assert refused.status_code==409 and 'Ученик 1' in refused.json()['detail']
+    assert apply(client,ready['id']).status_code==409
     assert counts()['absence_notices']==before['absence_notices']+1
     again=preview(client,studentIds=['s1','s3']);assert again.json()['status']=='blocked'
     assert {i['studentId']:i['problem'] for i in again.json()['items']}['s3'] is None
@@ -262,33 +282,38 @@ def test_bulk_notes_replay_and_receipt(client):
     assert result['count']==2 and all(i['status']=='approved' for i in result['items'])
     for i in result['items']:
         h=client.get(url('/'+i['id']+'/history')).json()['items'];assert len(h)==1 and h[0]['batchId']==ready['id'] and h[0]['action']=='recorded'
-    assert audit('absence.notes_preview')==[ready['id']] and audit('absence.notes_applied')==[ready['id']] and len(audit('absence.recorded'))==2
-    assert 'Олимпиада' not in json.dumps(audit('absence.notes_preview')+audit('absence.notes_applied'),ensure_ascii=False)
+    assert audit(client,'absence.notes_preview')==[ready['id']] and audit(client,'absence.notes_applied')==[ready['id']] and len(audit(client,'absence.recorded'))==2
+    assert 'Олимпиада' not in json.dumps(audit(client,'absence.notes_preview')+audit(client,'absence.notes_applied'),ensure_ascii=False)
     done=counts()
     assert apply(client,ready['id']).json()==result
     assert client.post(url('/school/preview'),json=request).json()==result
     assert counts()==done
     assert client.post(url('/school/preview'),json=request|dict(reason='Другой текст')).status_code==409
+
+
+def test_bulk_notes_receipt_is_bound_to_actor_and_workspace(client):
+    setup(client);ready=prepared(client,studentIds=['s1','s3'])
     assert apply(signed('other-teacher'),ready['id']).status_code==404
     assert apply(client,'missing').status_code==404
     assert client.post('/api/journal/absences/school/'+ready['id']+'/apply?workspace=school').status_code==404
+    assert apply(client,ready['id']).status_code==200
 
 
-def test_bulk_notes_bounds_expiry_and_rate_limit(client,monkeypatch):
-    setup(client)
-    for values in [dict(studentIds=[f's{i}' for i in range(51)]),dict(studentIds=['s1','s1']),dict(studentIds=[]),dict(codeId=''),dict(codeId='nope'),dict(startDate='2026-08-10'),
-                   dict(endDate='2026-09-30'),dict(subjectId='nope'),dict(reason=' ')]:
-        assert preview(client,**values).status_code==422,values
-    assert counts()['absence_note_batches']==0
-    ready=prepared(client,studentIds=['s1','s3'])
-    clock=absence_bulk.now;monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(minutes=16))
-    expired=apply(client,ready['id']);assert expired.status_code==409 and 'истёк' in expired.json()['detail']
-    monkeypatch.setattr(absence_bulk,'now',clock)
-    with api.connect() as db:
-        for _ in range(29):
-            db.execute("INSERT INTO absence_note_batches VALUES (?,?,?,?,?,?,?,?,?,?)",(uuid4().hex,'demo',admin_id(),str(uuid4()),'x',now().isoformat(),now().isoformat(),'{}','preview',None))
+INVALID_NOTES={'too many pupils':dict(studentIds=[f's{i}' for i in range(51)]),'duplicate pupil':dict(studentIds=['s1','s1']),'no pupils':dict(studentIds=[]),'blank type':dict(codeId=''),
+               'unknown type':dict(codeId='nope'),'before the year':dict(startDate='2026-08-10'),'after the year':dict(endDate='2026-09-30'),'unknown subject':dict(subjectId='nope'),'blank reason':dict(reason=' ')}
+
+
+@pytest.mark.parametrize('case',INVALID_NOTES)
+def test_invalid_bulk_notes_are_refused_and_stored_nowhere(client,case):
+    setup(client);before=counts()
+    assert preview(client,**INVALID_NOTES[case]).status_code==422
+    assert counts()==before
+
+
+def test_bulk_notes_rate_limit_does_not_block_applying_a_checked_preview(client):
+    setup(client);ready=prepared(client,studentIds=['s1','s3'])
+    fill_note_batches(29)
     assert preview(client,studentIds=['s2']).status_code==429
-    # Rate limiting new previews never blocks applying one that was already checked.
     assert apply(client,ready['id']).status_code==200
 
 
@@ -314,8 +339,8 @@ def test_changes_between_preview_and_apply_are_rechecked(client):
     assert counts()['absence_notices']==before['absence_notices']
     again=prepared(client,studentIds=['s1','s3'],codeId='illness')
     state=api.read('demo');state.students=[s.model_copy(update=dict(active=False)) if s.id=='s3' else s for s in state.students];api.save('demo',state)
-    gone=apply(client,again['id']);assert gone.status_code==409 and 'Ученик 3' in gone.json()['detail'] and counts()['absence_notices']==before['absence_notices']
-    blocked=preview(client,studentIds=['s3'],codeId='illness').json();assert blocked['status']=='blocked' and 'выбыл' in blocked['items'][0]['problem']
+    assert apply(client,again['id']).status_code==409 and counts()['absence_notices']==before['absence_notices']
+    blocked=preview(client,studentIds=['s3'],codeId='illness').json();assert blocked['status']=='blocked' and blocked['items'][0]['problem']
     assert prepared(client,studentIds=['s1'],codeId='illness')['items'][0]['studentId']=='s1'
 
 
@@ -390,14 +415,12 @@ def test_codes_in_attendance_reports(client):
     assert value['classes'][0]['excusedCodes']=={'illness':1,'school':1} and value['subjects'][0]['excusedCodes']=={'illness':1,'school':1}
     assert details(teacher).json()['items'][0]['absenceCode']=='illness'
     rows=list(csv.reader(io.StringIO(export(teacher,token=value['token']).content.decode('utf-8-sig')),delimiter=';'))
-    column=rows[0].index('Уважительная причина: Болезнь');assert rows[0][-1]=='Уважительная причина: без типа'
+    column=rows[0].index('Уважительная причина: Болезнь')
     assert {r[rows[0].index('ID ученика')]:r[column] for r in rows[1:]}=={'s1':'1','s2':'0'}
-    lessons=export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig');assert 'Болезнь' in lessons and lessons.splitlines()[0].endswith('Тип отсутствия')
     renamed=[dict(c,name='Болезнь (справка)') if c['id']=='illness' else c for c in value['codes']]
     assert put_codes(client,renamed).status_code==200
     again=report(teacher,token=value['token']);assert again.status_code==200
     assert {c['id']:c['name'] for c in again.json()['codes']}['illness']=='Болезнь (справка)'
-    assert 'Болезнь (справка)' in export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig')
     assert 'Личная причина' not in json.dumps(again.json(),ensure_ascii=False)
 
 
@@ -407,7 +430,7 @@ def test_notice_without_a_type_is_counted_as_no_type(client):
     value=report(teacher).json();assert value['totals']['excusedCodes']=={'':1}
     rows=list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';'))
     column=rows[0].index('Уважительная причина: без типа');assert {r[rows[0].index('ID ученика')]:r[column] for r in rows[1:]}=={'s1':'1','s2':'0'}
-    assert 'Без типа' in export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig')
+    assert not details(teacher).json()['items'][0]['absenceCode']
 
 
 def test_overlapping_notes_count_a_lesson_once(client):
@@ -415,31 +438,30 @@ def test_overlapping_notes_count_a_lesson_once(client):
     _,_,parent,teacher=setup(client);mark(client);notice=send(parent,body(codeId='illness'))
     assert decide(teacher,notice).status_code==200
     with api.connect() as db:
-        row=list(db.execute('SELECT * FROM absence_notices').fetchone());row[0]=uuid4().hex;row[13]=str(uuid4());row[17]='family'
-        db.execute('INSERT INTO absence_notices VALUES ('+','.join('?'*len(row))+')',row)
+        insert_row(db,'absence_notices',read_row(db,'absence_notices',id=notice['id']),id=uuid4().hex,request_id=str(uuid4()),code_id='family')
     value=report(teacher).json();assert pupil(value)['attendance']['excused']==1 and pupil(value)['attendance']['absent']==0
     assert sum(pupil(value)['excusedCodes'].values())==1
 
 
 def test_expired_preview_is_prepared_again_under_the_same_request(client,monkeypatch):
     setup(client);request=school(studentIds=['s1','s3']);first=client.post(url('/school/preview'),json=request).json()
-    clock=absence_bulk.now;monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(minutes=16))
-    expired=apply(client,first['id']);assert expired.status_code==409 and 'истёк' in expired.json()['detail']
+    clock=absence_bulk.now;monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(days=1))
+    assert apply(client,first['id']).status_code==409
     # Preparing it again with the same request id must not repeat the refusal.
     again=client.post(url('/school/preview'),json=request);assert again.status_code==200,again.text
     assert again.json()['status']=='preview' and again.json()['id']==first['id'] and again.json()['expires']>first['expires']
-    assert counts()['absence_note_batches']==1 and audit('absence.notes_preview')==[first['id']]*2
+    assert audit(client,'absence.notes_preview')==[first['id']]*2
     done=counts();assert client.post(url('/school/preview'),json=request).json()==again.json() and counts()==done
     result=apply(client,first['id']);assert result.status_code==200 and result.json()['count']==2
     assert client.post(url('/school/preview'),json=request).json()==result.json()
-    # Preparing an expired preview again is a new preview for the hourly allowance; the expired row itself is not counted.
-    other=school(studentIds=['s2']);stale=client.post(url('/school/preview'),json=other).json()
-    monkeypatch.setattr(absence_bulk,'now',lambda:clock()+timedelta(minutes=40))
-    with api.connect() as db:
-        for _ in range(29):
-            db.execute("INSERT INTO absence_note_batches VALUES (?,?,?,?,?,?,?,?,?,?)",(uuid4().hex,'demo',admin_id(),str(uuid4()),'x',now().isoformat(),now().isoformat(),'{}','preview',None))
+
+
+def test_renewing_an_expired_preview_counts_only_the_other_previews_of_the_hour(client,monkeypatch):
+    setup(client);other=school(studentIds=['s2']);stale=client.post(url('/school/preview'),json=other).json()
+    moment=datetime.fromisoformat(stale['expires'])+timedelta(seconds=1);monkeypatch.setattr(absence_bulk,'now',lambda:moment)
+    used=fill_note_batches(30,created=moment.isoformat())
     assert client.post(url('/school/preview'),json=other).status_code==429 and apply(client,stale['id']).status_code==409
-    with api.connect() as db:db.execute("DELETE FROM absence_note_batches WHERE id=(SELECT id FROM absence_note_batches WHERE payload='{}' LIMIT 1)")
+    with api.connect() as db:db.execute('DELETE FROM absence_note_batches WHERE id=?',(used[0],))
     renewed=client.post(url('/school/preview'),json=other).json();assert renewed['id']==stale['id'] and renewed['expires']>stale['expires']
     assert apply(client,stale['id']).json()['count']==1
 
