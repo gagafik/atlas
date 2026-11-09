@@ -10,6 +10,7 @@ from typing import Annotated,Literal
 from fastapi import HTTPException,Query,Request
 from fastapi.responses import StreamingResponse
 from pydantic import Field,model_validator
+from . import school_years
 from .models import Model
 from .natural import natural
 from .notifications import encoded
@@ -176,7 +177,8 @@ def register(service,app,Workspace):
     def layout_write(periodId:str,classId:str,body:Layout,request:Request,workspace:Workspace='school'):
         user,snap=service.context(request,workspace,True,True)
         with service.access.lock,service.access.connect() as db:
-            db.execute('BEGIN IMMEDIATE');service.recheck(db,user,snap,workspace);known(db,snap,workspace,periodId,classId)
+            db.execute('BEGIN IMMEDIATE');service.recheck(db,user,snap,workspace);period=known(db,snap,workspace,periodId,classId)
+            school_years.require_current(db,workspace,period['start'])
             if layout_of(db,workspace,periodId,classId)['version']!=body.version:raise HTTPException(409,'Порядок предметов изменился. Обновите страницу.')
             version=body.version+1;value=body.model_dump(mode='json',exclude={'version'})
             db.execute('INSERT INTO grading_report_settings VALUES (?,?,?,?,?) ON CONFLICT(workspace,period_id,class_id) DO UPDATE SET version=excluded.version,document=excluded.document',(workspace,periodId,classId,version,encoded(value)))

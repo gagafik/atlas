@@ -253,13 +253,14 @@ class SchoolYears:
         if user['role'] != 'admin': raise HTTPException(403, 'Новый учебный год начинает администратор.')
         return user
 
-    def periods(self, db, workspace):
-        try: return [(r[0], r[1], date.fromisoformat(r[2]), date.fromisoformat(r[3])) for r in db.execute('SELECT name,kind,start_day,end_day FROM journal_periods WHERE workspace=? ORDER BY start_day,end_day DESC,id', (workspace,))]
+    def periods(self, db, workspace, state):
+        # Only the running year: the periods of archived years stay in the table and must not shift into the next plan.
+        try: return [(r[0], r[1], date.fromisoformat(r[2]), date.fromisoformat(r[3])) for r in db.execute('SELECT name,kind,start_day,end_day FROM journal_periods WHERE workspace=? AND start_day>=? AND end_day<=? ORDER BY start_day,end_day DESC,id', (workspace, state.settings.yearStart.isoformat(), state.settings.yearEnd.isoformat()))]
         except sqlite3.OperationalError as error:
             missing(error); return []
 
-    def open_periods(self, db, workspace):
-        try: return [r[0] for r in db.execute("SELECT name FROM journal_periods WHERE workspace=? AND status='open' ORDER BY start_day,id", (workspace,))]
+    def open_periods(self, db, workspace, state):
+        try: return [r[0] for r in db.execute("SELECT name FROM journal_periods WHERE workspace=? AND status='open' AND start_day>=? AND end_day<=? ORDER BY start_day,id", (workspace, state.settings.yearStart.isoformat(), state.settings.yearEnd.isoformat()))]
         except sqlite3.OperationalError as error:
             missing(error); return []
 
@@ -303,7 +304,7 @@ class SchoolYears:
             with self.access.read_connect() as db:
                 db.execute('BEGIN')
                 version, stored = self.draft(db, workspace)
-                periods = self.periods(db, workspace)
+                periods = self.periods(db, workspace, state)
                 now_year = current(db, workspace, state)
             defaults = default_plan(state, periods)
             plan = stored or defaults
@@ -332,7 +333,7 @@ class SchoolYears:
             state = self.access.read(workspace)
             if state.revision != body.revision: raise HTTPException(409, 'Данные изменились в другом окне. Обновите страницу.')
             with self.access.read_connect() as db:
-                db.execute('BEGIN'); warnings = dict(openPeriods=self.open_periods(db, workspace))
+                db.execute('BEGIN'); warnings = dict(openPeriods=self.open_periods(db, workspace, state))
             candidate, summary, problems = next_state(state, body.plan)
             return dict(summary=summary, problems=problems, warnings=warnings, canApply=not problems, canStart=today() > state.settings.yearEnd)
 
@@ -356,7 +357,7 @@ class SchoolYears:
                 if db.execute('SELECT 1 FROM school_years WHERE workspace=? AND id=?', (workspace, new_id)).fetchone(): raise refusal(409, 'Этот учебный год уже начат.', 'yearExists')
                 candidate, summary, problems = next_state(before, body.plan)
                 if problems: raise refusal(422, 'План нового года не готов к запуску.', 'plan', problems=problems)
-                open_names = self.open_periods(db, workspace)
+                open_names = self.open_periods(db, workspace, before)
                 if open_names and not body.acknowledgeWarnings: raise refusal(422, 'Есть открытые периоды текущего года.', 'warnings', warnings=dict(openPeriods=open_names))
                 old = current(db, workspace, before)
                 stamp = now().isoformat()

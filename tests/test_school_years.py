@@ -7,7 +7,7 @@ from backend.seed import initial_state
 from test_access import client,enable,create,signed
 from test_journal import DAY,entry,lesson,write,graded
 from test_journal_periods import period,close,action,period_clock
-from test_final_grades import seeded as final_book,stop_gradebook_jobs
+from test_final_grades import seeded as final_book,stop_gradebook_jobs,publish as publish_final,propose,batch as final_batch,report as final_report
 
 BASE='/api/school-years'
 SUMMER=datetime(2027,6,20,10,tzinfo=timezone.utc)
@@ -278,3 +278,34 @@ def test_final_grade_options_by_year(client):
     assert closed['id'] in listed(year='2026')
     assert closed['id'] not in listed(year=years(client)['current'])
     assert closed['id'] in listed()
+
+
+def test_published_final_grades_and_layouts_of_the_past_year_are_read_only(client):
+    closed,_,scale,row,_=final_book(client)
+    published=publish_final(client,propose(client,row,scale).json())
+    client.put(f"/api/final-grades/report-layouts/{closed['id']}/c-demo-a?workspace=demo",json=dict(version=0)).raise_for_status()
+    started(client)
+    def kept():
+        return [(i['subjectId'],i['label']) for i in final_report(signed('parent'),closed).json()['items']]
+    before=kept()
+    assert before
+    for send in (lambda:final_batch(client,[published],'withdraw',reason='Исправление ошибки'),
+                 lambda:final_batch(client,[published],'reopen',reason='Исправление ошибки'),
+                 lambda:client.put(f"/api/final-grades/report-layouts/{closed['id']}/c-demo-a?workspace=demo",json=dict(version=1,order=['math']))):
+        response=send()
+        assert response.status_code==409 and response.json()['detail']['reason']=='archivedYear',response.text
+    assert kept()==before
+
+
+def test_the_second_year_can_be_prepared_and_started(client,monkeypatch):
+    enable(client)
+    period(client)
+    started(client)
+    monkeypatch.setattr(school_years,'now',lambda:datetime(2028,6,20,10,tzinfo=timezone.utc))
+    plan=client.get(url('/plan'))
+    assert plan.status_code==200,plan.text
+    warned=client.post(url('/preview'),json=dict(revision=api.read('demo').revision,plan=plan.json()['plan']))
+    assert warned.status_code==200 and len(warned.json()['warnings']['openPeriods'])==1  # the carried period of this year, not the archived one
+    second=begin(client,plan.json()['plan'],acknowledgeWarnings=True)
+    assert second.status_code==200,second.text
+    assert [y['archived'] for y in years(client)['years']]==[False,True,True]
