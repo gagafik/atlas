@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { Account } from "./auth";
 import { requestId } from "./dutySchedule";
+import Letterhead from "./Letterhead";
 import { BRIEFING_PRINT, printNode } from "./printReport";
 import {
   HISTORY_NAMES,
@@ -188,7 +189,6 @@ function BriefingForm({
         <input
           type="date"
           value={heldOn}
-          min={options.yearStart}
           max={options.today}
           onChange={(e) => touch(setHeldOn)(e.target.value)}
         />
@@ -663,6 +663,9 @@ function Journal({
       {open && (
         <section aria-label="Инструктаж" className="sf-class">
           <div ref={printable}>
+            <div className="sf-printonly">
+              <Letterhead school={options.school} />
+            </div>
             <h3 className="sf-printonly">Журнал регистрации инструктажа</h3>
             <h3>
               {kindName(open.kind)} инструктаж · {dayLabel(open.heldOn)}

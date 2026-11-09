@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import Letterhead from "./Letterhead";
 
 type Flags = { manage: boolean; member: boolean; family: boolean };
 type Person = { id: string; name: string };
@@ -483,7 +484,7 @@ export default function CommissionExams({
         doc.kind === "protocol" ? "Протокол экзамена" : "Решение комиссии"
       }
     >
-      <p>{doc.data.school}</p>
+      <Letterhead school={doc.data.school} />
       {doc.kind === "protocol" ? (
         <>
           <h3>Протокол комиссионного экзамена</h3>

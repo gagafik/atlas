@@ -766,6 +766,8 @@ const YEARLESS_MODALS: ModalId[] = [
   "hall",
   "sections",
   "operations",
+  "drill",
+  "logins",
 ];
 export function yearScreen(target: NavTarget, role: Role | null): YearScreen {
   if (target.kind === "account") return "same";

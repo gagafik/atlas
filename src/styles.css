@@ -4379,6 +4379,13 @@ main {
     flex: 1 1 120px;
     min-width: 0;
   }
+  /* With the year select the name and the select take the whole row, so neither is cut when the right side fits beside them. */
+  .topbar .breadcrumb:has(.year-switch) {
+    flex-basis: 100%;
+  }
+  .topbar .year-switch {
+    flex: none;
+  }
   /* A long school name wraps to two lines one step smaller instead of being cut. */
   .topbar .breadcrumb strong {
     display: -webkit-box;
