@@ -157,7 +157,7 @@ def register(service,app,Workspace):
     def decide(id:str,body:Decide,request:Request,workspace:Workspace='school'):
         with service.context(request,workspace,True) as (db,user,snap):
             admin(user)
-            key,previous=service.replay(db,user,body)
+            key,previous=service.replay(db,user,body,id)
             if previous:return previous
             row=service.exam(db,workspace,id);check(row,body.version);need(row,'held')
             if body.writeFinal and row['data']['result']['outcome']!='graded':raise HTTPException(422,'Не явившемуся итог не ставится: отметьте «без записи в итог» и укажите причину.')

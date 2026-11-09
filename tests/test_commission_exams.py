@@ -177,3 +177,25 @@ def test_result_rules(client):
     assert result(people['member'],due,s,'9').status_code==422
     absent=ok(people['member'].post(url(f"/{due['id']}/result"),json=dict(version=due['version'],outcome='absent')))
     assert decide(client,absent).status_code==422
+
+
+def test_a_request_id_cannot_decide_another_exam(client):
+    people=staffed(client);p=period(client);s=points_scale(client)
+    first,second=[ok(result(people['member'],ok(plan(client,p,studentId=pupil)),s)) for pupil in ['s1','s2']]
+    request=dict(requestId=str(uuid4()),version=first['version'],writeFinal=False,reason='Оценка выставляется отдельно')
+    ok(client.post(url(f"/{first['id']}/decide"),json=request))
+    assert client.post(url(f"/{second['id']}/decide"),json=request).status_code==409
+    assert [e['status'] for e in ok(client.get(url()))['items'] if e['id']==second['id']]==['held']
+
+
+def test_rescheduling_moves_access_to_the_new_commission_and_cancelling_frees_the_pupil(client):
+    people=staffed(client);p=period(client);s=points_scale(client);exam=ok(plan(client,p))
+    body=plan_body(p,chairmanId='t3',examinerId='t2',memberIds=['t0']);body.pop('requestId')
+    moved=ok(client.put(url(f"/{exam['id']}"),json=body|dict(version=exam['version'])))
+    assert result(people['member'],moved,s).status_code==404
+    assert people['member'].get(url()).status_code==403
+    assert [e['id'] for e in ok(people['other'].get(url()))['items']]==[exam['id']]
+    held_exam=ok(result(people['other'],moved,s));assert held_exam['status']=='held'
+    gone=ok(client.post(url(f"/{exam['id']}/cancel"),json=dict(version=held_exam['version'],reason='Ученик выбыл')))
+    assert gone['status']=='cancelled'
+    assert plan(client,p).status_code==200

@@ -170,8 +170,8 @@ class CommissionExams:
                    (workspace,exam,user['id'],user['name'],stamp(),action,reason,encoded(document)))
         self.access.record(db,'behaviour.commission_'+action,workspace,detail=encoded(dict(examId=exam,version=document.get('version'),reason=reason)))
 
-    def replay(self,db,user,body):
-        key=hashlib.sha256(encoded(body.model_dump(mode='json')).encode()).hexdigest()
+    def replay(self,db,user,body,scope=''):
+        key=hashlib.sha256(encoded(dict(scope=scope,body=body.model_dump(mode='json'))).encode()).hexdigest()
         row=db.execute('SELECT fingerprint,result FROM commission_requests WHERE user_id=? AND request_id=?',(user['id'],body.requestId)).fetchone()
         if row:
             if row['fingerprint']!=key:raise HTTPException(409,'Идентификатор уже использован другим действием.')
