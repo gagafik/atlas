@@ -275,6 +275,7 @@ export type Page =
   | "materials"
   | "curriculum"
   | "access"
+  | "school-year"
   | "publications"
   | "commitments"
   | "dated"

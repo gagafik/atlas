@@ -15,6 +15,7 @@ import MessageFeed from "./MessageFeed";
 import MessagesPanel from "./MessagesPanel";
 import Shell, { type ShellFrame } from "./Shell";
 import { useJournalOptions, useMessageUnread } from "./shellData";
+import { useSchoolYears } from "./schoolYears";
 import { currentChild, recallChoice, rememberChoice } from "./familyChild";
 import { eventPart, eventViews, schoolYear } from "./navigation";
 import { bellState, minutesNow } from "./startPage";
@@ -269,6 +270,7 @@ export default function Portal({
   }, []);
   const space = spaces.find((x) => x.id === workspace);
   const messageUnread = useMessageUnread(workspace);
+  const years = useSchoolYears(workspace);
   const role = session.user!.role;
   const { options: journal, failed } = useJournalOptions(
     workspace,
@@ -437,6 +439,7 @@ export default function Portal({
       onView={setSection}
       school={space?.name}
       year={space && schoolYear(space.yearStart, space.yearEnd)}
+      years={years.shell}
       unread={messageUnread}
       family={
         role === "parent" && children.length
@@ -602,8 +605,9 @@ export default function Portal({
                   />
                 ) : (
                   <JournalPanel
-                    key={workspace}
+                    key={`${workspace}-${years.archivedYear ?? ""}`}
                     workspace={workspace}
+                    year={years.archivedYear}
                     child={child}
                     focus={journalFocus}
                     view={journalView}

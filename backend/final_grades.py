@@ -14,6 +14,7 @@ from .natural import natural
 from .notifications import encoded
 from .assessment_categories import composite,load
 from .gradebook_jobs import teacher_accounts,pick_account
+from . import school_years
 from .final_reports import year_advice,gpa_of,arranged,results,measures_of,duty_classes,school,OUTCOMES
 
 
@@ -213,6 +214,7 @@ class FinalGrades:
         if not raw:raise HTTPException(404,'Ведомость не найдена.')
         period=self.periods.find(db,workspace,raw[2]);fresh=period['status']=='closed' and period['version']==raw[3]
         if current and not fresh:raise HTTPException(409,'Период открыт или закрыт повторно. Подготовьте ведомость нового закрытия.')
+        if current:school_years.require_current(db,workspace,period['start'])
         return dict(id=id,period=period,closureVersion=raw[3],created=raw[4],current=fresh)
 
     def teachers(self,db,workspace,snap):
@@ -267,7 +269,7 @@ class FinalGrades:
 
     def register(self,app,Workspace):
         @app.get('/api/final-grades/options')
-        def options(request:Request,workspace:Workspace='school'):
+        def options(request:Request,workspace:Workspace='school',year:str|None=Query(default=None,pattern=r'^\d{4}$')):
             user,snap=self.context(request,workspace);staff=user['role'] in ['admin','teacher']
             # A class teacher reads the published reports of the current pupils of the own classes.
             leading=led(user,snap,workspace);pupils={s.id for s in snap.state.students if s.active and s.classId in leading}
@@ -282,6 +284,11 @@ class FinalGrades:
                 else:
                     books=[];ids=user_ids(user,workspace,'student')
                     periods=[self.periods.item(r) for r in db.execute('''SELECT p.* FROM journal_periods p WHERE p.workspace=? AND EXISTS(SELECT 1 FROM final_results f WHERE f.workspace=p.workspace AND f.period_id=p.id AND f.student_id IN (SELECT value FROM json_each(?))) ORDER BY p.start_day DESC''',(workspace,encoded(sorted(ids))))]
+                if year:
+                    # Only with a year: one school year's periods and books. Without it every period is listed, as before.
+                    start,end,_=school_years.bounds(db,workspace,snap.state,year)
+                    inside=lambda p:start<=p['start'] and p['end']<=end
+                    periods=[p for p in periods if inside(p)];books=[b for b in books if inside(b['period'])]
                 students=[dict(id=s.id,name=s.name) for s in snap.state.students if user['role']=='admin' or user['role'] in ['parent','student'] and s.id in user_ids(user,workspace,'student') or s.id in pupils]
                 # Classes for the report-card steps: all of them for the administrator, the led ones for a class teacher.
                 shown=[c for c in snap.state.classes if user['role']=='admin' or c.id in leading]
@@ -445,6 +452,7 @@ class FinalGrades:
                         db.execute('INSERT INTO final_results VALUES (?,?,?,?,?,?,?) ON CONFLICT(workspace,period_id,student_id,subject_id) DO UPDATE SET row_id=excluded.row_id,version=excluded.version,document=excluded.document',(workspace,book['period']['id'],row['studentId'],row['subjectId'],row['id'],row['version']+1,encoded(public)))
                         row['status']='published';changed.setdefault((book['period']['id'],book['period']['name'],row['studentId'],row['source']['student']['name']),[]).append(row['source']['subject'])
                     elif body.action=='withdraw':
+                        school_years.require_current(db,workspace,book['period']['start'])
                         current=db.execute('SELECT row_id FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId'])).fetchone()
                         if not current or current[0]!=row['id']:raise HTTPException(409,'У этой строки нет действующей публикации.')
                         db.execute('DELETE FROM final_results WHERE workspace=? AND period_id=? AND student_id=? AND subject_id=?',(workspace,book['period']['id'],row['studentId'],row['subjectId']))

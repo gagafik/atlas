@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Role } from "./auth";
-import type { JournalPanelName } from "./journal";
+import type { JournalPanelName, JournalView } from "./journal";
 import {
   accountMenu,
   activeItem,
@@ -15,7 +15,9 @@ import {
   startTiles,
   stepIndex,
   targetKey,
+  yearScreen,
   type MenuContext,
+  type NavTarget,
 } from "./navigation";
 
 const ROLES: Role[] = [
@@ -91,9 +93,11 @@ const APP_PAGES = [
   "publications",
   "access",
   "settings",
+  "school-year",
 ];
 const EDITOR_LACKS = [
   "access",
+  "school-year",
   "journal",
   "homework",
   "quizzes",
@@ -452,4 +456,32 @@ describe("an opened notification", () => {
         if (reachable.has(view)) expect(opened).toContain(view);
     }
   });
+});
+
+describe("what a past school year shows", () => {
+  const view = (name: string, journal?: JournalView): NavTarget => ({
+    kind: "view",
+    view: name,
+    journal,
+  });
+  it.each([
+    ["admin", view("journal", "finalGrades"), "shown"],
+    ["teacher", view("journal", "finalGrades"), "shown"],
+    ["parent", view("journal", "finalGrades"), "shown"],
+    ["parent", view("journal", "pupilGrades"), "shown"],
+    ["student", view("journal", "pupilAttendance"), "shown"],
+    ["teacher", view("journal", "pupilGrades"), "notice"],
+    ["teacher", view("journal"), "notice"],
+    ["parent", view("journal"), "notice"],
+    ["teacher", view("schedule"), "notice"],
+    ["admin", { kind: "modal", modal: "assessments" }, "notice"],
+    ["parent", view("messages"), "same"],
+    ["admin", view("school-year"), "same"],
+    ["parent", { kind: "modal", modal: "forms" }, "same"],
+  ] as [Role, NavTarget, string][])(
+    "%s opening %j gets %s",
+    (role, target, expected) => {
+      expect(yearScreen(target, role)).toBe(expected);
+    },
+  );
 });

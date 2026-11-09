@@ -14,6 +14,7 @@ import DatedSchedule from "./DatedSchedule";
 import CommitmentsPanel from "./CommitmentsPanel";
 import PublicationsPanel from "./PublicationsPanel";
 import AccessPanel from "./AccessPanel";
+import SchoolYearPanel from "./SchoolYearPanel";
 import JournalPanel, { type JournalFocus } from "./JournalPanel";
 import HomeworkQueuePanel from "./HomeworkQueuePanel";
 import QuizzesPanel from "./QuizzesLoader";
@@ -31,6 +32,7 @@ import { api } from "./api";
 import Shell, { type ShellFrame } from "./Shell";
 import SchoolStart from "./SchoolStart";
 import { useJournalPanels, useMessageUnread } from "./shellData";
+import { useSchoolYears } from "./schoolYears";
 import { schoolYear, startTiles, viewLabel, eventViews } from "./navigation";
 import type { JournalView } from "./journal";
 import { withEffectiveFrom } from "./timetableVersions";
@@ -212,6 +214,7 @@ export default function App({
     !session.enabled || session.user?.role === "admin",
   );
   const messageUnread = useMessageUnread(workspace);
+  const years = useSchoolYears(workspace);
   useEffect(() => {
     const pages = eventViews("app", null) as Record<string, Page>;
     const open = (event: Event) => {
@@ -1303,6 +1306,7 @@ export default function App({
       onView={(view, journal) => setPage(view as Page, journal)}
       school={s.settings.name}
       year={yearLabel}
+      years={years.shell}
       unread={messageUnread}
       badges={{ workloads: totalPending > 0 ? totalPending : undefined }}
       extra={
@@ -1438,7 +1442,9 @@ export default function App({
                                                         ? "Посещаемость, оценки, темы и домашние задания по датам."
                                                         : page === "access"
                                                           ? "Учётные записи, разрешённые расписания и журнал действий."
-                                                          : page === "settings"
+                                                          : page === "school-year"
+                                                            ? "Даты и периоды, перевод классов и запуск следующего года."
+                                                            : page === "settings"
                                                             ? "Параметры школы, звонки и резервные копии."
                                                             : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
                 </p>
@@ -1486,6 +1492,7 @@ export default function App({
                     "materials",
                     "curriculum",
                     "messages",
+                    "school-year",
                   ].includes(page) ? null : page !== "settings" ? (
                   entityButtons
                 ) : (
@@ -1509,6 +1516,7 @@ export default function App({
               "materials",
               "curriculum",
               "messages",
+              "school-year",
             ].includes(page) && (
               <div className="cycle-switcher">
                 <label className="field">
@@ -1635,8 +1643,9 @@ export default function App({
             )}
             {page === "journal" && (
               <JournalPanel
-                key={workspace}
+                key={`${workspace}-${years.archivedYear ?? ""}`}
                 workspace={workspace}
+                year={years.archivedYear}
                 focus={journalFocus}
                 view={journalView}
                 onLeaveView={() => setJournalView(undefined)}
@@ -1673,6 +1682,16 @@ export default function App({
                 state={s}
                 workspace={workspace}
                 onAuthChange={onAuthChange}
+              />
+            )}
+            {page === "school-year" && (
+              <SchoolYearPanel
+                key={workspace}
+                workspace={workspace}
+                onStarted={async () => {
+                  await receiveState(await api("state", workspace));
+                  await years.reload();
+                }}
               />
             )}
             {error && !modal && (
@@ -2212,6 +2231,7 @@ export default function App({
               "curriculum",
               "messages",
               "settings",
+              "school-year",
             ].includes(page) && (
               <>
                 <div className="list-toolbar">

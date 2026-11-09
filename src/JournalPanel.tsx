@@ -98,12 +98,15 @@ export type JournalFocus =
 
 export default function JournalPanel({
   workspace,
+  year,
   child,
   focus,
   view,
   onLeaveView,
 }: {
   workspace: string;
+  // The archived school year on show; undefined for the current one, so the requests stay as they were.
+  year?: string;
   // The child a pupil's or parent's portal looks at; the family screens follow it.
   child?: string;
   focus?: JournalFocus;
@@ -173,7 +176,7 @@ export default function JournalPanel({
   useEffect(() => {
     let live = true;
     setError("");
-    api("journal/options", workspace)
+    api(`journal/options${year ? `?year=${year}` : ""}`, workspace)
       .then((r: Options) => {
         if (!live) return;
         setOptions(r);
@@ -187,7 +190,7 @@ export default function JournalPanel({
     return () => {
       live = false;
     };
-  }, [workspace]);
+  }, [workspace, year]);
   useEffect(() => {
     if (
       !options?.staff ||
@@ -478,6 +481,7 @@ export default function JournalPanel({
           <FinalGradesPanel
             key={`final-grades-${workspace}`}
             workspace={workspace}
+            year={year}
             defaultOpen
             focus={focus?.finalsPeriodId ? focus : undefined}
           />
@@ -1385,6 +1389,7 @@ export default function JournalPanel({
       {options && !options.staff && (
         <FamilyJournal
           workspace={workspace}
+          year={year}
           options={options}
           chosen={child}
           view={view}
@@ -1576,6 +1581,7 @@ export default function JournalPanel({
               </div>
               <FamilyJournal
                 workspace={workspace}
+                year={year}
                 options={options}
                 view={
                   pupilTab === "grades"

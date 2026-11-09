@@ -575,7 +575,7 @@ class Journal:
         from .journal_pupil import register as pupil_period
         pupil_period(self,app,Workspace)
         @app.get('/api/journal/options')
-        def options(request: Request,workspace: Workspace='school'):
+        def options(request: Request,workspace: Workspace='school',year: str | None = Query(default=None,pattern=r'^\d{4}$')):
             user = self.scope(request,workspace)
             snap = self.snapshots.get(workspace);state = snap.state
             allowed_students = user_ids(user,workspace,'student')
@@ -590,13 +590,15 @@ class Journal:
             students = {s.id:dict(id=s.id,name=s.name,className=classes[s.classId].name if s.classId in classes else None,profileId=classes[s.classId].profileId if s.classId in classes else None) for s in state.students if s.id in allowed_students}
             def read(db):
                 self.recheck_read(db,user,snap,workspace)
-                periods = [dict(id=r[0],name=r[1],start=r[2],end=r[3],kind=r[4]) for r in db.execute('SELECT id,name,start_day,end_day,kind FROM journal_periods WHERE workspace=? ORDER BY start_day,end_day DESC,id',(workspace,))]
-                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap),periods
-            historical,panels,periods = self.reading(read)
+                from . import school_years
+                start,end,old = school_years.bounds(db,workspace,state,year);chosen = year or school_years.current(db,workspace,state)['id']
+                periods = [dict(id=r[0],name=r[1],start=r[2],end=r[3],kind=r[4]) for r in db.execute('SELECT id,name,start_day,end_day,kind FROM journal_periods WHERE workspace=? AND start_day>=? AND end_day<=? ORDER BY start_day,end_day DESC,id',(workspace,start,end))]
+                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap),periods,(start,end,old,chosen)
+            historical,panels,periods,(start,end,old,chosen) = self.reading(read)
             for student in historical: students.setdefault(student['id'],dict(student,className=None,profileId=None))
             # Families cannot read /api/state or /api/journal/periods: the school's own periods and bells reach them here.
             profiles = [dict(id=p.id,name=p.name,periods=[b.model_dump() for b in p.periods],dayPeriods={k:[b.model_dump() for b in v] for k,v in p.dayPeriods.items()}) for p in state.profiles]
-            return dict(staff=user['role'] in ['admin','teacher'],admin=user['role']=='admin',absenceNotices=panels['absences'],panels=panels,yearStart=state.settings.yearStart,yearEnd=state.settings.yearEnd,students=sorted(students.values(),key=lambda s:s['name']),
+            return dict(staff=user['role'] in ['admin','teacher'],admin=user['role']=='admin',absenceNotices=panels['absences'],panels=panels,yearStart=start,yearEnd=end,year=chosen,archived=old,students=sorted(students.values(),key=lambda s:s['name']),
                         periods=periods,profiles=profiles,today=today().isoformat())
 
         @app.get('/api/journal/day')

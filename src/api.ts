@@ -4,6 +4,9 @@ export function errorText(detail: unknown): string {
     return detail
       .map((x: any) => String(x?.msg ?? "").replace(/^Value error, /, ""))
       .join("\n");
+  // Refusals with a reason (an archived school year) carry the sentence next to the code.
+  if (detail && typeof (detail as { message?: unknown }).message === "string")
+    return (detail as { message: string }).message;
   return "Не удалось выполнить действие.";
 }
 export async function api(
@@ -31,6 +34,7 @@ export async function api(
       window.dispatchEvent(new Event("atlas-auth-required"));
     throw Object.assign(new Error(errorText(result.detail)), {
       status: response.status,
+      detail: result.detail,
     });
   }
   return result;
