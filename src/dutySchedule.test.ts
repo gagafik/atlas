@@ -113,16 +113,30 @@ describe("Duty roster helpers", () => {
     expect(monthRange("2026-12-31")).toEqual(["2026-12-01", "2026-12-31"]);
     expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
   });
-  it("writes one CSV row per duty, sorted, with spreadsheet formulas neutralised", () => {
-    const lines = rosterCsv(roster).split("\r\n");
-    expect(lines).toHaveLength(4);
-    expect(lines[0].split(";")).toHaveLength(lines[1].split(";").length);
-    expect(lines[1]).toContain(
-      '"2026-09-07";"Понедельник";"08:30";"08:50";"301";"";"1";"1"',
+  // A CSV table as rows of cells, the quotes taken off.
+  const cellsOf = (csv: string) =>
+    csv.split("\r\n").map((line) =>
+      line.split(";").map((cell) => cell.replace(/^"|"$/g, "")),
     );
-    expect(lines[2]).toContain('"\'=Сидоров"');
-    expect(lines[3]).toContain('"Иванова, Петров"');
-    expect(lines[3]).toContain('"Холл"');
+  it("writes one CSV row per duty, sorted by date and start", () => {
+    const [header, ...rows] = cellsOf(rosterCsv(roster));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(row).toHaveLength(header.length);
+    const at = (row: string[], name: string) => row[header.indexOf(name)];
+    expect(rows.map((row) => [at(row, "Дата"), at(row, "Начало")])).toEqual([
+      ["2026-09-07", "08:30"],
+      ["2026-09-07", "12:00"],
+      ["2026-09-08", "12:00"],
+    ]);
+    expect(at(rows[0], "Место")).toBe("301");
+    expect(at(rows[1], "Место")).toBe("Холл");
+  });
+  it("lists the staff of a duty and neutralises spreadsheet formulas in their names", () => {
+    const [header, ...rows] = cellsOf(rosterCsv(roster));
+    const staff = rows.map((row) => row[header.indexOf("Сотрудники")]);
+    expect(staff[1]).toBe("'=Сидоров");
+    expect(staff[2]).toContain("Иванова");
+    expect(staff[2]).toContain("Петров");
   });
   it("writes the fairness table", () => {
     const data = {
@@ -142,9 +156,17 @@ describe("Duty roster helpers", () => {
       ],
       summary: {},
     } as unknown as FairnessData;
-    const lines = fairnessCsv(data).split("\r\n");
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toBe('"\'-Минус";"2";"25";"15";"1";"2026-09-07";""');
+    const [header, row] = cellsOf(fairnessCsv(data));
+    expect(row).toHaveLength(header.length);
+    const at = (name: string) => row[header.indexOf(name)];
+    expect(at("Дежурств")).toBe("2");
+    expect(at("Минут")).toBe("25");
+    expect(at("Мест")).toBe("1");
+    expect(at("Отклонение от среднего")).toBe("15");
+    expect(at("Первое дежурство")).toBe("2026-09-07");
+    expect(at("Последнее дежурство")).toBe("");
+    // A name that a spreadsheet would read as a formula is neutralised.
+    expect(at("Сотрудник")).toBe("'-Минус");
   });
   it("describes the break after a lesson with the bells of that weekday", () => {
     expect(breakAfter(profile, 0, 0)).toEqual({

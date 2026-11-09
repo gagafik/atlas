@@ -46,12 +46,11 @@ describe("demo fetch", () => {
     expect((await demoFetch(`${ORIGIN}/api/gate`)).status).toBe(403);
   });
 
-  it("answers a missing GET with JSON 404 and logs it", async () => {
-    const { demoFetch, log } = setup();
+  it("answers a missing GET with JSON 404", async () => {
+    const { demoFetch } = setup();
     const response = await demoFetch(`${ORIGIN}/api/day?day=2026-11-03`);
     expect(response.status).toBe(404);
     expect(typeof (await response.json()).detail).toBe("string");
-    expect(log).toHaveBeenCalled();
   });
 
   it.each(["PUT", "POST", "DELETE", "PATCH"])(

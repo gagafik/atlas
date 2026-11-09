@@ -35,48 +35,42 @@ describe("a notification's request to show one record", () => {
 });
 
 describe("a notification's request reaching a reader with unsaved work", () => {
-  // A reader of one conversation, typing a reply; leaving asks first and wipes the typed text only when the answer is yes.
-  function reader(typed: string, agrees: boolean) {
-    const state = { typed, shown: "A", asked: 0, spent: [] as FocusRequest[] };
+  // The panel is stubbed with what takeFocus may ask of it, in the order it asks.
+  function reader(agrees: boolean) {
+    const calls: string[] = [];
+    const spent: FocusRequest[] = [];
     return {
-      state,
+      calls,
+      spent,
       panel: {
-        spend: (r: FocusRequest) => void state.spent.push(r),
+        spend: (r: FocusRequest) => {
+          calls.push("spend");
+          spent.push(r);
+        },
         leave: () => {
-          if (state.typed) {
-            state.asked++;
-            if (!agrees) return false;
-            state.typed = "";
-          }
-          return true;
+          calls.push("leave");
+          return agrees;
         },
         open: (id: string) => {
-          state.shown = id;
-          return id;
+          calls.push("open");
+          return `opened ${id}`;
         },
       },
     };
   }
-  it("keeps the typed reply and the conversation when the reader stays", () => {
-    const { state, panel } = reader("Здравствуйте, ответ на", false);
+  it("opens nothing when the reader stays, and still spends the request", () => {
+    const { calls, spent, panel } = reader(false);
     const request = focusRequest("B")!;
     expect(takeFocus(request, panel)).toBeUndefined();
-    expect(state).toMatchObject({
-      typed: "Здравствуйте, ответ на",
-      shown: "A",
-    });
+    expect(calls).not.toContain("open");
     // The request is gone all the same, so it cannot ask again when the panel is mounted afresh.
-    expect(state.spent).toEqual([request]);
+    expect(spent).toEqual([request]);
   });
-  it("opens the other conversation once the reader agrees to leave the reply", () => {
-    const { state, panel } = reader("черновик", true);
+  it("opens the other conversation once the reader agrees to leave, after asking", () => {
+    const { calls, spent, panel } = reader(true);
     const request = focusRequest("B")!;
-    expect(takeFocus(request, panel)).toBe("B");
-    expect(state).toMatchObject({
-      typed: "",
-      shown: "B",
-      asked: 1,
-      spent: [request],
-    });
+    expect(takeFocus(request, panel)).toBe("opened B");
+    expect(calls.indexOf("leave")).toBeLessThan(calls.indexOf("open"));
+    expect(spent).toEqual([request]);
   });
 });

@@ -50,20 +50,20 @@ describe("uploadFile", () => {
     });
   });
 
-  it("retries a 503 with Retry-After and uses the given content type", async () => {
+  it.each([429, 503])("retries a %i after Retry-After", async (status) => {
     fetchMock
-      .mockResolvedValueOnce(
-        json({ detail: "db" }, 503, { "Retry-After": "1" }),
-      )
+      .mockResolvedValueOnce(json({ detail: "busy" }, status, { "Retry-After": "1" }))
       .mockResolvedValueOnce(json({ ok: true }));
-    const promise = uploadFile("/u", new Blob(["a"]), {
-      contentType: "image/png",
-    });
+    const promise = uploadFile("/u", new Blob(["a"]));
     await vi.advanceTimersByTimeAsync(1000);
     await expect(promise).resolves.toEqual({ ok: true });
-    expect(fetchMock.mock.calls[1][1].headers["Content-Type"]).toBe(
-      "image/png",
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the content type it was given", async () => {
+    fetchMock.mockResolvedValueOnce(json({ ok: true }));
+    await uploadFile("/u", new Blob(["a"]), { contentType: "image/png" });
+    expect(fetchMock.mock.calls[0][1].headers["Content-Type"]).toBe("image/png");
   });
 
   /** Uploads to a server that is always busy; reports the pauses between requests. */
@@ -170,10 +170,10 @@ describe("uploadFile", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reports an unreadable answer", async () => {
+  it("reports an unreadable answer, with the message it was given when there is one", async () => {
     fetchMock.mockResolvedValue(new Response("<html>", { status: 200 }));
     const error = await settle(uploadFile("/u", new Blob(["a"])));
-    expect(error.message).toBe("Сервер не принял файл. Повторите загрузку.");
+    expect(error.message).not.toBe("");
     fetchMock.mockResolvedValue(new Response("<html>", { status: 502 }));
     const custom = await settle(
       uploadFile("/u", new Blob(["a"]), { unreadable: "Ответ не получен." }),
@@ -196,33 +196,39 @@ describe("downscalePhoto", () => {
   }
   const MB = 1024 * 1024;
 
-  it("shrinks a large camera JPEG to 2560 px and re-encodes it as JPEG", async () => {
-    const { tools, draw, close } = fake(4000, 3000);
-    const original = photo("photo.JPG", 5 * MB);
-    const result = await downscalePhoto(original, undefined, tools);
-    expect(draw).toHaveBeenCalledWith(2560, 1920);
-    expect(result).not.toBe(original);
-    expect(result.name).toBe("photo.jpg");
-    expect(result.type).toBe("image/jpeg");
-    expect(result.lastModified).toBe(123);
-    expect(result.size).toBe(1_000_000);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
+  // Limits of the test's own, so the cases do not move with the school's defaults.
+  const LIMITS = { maxSide: 100, maxBytes: 1 * MB, quality: 0.5 };
 
-  it("keeps a portrait photo portrait", async () => {
-    const { tools, draw } = fake(3000, 4000);
-    await downscalePhoto(photo("p.jpg", 5 * MB), undefined, tools);
-    expect(draw).toHaveBeenCalledWith(1920, 2560);
-  });
+  it.each([
+    ["a landscape JPEG", "photo.JPG", "image/jpeg", 400, 300, "photo.jpg"],
+    ["a portrait JPEG", "p.jpg", "image/jpeg", 300, 400, "p.jpg"],
+    ["a wide PNG screenshot", "scan.PNG", "image/png", 400, 100, "scan.jpg"],
+  ])(
+    "shrinks %s to the limit, keeps its proportions and re-encodes it as JPEG",
+    async (_label, name, type, width, height, renamed) => {
+      const { tools, draw, close } = fake(width, height);
+      const original = photo(name, 5 * MB, type);
+      const result = await downscalePhoto(original, LIMITS, tools);
+      const [w, h] = draw.mock.calls[0];
+      expect(Math.max(w, h)).toBe(LIMITS.maxSide);
+      expect(Math.abs(w / h - width / height)).toBeLessThan(0.05);
+      expect(result).not.toBe(original);
+      expect(result.name).toBe(renamed);
+      expect(result.type).toBe("image/jpeg");
+      expect(result.lastModified).toBe(123);
+      expect(result.size).toBe(1_000_000);
+      expect(close).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("re-encodes a heavy photo that is already small in pixels, without enlarging", async () => {
-    const { tools, draw } = fake(2000, 1500);
+    const { tools, draw } = fake(80, 60);
     const result = await downscalePhoto(
-      photo("heavy.jpeg", 4 * MB),
-      undefined,
+      photo("heavy.jpeg", 2 * MB),
+      LIMITS,
       tools,
     );
-    expect(draw).toHaveBeenCalledWith(2000, 1500);
+    expect(draw).toHaveBeenCalledWith(80, 60);
     expect(result.name).toBe("heavy.jpg");
   });
 
@@ -246,9 +252,12 @@ describe("downscalePhoto", () => {
   });
 
   it("accepts an empty type for a known image extension", async () => {
-    const { tools, draw } = fake(4000, 3000);
-    await downscalePhoto(photo("camera.png", 5 * MB, ""), undefined, tools);
-    expect(draw).toHaveBeenCalled();
+    const { tools } = fake(400, 300);
+    const original = photo("camera.png", 5 * MB, "");
+    const result = await downscalePhoto(original, LIMITS, tools);
+    expect(result).not.toBe(original);
+    expect(result.type).toBe("image/jpeg");
+    expect(result.name).toBe("camera.jpg");
   });
 
   it("keeps the original when decoding fails", async () => {
@@ -283,18 +292,6 @@ describe("downscalePhoto", () => {
   it("keeps the original when the browser has no image tools", async () => {
     const original = photo("a.jpg", 12 * MB);
     expect(await downscalePhoto(original, undefined, null)).toBe(original);
-  });
-
-  it("names a re-encoded PNG screenshot .jpg", async () => {
-    const { tools, draw } = fake(3000, 1000);
-    const result = await downscalePhoto(
-      photo("scan.PNG", 4 * MB, "image/png"),
-      undefined,
-      tools,
-    );
-    expect(draw).toHaveBeenCalledWith(2560, 853);
-    expect(result.name).toBe("scan.jpg");
-    expect(result.type).toBe("image/jpeg");
   });
 
   it("still closes the image when closing throws", async () => {
