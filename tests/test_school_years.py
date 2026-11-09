@@ -1,6 +1,7 @@
 from datetime import datetime,timezone
 from uuid import uuid4
 import pytest
+from fastapi.testclient import TestClient
 from backend import api,families,school_years
 from backend.models import Student
 from backend.seed import initial_state
@@ -59,12 +60,13 @@ def test_current_data_is_the_first_year_without_any_write(client):
     assert years(client)['years']==first['years']
 
 
-@pytest.mark.parametrize('role',['admin','editor','teacher','student','parent'])
+@pytest.mark.parametrize('role',['admin','editor','teacher','student','parent','viewer','none'])
 def test_every_signed_in_account_reads_the_year_list(client,role):
     enable(client)
-    if role!='admin':create(client,role)
-    reader=client if role=='admin' else signed(role)
+    if role not in ['admin','none']:create(client,role,**(dict(grants=[dict(workspace='demo',view='class',entityIds=['c-demo-a'])]) if role=='viewer' else {}))
+    reader=client if role=='admin' else TestClient(api.app) if role=='none' else signed(role)
     answer=reader.get(url(''))
+    if role=='none':assert answer.status_code==401;return
     assert answer.status_code==200
     assert [y['current'] for y in answer.json()['years']]==[True]
     assert answer.json()['canManage']==(role=='admin')
@@ -219,9 +221,13 @@ def test_plan_draft_versions(client):
 def people(client):
     enable(client)
     for role in ['parent','student','editor']:create(client,role)
-    create(client,'teacher',login='unrelated',grants=[dict(workspace='demo',view='teacher',entityIds=['t1'])])
-    create(client,'teacher',login='second',grants=[dict(workspace='demo',view='teacher',entityIds=['t2'])])
-    return {login:signed(login) for login in ['parent','student','editor','unrelated','second']}
+    names=lesson(client)['lesson']['teachers']
+    teachers=client.get('/api/state?workspace=demo').json()['teachers']
+    taught=next(t['id'] for t in teachers if t['name']==names)
+    other=next(t['id'] for t in teachers if t['id']!=taught)
+    create(client,'teacher',login='lesson_teacher',grants=[dict(workspace='demo',view='teacher',entityIds=[taught])])
+    create(client,'teacher',login='other_teacher',grants=[dict(workspace='demo',view='teacher',entityIds=[other])])
+    return {login:signed(login) for login in ['parent','student','editor','lesson_teacher','other_teacher']}
 
 
 def test_years_and_archive_reads_by_role_and_dated_links(client,people):
@@ -239,8 +245,10 @@ def test_years_and_archive_reads_by_role_and_dated_links(client,people):
     span=dict(workspace='demo',studentId='s1',start=DAY,end='2027-06-11')
     assert len(student.get('/api/journal/pupil-period',params=span).json()['marks'])==1
     # The teacher of the lesson reads its marks, an unrelated teacher does not.
-    reads={login:people[login].get('/api/journal/pupil-period',params=span) for login in ['second','unrelated']}
-    assert [len(r.json()['marks']) if r.status_code==200 else 0 for r in reads.values()].count(1)==1
+    own=people['lesson_teacher'].get('/api/journal/pupil-period',params=span)
+    assert own.status_code==200 and len(own.json()['marks'])==1
+    foreign=people['other_teacher'].get('/api/journal/pupil-period',params=span)
+    assert foreign.status_code==403 or foreign.json()['marks']==[]
     # Ending the family link ends the archive for that child.
     ended=client.get(f"/api/access/families/{next(u['id'] for u in client.get('/api/access/users').json() if u['login']=='parent')}/s1?workspace=demo").json()
     body={k:ended[k] for k in ['version','accountVersion','relationship','verified','evidence','reason','startDate','endDate','status']}
@@ -252,13 +260,15 @@ def test_years_and_archive_reads_by_role_and_dated_links(client,people):
 
 def test_a_pupil_who_joined_after_the_start_has_no_archive(client,people):
     started(client)
-    state=api.read('demo');state.students+=[Student(id='n1',name='Новый ученик',classId='c-demo-a')];api.save('demo',state)
+    state=client.get('/api/state?workspace=demo').json()
+    state['students'].append(Student(id='n1',name='Новый ученик',classId='c-demo-a').model_dump(mode='json'))
+    assert client.put('/api/state?workspace=demo',json=state).status_code==200
     create(client,'parent',login='newcomer',grants=[dict(workspace='demo',view='student',entityIds=['n1'])])
     assert [y['current'] for y in signed('newcomer').get(url('')).json()['years']]==[True]
 
 
 @pytest.mark.parametrize('call',['start','preview','plan'])
-@pytest.mark.parametrize('login',['editor','second','parent','student'])
+@pytest.mark.parametrize('login',['editor','other_teacher','parent','student'])
 def test_only_the_administrator_manages_the_new_year(client,people,login,call):
     reader=people[login]
     plan=draft(client)

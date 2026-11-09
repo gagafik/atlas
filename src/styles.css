@@ -6147,9 +6147,9 @@ main {
 }
 @media print {
   .archive-banner {
-    background: #fff;
-    color: #000;
-    border-color: #000;
+    background: var(--paper);
+    color: var(--ink);
+    border-color: var(--ink);
   }
   .archive-banner button,
   .year-switch {
