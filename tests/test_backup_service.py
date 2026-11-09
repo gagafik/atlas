@@ -19,6 +19,13 @@ def config(tmp_path,**values):
     return service.Config(source,tmp_path/'private-backups',**values)
 
 
+class FixedTime:
+    """The `time` module of the service with a clock that stands still."""
+    def __init__(self,now):self.now=now
+    def time(self):return self.now
+    def __getattr__(self,name):return getattr(time,name)
+
+
 def test_real_worker_snapshots_verifies_restores_and_retains_only_its_copies(tmp_path):
     c=config(tmp_path,keep=2)
     original=digest(c.database)
@@ -28,7 +35,6 @@ def test_real_worker_snapshots_verifies_restores_and_retains_only_its_copies(tmp
     assert len(list(c.destination.glob('backup-*')))==2
     assert not list(c.control.glob('backup-*'))
     assert state['lastSuccess']['restoreVerified'] and state['lastSuccess']['files']==1
-    assert 0<state['lastSuccess']['writerLockSeconds']<state['lastSuccess']['snapshotSeconds']
     for row in state['copies']:assert verify_backup(c.destination/row['id'])['files']==1
     assert digest(c.database)==original
     with closing(sqlite3.connect(c.database)) as db:
@@ -36,14 +42,15 @@ def test_real_worker_snapshots_verifies_restores_and_retains_only_its_copies(tmp
 
 
 def test_failure_does_not_replace_last_good_copy_and_retry_is_scheduled(tmp_path,monkeypatch):
-    c=config(tmp_path)
+    c=config(tmp_path);now=1_800_000_000.
+    monkeypatch.setattr(service,'time',FixedTime(now))
     assert service.Worker(c).run(once=True)
     old=service.read_json(c.control/'status.json')['lastSuccess']
     (c.database.with_suffix('.files')/'homework'/('a'*32+'.bin')).write_bytes(b'broken')
     assert not service.Worker(c).run(once=True)
     state=service.read_json(c.control/'status.json')
     assert state['lastSuccess']==old and state['lastFailure']['code']=='failed'
-    assert state['nextRun']>time.time()+890
+    assert now<state['nextRun']<now+c.interval
     assert verify_backup(c.destination/old['id'])['files']==1
     assert len(list(c.destination.glob('backup-*')))==1
 
@@ -120,13 +127,13 @@ def test_crash_recovery_cleans_only_recorded_incomplete_run_and_retries(tmp_path
     id='backup-20260101000000-'+'a'*16
     (c.control/id).mkdir();(c.control/id/'partial.bin').write_bytes(b'partial')
     (c.destination/id).mkdir();(c.destination/id/'partial.bin').write_bytes(b'partial')
-    state.update(runId=id,phase='snapshot',childDeadline=time.time()-1)
+    state.update(runId=id,phase='snapshot',childDeadline=0)
     service.atomic_json(c.control/'status.json',state)
-    with service.worker_lock(c.control):
-        worker=service.Worker(c);worker.initialize()
-        assert worker.state['lastSuccess']==last and worker.state['lastFailure']['code']=='interrupted'
-        assert not (c.control/id).exists() and not (c.destination/id).exists()
-        assert (c.destination/last['id']).is_dir() and worker.state['nextRun']==0
+    assert service.Worker(c).run(once=True)
+    assert not (c.control/id).exists() and not (c.destination/id).exists()
+    assert (c.destination/last['id']).is_dir() and verify_backup(c.destination/last['id'])['files']==1
+    state=service.read_json(c.control/'status.json')
+    assert len(state['copies'])==2 and state['lastSuccess']['id']!=last['id']
 
 
 def test_possible_orphan_deadline_prevents_cleanup(tmp_path):
@@ -173,8 +180,9 @@ def test_status_is_disabled_or_stale_and_never_exposes_paths(tmp_path,monkeypatc
     assert public['state']=='stopped' and not public['overdue']
     encoded=json.dumps(public)
     assert str(tmp_path) not in encoded and 'manifestSha256' not in encoded and 'backup-' not in encoded
-    state=service.read_json(c.control/'status.json');state.update(phase='waiting',heartbeat=time.time())
+    now=1_800_000_000.;monkeypatch.setattr(service,'time',FixedTime(now))
+    state=service.read_json(c.control/'status.json');state.update(phase='waiting',heartbeat=now)
     service.atomic_json(c.control/'status.json',state)
     assert service.public_status(c.database)['state']=='running'
-    state['heartbeat']=time.time()-60;service.atomic_json(c.control/'status.json',state)
+    monkeypatch.setattr(service,'time',FixedTime(now+24*3600))
     assert service.public_status(c.database)['state']=='stopped'

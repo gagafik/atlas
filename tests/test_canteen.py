@@ -103,11 +103,15 @@ def test_paid_order_atomic_ledger_and_cancellation_credit(client,setup):
     topup(client,people['parent'],amount=20000);before=finance(client,'accounts/s1')
     order=book(p,m);account=finance(client,'accounts/s1')
     assert account['summary']['balance']=='-7500' and account['summary']['outstanding']=='0'
-    assert account['summary']['unallocated']=='7500';assert len(account['allocations'])==1
+    assert account['summary']['unallocated']=='7500' and account['allocations']
+    charges=[e for e in account['entries'] if e['kind']=='charge'];assert len(charges)==1
     ok(action(p,order['id'],'cancel'));after=finance(client,'accounts/s1')
     assert after['summary']['balance']==before['summary']['balance']=='-20000'
     assert after['summary']['charged']=='0' and after['summary']['received']=='20000'
-    assert not after['allocations'] and len(after['entries'])==3
+    assert not after['allocations']
+    # The charge stays in the ledger and is offset by an adjustment of the same amount.
+    assert charges[0] in after['entries']
+    assert any(e['kind']=='adjustment' and e['amount']==str(-int(charges[0]['amount'])) for e in after['entries'])
     assert book(p,m)['id']!=order['id']
 
 
@@ -119,11 +123,17 @@ def test_insufficient_credit_no_order_or_partial_charge_and_opt_in_debt(client,s
     assert finance(client,'accounts/s1')['summary']['balance']=='5000'
 
 
-def test_batch_preview_rolls_back_and_capacity_failure_is_whole_batch(client,setup):
+def test_batch_preview_writes_nothing(client,setup):
     m=menu(client,capacity=2);data=dict(action='reserve',reservations=[reservation(m,'s1'),reservation(m,'s2')])
+    history=get(client,'history?menuId='+m['id'])
     preview=ok(post(client,'batch/preview',**data))
     assert preview['count']==2 and not get(client,'orders')['items'] and not get(client,'menus/'+m['id'])['reserved']
-    with api.connect() as db: assert db.execute("SELECT count(*) FROM canteen_history WHERE action='ordered'").fetchone()[0]==0
+    assert get(client,'history?menuId='+m['id'])==history
+
+
+def test_batch_is_refused_whole_when_capacity_is_short_and_a_repeated_command_is_idempotent(client,setup):
+    m=menu(client,capacity=2);data=dict(action='reserve',reservations=[reservation(m,'s1'),reservation(m,'s2')])
+    preview=ok(post(client,'batch/preview',**data))
     book(client,m,'s3');assert post(client,'batch',**data,previewHash=preview['previewHash']).status_code==409
     assert len(get(client,'orders')['items'])==1
     single=dict(action='reserve',reservations=[reservation(m,'s1')]);p=ok(post(client,'batch/preview',**single))

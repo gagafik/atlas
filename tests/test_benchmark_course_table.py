@@ -1,22 +1,14 @@
 import sys
 
 import pytest
-from tools import benchmark_course_table as tool
+from tools import benchmark_course_table,benchmark_journal_reads
 
 
-def run(monkeypatch,*arguments):
-    def forbidden(**kwargs):raise AssertionError('The probe must refuse before starting a server.')
-    monkeypatch.setattr(tool,'synthetic_server',forbidden)
-    monkeypatch.setattr(sys,'argv',['benchmark_course_table',*arguments])
-    tool.main()
-
-
-def test_results_are_refused_inside_the_data_directory(monkeypatch,capsys):
-    inside=tool.ROOT/'data'/'course-table.json'
-    with pytest.raises(SystemExit) as stop:run(monkeypatch,'--output',str(inside))
-    assert stop.value.code==2 and 'data/' in capsys.readouterr().err
-    with pytest.raises(SystemExit):run(monkeypatch,'--output',str(tool.ROOT/'data'/'nested'/'..'/'x.json'))
-
-
-def test_a_course_needs_sixty_teaching_days(monkeypatch,tmp_path):
-    with pytest.raises(SystemExit):run(monkeypatch,'--output',str(tmp_path/'x.json'),'--days','10')
+@pytest.mark.parametrize('tool',[benchmark_course_table,benchmark_journal_reads],ids=lambda tool:tool.__name__.rsplit('.',1)[-1])
+@pytest.mark.parametrize('relative',[('course-table.json',),('nested','..','x.json')])
+def test_results_are_refused_inside_the_data_directory(monkeypatch,tool,relative):
+    started=[]
+    monkeypatch.setattr(tool,'synthetic_server',lambda **kwargs:started.append(kwargs))
+    monkeypatch.setattr(sys,'argv',[tool.__name__,'--output',str(tool.ROOT.joinpath('data',*relative))])
+    with pytest.raises(SystemExit) as stop:tool.main()
+    assert stop.value.code==2 and not started

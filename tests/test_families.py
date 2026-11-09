@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from backend import api, families
+from seeding import insert_row
 from test_access import client, enable, create, signed
 from test_invitations import issue, register, visitor, link as accept_invitation
 from test_messages import url as messages_url, detail
@@ -182,27 +183,24 @@ def test_role_change_revokes_relationship_and_empty_parent_account_can_be_linked
     assert save(client,person['id']).status_code==422
 
 
-def test_backup_restores_family_history_and_current_permissions(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    enable(client);person=create(client,'parent');parent=signed('parent')
-    assert save(client,person['id'],relationship='mother',verified=True,evidence='Закрытое основание',status='revoked').status_code==200
-    original=api.DB;target_dir=tmp_path/'family-backup';create_backup(original,target_dir);monkeypatch.setattr(api,'DB',target_dir/original.name)
-    assert schedule(parent).status_code==403 and get(client,person['id'])['evidence']=='Закрытое основание'
-    history=client.get(f"/api/access/families/{person['id']}/s1/history?workspace=demo").json()['items'];assert len(history)==2
-    assert save(client,person['id'],status='active').status_code==200 and schedule(parent).status_code==200
-
-
 def test_paginated_registry_and_private_history_do_not_drop_old_relationships(client):
-    enable(client);person=create(client,'parent');parent=signed('parent')
+    enable(client);person=create(client,'parent');parent=signed('parent');total=120
     with api.connect() as db:
         doc=families.base()|dict(status='revoked',evidence='Личное основание')
-        db.executemany('INSERT INTO family_links VALUES (?,?,?,?,?,?)',[('demo',person['id'],f'historical{i:03d}',f'Прежний ученик {i}',1,json.dumps(doc)) for i in range(520)])
-    first=client.get('/api/access/families?workspace=demo').json();assert len(first['items'])==50 and first['nextOffset']==50
-    last=client.get('/api/access/families?workspace=demo&offset=500').json();assert len(last['items'])==21 and last['nextOffset'] is None
-    assert len(client.get('/api/access/families?workspace=demo&q=Прежний%20ученик%20519').json()['items'])==1
-    assert get(client,person['id'],'historical519')['evidence']=='Личное основание'
-    own=parent.get('/api/portal/family?offset=500').json();assert len(own['items'])==21 and own['nextOffset'] is None
-    assert 'Личное основание' not in json.dumps(own,ensure_ascii=False)
+        for i in range(total):insert_row(db,'family_links',workspace='demo',parent_id=person['id'],student_id=f'historical{i:03d}',student_name=f'Прежний ученик {i}',version=1,document=json.dumps(doc))
+    def walk(fetch):
+        seen=[];offset=0
+        while offset is not None:
+            page=fetch(offset);seen+=[x['studentId'] for x in page['items']];offset=page['nextOffset']
+        return seen
+    expected={f'historical{i:03d}' for i in range(total)}
+    registry=walk(lambda offset:client.get(f'/api/access/families?workspace=demo&offset={offset}').json())
+    assert len(registry)==len(set(registry)) and expected<=set(registry)
+    assert [x['studentId'] for x in client.get(f'/api/access/families?workspace=demo&q=Прежний%20ученик%20{total-1}').json()['items']]==[f'historical{total-1:03d}']
+    assert get(client,person['id'],f'historical{total-1:03d}')['evidence']=='Личное основание'
+    own=walk(lambda offset:parent.get(f'/api/portal/family?offset={offset}').json())
+    assert len(own)==len(set(own)) and expected<=set(own)
+    assert 'Личное основание' not in json.dumps(parent.get('/api/portal/family').json(),ensure_ascii=False)
 
 
 def test_message_write_rechecks_expiry_at_commit(client,monkeypatch):

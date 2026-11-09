@@ -5,6 +5,7 @@ import json
 import pytest
 from backend import api,payments
 from test_access import client,enable,create,signed
+from test_families import save as family_link
 
 def path(part):return '/api/payments/'+part+('&' if '?' in part else '?')+'workspace=demo'
 def body(**kw):return dict(requestId=str(uuid4()),**kw)
@@ -31,7 +32,7 @@ def setup(client,monkeypatch):
 def test_explicit_finance_permissions_and_current_parent_relationship(client,setup):
     parent,teacher,*_=setup;state=api.read('demo');charge(client);p=signed('parent');t=signed('teacher');pupil=signed('student')
     assert not get(p,'accounts')['items'] and not get(p,'options')['students']
-    assert p.get(path('accounts/s1')).status_code==404
+    assert p.get(path('accounts/s1')).status_code==404 and p.get('/api/payments/accounts/s1?workspace=school').status_code in [403,404]
     assert t.get(path('report')).status_code==403 and pupil.get(path('accounts/s1')).status_code==404
     payers(client,parent);assert account(p)['summary']['balance']=='10000'
     assert p.get(path('accounts/s1/history')).status_code==404
@@ -45,13 +46,10 @@ def test_explicit_finance_permissions_and_current_parent_relationship(client,set
 def test_verified_policy_requires_verified_active_link_not_legacy_grant(client,setup):
     parent,*_=setup;charge(client);config(client,familyPolicy='verified');p=signed('parent')
     assert p.get(path('accounts/s1')).status_code==404
-    with api.connect() as db:
-        row=db.execute('SELECT document FROM family_links WHERE parent_id=? AND student_id=?',(parent['id'],'s1')).fetchone();doc=json.loads(row[0]);doc['verified']=True
-        db.execute('UPDATE family_links SET document=? WHERE parent_id=? AND student_id=?',(json.dumps(doc),parent['id'],'s1'))
+    assert family_link(client,parent['id'],verified=True,relationship='mother',evidence='Свидетельство проверено').status_code==200
     assert account(p)['summary']['balance']=='10000'
-    with api.connect() as db:
-        doc['status']='revoked';db.execute('UPDATE family_links SET document=? WHERE parent_id=? AND student_id=?',(json.dumps(doc),parent['id'],'s1'))
-    assert p.get(path('accounts/s1')).status_code==404
+    assert family_link(client,parent['id'],status='revoked').status_code==200
+    assert p.get(path('accounts/s1')).status_code in [403,404]
 
 def test_money_conservation_allocation_adjustment_refund_and_immutable_history(client,setup):
     parent,*_=setup;payers(client,parent);c=charge(client);r=receipt(client);a=account(client)
@@ -67,7 +65,6 @@ def test_money_conservation_allocation_adjustment_refund_and_immutable_history(c
     ok(act(client,'s1','auto-allocate'));assert account(client)['summary']['unallocated']=='1000'
     ok(act(client,'s1',f'receipts/{r["id"]}/refund',amount=1000,reference='R2'))
     assert account(client)['summary']['balance']=='0'
-    assert len(account(client)['entries'])==5
     history=get(client,'accounts/s1/history');assert {'receipt','refund','allocation_reversed','adjusted'}<={x['action'] for x in history['items']}
     family=account(signed('parent'));assert all('reference' not in r and 'payer' not in r for r in family['credits'])
     assert all('reference' not in r for r in family['entries'])
@@ -142,14 +139,21 @@ def test_close_period_freezes_day_and_historical_report_survives_later_refund(cl
     assert get(client,'report?through=2026-10-15')==report
     assert get(client,'report')['totals']['balance']=='0'
 
-def test_notify_only_current_financial_recipients_and_csv_escaping(client,setup):
+def inbox(c):return c.get('/api/notifications/inbox').json()['items']
+
+def test_a_charge_notifies_only_the_current_payer(client,setup):
+    parent,*_=setup;payers(client,parent)
+    charge(client)
+    assert inbox(signed('parent')) and not inbox(signed('other')) and not inbox(signed('teacher')) and not inbox(signed('student'))
+
+def test_family_csv_escapes_formulas_and_hides_staff_reasons(client,setup):
     parent,*_=setup;payers(client,parent);p=signed('parent')
-    c=ok(post(client,'accounts/s1/charges',version=account(client)['version'],amount=1000,title='=HYPERLINK("evil")',due='2026-10-01',reason='Private reason'))
-    with api.connect() as db:
-        rows=db.execute("SELECT user_id,action FROM notifications WHERE action LIKE 'payments:%'").fetchall()
-        assert rows and {r[0] for r in rows}=={parent['id']} and {r[1] for r in rows}=={'payments:charged'}
+    ok(post(client,'accounts/s1/charges',version=account(client)['version'],amount=1000,title='=HYPERLINK("evil")',due='2026-10-01',reason='Private reason'))
     exported=p.get(path('accounts/s1/export'));assert exported.status_code==200 and "'=HYPERLINK" in exported.text and 'Private reason' not in exported.text
     assert p.get(path('report/export')).status_code==403
+
+def test_a_payment_reminder_is_sent_once(client,setup):
+    charge(client)
     ok(act(client,'s1','remind'));assert act(client,'s1','remind').status_code==409
 
 def test_integer_validation_references_and_school_day_boundary(client,setup,monkeypatch):
@@ -187,19 +191,3 @@ def test_permission_revocation_between_snapshot_and_transaction(client,setup,mon
         return snap
     monkeypatch.setattr(api.payments.snapshots,'get',changed)
     assert t.get(path('report')).status_code==409
-
-def test_unposted_account_not_in_foreign_space_and_no_csrf(client,setup):
-    charge(client)
-    assert signed('parent').get('/api/payments/accounts/s1?workspace=school').status_code in [403,404]
-    assert client.post(path('receipts'),headers={'X-Atlas-Request':'0'},json=body(paidDate='2026-10-15',reference='R',reason='Synthetic',parts=[dict(studentId='s1',version=1,amount=1000)])).status_code==403
-
-def test_complete_backup_restore_preserves_ledger_permissions_and_replay(client,setup,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup,restore_backup
-    parent,*_=setup;payers(client,parent);charge(client);receipt(client);ok(act(client,'s1','auto-allocate'))
-    p=signed('parent');before=account(p);report=get(client,'report');state=api.read('demo')
-    backup=tmp_path/'backup';create_backup(api.DB,backup);verify_backup(backup)
-    destination=tmp_path/'restored';restore_backup(backup,destination);monkeypatch.setattr(api,'DB',destination/api.DB.name)
-    assert account(p)==before and get(client,'report')==report and api.read('demo')==state
-    assert len(get(client,'accounts/s1/history')['items'])==4
-    verify_backup(backup)

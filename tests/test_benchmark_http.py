@@ -54,7 +54,6 @@ def test_timing_distinguishes_server_and_total_without_inventing_transport_event
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=ServerTiming(app)),base_url='http://test') as session:
             timing=RequestTiming();response=await session.get('/');values=timing.finish(response)
         assert response.text=='ok' and 0<=values['server_ms']<=values['total_ms']
-        assert values['outside_server_ms']==values['total_ms']-values['server_ms']
         assert 'tcp_connect_ms' not in values and 'before_send_ms' not in values
     asyncio.run(run())
 

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from backend import api, jobs
 from backend.scheduling import solve
 from backend.seed import initial_state
+from seeding import insert_row
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ def test_background_search_returns_preview_without_writing(client):
 def test_cancellation_of_running_and_queued_search(client, monkeypatch):
     entered = threading.Event()
     completed = threading.Event()
-    def long_solve(state, ids, seconds, cancel, progress, optimization=None):
+    def long_solve(state, *args, cancel, progress, **options):
         entered.set()
         progress({'phase': 'searching'})
         assert cancel.wait(5)
@@ -70,11 +71,8 @@ def test_cancellation_of_running_and_queued_search(client, monkeypatch):
     assert client.post(f'/api/generation-jobs/{a["id"]}/cancel?workspace=school').status_code == 404
     client.post(f'/api/generation-jobs/{a["id"]}/cancel?workspace=demo')
     assert finished(client, a['id'])['status'] == 'cancelled'
+    assert finished(client, b['id'])['status'] == 'cancelled'
     assert completed.wait(2)
-    # Drain the queued worker before the database fixture is restored.
-    with api.solve_lock:
-        pass
-    time.sleep(0.05)
     assert client.get('/api/state?workspace=demo').json()['revision'] == 0
 
 
@@ -88,9 +86,12 @@ def test_solver_honors_cancel_before_search_and_during_model_build():
     assert solve(initial_state('demo'), cancel=event, progress=progress)['status'] == 'cancelled'
 
 
-def test_restart_status_and_invalid_scope(client):
+def test_a_job_left_running_by_a_restart_is_reported_interrupted(client):
     import json
     with api.connect() as db:
-        db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?)', ('old', 'demo', '2026-01-01', json.dumps({'id': 'old', 'status': 'running'})))
+        insert_row(db, 'generation_jobs', id='old', workspace='demo', created='2026-01-01', document=json.dumps({'id': 'old', 'status': 'running'}))
     assert client.get('/api/generation-jobs/old?workspace=demo').json()['status'] == 'interrupted'
+
+
+def test_a_search_for_an_unknown_workload_is_refused(client):
     assert client.post('/api/generation-jobs?workspace=demo', json={'revision': 0, 'workloadIds': ['absent']}).status_code == 422
