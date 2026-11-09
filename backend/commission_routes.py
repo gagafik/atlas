@@ -178,7 +178,7 @@ def register(service,app,Workspace):
         with service.context(request,workspace,True) as (db,user,snap):
             admin(user);row=service.exam(db,workspace,id);check(row,body.version);need(row,'decided')
             number=service.behaviour.letter_number(db,workspace);sent=stamp();version=row['version']+1
-            data=row['data']|dict(letter=dict(number=number,sentAt=sent,sentBy=user['name'],className=service.public(row,snap,user)['className']))
+            data=row['data']|dict(letter=dict(number=number,sentAt=sent,sentBy=user['name'],className=row['data']['decision'].get('className',service.public(row,snap,user)['className'])))
             save(db,row,data,'letter_sent',version)
             service.history(db,workspace,user,id,'letter_sent','',dict(number=number,version=version))
             pupil=snap.entities['student'].get(row['student_id']);name=pupil.name if pupil else data['student']
@@ -207,7 +207,7 @@ def register(service,app,Workspace):
             if row['status']=='cancelled':raise conflict('status','Экзамен отменён.')
             card=service.public(row,snap,user)
             keys=['kindTitle','reason','student','className','subject','period','day','start','end','room','chairman','examiner','members']
-            return {k:card[k] for k in keys}|dict(className=(row['data'].get('decision') or {}).get('className',card['className']),school=snap.state.settings.name,result=card['result'])
+            return {k:card[k] for k in keys}|dict(className=(row['data'].get('decision') or {}).get('className',row['data'].get('className',card['className'])),school=snap.state.settings.name,result=card['result'])
 
     @app.get(BASE+'/{id}/letter')
     def letter_text(id:str,request:Request,workspace:Workspace='school'):
