@@ -337,6 +337,8 @@ def register_jobs(app,grades,Workspace,database_path,compute_lock):
         user,snap=grades.context(request,workspace,True,True)
         with grades.access.read_connect() as db:
             db.execute('BEGIN');grades.recheck(db,user,snap,workspace);period=grades.periods.find(db,workspace,id,body.version)
+            from . import school_years
+            school_years.require_current(db,workspace,period['start'])
         r=runner();job=r.queue.enqueue(workspace,period,user);r.start();return job
 
     @app.get('/api/final-grades/preparations')

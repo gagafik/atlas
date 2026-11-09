@@ -17,9 +17,29 @@ export const PART_ROUTES = {
   courseTable: "/api/journal/course-table",
 };
 const OPTIONS = "GET /api/journal/options";
+const YEARS = "GET /api/school-years";
+
+// The snapshots were captured before the year switcher and the administrator's file is at its size limit, so the build answers
+// `school-years` itself: the one year the snapshot is of, which the top bar shows as a plain label.
+function withYears(snapshot) {
+  const body = snapshot.entries[OPTIONS]?.b;
+  if (snapshot.entries[YEARS] || !body?.yearStart || !body?.yearEnd) return snapshot;
+  const start = body.yearStart.slice(0, 4);
+  const id = start;
+  const name = `${start}/${body.yearEnd.slice(2, 4)}`;
+  const years = [{ id, name, start: body.yearStart, end: body.yearEnd, current: true, archived: false }];
+  return {
+    ...snapshot,
+    entries: {
+      ...snapshot.entries,
+      [YEARS]: { s: 200, b: { current: id, today: body.today, canManage: false, years } },
+    },
+  };
+}
 
 /** The snapshot as the demo serves it: the same object when every offered part has answers, else a copy without the others. */
-export function servedSnapshot(snapshot) {
+export function servedSnapshot(whole) {
+  const snapshot = withYears(whole);
   const options = snapshot.entries[OPTIONS];
   const panels = options?.b?.panels;
   if (!panels) return snapshot;

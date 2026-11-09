@@ -85,6 +85,8 @@ def place(db, workspace, student, kind, target, day, member):
 def capture(db, workspace, before, after, effective=None):
     """Store the replaced template and date enrollment changes in the caller's write transaction."""
     tables(db);backfill(db, workspace, before)
+    from . import school_years
+    school_years.refuse_into_archive(db, workspace, after)
     current = date.fromisoformat(db.execute('SELECT valid_from FROM timetable_current WHERE workspace=?', (workspace,)).fetchone()[0])
     if effective is not None:
         if not after.settings.yearStart <= effective <= after.settings.yearEnd:
@@ -99,7 +101,12 @@ def capture(db, workspace, before, after, effective=None):
                    (workspace, current.isoformat(), day.isoformat(), after.revision, now().isoformat(), encoded(template(before))))
         db.execute('UPDATE timetable_current SET valid_from=? WHERE workspace=?', (day.isoformat(), workspace))
         stored = current, day
-    # Compare with the periods in the database, not with the previous State.
+    enroll(db, workspace, after, day)
+    return stored
+
+
+def enroll(db, workspace, after, day):
+    """Date the pupils' class and group changes against the periods in the database, not against the previous State."""
     open_class = dict(db.execute("SELECT student_id,target_id FROM pupil_enrollments WHERE workspace=? AND kind='class' AND end_day IS NULL", (workspace,)))
     desired = {s.id: s.classId for s in after.students if s.active}
     for sid in sorted(set(open_class) | set(desired)):
@@ -109,7 +116,16 @@ def capture(db, workspace, before, after, effective=None):
     groups = {(sid, target) for sid, kind, target in memberships(after) if kind == 'group'}
     for sid, target in sorted(open_groups - groups): place(db, workspace, sid, 'group', target, day, False)
     for sid, target in sorted(groups - open_groups): place(db, workspace, sid, 'group', target, day, True)
-    return stored
+
+
+def roll(db, workspace, before, after, day):
+    """A new school year: the whole replaced template ends on the day before, memberships move on the day. Always stored, even when nothing changed."""
+    tables(db);backfill(db, workspace, before)
+    current = db.execute('SELECT valid_from FROM timetable_current WHERE workspace=?', (workspace,)).fetchone()[0]
+    db.execute('INSERT INTO timetable_versions (workspace,valid_from,valid_to,revision,created,document) VALUES (?,?,?,?,?,?)',
+               (workspace, current, day.isoformat(), after.revision, now().isoformat(), encoded(template(before))))
+    db.execute('UPDATE timetable_current SET valid_from=? WHERE workspace=?', (day.isoformat(), workspace))
+    enroll(db, workspace, after, day)
 
 
 class Stale(Exception):
@@ -137,10 +153,11 @@ def archived(before, after):
 
 class History:
     """stints are (student, kind, target, start, end) with an inclusive end; document maps a version start to its stored template."""
-    def __init__(self, state, current_from=None, versions=(), stints=(), document=None):
+    def __init__(self, state, current_from=None, versions=(), stints=(), document=None, first=None):
         self.state, self.current_from, self.document = state, current_from, document
         self.versions, self.stints = sorted(versions), list(stints)
-        self.first = state.settings.yearStart
+        # The first day of the oldest school year in the data: memberships from before a later yearStart still count from it.
+        self.first = first or state.settings.yearStart
         self.bounds = sorted({to for _, to in self.versions} | {s[3] for s in self.stints if s[3] > self.first} |
                              {s[4] + timedelta(days=1) for s in self.stints if s[4]})
         self.lock, self.contexts, self.bases_cache = RLock(), OrderedDict(), OrderedDict()
@@ -256,7 +273,7 @@ def load(database, workspace, state):
             row = db.execute('SELECT document FROM timetable_versions WHERE workspace=? AND valid_from=?', (workspace, valid_from.isoformat())).fetchone()
         if row is None: raise HTTPException(409, 'Версия расписания не найдена. Обновите страницу.')
         return json.loads(row[0])
-    return History(state, date.fromisoformat(current[0]), versions, stints, document)
+    return History(state, date.fromisoformat(current[0]), versions, stints, document, min([state.settings.yearStart, *(s[3] for s in stints)]))
 
 
 def current_from(db, workspace):

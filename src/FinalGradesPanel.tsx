@@ -353,8 +353,11 @@ export default function FinalGradesPanel({
   focus,
   defaultOpen = false,
   studentId: chosen,
+  year,
 }: {
   workspace: string;
+  // A past school year (archived only): its periods and books are listed. The current year sends nothing.
+  year?: string;
   // Set by an opened notification: show the report card of this pupil for this period.
   focus?: { studentId: string; finalsPeriodId?: string };
   // Opened from the menu: the panel starts open and loads its options like a click on the button.
@@ -450,7 +453,10 @@ export default function FinalGradesPanel({
     }
   }
   async function loadOptions() {
-    const r = await api("final-grades/options", workspace);
+    const r = await api(
+      `final-grades/options${year ? `?year=${year}` : ""}`,
+      workspace,
+    );
     setOptions(r);
     return r as Options;
   }

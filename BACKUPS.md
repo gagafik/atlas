@@ -10,6 +10,8 @@
 
 ## Ручная копия и проверка
 
+Перед запуском «Нового учебного года» сделайте полную копию: запуск необратим (`SCHOOL_YEARS.md`).
+
 ```sh
 python -m tools.backup_school --database /app/data/timetable.db --output /private-backups/new-copy
 python -m tools.restore_school /private-backups/new-copy

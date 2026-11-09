@@ -508,6 +508,9 @@ registers = Registers(access, notifications, portal_stamp)
 registers.register(app, Workspace)
 from .school_sections import register as register_school_sections
 register_school_sections(app, access)
+from .school_years import SchoolYears
+school_years = SchoolYears(access, journal)
+school_years.register(app, Workspace)
 
 if (ROOT / 'dist').exists():
     app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')

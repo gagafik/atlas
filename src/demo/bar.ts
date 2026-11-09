@@ -33,7 +33,7 @@ dialog:modal{margin-top:calc(var(--demo-bar,0px) + 8px)!important;max-height:cal
  * button that only ends in an error. They sit in the menu and the account menu.
  */
 const UNAVAILABLE =
-  /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Попробовать на примере|Вернуться в свою школу)$/;
+  /^(Приложение|Принять приглашение|Резервные коды|Пароль|Публикация|Информационные экраны|Состояние сервера|Попробовать на примере|Вернуться в свою школу|Новый учебный год)$/;
 
 function tidy(): void {
   for (const element of document.querySelectorAll<HTMLElement>(

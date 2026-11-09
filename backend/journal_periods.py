@@ -37,6 +37,7 @@ def tables(db):
 
 
 def locks(db,workspace,*lessons):
+    from . import school_years
     days=set()
     for lesson in lessons:
         if not lesson:continue
@@ -47,21 +48,48 @@ def locks(db,workspace,*lessons):
             try:days.add(date.fromisoformat(raw).isoformat())
             except ValueError:pass
     if not days:return []
-    return [dict(id=r[0],name=r[1],start=r[2],end=r[3],version=r[4]) for r in db.execute('''SELECT id,name,start_day,end_day,version
+    closed=[dict(id=r[0],name=r[1],start=r[2],end=r[3],version=r[4]) for r in db.execute("""SELECT id,name,start_day,end_day,version
         FROM journal_periods WHERE workspace=? AND status='closed' AND EXISTS
-        (SELECT 1 FROM json_each(?) d WHERE d.value BETWEEN start_day AND end_day) ORDER BY start_day,id''',(workspace,encoded(sorted(days))))]
+        (SELECT 1 FROM json_each(?) d WHERE d.value BETWEEN start_day AND end_day) ORDER BY start_day,id""",(workspace,encoded(sorted(days))))]
+    # The days of an archived school year are read-only for every writer that honours closed periods.
+    return closed+school_years.archive_locks(db,workspace,sorted(days))
 
 
 def require_open(db,workspace,*lessons):
+    from . import school_years
     found=locks(db,workspace,*lessons)
+    year=next((p for p in found if p.get('archived')),None)
+    if year:raise school_years.archived_error(dict(id=year['year'],name=year['yearName']))
     if found:raise HTTPException(403,'Журнал закрыт в периоде: '+', '.join(p['name'] for p in found)+'. Для исправления администратор должен открыть период с указанием причины.')
 
 
 def range_locks(db,workspace,start,end):
-    """Closed periods overlapping the inclusive day range."""
+    """Closed periods and archived school years overlapping the inclusive day range."""
+    from . import school_years
     # A fresh database may have no journal tables yet.
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='journal_periods'").fetchone():return []
-    return [dict(id=r[0],name=r[1],start=r[2],end=r[3],version=r[4]) for r in db.execute("SELECT id,name,start_day,end_day,version FROM journal_periods WHERE workspace=? AND status='closed' AND start_day<=? AND end_day>=? ORDER BY start_day,id",(workspace,end,start))]
+    closed=[dict(id=r[0],name=r[1],start=r[2],end=r[3],version=r[4]) for r in db.execute("SELECT id,name,start_day,end_day,version FROM journal_periods WHERE workspace=? AND status='closed' AND start_day<=? AND end_day>=? ORDER BY start_day,id",(workspace,end,start))]
+    return closed+school_years.archive_range_locks(db,workspace,start,end)
+
+
+def period_item(row):
+    return dict(id=row[1],name=row[2],start=row[3],end=row[4],kind=row[5],version=row[6],status=row[7],everClosed=bool(row[8]),updated=row[9])
+
+
+def store(db,workspace,id,name,start,end,kind,version,stamp):
+    """Insert or update an open period; the caller records its history."""
+    db.execute('INSERT INTO journal_periods VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,id) DO UPDATE SET name=excluded.name,start_day=excluded.start_day,end_day=excluded.end_day,kind=excluded.kind,version=excluded.version,updated=excluded.updated',
+        (workspace,id,name,start,end,kind,version,'open',0,stamp))
+
+
+def find_item(db,workspace,id):
+    return period_item(db.execute('SELECT * FROM journal_periods WHERE workspace=? AND id=?',(workspace,id)).fetchone())
+
+
+def log(db,access,workspace,value,action,user,reason):
+    db.execute('INSERT INTO journal_period_history(workspace,period_id,version,action,created,actor,reason,document) VALUES (?,?,?,?,?,?,?,?)',
+        (workspace,value['id'],value['version'],action,now().isoformat(),user['name'],reason,encoded(value)))
+    access.record(db,'journal.period_'+action,workspace,detail=encoded(dict(periodId=value['id'],version=value['version'],reason=reason)))
 
 
 class PeriodEdit(Model):
@@ -103,7 +131,7 @@ class JournalPeriods:
         self.coverage.absences.recheck(db,user,snap,workspace)
 
     def item(self,row):
-        return dict(id=row[1],name=row[2],start=row[3],end=row[4],kind=row[5],version=row[6],status=row[7],everClosed=bool(row[8]),updated=row[9])
+        return period_item(row)
 
     def find(self,db,workspace,id,version=None):
         row=db.execute('SELECT * FROM journal_periods WHERE workspace=? AND id=?',(workspace,id)).fetchone()
@@ -119,10 +147,7 @@ class JournalPeriods:
         if value['status']!='open' or not preview or preview[3]!=body.version or preview[5]<now().isoformat():raise HTTPException(409,STALE)
 
     def record(self,db,workspace,value,action,user,reason):
-        stamp=now().isoformat()
-        db.execute('INSERT INTO journal_period_history(workspace,period_id,version,action,created,actor,reason,document) VALUES (?,?,?,?,?,?,?,?)',
-            (workspace,value['id'],value['version'],action,stamp,user['name'],reason,encoded(value)))
-        self.access.record(db,'journal.period_'+action,workspace,detail=encoded(dict(periodId=value['id'],version=value['version'],reason=reason)))
+        log(db,self.access,workspace,value,action,user,reason)
 
     def archive_scope(self,user,workspace):
         if user['role']=='admin':return '',[]
@@ -134,6 +159,7 @@ class JournalPeriods:
             self.access.record(db,'journal.period_archive_read',workspace,detail=encoded(dict(periodId=id,version=version,lessonKey=key)))
 
     def register(self,app,Workspace):
+        from . import school_years
         @app.get('/api/journal/periods')
         def listing(request:Request,workspace:Workspace='school'):
             user,snap=self.context(request,workspace)
@@ -151,13 +177,11 @@ class JournalPeriods:
                 db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
                 existing=db.execute('SELECT * FROM journal_periods WHERE workspace=? AND id=?',(workspace,id)).fetchone()
                 if existing:
-                    value=self.find(db,workspace,id,body.version)
+                    value=self.find(db,workspace,id,body.version);school_years.require_current(db,workspace,value['start'])
                     if value['everClosed']:raise HTTPException(409,'После первого закрытия название и границы периода сохранены в архиве и не меняются.')
                 elif body.version:raise HTTPException(409,'Период отсутствует. Обновите список.')
                 elif db.execute('SELECT count(*) FROM journal_periods WHERE workspace=?',(workspace,)).fetchone()[0]>=200:raise HTTPException(422,'До 200 учебных периодов в пространстве.')
-                stamp=now().isoformat()
-                db.execute('INSERT INTO journal_periods VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace,id) DO UPDATE SET name=excluded.name,start_day=excluded.start_day,end_day=excluded.end_day,kind=excluded.kind,version=excluded.version,updated=excluded.updated',
-                    (workspace,id,body.name,body.start.isoformat(),body.end.isoformat(),body.kind,body.version+1,'open',0,stamp))
+                store(db,workspace,id,body.name,body.start.isoformat(),body.end.isoformat(),body.kind,body.version+1,now().isoformat())
                 value=self.find(db,workspace,id);self.record(db,workspace,value,'updated' if existing else 'created',user,body.reason)
             return value
 
@@ -166,7 +190,7 @@ class JournalPeriods:
             user,snap=self.context(request,workspace,True)
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace)
-                value=self.find(db,workspace,id,body.version)
+                value=self.find(db,workspace,id,body.version);school_years.require_current(db,workspace,value['start'])
                 if value['status']!='open':raise HTTPException(409,'Период уже закрыт.')
                 query=CoverageQuery(start=value['start'],end=value['end'],status='all',asOf=now())
                 token=self.coverage.token(db,user,snap,workspace,query)
@@ -193,7 +217,7 @@ class JournalPeriods:
             # the period's recalculated counts stay the same; this runs on a read connection, outside the write lock.
             with self.access.read_connect() as db:
                 db.execute('BEGIN');self.recheck(db,user,snap,workspace)
-                value=self.find(db,workspace,id,body.version);preview=self.preview_row(db,workspace,id,user,body)
+                value=self.find(db,workspace,id,body.version);school_years.require_current(db,workspace,value['start']);preview=self.preview_row(db,workspace,id,user,body)
                 self.fresh(value,preview,body)
                 query=CoverageQuery(start=value['start'],end=value['end'],status='all',asOf=now())
                 live=self.coverage.token(db,user,snap,workspace,query);expected=preview[6]
@@ -234,7 +258,7 @@ class JournalPeriods:
             user,snap=self.context(request,workspace,True)
             with self.access.lock,self.access.connect() as db:
                 db.execute('BEGIN IMMEDIATE');self.recheck(db,user,snap,workspace)
-                value=self.find(db,workspace,id,body.version)
+                value=self.find(db,workspace,id,body.version);school_years.require_current(db,workspace,value['start'])
                 if value['status']!='closed':raise HTTPException(409,'Период уже открыт.')
                 db.execute("UPDATE journal_periods SET status='open',version=version+1,updated=? WHERE workspace=? AND id=?",(now().isoformat(),workspace,id))
                 value=self.find(db,workspace,id);self.record(db,workspace,value,'reopened',user,body.reason)

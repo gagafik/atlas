@@ -19,6 +19,7 @@ import {
   BookOpen,
   CalendarCheck,
   CalendarClock,
+  CalendarPlus,
   CalendarDays,
   CalendarRange,
   Check,
@@ -96,6 +97,7 @@ import {
   recallRail,
   rememberRail,
   stepIndex,
+  yearScreen,
   type AccountId,
   type MenuContext,
   type ModalId,
@@ -103,6 +105,7 @@ import {
   type NavItem,
   type NavMenu,
 } from "./navigation";
+import type { SchoolYear } from "./schoolYears";
 import type { Unread } from "./shellData";
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
@@ -172,6 +175,7 @@ const ICONS: Record<string, Icon> = {
   recovery: ShieldCheck,
   app: Smartphone,
   signOut: LogOut,
+  newYear: CalendarPlus,
 };
 export const iconOf = (name: string): Icon => ICONS[name] ?? CircleHelp;
 
@@ -231,6 +235,7 @@ export default function Shell({
   onView,
   school,
   year,
+  years,
   unread,
   badges,
   extra,
@@ -246,6 +251,12 @@ export default function Shell({
   onView: (view: string, journal?: JournalView) => void;
   school?: string;
   year?: string;
+  // The school years of the workspace; with several of them the top bar lets the user choose.
+  years?: {
+    items: SchoolYear[];
+    selected: string;
+    onSelect(id: string): void;
+  };
   unread?: Unread;
   badges?: Record<string, number | undefined>;
   extra?: ReactNode;
@@ -269,8 +280,14 @@ export default function Shell({
     [openGroups, setOpenGroups] = useState<string[]>([]),
     // Desktop only: the group whose flyout is open.
     [flyout, setFlyout] = useState<string | null>(null),
-    [folded, setFolded] = useState(recallRail);
+    [folded, setFolded] = useState(recallRail),
+    // A window of the current year that a past year does not have: the notice stands in for it.
+    [notice, setNotice] = useState<NavItem | null>(null);
   const rail = desktop && folded;
+  const yearNow = years?.items.find((y) => y.current),
+    yearShown = years?.items.find((y) => y.id === years.selected);
+  const archive = !!yearNow && !!yearShown && yearShown.id !== yearNow.id;
+  useEffect(() => setNotice(null), [years?.selected]);
   const accountBox = useRef<HTMLDivElement>(null),
     accountToggle = useRef<HTMLButtonElement>(null),
     sidebar = useRef<HTMLElement>(null),
@@ -405,10 +422,14 @@ export default function Shell({
     closeDrawer();
     setAccountOpen(false);
     setFlyout(null);
+    setNotice(null);
     const { target } = item;
     if (target.kind === "view") onView(target.view, target.journal);
-    else if (target.kind === "modal")
-      frame.onModal(target.modal, family?.current);
+    else if (target.kind === "modal") {
+      if (archive && yearScreen(target, frame.context.role) === "notice")
+        setNotice(item);
+      else frame.onModal(target.modal, family?.current);
+    }
     else frame.onAccount(target.account);
   }
   // An action of the launcher goes the way of the menu entry it belongs to, then asks the screen for its editor.
@@ -607,7 +628,11 @@ export default function Shell({
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-foot">
-            {year && <div className="school-year">{year} учебный год</div>}
+            {(yearShown?.name || year) && (
+              <div className="school-year">
+                {yearShown?.name || year} учебный год
+              </div>
+            )}
             {desktop && (
               <button
                 className="rail-toggle"
@@ -637,11 +662,29 @@ export default function Shell({
               <PanelLeftClose size={19} />
             </button>
             <strong>{school || "Атлас"}</strong>
-            {year && <small>{year}</small>}
+            {years && years.items.length > 1 ? (
+              <select
+                className="year-switch"
+                aria-label="Учебный год"
+                value={years.selected}
+                onChange={(event) => years.onSelect(event.target.value)}
+              >
+                {years.items.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                    {item.current ? " (текущий)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              (yearShown?.name || year) && (
+                <small>{yearShown?.name || year}</small>
+              )
+            )}
           </div>
           <div className="topbar-right">
             {extra}
-            {!!actions.length && (
+            {!!actions.length && !archive && (
               <Launcher actions={actions} onChoose={launch} />
             )}
             <NotificationCenter
@@ -731,7 +774,39 @@ export default function Shell({
             </div>
           </div>
         </header>
-        {children({ title, menu, select })}
+        {archive && yearNow && yearShown && (
+          <div className="archive-banner" role="status">
+            <span>Учебный год {yearShown.name} в архиве: только просмотр.</span>
+            <button onClick={() => years?.onSelect(yearNow.id)}>
+              Вернуться в {yearNow.name}
+            </button>
+          </div>
+        )}
+        {archive &&
+        yearNow &&
+        yearShown &&
+        (notice ||
+          yearScreen(
+            { kind: "view", view, journal: journalView },
+            frame.context.role,
+          ) === "notice") ? (
+          <main className="archive-notice">
+            <h1>{notice ? notice.label : title}</h1>
+            <p>
+              Этот раздел за {yearShown.name} в Атласе пока не показывается. За
+              прошлые годы открываются «Табели», а у учеников и родителей —
+              «Оценки» и «Посещаемость».
+            </p>
+            <button
+              className="primary"
+              onClick={() => years?.onSelect(yearNow.id)}
+            >
+              Вернуться в {yearNow.name}
+            </button>
+          </main>
+        ) : (
+          children({ title, menu, select })
+        )}
       </div>
     </div>
   );

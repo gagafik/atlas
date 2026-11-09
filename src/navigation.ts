@@ -239,6 +239,12 @@ const ITEMS: Record<string, Spec> = {
     allow: appFull,
   },
   settings: page("Настройки", "settings", "settings"),
+  "school-year": {
+    label: "Новый учебный год",
+    icon: "newYear",
+    target: view("school-year"),
+    allow: appFull,
+  },
   "class-staff": {
     label: "Посещаемость учащихся",
     icon: "classStaff",
@@ -431,6 +437,7 @@ const LAYOUTS: Record<string, Layout> = {
       group("control", "Центр управления", "control", [
         "access",
         "settings",
+        "school-year",
         "periods",
         "sections",
         "hall",
@@ -722,6 +729,42 @@ export function viewLabel(name: string): string | undefined {
 
 export const schoolYear = (start: string, end: string) =>
   `${start.slice(0, 4)} / ${end.slice(0, 4)}`;
+
+/** What a screen does while a past school year is chosen: reads that year, stays as it is, or gives way to a notice. */
+export type YearScreen = "shown" | "notice" | "same";
+const YEARLESS_VIEWS = ["home", "messages", "access", "school-year"];
+const YEARLESS_MODALS: ModalId[] = [
+  "forms",
+  "meetings",
+  "consultations",
+  "clubs",
+  "handover",
+  "documents",
+  "registers",
+  "live",
+  "payments",
+  "library",
+  "canteen",
+  "lostFound",
+  "site",
+  "admissions",
+  "hall",
+  "sections",
+  "operations",
+];
+export function yearScreen(target: NavTarget, role: Role | null): YearScreen {
+  if (target.kind === "account") return "same";
+  if (target.kind === "modal")
+    return YEARLESS_MODALS.includes(target.modal) ? "same" : "notice";
+  if (YEARLESS_VIEWS.includes(target.view)) return "same";
+  if (target.view !== "journal") return "notice";
+  if (target.journal === "finalGrades") return "shown";
+  const family = role === "student" || role === "parent";
+  return family &&
+    (target.journal === "pupilGrades" || target.journal === "pupilAttendance")
+    ? "shown"
+    : "notice";
+}
 
 // The tiles of the start page, in the order EduPage shows them; only those the menu has.
 const TILES = [

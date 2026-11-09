@@ -38,8 +38,11 @@ export default function FamilyJournal({
   view,
   focus,
   family = true,
+  year,
 }: {
   workspace: string;
+  // The archived school year on show; undefined for the current one.
+  year?: string;
   options: JournalOptions;
   chosen?: string;
   view?: JournalView;
@@ -75,7 +78,13 @@ export default function FamilyJournal({
   );
   const [period, setPeriod] = useState<PeriodSelection>(() => {
     const remembered = recallPeriod(workspace);
-    if (remembered) return remembered;
+    // A period remembered from another year never asks for days outside the year on show.
+    if (
+      remembered &&
+      remembered.start >= options.yearStart &&
+      remembered.end <= options.yearEnd
+    )
+      return remembered;
     const { id, start, end } = defaultChoice(choices, today);
     return { id, start, end };
   });
@@ -111,6 +120,7 @@ export default function FamilyJournal({
     ) : view === "finalGrades" ? (
       <FinalGradesPanel
         workspace={workspace}
+        year={year}
         defaultOpen
         studentId={child}
         focus={

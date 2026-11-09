@@ -6103,3 +6103,56 @@ main {
 .start-tiles button:focus-visible svg {
   color: var(--text-on-primary);
 }
+
+/* The school year in the top bar: a select beside the school name, and the notices of a past year. */
+.year-switch {
+  background: var(--surface-inverse-deep);
+  color: var(--text-on-primary);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  min-height: 28px;
+  max-width: 100%;
+}
+.archive-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--warning-tint);
+  border-bottom: 1px solid var(--warning-line);
+  color: var(--text);
+  padding: 10px 16px;
+  font-size: 12px;
+}
+.archive-notice {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 16px;
+}
+.archive-notice p {
+  color: var(--text-muted);
+  line-height: 1.7;
+  margin: 0 0 18px;
+}
+@media (min-width: 900px) {
+  .archive-banner {
+    padding: 10px 34px;
+  }
+  .archive-notice {
+    padding: 28px 34px;
+  }
+}
+@media print {
+  .archive-banner {
+    background: var(--paper);
+    color: var(--ink);
+    border-color: var(--ink);
+  }
+  .archive-banner button,
+  .year-switch {
+    display: none;
+  }
+}

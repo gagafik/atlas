@@ -1,0 +1,102 @@
+/* «Новый учебный год»: the steps, the tables and the summary. Tokens only. */
+.year-wizard {
+  max-width: 1100px;
+  padding: 0 0 28px;
+}
+.year-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+}
+.year-steps button {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+.year-steps button[aria-current="step"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-on-primary);
+}
+.year-step h2 {
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+.year-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+.year-dates .field {
+  min-width: 170px;
+}
+.year-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 17px;
+}
+.year-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 11px;
+}
+.year-table th {
+  background: var(--surface-alt);
+  color: var(--text-subtle);
+  font-size: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.year-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+}
+.year-table td input,
+.year-table td select {
+  width: 100%;
+  min-width: 120px;
+  font-size: 11px;
+}
+.year-choice {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+.year-summary {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.year-summary ul,
+.year-wizard .error-banner ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.year-ack {
+  display: block;
+  margin: 12px 0;
+  font-size: 12px;
+}
+.year-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 0;
+}
+@media (max-width: 640px) {
+  .year-dates .field {
+    min-width: 100%;
+  }
+}
