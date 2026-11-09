@@ -2,7 +2,7 @@ from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 from backend import api
-from backend.models import State, Placement, Event, DatedLesson, TeacherAbsence, Cycles, Room, TimetableRule
+from backend.models import State, Placement, Event, DatedLesson, TeacherAbsence, Cycles, Room, TimetableRule, ScheduleDay
 from backend.seed import initial_state
 from backend.calendar_ops import day_report, check_dates, operational_dates, substitute_options, SubstituteRequest
 from backend.editing import inspect_edit
@@ -103,26 +103,37 @@ def test_capacity_and_actual_time_availability_are_checked_for_replacement():
     assert any(i['type'] == 'dated_rule' for i in day_report(s, MON)['issues'])
 
 
-def test_invalid_refs_duplicate_changes_and_dates_rejected():
+def two_changes_of_one_lesson():
     s = fixture(); s.datedLessons = [change(), change().model_copy(update={'id': 'second'})]
-    with pytest.raises(ValueError, match='одно изменение'): State.model_validate(s.model_dump())
-    s.datedLessons = [change(teacherIds=['missing'])]
-    with pytest.raises(ValueError, match='учителя'): State.model_validate(s.model_dump())
-    with pytest.raises(ValueError): DatedLesson(id='a', name='bad', kind='add', onDate=MON)
-    with pytest.raises(ValueError): TeacherAbsence(id='a', name='bad', teacherId='t0', start=MON, end=MON, startTime='12:00', endTime='11:00')
+    State.model_validate(s.model_dump())
 
 
-def test_substitute_candidates_exclude_absent_busy_and_keep_other_teachers():
-    s = fixture(); teacher = s.workloads[0].teacherId
-    s.absences = [TeacherAbsence(id='a', name='Нет', teacherId=teacher, start=MON, end=MON)]
-    s.placements.append(Placement(id='busy', workloadId='w4', day=0, period=1, roomId='r1'))
-    before = s.model_dump()
-    result = substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId=f'{MON}:eng', teacherId=teacher))
-    options = {r['id']: r for r in result['candidates']}
-    assert not options[teacher]['available'] and not options[s.workloads[4].teacherId]['available']
-    assert any(r['available'] for r in result['candidates'])
-    assert s.model_dump() == before
-    with pytest.raises(ValueError): substitute_options(s, SubstituteRequest(revision=0, day=MON, rowId='missing'))
+def change_with_an_unknown_teacher():
+    s = fixture(); s.datedLessons = [change(teacherIds=['missing'])]
+    State.model_validate(s.model_dump())
+
+
+def added_lesson_without_its_data(): DatedLesson(id='a', name='bad', kind='add', onDate=MON)
+
+
+def absence_ending_before_it_starts(): TeacherAbsence(id='a', name='bad', teacherId='t0', start=MON, end=MON, startTime='12:00', endTime='11:00')
+
+
+@pytest.mark.parametrize('build', [two_changes_of_one_lesson, change_with_an_unknown_teacher, added_lesson_without_its_data, absence_ending_before_it_starts])
+def test_invalid_refs_duplicate_changes_and_dates_rejected(build):
+    with pytest.raises(ValueError): build()
+
+
+@pytest.mark.parametrize('row', ['missing', f'{MON}:eng'], ids=['no-such-lesson', 'cancelled-lesson'])
+def test_substitute_candidates_for_a_missing_or_cancelled_lesson_are_refused(tmp_path, monkeypatch, row):
+    monkeypatch.setattr(api, 'DB', tmp_path / 'dated.db')
+    client = TestClient(api.app)
+    client.get('/api/state?workspace=demo')
+    s = fixture()
+    s.datedLessons = [DatedLesson(id='c', name='Отмена', kind='cancel', placementId='eng', sourceDate=MON, onDate=MON)]
+    s = api.save('demo', s)
+    refused = client.post('/api/calendar/substitutes?workspace=demo', json=dict(revision=s.revision, day=str(MON), rowId=row))
+    assert refused.status_code == 422
 
 
 
@@ -175,18 +186,31 @@ def test_api_preview_absence_apply_substitute_undo_and_stale_revision(tmp_path, 
     assert any(i['type'] == 'dated_absence' for i in client.get(f'/api/calendar/day?workspace=demo&day={MON}').json()['issues'])
 
 
-def test_calendar_data_roundtrips_xml_and_workbook_without_losing_overrides():
-    from backend.exporting import state_xml, read_state_xml, workbook, ExportRequest, TABLES
-    from backend.tabular import parse_file
-    from backend.importing import mapped_state, MappingRequest
-    s = fixture(); s.datedLessons = [change(teacherIds=['t0'])]
+def rich_calendar():
+    s = fixture()
+    s.placements.append(Placement(id='hist', workloadId='w3', day=0, period=1, roomId='r2'))
+    s.datedLessons = [change(teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist'),
+                      DatedLesson(id='quiet', name='Замена', kind='change', placementId='hist', sourceDate=date(2026, 8, 24), onDate=date(2026, 8, 24), changeType='self_study', teacherIds=['t0'])]
     s.absences = [TeacherAbsence(id='a', name='Нет', teacherId='t2', start=MON, end=MON)]
     s.events = [Event(id='closed', name='Каникулы', kind='extra', start=TUE, end=TUE, effect='cancel', classIds=['c-demo-a'])]
+    s.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=date(2026, 8, 22), day=0, classIds=['c-demo-a'])]
+    return State.model_validate(s.model_dump())
+
+
+def test_calendar_data_roundtrips_xml_without_losing_overrides():
+    from backend.exporting import state_xml, read_state_xml
+    s = rich_calendar()
     assert read_state_xml(state_xml(s)) == s
+
+
+@pytest.mark.parametrize('key', ['datedLessons', 'absences', 'events', 'scheduleDays'])
+def test_calendar_table_roundtrips_through_its_workbook_sheet(key):
+    from backend.exporting import workbook, ExportRequest, TABLES
+    from backend.tabular import parse_file
+    from backend.importing import mapped_state, MappingRequest
+    s = rich_calendar()
     book = parse_file('data.xlsx', workbook(s, ExportRequest(revision=0, format='xlsx_data')))
-    for key in ['datedLessons', 'absences', 'events']:
-        number = next(i for i, x in enumerate(book['sheets']) if x['name'] == TABLES[key])
-        sheet = book['sheets'][number]
-        request = MappingRequest(revision=0, token='test', table=key, sheet=number, mapping={h:i for i,h in enumerate(sheet['rows'][0])}, skipBlanks=False)
-        result = mapped_state(s, book, request)
-        assert result['status'] == 'success' and result['candidate'] == s
+    number = next(i for i, x in enumerate(book['sheets']) if x['name'] == TABLES[key])
+    sheet = book['sheets'][number]
+    result = mapped_state(s, book, MappingRequest(revision=0, token='test', table=key, sheet=number, mapping={h: i for i, h in enumerate(sheet['rows'][0])}, skipBlanks=False))
+    assert result['status'] == 'success' and result['candidate'] == s

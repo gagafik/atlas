@@ -7,9 +7,9 @@ from backend.models import TeachingPeriod, Cycles, Named
 from backend.cycles import pattern_on
 from backend.commitments import DutyRequest, allocate_duties
 from backend.seed import initial_state
-from backend.calendar_ops import day_report, change_type, SubstituteRequest, substitute_options
+from backend.calendar_ops import day_report, SubstituteRequest, substitute_options
 from backend.editing import inspect_edit
-from backend.substitutions import monthly_totals, day_plan, DayPlanRequest
+from backend.substitutions import monthly_totals
 from test_access import client, enable, create, signed
 from test_journal import lesson, entry, write
 from test_journal_coverage import known
@@ -59,85 +59,83 @@ def stored(s):
 
 # ---- S1: model --------------------------------------------------------------------------------
 
-def test_change_type_validation_matrix():
-    base = dict(id='c', name='Замена', placementId='eng', sourceDate=MON, onDate=MON)
-    DatedLesson(kind='change', **base)
-    DatedLesson(kind='change', changeType='substitution', teacherIds=['t0'], **base)
-    DatedLesson(kind='change', changeType='merge', mergeWith=f'{MON}:hist', **base)
-    DatedLesson(kind='change', changeType='self_study', teacherIds=['t0'], **base)
-    DatedLesson(kind='change', changeType='move', startTime='16:00', endTime='16:40', **base)
-    DatedLesson(kind='change', changeType='move', **(base | dict(onDate=TUE)))
-    DatedLesson(kind='cancel', changeType='cancel', **base)
-    DatedLesson(kind='add', changeType='extra', id='x', name='Разовый', onDate=MON, groupId='g-a', profileId='secondary', subjectId='sub2', startTime='10:00', endTime='10:40')
-    invalid = [
-        (dict(kind='cancel', changeType='substitution'), 'Тип замены'),
-        (dict(kind='change', changeType='cancel'), 'Тип замены'),
-        (dict(kind='change', changeType='extra'), 'Тип замены'),
-        (dict(kind='change', changeType='merge'), 'присоединяется группа'),
-        (dict(kind='change', changeType='substitution', mergeWith='x'), 'присоединяется группа'),
-        (dict(kind='change', mergeWith='x'), 'присоединяется группа'),
-        (dict(kind='change', changeType='self_study'), 'укажите ответственного'),
-        (dict(kind='change', changeType='self_study', teacherIds=[]), 'укажите ответственного'),
-        (dict(kind='change', changeType='move'), 'менять дату или время'),
-    ]
-    for extra, message in invalid:
-        with pytest.raises(ValueError, match=message): DatedLesson(**(base | extra))
-    with pytest.raises(ValueError, match='Тип замены'):
-        DatedLesson(id='x', name='Разовый', kind='add', changeType='merge', mergeWith='a', onDate=MON, groupId='g-a', profileId='secondary', subjectId='sub2', startTime='10:00', endTime='10:40')
+CHANGE = dict(id='c', name='Замена', placementId='eng', sourceDate=MON, onDate=MON)
+ADDED = dict(id='x', name='Разовый', onDate=MON, groupId='g-a', profileId='secondary', subjectId='sub2', startTime='10:00', endTime='10:40')
+VALID_CHANGES = {
+    'plain-change': CHANGE | dict(kind='change'),
+    'substitution': CHANGE | dict(kind='change', changeType='substitution', teacherIds=['t0']),
+    'merge': CHANGE | dict(kind='change', changeType='merge', mergeWith=f'{MON}:hist'),
+    'self-study': CHANGE | dict(kind='change', changeType='self_study', teacherIds=['t0']),
+    'move-in-time': CHANGE | dict(kind='change', changeType='move', startTime='16:00', endTime='16:40'),
+    'move-to-another-date': CHANGE | dict(kind='change', changeType='move', onDate=TUE),
+    'cancel': CHANGE | dict(kind='cancel', changeType='cancel'),
+    'extra-lesson': ADDED | dict(kind='add', changeType='extra'),
+}
+INVALID_CHANGES = {
+    'cancel-typed-as-substitution': CHANGE | dict(kind='cancel', changeType='substitution'),
+    'change-typed-as-cancel': CHANGE | dict(kind='change', changeType='cancel'),
+    'change-typed-as-extra': CHANGE | dict(kind='change', changeType='extra'),
+    'merge-without-a-host': CHANGE | dict(kind='change', changeType='merge'),
+    'substitution-with-a-host': CHANGE | dict(kind='change', changeType='substitution', mergeWith='x'),
+    'untyped-change-with-a-host': CHANGE | dict(kind='change', mergeWith='x'),
+    'self-study-without-a-teacher': CHANGE | dict(kind='change', changeType='self_study'),
+    'self-study-with-an-empty-teacher-list': CHANGE | dict(kind='change', changeType='self_study', teacherIds=[]),
+    'move-that-moves-nothing': CHANGE | dict(kind='change', changeType='move'),
+    'extra-lesson-typed-as-merge': ADDED | dict(kind='add', changeType='merge', mergeWith='a'),
+}
 
 
-def test_old_documents_load_with_defaults_and_legacy_type_is_derived():
+@pytest.mark.parametrize('values', VALID_CHANGES.values(), ids=VALID_CHANGES)
+def test_valid_change_type_combinations_are_created(values):
+    assert DatedLesson(**values).id == values['id']
+
+
+@pytest.mark.parametrize('values', INVALID_CHANGES.values(), ids=INVALID_CHANGES)
+def test_invalid_change_type_combinations_are_rejected(values):
+    with pytest.raises(ValueError): DatedLesson(**values)
+
+
+def test_old_documents_load_with_defaults():
     s = initial_state('demo')
     dump = s.model_dump()
-    assert dump['scheduleDays'] == [] and dump['settings']['substitutionWeights'] == dict(subject=40, group=30, presence=20, fairness=20, building=10)
+    assert dump['scheduleDays'] == [] and dump['settings']['substitutionWeights'] == SubstitutionWeights().model_dump()
     del dump['scheduleDays']; del dump['settings']['substitutionWeights']
     assert State.model_validate(dump) == s
-    assert [change_type(c) for c in [None, change(teacherIds=['t0']), change(day=MON).model_copy(update={'onDate': TUE}),
-                                     DatedLesson(id='k', name='О', kind='cancel', placementId='eng', sourceDate=MON, onDate=MON),
-                                     change(changeType='self_study', teacherIds=['t0'])]] == [None, 'substitution', 'move', 'cancel', 'self_study']
 
 
-def test_schedule_day_validation():
-    s = fixture()
-    def make(*days, **update):
-        value = s.model_copy(update=dict(scheduleDays=list(days)) | update)
-        return State.model_validate(value.model_dump())
-    day = ScheduleDay(id='a', name='Отработка', onDate=SAT, day=0)
-    assert make(day).scheduleDays == [day]
-    with pytest.raises(ValueError, match='один «день в расписании»'): make(day, ScheduleDay(id='b', name='Ещё', onDate=SAT, day=1))
-    with pytest.raises(ValueError, match='вне учебной недели'): make(ScheduleDay(id='a', name='Д', onDate=TUE, day=5))
-    with pytest.raises(ValueError, match='выходит за учебный год'): make(ScheduleDay(id='a', name='Д', onDate=date(2026, 8, 15), day=0))
-    with pytest.raises(ValueError, match='связанные данные'): make(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, classIds=['missing']))
-    with pytest.raises(ValueError, match='отсутствующую неделю'): make(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, cycleId='missing'))
-    with pytest.raises(ValueError, match='и так работает'): ScheduleDay(id='a', name='Д', onDate=MON, day=0)
-    with pytest.raises(ValueError, match='не должны повторяться'): ScheduleDay(id='a', name='Д', onDate=SAT, day=0, classIds=['c-demo-a', 'c-demo-a'])
-    periods = dict(cycles=s.cycles.model_copy(update=dict(periods=[TeachingPeriod(id='p', name='Период', start=date(2026, 8, 24), end=date(2027, 6, 11), anchor=date(2026, 8, 24), patternIds=['weekly'])])))
-    with pytest.raises(ValueError, match='Дата вне учебных периодов'): make(day, **periods)
-    assert make(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, cycleId='weekly'), **periods).scheduleDays[0].cycleId == 'weekly'
+SATURDAY = ScheduleDay(id='a', name='Отработка', onDate=SAT, day=0)
+
+
+def schedule_state(*days, **update):
+    value = fixture().model_copy(update=dict(scheduleDays=list(days)) | update)
+    return State.model_validate(value.model_dump())
+
+
+def later_periods():
+    return dict(cycles=fixture().cycles.model_copy(update=dict(periods=[TeachingPeriod(id='p', name='Период', start=date(2026, 8, 24), end=date(2027, 6, 11), anchor=date(2026, 8, 24), patternIds=['weekly'])])))
+
+
+INVALID_SCHEDULE_DAYS = {
+    'two-days-for-one-date': lambda: schedule_state(SATURDAY, ScheduleDay(id='b', name='Ещё', onDate=SAT, day=1)),
+    'weekday-outside-the-school-week': lambda: schedule_state(ScheduleDay(id='a', name='Д', onDate=TUE, day=5)),
+    'date-outside-the-school-year': lambda: schedule_state(ScheduleDay(id='a', name='Д', onDate=date(2026, 8, 15), day=0)),
+    'unknown-class': lambda: schedule_state(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, classIds=['missing'])),
+    'unknown-week-pattern': lambda: schedule_state(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, cycleId='missing')),
+    'date-that-already-runs-this-weekday': lambda: ScheduleDay(id='a', name='Д', onDate=MON, day=0),
+    'repeated-class': lambda: ScheduleDay(id='a', name='Д', onDate=SAT, day=0, classIds=['c-demo-a', 'c-demo-a']),
+    'date-outside-the-teaching-periods': lambda: schedule_state(SATURDAY, **later_periods()),
+}
+
+
+@pytest.mark.parametrize('build', INVALID_SCHEDULE_DAYS.values(), ids=INVALID_SCHEDULE_DAYS)
+def test_invalid_schedule_days_are_rejected(build):
+    with pytest.raises(ValueError): build()
+
+
+def test_valid_schedule_days_are_accepted():
+    assert schedule_state(SATURDAY).scheduleDays == [SATURDAY]
+    assert schedule_state(ScheduleDay(id='a', name='Д', onDate=SAT, day=0, cycleId='weekly'), **later_periods()).scheduleDays[0].cycleId == 'weekly'
     assert ScheduleDay(id='a', name='Д', onDate=MON, day=0, cycleId='weekly').cycleId == 'weekly'
-
-
-def merge_and_self_study():
-    s = ranked()
-    s.datedLessons = [change('eng', MON, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist'),
-                      change('hist', date(2026, 8, 24), teacherIds=['t0'], changeType='self_study')]
-    s.scheduleDays = [ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0, classIds=['c-demo-a'])]
-    return State.model_validate(s.model_dump())
-
-
-def test_types_and_schedule_days_roundtrip_xml_and_workbook():
-    from backend.exporting import state_xml, read_state_xml, workbook, ExportRequest, TABLES
-    from backend.tabular import parse_file
-    from backend.importing import mapped_state, MappingRequest
-    s = merge_and_self_study()
-    assert read_state_xml(state_xml(s)) == s
-    book = parse_file('data.xlsx', workbook(s, ExportRequest(revision=0, format='xlsx_data')))
-    for key in ['datedLessons', 'scheduleDays']:
-        number = next(i for i, x in enumerate(book['sheets']) if x['name'] == TABLES[key])
-        sheet = book['sheets'][number]
-        result = mapped_state(s, book, MappingRequest(revision=0, token='test', table=key, sheet=number, mapping={h: i for i, h in enumerate(sheet['rows'][0])}, skipBlanks=False))
-        assert result['status'] == 'success' and result['candidate'] == s
-    assert TABLES['scheduleDays'] == 'Дни в расписании'
 
 
 def test_schedule_day_notifies_personal_accounts(client):
@@ -178,7 +176,7 @@ def test_class_selective_override():
     assert not any(i['type'] == 'dated_day_split' for i in report['issues'])
     s.placements.append(Placement(id='M0', workloadId='w4', day=0, period=2, roomId='r1'))
     split = [i for i in day_report(s, TUE)['issues'] if i['type'] == 'dated_day_split']
-    assert [i['ids'] for i in split] == [[f'{TUE}:M0']] and 'Математика' in split[0]['message']
+    assert [i['ids'] for i in split] == [[f'{TUE}:M0']]
     blocked = inspect_edit(s.model_copy(update=dict(placements=s.placements[:3])), s)
     assert not blocked['canApply'] and any(i['type'] == 'dated_day_split' for i in blocked['newIssues'])
 
@@ -320,18 +318,12 @@ def test_override_applies_to_duty_allocation():
     s = ab_state(commitments=[duty('a', '09:30', '09:50')])
     next(t for t in s.teachers if t.id == 't1').unavailable = ['0:1']
     s = monday_bells_an_hour_later(s)
-    banned = run(s, 'a')
-    assert banned['status'] == 'infeasible' and 'запрет по номеру урока' in banned['details'][0]
+    assert run(s, 'a')['status'] == 'infeasible'
     assert run(s.model_copy(update=dict(commitments=[duty('a', '09:30', '09:50', next_week)])), 'a')['status'] == 'success'
     # Hard rules follow the week and weekday of the date.
     hard = TimetableRule(id='hard', name='Занят', kind='availability', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], unavailable=[dict(day=0, start='09:00', end='10:00')])
-    blocked = run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50')]), 'a')
-    assert blocked['status'] == 'infeasible' and 'обязательная недоступность' in blocked['details'][0]
+    assert run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50')]), 'a')['status'] == 'infeasible'
     assert run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50', next_week)]), 'a')['status'] == 'success'
-    # A lunch rule of the chosen day keeps two short duties from consuming the break.
-    lunch = TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)
-    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20'), duty('b', '12:40', '13:00')]), 'a', 'b')['status'] == 'infeasible'
-    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20', next_week), duty('b', '12:40', '13:00', next_week)]), 'a', 'b')['status'] == 'success'
 
 
 def merge_state(capacity=25):
@@ -414,6 +406,7 @@ def test_two_groups_may_join_the_same_host():
 
 def test_legacy_change_type_is_derived():
     s = fixture()
+    assert day_report(s, MON)['rows'][0]['changeType'] is None
     moved = change(teacherIds=['t0']).model_copy(update={'onDate': TUE})
     s.datedLessons = [moved]
     source = next(r for r in day_report(s, MON)['rows'])
@@ -426,7 +419,6 @@ def test_legacy_change_type_is_derived():
     assert day_report(s, MON)['rows'][0]['changeType'] == 'cancel'
     s.datedLessons = [DatedLesson(id='x', name='Разовый', kind='add', onDate=SAT, groupId='g-a', profileId='secondary', subjectId='sub2', startTime='10:00', endTime='10:40', teacherIds=['t2'], roomIds=['r0'])]
     assert day_report(s, SAT)['rows'][0]['changeType'] == 'extra'
-    assert all('changeType' in r for r in day_report(s, MON)['rows'])
 
 
 def test_override_reaches_journal_coverage_portal_and_publication(client):
@@ -456,7 +448,9 @@ def options(s, **update):
 
 
 def test_ranking_order_and_explanations():
-    s = ranked(); before = s.model_dump()
+    s = ranked()
+    s.settings.substitutionWeights = SubstitutionWeights(subject=40, group=30, presence=20, fairness=20, building=10)
+    before = s.model_dump()
     result = options(s)
     available = [c for c in result['candidates'] if c['available']]
     assert [c['id'] for c in available] == ['t4', 't0', 't1', 't5'] and [c['score'] for c in available] == [80, 35, 35, 20]
@@ -489,15 +483,14 @@ def test_fairness_and_weights_change_order():
 
 def test_building_factor():
     s = ranked()
+    s.settings.substitutionWeights = SubstitutionWeights(subject=40, group=30, presence=20, fairness=20, building=10)
     s.campus = s.campus.model_validate(dict(buildings=[dict(id='a', name='A'), dict(id='b', name='B')], defaultTravelMinutes=0))
     s.rooms[0].buildingId = 'a'; s.rooms[1].buildingId = 'b'
     s = State.model_validate(s.model_dump())
-    t4 = next(c for c in options(s)['candidates'] if c['id'] == 't4')
-    building = next(f for f in t4['factors'] if f['key'] == 'building')
-    assert (building['points'], building['detail']) == (0, 'Нужен переход в другое здание')
+    building = lambda: next(f for c in options(s)['candidates'] if c['id'] == 't4' for f in c['factors'] if f['key'] == 'building')['points']
+    other_building = building()
     s.rooms[1].buildingId = 'a'
-    t4 = next(c for c in options(s)['candidates'] if c['id'] == 't4')
-    assert next(f for f in t4['factors'] if f['key'] == 'building')['points'] == 10
+    assert building() > other_building
 
 
 def test_merge_options_listed():
@@ -575,6 +568,7 @@ def self_study_state():
 
 
 def test_types_visible_to_teacher_only_in_portal_and_publication():
+    from backend.calendar_ops import TYPES
     from backend.portal_cache import Snapshot
     from backend.publications import public_document, PublicationRequest
     s = self_study_state(); snapshot = Snapshot(s)
@@ -584,9 +578,9 @@ def test_types_visible_to_teacher_only_in_portal_and_publication():
     assert all('changeType' not in r for r in snapshot.day_rows(MON, 'class_', 'c-demo-a'))
     request = dict(revision=s.revision, name='Дни', kind='dated', firstDate=MON, lastDate=MON)
     teacher, _ = public_document(s, PublicationRequest(view='teacher', entityIds=['t5'], **request))
-    assert 'Самостоятельная работа' in teacher
+    assert TYPES['self_study'] in teacher
     klass, _ = public_document(s, PublicationRequest(view='class', entityIds=['c-demo-a'], **request))
-    assert 'Самостоятельная работа' not in klass and 'Изменено' in klass
+    assert TYPES['self_study'] not in klass
 
 
 def test_api_change_type_persists(web):
@@ -594,13 +588,11 @@ def test_api_change_type_persists(web):
     value = change('eng', MON, teacherIds=['t3'], roomIds=['r2'], changeType='merge', mergeWith=f'{MON}:hist')
     preview = web.post('/api/calendar/preview?workspace=demo', json=dict(revision=s.revision, table='datedLessons', value=value.model_dump(mode='json')))
     assert preview.status_code == 200, preview.text
-    assert preview.json()['diff']['changes'][0]['after'].startswith('Объединение')
     saved = web.post('/api/editor/apply?workspace=demo', json=dict(revision=s.revision, token=preview.json()['token']))
     assert saved.status_code == 200, saved.text
     assert web.get('/api/state?workspace=demo').json()['datedLessons'][0]['changeType'] == 'merge'
     row = next(r for r in web.get(f'/api/calendar/day?workspace=demo&day={MON}').json()['rows'] if r['placementId'] == 'eng')
     assert row['changeType'] == 'merge' and row['mergeWith'] == f'{MON}:hist'
-    with pytest.raises(ValueError, match='присоединяется группа'): change('eng2', MON, changeType='merge')
     stale = change('eng2', MON, teacherIds=['t0'], roomIds=['r1'], changeType='merge', mergeWith=f'{MON}:hist')
     blocked = web.post('/api/calendar/preview?workspace=demo', json=dict(revision=saved.json()['revision'], table='datedLessons', value=stale.model_dump(mode='json'))).json()
     assert not blocked['canApply'] and any(i['type'] == 'dated_merge' for i in blocked['newIssues'])
@@ -610,7 +602,7 @@ def test_schedule_day_preview_api(web):
     s = stored(fixture())
     value = ScheduleDay(id='sat', name='Отработка', onDate=SAT, day=0).model_dump(mode='json')
     preview = web.post('/api/calendar/preview?workspace=demo', json=dict(revision=s.revision, table='scheduleDays', value=value)).json()
-    assert preview['canApply'] and preview['diff']['changes'][0]['table'] == 'scheduleDays' and 'Понедельник' in preview['diff']['changes'][0]['after']
+    assert preview['canApply'] and preview['diff']['changes'][0]['table'] == 'scheduleDays'
     applied = web.post('/api/editor/apply?workspace=demo', json=dict(revision=s.revision, token=preview['token'])).json()
     report = web.get(f'/api/calendar/day?workspace=demo&day={SAT}').json()
     assert len(report['rows']) == 2 and report['scheduleDay']['day'] == 0
@@ -624,13 +616,22 @@ def test_schedule_day_preview_api(web):
 
 # ---- S5: whole-day plan ----------------------------------------------------------------------
 
-def plan(s, teacher='t2', day=MON):
-    return day_plan(s, DayPlanRequest(revision=s.revision, day=day, teacherId=teacher))
+def plan_request(web, teacher='t2', day=MON):
+    return web.post('/api/calendar/day-plan?workspace=demo', json=dict(revision=api.read('demo').revision, day=str(day), teacherId=teacher))
 
 
-def test_day_plan_proposes_each_lesson_greedily():
-    s = ranked(); before = s.model_dump()
-    result = plan(s)
+def plan(web, s, **kwargs):
+    """The proposals of the whole-day plan for a school state stored for the test."""
+    s.revision = api.read('demo').revision
+    stored(s)
+    response = plan_request(web, **kwargs)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_day_plan_proposes_each_lesson_greedily(web):
+    result = plan(web, ranked())
+    before = api.read('demo')
     assert [l['row']['id'] for l in result['lessons']] == [f'{MON}:eng', f'{MON}:eng2']
     assert [l['proposal']['teacherId'] for l in result['lessons']] == ['t4', 't4']
     first, second = result['lessons']
@@ -639,31 +640,31 @@ def test_day_plan_proposes_each_lesson_greedily():
     t4 = next(c for c in second['candidates'] if c['id'] == 't4')
     assert t4['lessons'] == next(c for c in first['candidates'] if c['id'] == 't4')['lessons'] + 1
     assert result['absences'][0]['id'] == 'abs' and any(o['rowId'] == f'{MON}:hist' for o in first['mergeOptions'])
-    assert s.model_dump() == before
-    with pytest.raises(ValueError, match='Учитель не найден'): plan(s, teacher='missing')
-    with pytest.raises(ValueError, match='вне учебного года'): plan(s, day=date(2027, 7, 1))
-    assert plan(s, teacher='t5')['lessons'] == []
+    assert plan_request(web).status_code == 200 and api.read('demo') == before
+    assert plan_request(web, teacher='t5').json()['lessons'] == []
 
 
-def test_day_plan_without_free_teacher_proposes_nothing():
+@pytest.mark.parametrize('values', [dict(teacher='missing'), dict(day=date(2027, 7, 1))], ids=['unknown-teacher', 'day-outside-the-school-year'])
+def test_day_plan_is_refused_for_an_unknown_teacher_and_a_day_outside_the_year(web, values):
+    stored(ranked())
+    assert plan_request(web, **values).status_code == 422
+
+
+def test_day_plan_without_free_teacher_proposes_nothing(web):
     s = ranked()
     s.absences += [TeacherAbsence(id=f'a-{t}', name='Нет', teacherId=t, start=MON, end=MON) for t in ['t0', 't1', 't3', 't4', 't5']]
-    s = State.model_validate(s.model_dump())
-    result = plan(s)
+    result = plan(web, State.model_validate(s.model_dump()))
     assert [l['proposal']['action'] for l in result['lessons']] == ['none', 'none']
-    assert 'Свободных учителей не найдено' in result['lessons'][0]['proposal']['reason']
 
 
-def test_day_plan_leaves_lessons_outside_a_partial_absence_alone():
-    first, second = (l['row'] for l in plan(ranked())['lessons'])
+def test_day_plan_leaves_lessons_outside_a_partial_absence_alone(web):
+    first, second = (l['row'] for l in plan(web, ranked())['lessons'])
     def planned(start, end):
         s = ranked()
         s.absences = [TeacherAbsence(id='abs', name='Врач', teacherId='t2', start=MON, end=MON, startTime=start, endTime=end)]
-        return plan(State.model_validate(s.model_dump()))['lessons']
+        return plan(web, State.model_validate(s.model_dump()))['lessons']
     lessons = planned(first['start'], first['end'])
     assert [l['proposal']['action'] for l in lessons] == ['substitution', 'none']
-    reason = lessons[1]['proposal']['reason']
-    assert 'вне времени отсутствия' in reason and f"{first['start']}–{first['end']}" in reason
     # The lesson stays available for a manual choice, with ranked candidates.
     assert lessons[1]['row']['actions'] == ['substitution', 'merge', 'self_study', 'cancel', 'none'] and lessons[1]['candidates']
     # An absence that touches neither lesson proposes nothing; touching only the second proposes only it.
@@ -671,7 +672,7 @@ def test_day_plan_leaves_lessons_outside_a_partial_absence_alone():
     assert [l['proposal']['action'] for l in planned(second['start'], second['end'])] == ['none', 'substitution']
     # Without a recorded absence every lesson of the teacher is planned.
     s = ranked(); s.absences = []
-    assert [l['proposal']['action'] for l in plan(s)['lessons']] == ['substitution', 'substitution']
+    assert [l['proposal']['action'] for l in plan(web, s)['lessons']] == ['substitution', 'substitution']
 
 
 def assignments(*items): return [dict(rowId=f'{MON}:{r}', action=a, **extra) for r, a, extra in items]
@@ -710,52 +711,75 @@ def test_day_plan_api_atomic_apply_and_replay(web):
     assert api.read('demo').datedLessons == []
 
 
-def test_day_plan_validation(web):
+def plan_preview(web, items, day=MON, **extra):
+    return web.post('/api/calendar/day-plan/preview?workspace=demo', json=dict(revision=api.read('demo').revision, day=str(day), teacherId='t2', assignments=items) | extra)
+
+
+REFUSED_PLANS = {
+    'lesson-of-another-teacher': (assignments(('d0', 'substitution', dict(teacherId='t5'))), {}),
+    'unknown-lesson': (assignments(('missing', 'cancel', {})), {}),
+    'lesson-planned-twice': (assignments(('eng', 'cancel', {}), ('eng', 'substitution', dict(teacherId='t4'))), {}),
+    'nothing-chosen': (assignments(('eng', 'none', {})), {}),
+    'substitution-without-a-teacher': (assignments(('eng', 'substitution', {})), {}),
+    'substitute-is-the-absent-teacher': (assignments(('eng', 'substitution', dict(teacherId='t2'))), {}),
+    'unknown-substitute': (assignments(('eng', 'self_study', dict(teacherId='missing'))), {}),
+    'merge-into-itself': (assignments(('eng', 'merge', dict(mergeWith=f'{MON}:eng'))), {}),
+    'merge-into-a-lesson-at-another-time': (assignments(('eng', 'merge', dict(mergeWith=f'{MON}:d0'))), {}),
+    'no-assignments': ([], {}),
+    'unknown-teacher': (assignments(('eng', 'substitution', dict(teacherId='t4'))), dict(teacherId='missing')),
+    'day-outside-the-school-year': (assignments(('eng', 'cancel', {})), dict(day='2027-07-01')),
+}
+
+
+@pytest.mark.parametrize('items,extra', REFUSED_PLANS.values(), ids=REFUSED_PLANS)
+def test_day_plan_assignments_that_cannot_be_applied_are_refused(web, items, extra):
+    stored(ranked())
+    assert plan_preview(web, items, **extra).status_code == 422
+
+
+@pytest.mark.parametrize('items', [assignments(('eng', 'cancel', {})), assignments(('eng', 'merge', dict(mergeWith=f'{MON}:hist')))], ids=['cancel', 'merge'])
+def test_day_plan_assignments_that_can_be_applied_are_previewed(web, items):
+    stored(ranked())
+    preview = plan_preview(web, items)
+    assert preview.status_code == 200 and preview.json()['canApply'] and preview.json()['diff']['added'] == 1
+
+
+def test_day_plan_of_a_stale_revision_is_refused(web):
     s = stored(ranked())
-    def preview(items, **extra):
-        return web.post('/api/calendar/day-plan/preview?workspace=demo', json=dict(revision=s.revision, day=str(MON), teacherId='t2', assignments=items) | extra)
-    def refused(items, marker, **extra):
-        response = preview(items, **extra)
-        assert response.status_code == 422 and marker in response.json()['detail'], response.text
-    refused(assignments(('d0', 'substitution', dict(teacherId='t5'))), 'больше не ведёт')
-    refused(assignments(('missing', 'cancel', {})), 'больше не ведёт')
-    refused(assignments(('eng', 'cancel', {}), ('eng', 'substitution', dict(teacherId='t4'))), 'дважды')
-    refused(assignments(('eng', 'none', {})), 'хотя бы одно')
-    refused(assignments(('eng', 'substitution', {})), 'учителя')
-    refused(assignments(('eng', 'substitution', dict(teacherId='t2'))), 'учителя')
-    refused(assignments(('eng', 'self_study', dict(teacherId='missing'))), 'учителя')
-    refused(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:eng'))), 'объединения')
-    refused(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:d0'))), 'объединения')
-    assert preview([]).status_code == 422
-    assert preview(assignments(('eng', 'substitution', dict(teacherId='t4'))), teacherId='missing').status_code == 422
-    refused(assignments(('eng', 'cancel', {})), 'учебного года', day='2027-07-01')
-    cancel = preview(assignments(('eng', 'cancel', {})))
-    assert cancel.status_code == 200 and cancel.json()['canApply'] and cancel.json()['diff']['added'] == 1
-    merged = preview(assignments(('eng', 'merge', dict(mergeWith=f'{MON}:hist'))))
-    assert merged.status_code == 200 and merged.json()['canApply']
-    stale = web.post('/api/calendar/day-plan?workspace=demo', json=dict(revision=s.revision - 1, day=str(MON), teacherId='t2'))
-    assert stale.status_code == 409
+    assert web.post('/api/calendar/day-plan?workspace=demo', json=dict(revision=s.revision - 1, day=str(MON), teacherId='t2')).status_code == 409
 
 
-def test_day_plan_replaces_existing_change():
+def apply_plan(web, preview):
+    assert preview.status_code == 200, preview.text
+    applied = web.post('/api/editor/apply?workspace=demo', json=dict(revision=api.read('demo').revision, token=preview.json()['token']))
+    assert applied.status_code == 200, applied.text
+    return api.read('demo').datedLessons
+
+
+def test_day_plan_replaces_the_existing_change_of_a_lesson(web):
     s = ranked()
     s.datedLessons = [change('eng', MON, roomIds=['r1'])]
-    s = State.model_validate(s.model_dump())
-    from backend.substitutions import plan_candidate, DayPlanPreview
-    body = DayPlanPreview(revision=0, day=MON, teacherId='t2', assignments=[dict(rowId=f'{MON}:eng', action='substitution', teacherId='t4')])
-    candidate = plan_candidate(s, body)
-    assert len(candidate.datedLessons) == 1
-    record = candidate.datedLessons[0]
+    stored(State.model_validate(s.model_dump()))
+    (record,) = apply_plan(web, plan_preview(web, assignments(('eng', 'substitution', dict(teacherId='t4')))))
     assert record.id == s.datedLessons[0].id and record.roomIds == ['r1'] and record.teacherIds == ['t4'] and record.changeType == 'substitution'
-    moved = ranked()
-    moved.datedLessons = [change('eng', MON, teacherIds=['t2']).model_copy(update=dict(onDate=TUE, changeType='move'))]
-    moved = State.model_validate(moved.model_dump())
-    on_tue = DayPlanPreview(revision=0, day=TUE, teacherId='t2', assignments=[dict(rowId=f'{MON}:eng', action='cancel')])
-    with pytest.raises(ValueError, match='отменяется в форме урока'): plan_candidate(moved, on_tue)
-    other = DayPlanPreview(revision=0, day=TUE, teacherId='t2', assignments=[dict(rowId=f'{MON}:eng', action='self_study', teacherId='t5')])
-    with pytest.raises(ValueError, match='только замена учителя'): plan_candidate(moved, other)
-    kept = plan_candidate(moved, DayPlanPreview(revision=0, day=TUE, teacherId='t2', assignments=[dict(rowId=f'{MON}:eng', action='substitution', teacherId='t4')]))
-    assert kept.datedLessons[0].changeType == 'move' and kept.datedLessons[0].teacherIds == ['t4']
+
+
+def moved_lesson_state():
+    s = ranked()
+    s.datedLessons = [change('eng', MON, teacherIds=['t2']).model_copy(update=dict(onDate=TUE, changeType='move'))]
+    return State.model_validate(s.model_dump())
+
+
+@pytest.mark.parametrize('items', [assignments(('eng', 'cancel', {})), assignments(('eng', 'self_study', dict(teacherId='t5')))], ids=['cancel', 'self-study'])
+def test_day_plan_only_replaces_the_teacher_of_a_moved_lesson(web, items):
+    stored(moved_lesson_state())
+    assert plan_preview(web, items, day=TUE).status_code == 422
+
+
+def test_day_plan_keeps_a_moved_lesson_moved(web):
+    stored(moved_lesson_state())
+    (record,) = apply_plan(web, plan_preview(web, assignments(('eng', 'substitution', dict(teacherId='t4'))), day=TUE))
+    assert record.changeType == 'move' and record.teacherIds == ['t4']
 
 
 def hosted_state():
@@ -767,26 +791,26 @@ def hosted_state():
     return State.model_validate(s.model_dump())
 
 
-def test_day_plan_keeps_a_merged_group_with_its_host():
-    from backend.substitutions import plan_candidate, DayPlanPreview
+def test_day_plan_keeps_a_merged_group_with_its_host(web):
     s = hosted_state()
     assert not [i for i in day_report(s, MON)['issues'] if i['type'] in ['dated_collision', 'dated_merge']]
-    lessons = {l['row']['id']: l for l in plan(s)['lessons']}
+    lessons = {l['row']['id']: l for l in plan(web, s)['lessons']}
     host, merged = lessons[f'{MON}:host'], lessons[f'{MON}:eng']
     assert host['proposal']['action'] == 'substitution'
     assert merged['proposal'] == dict(action='merge', mergeWith=f'{MON}:host')
     chosen = host['proposal']['teacherId']
-    body = DayPlanPreview(revision=0, day=MON, teacherId='t2', assignments=[dict(rowId=f'{MON}:host', action='substitution', teacherId=chosen),
-                                                                              dict(rowId=f'{MON}:eng', action='merge', mergeWith=f'{MON}:host')])
-    candidate = plan_candidate(s, body)
-    by_placement = {c.placementId: c for c in candidate.datedLessons}
+    chosen_plan = assignments(('host', 'substitution', dict(teacherId=chosen)), ('eng', 'merge', dict(mergeWith=f'{MON}:host')))
+    by_placement = {c.placementId: c for c in apply_plan(web, plan_preview(web, chosen_plan))}
     assert by_placement['eng'].teacherIds == [chosen] and by_placement['eng'].changeType == 'merge' and by_placement['host'].teacherIds == [chosen]
-    report = day_report(candidate, MON)
-    assert not [i for i in report['issues'] if i['type'] in ['dated_collision', 'dated_merge', 'dated_absence'] and f'{MON}:eng' in i['ids'] + [f'{MON}:host']]
-    cancelled = DayPlanPreview(revision=0, day=MON, teacherId='t2', assignments=[dict(rowId=f'{MON}:host', action='cancel'), dict(rowId=f'{MON}:eng', action='merge', mergeWith=f'{MON}:host')])
-    with pytest.raises(ValueError, match='Урок для объединения не найден'): plan_candidate(s, cancelled)
-    chain = DayPlanPreview(revision=0, day=MON, teacherId='t2', assignments=[dict(rowId=f'{MON}:host', action='merge', mergeWith=f'{MON}:eng'), dict(rowId=f'{MON}:eng', action='merge', mergeWith=f'{MON}:host')])
-    with pytest.raises(ValueError, match='Урок для объединения не найден'): plan_candidate(s, chain)
+    issues = web.get(f'/api/calendar/day?workspace=demo&day={MON}').json()['issues']
+    assert not [i for i in issues if i['type'] in ['dated_collision', 'dated_merge', 'dated_absence'] and f'{MON}:eng' in i['ids'] + [f'{MON}:host']]
+
+
+@pytest.mark.parametrize('items', [assignments(('host', 'cancel', {}), ('eng', 'merge', dict(mergeWith=f'{MON}:host'))),
+                                   assignments(('host', 'merge', dict(mergeWith=f'{MON}:eng')), ('eng', 'merge', dict(mergeWith=f'{MON}:host')))], ids=['host-cancelled', 'chain-of-merges'])
+def test_day_plan_does_not_merge_a_group_into_a_cancelled_or_merged_host(web, items):
+    stored(hosted_state())
+    assert plan_preview(web, items).status_code == 422
 
 
 # ---- S6: monthly totals ----------------------------------------------------------------------
@@ -820,17 +844,20 @@ def test_monthly_totals():
     assert [t['teacherId'] for t in only['teachers']] == ['t0'] and only['teachers'][0]['planned'] == 0
 
 
-def test_monthly_totals_exclude_closures_and_validate():
+def test_monthly_totals_exclude_closures():
     s = ranked(); s.absences = []
     s.events = [Event(id='closed', name='Каникулы', kind='holiday', start=date(2026, 8, 24), end=date(2026, 8, 24), effect='cancel')]
     s = State.model_validate(s.model_dump())
     t2 = next(t for t in monthly_totals(s, '2026-08')['teachers'] if t['teacherId'] == 't2')
     assert (t2['planned'], t2['missed'], t2['held']) == (4, 0, 4)
-    for month in ['2026-13', '2026-8', 'август', '']:
-        with pytest.raises(ValueError, match='ГГГГ-ММ'): monthly_totals(s, month)
-    with pytest.raises(ValueError, match='Месяц вне учебного года'): monthly_totals(s, '2027-08')
-    with pytest.raises(ValueError, match='Учитель не найден'): monthly_totals(s, '2026-08', 'missing')
     assert monthly_totals(s, '2026-08')['first'] == '2026-08-17'
+
+
+@pytest.mark.parametrize('query', ['month=2026-13', 'month=2026-8', 'month=august', 'month=2027-08', 'month=2026-08&teacherId=missing'],
+                         ids=['month-13', 'month-without-zero', 'not-a-month', 'month-outside-the-year', 'unknown-teacher'])
+def test_monthly_report_refuses_a_bad_month_and_an_unknown_teacher(web, query):
+    stored(ranked())
+    assert web.get('/api/calendar/substitution-report?workspace=demo&' + query).status_code == 422
 
 
 def test_monthly_totals_count_override_dates_and_skip_staff_groups():

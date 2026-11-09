@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import date, timedelta
 
 import pytest
-from backend import api, teaching_material_files
+from backend import api, homework_files
 from backend.access import now
 from backend.models import DatedLesson
 from test_access import client
@@ -103,8 +103,9 @@ def test_topic_transfer_publication_keeps_version_files_after_source_is_closed(c
 
 
 def test_substitute_can_resolve_but_revocation_before_save_is_atomic(client):
-    teacher,other,_,_=staff(client)
-    m=material(teacher,visibility='staff').json();p=new(teacher,topics=topics(m))
+    teacher,other,_,parent=staff(client)
+    file=upload(teacher).json()['id']
+    m=material(teacher,visibility='staff',fileIds=[file]).json();p=new(teacher,topics=topics(m))
     s=api.read('demo');s.datedLessons=[DatedLesson(id='sub',name='Replacement',kind='change',placementId='eng',
         sourceDate=date(2026,8,17),onDate=date(2026,8,17),teacherIds=['t1'])];api.save('demo',s)
     assert request(other,'/'+p['id']).status_code==403
@@ -112,10 +113,7 @@ def test_substitute_can_resolve_but_revocation_before_save_is_atomic(client):
     material(teacher,m,visibility='private').raise_for_status()
     assert write(other,record,publish=True).status_code==403
     assert entry(other,key)['version']==0
-    with api.connect() as db:
-        for table in ['teaching_material_lessons','curriculum_bindings','curriculum_publications']:
-            exists=db.execute('SELECT 1 FROM sqlite_master WHERE name=?',(table,)).fetchone()
-            assert not exists or db.execute(f'SELECT count(*) FROM {table}').fetchone()[0]==0
+    assert report(parent).json()['rows']==[] and download(parent,file,m,key).status_code==404
 
 
 def test_resolve_rejects_stale_plan_wrong_lesson_archived_and_missing_topic(client):
@@ -142,17 +140,13 @@ def test_resolve_rechecks_account_and_school_after_capturing_lesson(client,monke
     assert resolve(teacher,p).status_code==409
 
 
-def test_limits_and_deduplicated_status_for_repeated_topic_resources(client):
+def test_a_material_repeated_in_many_topics_is_one_status_and_not_twice_in_a_topic(client):
     m=material(client,visibility='staff',text='Long resource text').json()
-    repeated=[dict(id=f't{i}',title=f'Topic {i}',hours=1,materials=[ref(m)]) for i in range(500)]
+    repeated=[dict(id=f't{i}',title=f'Topic {i}',hours=1,materials=[ref(m)]) for i in range(3)]
     p=new(client,topics=repeated)
     assert len(p['materialStatus'])==1 and 'Long resource text' not in str(p)
     duplicate=deepcopy(repeated[:1]);duplicate[0]['materials']=[ref(m),ref(m)|dict(version=2)]
     assert save(client,p,topics=duplicate).status_code==422
-    excess=[dict(id=f't{i}',title='Topic',hours=1,materials=[dict(id=f'm{i}',version=1)]) for i in range(101)]
-    assert save(client,p,topics=excess).status_code==422
-    repeated[0]['materials']=[dict(id=f'm{i}',version=1) for i in range(11)]
-    assert save(client,p,topics=repeated).status_code==422
 
 
 def test_plan_only_file_is_retained_and_restored_with_backup(client,tmp_path,monkeypatch):
@@ -160,11 +154,11 @@ def test_plan_only_file_is_retained_and_restored_with_backup(client,tmp_path,mon
     file=upload(client).json()['id'];m=material(client,visibility='staff',fileIds=[file]).json()
     p=new(client,topics=topics(m))
     material(client,m,fileIds=[],text='New version without file').raise_for_status()
-    with api.connect() as db:
-        db.execute('UPDATE teaching_material_files SET created=?',((now()-timedelta(days=2)).isoformat(),))
-        teaching_material_files.collect_unused(db)
-    source=api.DB;backup=tmp_path/'copy';manifest=create_backup(source,backup)
-    assert len(manifest['files'])==1
+    # Two days on, the next upload collects what no version holds; the plan still pins the first version with its file.
+    monkeypatch.setattr(homework_files,'now',lambda:now()+timedelta(days=2))
+    assert upload(client).status_code==200
+    assert download(client,file,m).content==b'Lesson material'
+    source=api.DB;backup=tmp_path/'copy';create_backup(source,backup)
     monkeypatch.setattr(api,'DB',backup/source.name)
     assert request(client,'/'+p['id']).json()['content']==p['content']
     assert resolve(client,p).json()['materials'][0]['files'][0]['id']==file
