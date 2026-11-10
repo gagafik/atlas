@@ -58,9 +58,13 @@ describe("classCardLines", () => {
 
 describe("runLine", () => {
   const detail = { lessons: 3, sent: 5, skipped: 7 };
-  it("carries the counts of a run", () => {
-    const line = runLine({ kind: "lessons", onDate: "2026-08-19", detail });
-    for (const count of ["3", "5", "7"]) expect(line).toContain(count);
+  it.each([
+    ["lessons", { lessons: 3, sent: 5, skipped: 7 }],
+    ["digest", { lessons: 3, sent: 5, withoutAccount: 4 }],
+  ])("carries the counts of a %s run", (kind, counts) => {
+    const line = runLine({ kind, onDate: "2026-08-19", detail: counts });
+    for (const count of Object.values(counts))
+      expect(line).toContain(String(count));
   });
   it("tells a lesson reminder from the weekly digest", () => {
     const run = (kind: "lessons" | "digest") =>

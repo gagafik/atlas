@@ -53,6 +53,7 @@ const lesson = { date: "2026-08-17", start: "08:30", end: "09:10" };
 const codes = [
   { id: "illness", name: "Болезнь" },
   { id: "school", name: "Представляет школу" },
+  { id: "family", name: "Семейные обстоятельства" },
 ];
 
 it("sets the first lesson from its start and the last lesson to its end", () => {
@@ -109,10 +110,11 @@ it("calls only joint approvals and rejections a shared decision", () => {
 });
 
 it("lists the excused lessons per type and skips zeros", () => {
-  const text = codeBreakdown({ illness: 2, school: 0 }, codes);
-  expect(text).toContain("Болезнь");
-  expect(text).toContain("2");
-  expect(text).not.toContain("Представляет школу");
+  const text = codeBreakdown({ illness: 2, school: 4, family: 0 }, codes);
+  for (const part of ["Болезнь", "Представляет школу", "2", "4"])
+    expect(text).toContain(part);
+  expect(text).not.toContain("Семейные обстоятельства");
+  expect(text).not.toContain("0");
 });
 
 it("counts the lessons without a type apart from the typed ones", () => {

@@ -1,11 +1,11 @@
 from contextlib import closing
-from datetime import date,datetime,timezone
+from datetime import date,datetime,timedelta,timezone
 import sqlite3,threading
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from backend import api,coverage_reminders,journal_coverage,journal_periods
-from backend.coverage_reminders import DEFAULT_SETTINGS,reminder_day,school_day,settings,tables,windows
+from backend.coverage_reminders import DEFAULT_SETTINGS,DIGEST_DAYS,GRACE_DAYS,reminder_day,school_day,settings,tables,windows
 from backend.models import DatedLesson,Event,Placement,ScheduleDay,Student
 from backend.seed import initial_state
 from test_access import client,enable,create,signed,HEADERS
@@ -116,7 +116,8 @@ def test_windows_follow_since_grace_and_digest_range():
     lessons,digest=windows(state,date(2026,8,30),config|dict(since='2026-08-17'));assert MON not in lessons and MON in digest
     assert windows(state,date(2026,8,19),config|dict(since='2026-08-18'))==(set(),set())
     # A long gap is cut to the scan window and never reaches before the year.
-    lessons,digest=windows(state,date(2026,12,1),config|dict(since='2026-08-17'));assert min(digest)>date(2026,10,1) and min(lessons)>date(2026,10,1)
+    today=date(2026,12,1);lessons,digest=windows(state,today,config|dict(since='2026-08-17'))
+    assert min(digest)>=today-timedelta(days=DIGEST_DAYS) and min(lessons)>=today-timedelta(days=DIGEST_DAYS+GRACE_DAYS)
 
 
 def test_internal_fields_never_leave_the_server(client):
