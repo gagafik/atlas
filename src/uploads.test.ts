@@ -22,10 +22,10 @@ const settle = <T>(promise: Promise<T>) =>
   );
 
 describe("uploadFile", () => {
-  it("retries a busy answer after Retry-After and reports the busy state", async () => {
+  it.each([429, 503])("retries a %i after Retry-After and reports the busy state", async (status) => {
     fetchMock
       .mockResolvedValueOnce(
-        json({ detail: "busy" }, 429, { "Retry-After": "2" }),
+        json({ detail: "busy" }, status, { "Retry-After": "2" }),
       )
       .mockResolvedValueOnce(json({ id: "x" }));
     const onBusy = vi.fn();
@@ -48,16 +48,6 @@ describe("uploadFile", () => {
         "Content-Type": "application/octet-stream",
       },
     });
-  });
-
-  it.each([429, 503])("retries a %i after Retry-After", async (status) => {
-    fetchMock
-      .mockResolvedValueOnce(json({ detail: "busy" }, status, { "Retry-After": "1" }))
-      .mockResolvedValueOnce(json({ ok: true }));
-    const promise = uploadFile("/u", new Blob(["a"]));
-    await vi.advanceTimersByTimeAsync(1000);
-    await expect(promise).resolves.toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("sends the content type it was given", async () => {
