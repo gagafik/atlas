@@ -407,7 +407,10 @@ def test_transport_encrypts_generic_payload_and_refuses_redirects_without_real_n
     device,data=subscribe(client,data)
     with api.connect() as db:private=db.execute('SELECT private_key FROM push_config').fetchone()[0]
     requests_made=[]
+    for name in ['HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy']:monkeypatch.setenv(name,'http://127.0.0.1:9')
     def answer(adapter,request,**kwargs):
+        # The proxy from the environment is unreachable: a request sent through it fails.
+        if kwargs.get('proxies'):raise requests.exceptions.ProxyError('proxy unreachable')
         requests_made.append(request)
         response=requests.Response();response.status_code=307;response.headers['Location']='http://127.0.0.1/private'
         response._content=b'not read';response._content_consumed=True;response.request=request;response.url=request.url
