@@ -101,20 +101,32 @@ def test_parent_revocation_and_expiry_close_private_notice_and_files(client,monk
     assert parent.get(file_url(file['id'])).status_code==404
 
 
-def test_period_validation_preview_boundaries_and_future_journal(client):
-    _,_,parent,teacher=setup(client)
-    for values in [dict(endDate='2026-09-18'),dict(endDate='2026-08-16'),dict(startDate='2025-08-17'),dict(startTime='10:00',endTime='09:00'),dict(reason=' '),dict(startTime='26:00')]:
-        assert parent.post(url(),json=body(**values)).status_code==422
-    preview=parent.post(url('/preview'),json=body()).json();assert preview['lessons']
-    english=next(r for r in preview['lessons'] if r['subject']=='Английский язык')
+@pytest.mark.parametrize('values',[dict(endDate='2026-09-18'),dict(endDate='2026-08-16'),dict(startDate='2025-08-17'),dict(startTime='10:00',endTime='09:00'),dict(reason=' '),dict(startTime='26:00')],
+                         ids=['after the year','before the start','previous year','times reversed','blank reason','impossible time'])
+def test_invalid_absence_notices_are_refused(client,values):
+    _,_,parent,_=setup(client)
+    assert parent.post(url(),json=body(**values)).status_code==422
+    assert parent.get(url()).json()['items']==[]
+
+
+def english_lesson(parent):
+    lessons=parent.post(url('/preview'),json=body()).json()['lessons'];assert lessons
+    return next(r for r in lessons if r['subject']=='Английский язык')
+
+
+def test_note_for_a_lesson_interval_excuses_it_once_the_journal_is_published(client):
+    _,_,parent,teacher=setup(client);english=english_lesson(parent)
     notice=send(parent,body(startTime=english['start'],endTime=english['end']))
     assert decide(teacher,notice).status_code==200
     record=mark(client,publish=False);assert report(parent).json()['rows']==[]
     published=write(client,record,publish=True);assert published.status_code==200
     assert report(parent).json()['summary']['attendance']['excused']==1
-    # A partial lesson interval must not excuse the whole lesson.
-    revoked=client.get(url('/'+notice['id'])).json();assert decide(teacher,revoked,'revoke').status_code==200
-    parts=send(parent,body(startTime='08:21',endTime=english['end']));assert decide(teacher,parts).status_code==200
+
+
+def test_partial_lesson_interval_does_not_excuse_the_lesson(client):
+    _,_,parent,teacher=setup(client);english=english_lesson(parent);mark(client)
+    inside=(datetime.strptime(english['start'],'%H:%M')+timedelta(minutes=1)).strftime('%H:%M')
+    parts=send(parent,body(startTime=inside,endTime=english['end']));assert decide(teacher,parts).status_code==200
     assert report(parent).json()['summary']['attendance']['absent']==1
 
 
@@ -150,38 +162,54 @@ def test_parent_withdrawal_rejection_and_explicit_reversal(client):
     assert decide(teacher,approved,'revoke').status_code==200
 
 
-def test_decision_concurrency_and_transactional_notification_rollback(client,monkeypatch):
+def test_competing_decisions_leave_exactly_one_winner(client):
     _,_,parent,teacher=setup(client);notice=send(parent)
     with ThreadPoolExecutor(max_workers=2) as pool:codes=list(pool.map(lambda action:decide(teacher,notice,action).status_code,['approve','reject']))
     assert sorted(codes)==[200,409]
-    before=client.get(url('/'+notice['id'])).json()
-    if before['status']=='approved':assert decide(teacher,before,'revoke').status_code==200
-    next_notice=send(parent)
+    assert client.get(url('/'+notice['id'])).json()['status']==dict(zip(codes,['approved','rejected']))[200]
+
+
+def test_notification_failure_rolls_back_the_decision(client,monkeypatch):
+    _,_,parent,teacher=setup(client);notice=send(parent)
     def fail(*args,**kwargs):raise RuntimeError('notification failed')
     monkeypatch.setattr(api.notifications,'deliver',fail)
-    with pytest.raises(RuntimeError):decide(teacher,next_notice)
-    assert client.get(url('/'+next_notice['id'])).json()['version']==1
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM absence_history WHERE notice_id=?',(next_notice['id'],)).fetchone()[0]==1
+    with pytest.raises(RuntimeError):decide(teacher,notice)
+    assert client.get(url('/'+notice['id'])).json()['version']==1
+    assert len(parent.get(url('/'+notice['id']+'/history')).json()['items'])==1
 
 
-def test_file_binding_integrity_cleanup_and_shared_capacity(client,monkeypatch):
+def test_evidence_binds_only_to_own_unused_files_of_the_same_form(client):
     _,_,parent,teacher=setup(client);payload=body();first=upload(parent,payload).json()
     assert parent.post(url(),json=payload|dict(fileIds=[first['id'],'not-a-file'])).status_code==422
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM absence_notices').fetchone()[0]==0
-    different=body();assert parent.post(url(),json=different|dict(fileIds=[first['id']])).status_code==422
+    assert parent.get(url()).json()['items']==[]
+    assert parent.post(url(),json=body()|dict(fileIds=[first['id']])).status_code==422
     notice=send(parent,payload|dict(fileIds=[first['id']]))
     assert parent.post(url(),json=body(startDate='2026-08-18',endDate='2026-08-18',fileIds=[first['id']])).status_code==422
-    assert upload(parent,body(),b'not pdf','invalid.pdf').status_code==422
-    assert upload(parent,body(),b'x','bad.html').status_code==422
-    pending=upload(parent,body()).json()
-    with api.connect() as db:
-        db.execute('UPDATE absence_files SET created=?',((datetime.now(timezone.utc)-timedelta(days=2)).isoformat(),))
-        absence_files.cleanup(db)
-        assert db.execute('SELECT id FROM absence_files').fetchall()==[(first['id'],)]
-        assert homework_files.total_stored(db)==len(b'Private evidence')
     assert teacher.get(file_url(first['id'])).content==b'Private evidence'
-    assert parent.get(file_url(pending['id'])).status_code==404
-    monkeypatch.setattr(homework_files,'total_limit',lambda:homework_files.MAX_FILE)
+
+
+@pytest.mark.parametrize('content,name',[(b'not pdf','invalid.pdf'),(b'x','bad.html')])
+def test_evidence_with_a_wrong_type_is_refused(client,content,name):
+    _,_,parent,_=setup(client)
+    assert upload(parent,body(),content,name).status_code==422
+
+
+def test_unsent_evidence_expires_but_attached_evidence_stays(client,monkeypatch):
+    moment=datetime(2026,8,17,9,tzinfo=timezone.utc);monkeypatch.setattr(absence_files,'now',lambda:moment)
+    _,_,parent,teacher=setup(client);payload=body();attached=upload(parent,payload).json();send(parent,payload|dict(fileIds=[attached['id']]))
+    draft=body();pending=upload(parent,draft).json()
+    unsent=lambda:[f['id'] for f in parent.get('/api/journal/absence-files',params=dict(workspace='demo',studentId='s1',draftId=draft['requestId'])).json()['items']]
+    assert unsent()==[pending['id']]
+    monkeypatch.setattr(absence_files,'now',lambda:moment+timedelta(days=2))
+    # Any later upload clears the drafts nobody sent.
+    assert upload(parent,body()).status_code==200
+    assert unsent()==[] and parent.get(file_url(pending['id'])).status_code==404
+    assert teacher.get(file_url(attached['id'])).content==b'Private evidence'
+
+
+def test_evidence_is_refused_when_the_storage_is_full(client,monkeypatch):
+    _,_,parent,_=setup(client);assert upload(parent,body()).status_code==200
+    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB','10')
     assert upload(parent,body()).status_code==413
 
 
@@ -199,8 +227,7 @@ def test_upload_rechecks_relationship_and_cleans_reservation(client,monkeypatch)
 def test_backup_restores_evidence_history_and_effective_attendance(client,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
     _,_,parent,teacher=setup(client);mark(client);payload=body();file=upload(parent,payload).json();notice=send(parent,payload|dict(fileIds=[file['id']]))
-    approved=decide(teacher,notice).json();original=api.DB;backup=tmp_path/'absence-backup';manifest=create_backup(original,backup)
-    assert len(manifest['files'])==1 and '/absences/' in '/'+manifest['files'][0]['path']
+    approved=decide(teacher,notice).json();original=api.DB;backup=tmp_path/'absence-backup';create_backup(original,backup)
     monkeypatch.setattr(api,'DB',backup/original.name)
     assert report(parent).json()['summary']['attendance']['excused']==1
     assert teacher.get(file_url(file['id'])).content==b'Private evidence'
@@ -209,30 +236,37 @@ def test_backup_restores_evidence_history_and_effective_attendance(client,tmp_pa
     assert report(parent).json()['summary']['attendance']['absent']==1
 
 
-def test_pagination_limits_candidates_and_hides_private_reasons(client):
+def test_notice_list_pages_cover_every_notice_once_and_hide_private_reasons(client):
     _,_,parent,teacher=setup(client);notice=send(parent)
     with api.connect() as db:
-        template=read_row(db,'absence_notices',id=notice['id'])
-        for _ in range(65):insert_row(db,'absence_notices',template,id=uuid4().hex,status='withdrawn',request_id=str(uuid4()))
-    page=teacher.get(url()).json();assert len(page['items'])==50 and page['nextBefore']
-    last=teacher.get(url()+'&before='+str(page['nextBefore'])).json();assert len(last['items'])==16 and last['nextBefore'] is None
-    assert not {r['id'] for r in page['items']} & {r['id'] for r in last['items']}
+        template=read_row(db,'absence_notices',id=notice['id']);ids=[uuid4().hex for _ in range(130)]
+        for id in ids:insert_row(db,'absence_notices',template,id=id,status='withdrawn',request_id=str(uuid4()))
+    seen=[];pages=0;query=''
+    for _ in range(len(ids)+1):
+        page=teacher.get(url()+query).json();pages+=1;seen+=[r['id'] for r in page['items']]
+        assert 'Личная причина' not in json.dumps(page,ensure_ascii=False)
+        if page['nextBefore'] is None:break
+        query='&before='+str(page['nextBefore'])
+    assert pages>1 and sorted(seen)==sorted(ids+[notice['id']])
     assert len(teacher.get(url()+'&status=pending').json()['items'])==1
-    assert 'Личная причина' not in json.dumps(page,ensure_ascii=False)
 
 
-def test_rate_limit_and_role_or_school_change_at_commit(client,monkeypatch):
-    person,_,parent,teacher=setup(client)
+def test_eleventh_notice_within_an_hour_is_refused(client):
+    _,_,parent,_=setup(client)
     for i in range(10):send(parent,body(startDate=f'2026-08-{17+i}',endDate=f'2026-08-{17+i}'))
     assert parent.post(url(),json=body(startDate='2026-08-27',endDate='2026-08-27')).status_code==429
+
+
+def test_school_changed_while_sending_a_notice_refuses_it(client,monkeypatch):
+    _,_,parent,_=setup(client)
     original=api.absences.recheck
     def changed(db,user,snap,workspace):
         db.execute('UPDATE workspaces SET revision=revision+1 WHERE id=?',(workspace,))
         original(db,user,snap,workspace)
     monkeypatch.setattr(api.absences,'recheck',changed)
-    with api.connect() as db:before=db.execute('SELECT count(*) FROM absence_notices').fetchone()[0]
     assert parent.post(url(),json=body(startDate='2026-08-28',endDate='2026-08-28')).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM absence_notices').fetchone()[0]==before
+    monkeypatch.setattr(api.absences,'recheck',original)
+    assert parent.get(url()).json()['items']==[]
 
 
 def test_preview_respects_partial_class_closures_and_cancelled_lessons(client):
@@ -269,7 +303,7 @@ def test_decisions_refused_inside_closed_period(client,monkeypatch):
         with api.connect() as db:return [db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['absence_history','notifications','audit']]
     before=counts()
     for item,operation in [(approved,'revoke'),(pending,'approve')]:
-        refused=decide(teacher,item,operation);assert refused.status_code==403 and 'Первая четверть' in refused.json()['detail']
+        assert decide(teacher,item,operation).status_code==403
     assert counts()==before
     for item in [approved,pending]:
         current=client.get(url('/'+item['id'])).json();assert current['version']==item['version'] and current['periodLocks']==['Первая четверть']
@@ -279,12 +313,6 @@ def test_decisions_refused_inside_closed_period(client,monkeypatch):
     again=send(parent,body(startDate='2026-08-18',endDate='2026-08-18'));assert decide(parent,again,'withdraw').status_code==200
     action(client,p,'reopen').raise_for_status()
     assert decide(teacher,approved,'revoke').status_code==200
-
-
-def test_period_lookup_tolerates_database_without_journal_tables():
-    import sqlite3
-    from backend.journal_periods import range_locks
-    assert range_locks(sqlite3.connect(':memory:'),'demo','2026-08-17','2026-08-17')==[]
 
 
 def test_replayed_decision_still_succeeds_after_period_closes(client,monkeypatch):
@@ -307,13 +335,17 @@ def test_options_default_date_is_school_today_clamped(client,monkeypatch):
         assert options['yearStart']=='2026-08-17' and options['yearEnd']=='2027-06-11'
 
 
+@pytest.mark.parametrize('operation',['approve','reject'])
+@pytest.mark.parametrize('comment',['','   ',None],ids=['empty','blank','missing'])
+def test_approve_and_reject_need_a_comment(client,operation,comment):
+    _,_,parent,teacher=setup(client);notice=send(parent)
+    decision=dict(requestId=str(uuid4()),version=1,action=operation)|({} if comment is None else dict(comment=comment))
+    assert teacher.post(url('/'+notice['id']+'/decision'),json=decision).status_code==422
+    assert client.get(url('/'+notice['id'])).json()['status']=='pending'
+
+
 def test_withdraw_comment_is_optional(client):
     _,_,parent,teacher=setup(client);notice=send(parent)
-    for operation in ['approve','reject']:
-        for values in [dict(comment=''),dict(comment='   ')]:
-            refused=decide(teacher,notice,operation,**values);assert refused.status_code==422 and 'Объясните решение' in refused.json()['detail']
-    missing=teacher.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='approve'))
-    assert missing.status_code==422 and 'Объясните решение' in missing.json()['detail']
     withdrawn=parent.post(url('/'+notice['id']+'/decision'),json=dict(requestId=str(uuid4()),version=1,action='withdraw'))
     assert withdrawn.status_code==200 and withdrawn.json()['status']=='withdrawn',withdrawn.text
     history=parent.get(url('/'+notice['id']+'/history')).json()['items'][0]

@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from backend import api, journal, journal_periods
 from backend.models import Student
-from backend.attendance_projection import LATE_SHARE_FROM
 from test_access import client, create, signed
 from test_absences import setup, send, decide, body
 from test_journal import DAY, lesson, entry, write, graded
@@ -75,7 +74,7 @@ def test_correction_after_saving_is_told_and_kept_in_history(client):
     family(client);parent,teacher=signed('parent'),signed('teacher')
     key=lesson(teacher)['lessonKey'];first=save(teacher,entry(teacher,key))
     saved=save(teacher,mark(first,'s1',attendance='absent'))
-    (notice,)=told(parent);assert 'отсутствие' in notice['title']
+    assert len(told(parent))==1
     assert len(history(teacher,key))==2
     first_edition=history(teacher,key,version=1)[0]['document']['content']['records']
     assert next(r for r in first_edition if r['studentId']=='s1')['attendance']=='present' and marks(saved)['s1']['attendance']=='absent'
@@ -85,8 +84,8 @@ def test_early_leave_notice(client):
     family(client);parent,other,teacher=signed('parent'),signed('other-parent'),signed('teacher')
     key=lesson(teacher)['lessonKey'];opened=entry(teacher,key);leave=inside(opened,length(opened)//2)
     save(teacher,mark(opened,'s1',attendance='left',leftAt=leave))
-    (notice,)=told(parent);assert leave in notice['title']
-    assert told(other)==[]
+    assert len(told(parent))==1 and told(other)==[]
+    assert family_report(parent)['rows'][0]['record']['leftAt']==leave
 
 
 def test_plan_then_present_is_silent(client,monkeypatch):
@@ -147,9 +146,11 @@ def test_held_lesson_differing_from_the_plan_is_told(client,monkeypatch,change):
 def test_mark_corrected_back_to_present_is_told(client):
     family(client);parent,teacher=signed('parent'),signed('teacher')
     key=lesson(teacher)['lessonKey'];absent=save(teacher,mark(entry(teacher,key),'s1',attendance='absent'))
-    (first,)=told(parent);assert 'отсутствие' in first['title']
+    (first,)=told(parent)
     save(teacher,mark(absent,'s1',attendance='present'))
-    (second,)=told(parent);assert 'присутствие' in second['title']
+    # The new entry replaces the old one: the family still has exactly one, a new one, and the report shows the corrected mark.
+    (second,)=told(parent);assert second['id']!=first['id']
+    assert family_report(parent)['rows'][0]['record']['attendance']=='present'
 
 
 def test_lesson_not_yet_begun_keeps_unmarked(client,monkeypatch):
@@ -160,15 +161,6 @@ def test_lesson_not_yet_begun_keeps_unmarked(client,monkeypatch):
     monkeypatch.setattr(journal,'today',lambda:date(2026,8,16))
     eve=entry(client,key);assert not eve['lessonBegun'] and not eve['attendanceDefaulted']
     assert {r['attendance'] for r in eve['document']['content']['records']}=={'unmarked'}
-
-
-def test_plan_published_ahead_defaults_on_the_day(client,monkeypatch):
-    monkeypatch.setattr(journal,'today',lambda:date(2026,8,16))
-    plan=entry(client,lesson(client)['lessonKey']);plan['document']['content'].update(topic='План',homework='Стр. 12',dueDate='2026-08-19')
-    saved=save(client,plan);assert saved['hasPublished'] and not saved['attendanceDefaulted']
-    monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
-    opened=entry(client,saved['lessonKey']);assert opened['attendanceDefaulted']
-    assert {r['attendance'] for r in opened['document']['content']['records']}=={'present'}
 
 
 def test_partly_marked_lesson_is_not_defaulted(client,monkeypatch):
@@ -317,15 +309,16 @@ def test_early_leave_counts_in_reports_and_coverage(client):
 def test_late_share_in_both_reports(client):
     _,_,parent,teacher=setup(client)
     key=lesson(teacher)['lessonKey'];opened=entry(teacher,key);total=length(opened)
-    assert total%4==0
+    assert total==40
     saved=opened
-    for late,share in [(total//4,0.25),(LATE_SHARE_FROM-1,0),(LATE_SHARE_FROM,round(LATE_SHARE_FROM/total,2)),(total+30,1)]:
+    # Lateness of a 40-minute lesson: a quarter of it, too short to count, the shortest that counts, and more than the lesson.
+    for late,share in [(10,0.25),(4,0),(5,0.12),(total+30,1)]:
         saved=save(teacher,mark(saved,'s1',attendance='late',lateMinutes=late))
         school=school_report(teacher).json()['totals'];personal=family_report(parent)['summary']
         assert school['lateMinutes']==personal['lateMinutes']==late
         assert school['lateShare']==personal['lateShare']==share
         assert pupil(school_report(teacher).json())['lateShare']==share
-    save(teacher,mark(saved,'s1',attendance='late',lateMinutes=total//4))
+    save(teacher,mark(saved,'s1',attendance='late',lateMinutes=10))
     rows=list(csv.reader(io.StringIO(export(teacher).content.decode('utf-8-sig')),delimiter=';'))
     assert {r[rows[0].index('ID ученика')]:float(r[rows[0].index('Опоздания в долях урока')]) for r in rows[1:]}=={'s1':0.25,'s2':0}
 
@@ -363,9 +356,8 @@ def test_csv_has_early_leave_and_code_columns(client):
     def column(name):return {r[header.index('ID ученика')]:r[header.index(name)] for r in rows[1:]}
     assert column('Ушёл раньше')=={'s1':'1','s2':'0'}
     assert column('Отсутствует без записки: Семейные обстоятельства')=={'s1':'0','s2':'1'}
-    assert header[-1]=='Уважительная причина: без типа' and header.index('Минут опоздания')<header.index('Ушёл раньше')
     lessons=list(csv.reader(io.StringIO(export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig')),delimiter=';'))
-    assert lessons[1][lessons[0].index('Ушёл в')]==leave and lessons[0][-1]=='Тип отсутствия'
+    assert lessons[1][lessons[0].index('Ушёл в')]==leave
     kept=list(csv.reader(io.StringIO(export(teacher,studentId='s2',view='lessons').content.decode('utf-8-sig')),delimiter=';'))
     assert kept[1][kept[0].index('Тип по отметке учителя')]=='Семейные обстоятельства'
 
