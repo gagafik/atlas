@@ -130,9 +130,9 @@ def test_invalid_upload_is_rejected_and_stores_nothing(client,filename,content):
 def test_oversized_upload_is_rejected_and_releases_its_slot(client,monkeypatch,declared):
     record,pupil,_,_=setup(client);key=record['lessonKey'];assignment=get(pupil,key)['assignment']
     monkeypatch.setattr(homework_files,'MAX_FILE',8)
-    # The size may be declared honestly in Content-Length or understated, and the real body is still counted.
-    extra={'Content-Length':'9'} if declared else {'Content-Length':'1'}
-    assert upload(pupil,key,assignment,body=b'123456789',**extra).status_code==413
+    # An oversized declared length is refused up front; an understated one is caught while the real body is counted.
+    body,length=(b'1',str(homework_files.MAX_FILE+1)) if declared else (b'123456789','1')
+    assert upload(pupil,key,assignment,body=body,**{'Content-Length':length}).status_code==413
     assert get(pupil,key)['availableFiles']==[]
     with api.connect() as db: assert not list(homework_files.root_for(db).glob('*.bin'))
     assert upload(pupil,key,assignment,body=b'123').status_code==200
