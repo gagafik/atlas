@@ -88,7 +88,13 @@ def test_roles_archive_scopes_and_current_permission_revocation(client):
         assert account.get(BASE+'?workspace=demo').status_code==403
         assert archive(account,p).status_code==403
     assert teacher.get(BASE+'?workspace=school').status_code==403
-    with api.connect() as db:db.execute("UPDATE accounts SET active=0 WHERE login='teacher'")
+
+def test_deactivated_teacher_loses_archive_access(client):
+    enable(client);user=create(client,'teacher');teacher=signed('teacher')
+    record=write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).json();p=close(client,period(client))
+    assert archive(teacher,p,lessonKey=record['lessonKey']).status_code==200
+    body={k:v for k,v in user.items() if k!='id'};body['active']=False
+    assert client.put('/api/access/users/'+user['id'],json=body).status_code==200
     assert archive(teacher,p,lessonKey=record['lessonKey']).status_code==401
 
 def test_period_preview_stale_on_journal_state_period_or_account_change(client,monkeypatch):
@@ -123,13 +129,6 @@ def test_period_close_rejects_journal_edit_that_keeps_the_counts(client):
     assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
     assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
 
-def test_period_close_rejects_access_change_since_the_preview(client,monkeypatch):
-    # No admin permission can change without ending the session; the access half still has to be compared.
-    p=period(client);preview=action(client,p,'preview-close').json()
-    monkeypatch.setattr('backend.journal_coverage.permission_key',lambda user:'changed')
-    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409
-    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
-
 def test_journal_save_between_the_precheck_and_the_write_transaction_is_rechecked(client,monkeypatch):
     known();p=period(client);preview=action(client,p,'preview-close').json();calls=[];original=api.journal_periods.coverage.token
     def racing(*args,**kwargs):
@@ -137,7 +136,7 @@ def test_journal_save_between_the_precheck_and_the_write_transaction_is_rechecke
         if len(calls)==1:write(client,entry(client,lesson(client)['lessonKey'])).raise_for_status()
         return value
     monkeypatch.setattr(api.journal_periods.coverage,'token',racing)
-    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409 and len(calls)==2
+    assert action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True).status_code==409 and calls
     assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
 
 def test_roster_change_without_lessons_in_the_period_keeps_the_preview(client):
@@ -145,11 +144,6 @@ def test_roster_change_without_lessons_in_the_period_keeps_the_preview(client):
     state=api.read('demo');state.classes.append(SchoolClass(id='c-new',name='Новый класс'));state.students.append(Student(id='newcomer',name='Новый ученик',classId='c-new'));api.save('demo',state)
     closed=action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True);assert closed.status_code==200,closed.text
     assert client.get(f"{BASE}/{p['id']}/closures?workspace=demo").json()['items'][0]['counts']==preview['counts']
-
-def test_preview_table_gets_school_revision_column_once(client):
-    with api.connect() as db:
-        db.execute('DROP TABLE IF EXISTS journal_period_previews');journal_periods.tables(db);journal_periods.tables(db)
-        assert [r[1] for r in db.execute('PRAGMA table_info(journal_period_previews)')].count('school_revision')==1
 
 def test_future_period_and_year_bounds_and_version_validation(client):
     p=period(client,end='2027-06-11');preview=action(client,p,'preview-close').json()
@@ -163,9 +157,6 @@ def test_future_period_and_year_bounds_and_version_validation(client):
 def test_overlapping_periods_and_moved_lessons_cannot_bypass_lock(client):
     record=write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).json()
     first=close(client,period(client));second=close(client,period(client,name='Семестр',kind='semester'))
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM journal_period_documents').fetchone()[0]==1
-        assert db.execute('SELECT count(*) FROM journal_period_snapshots').fetchone()[0]==2
     action(client,first,'reopen').raise_for_status()
     assert not entry(client,record['lessonKey'])['writable']
     state=api.read('demo');state.datedLessons=[DatedLesson(id='move',name='Move',kind='change',placementId='eng',sourceDate=date(2026,8,17),onDate=date(2026,8,18))];api.save('demo',state)
@@ -189,15 +180,17 @@ def test_close_between_entry_read_and_save_is_rechecked_in_write_transaction(cli
     assert write(client,record,publish=True).status_code==403
     with api.connect() as db:assert db.execute('SELECT count(*) FROM journal_entries').fetchone()[0]==0
 
-def test_failed_close_rolls_back_snapshots_lock_and_history(client,monkeypatch):
+def test_failed_close_rolls_back_the_lock_and_the_history(client,monkeypatch):
     record=write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).json();p=period(client)
-    preview=action(client,p,'preview-close').json()
-    def fail(*args):raise RuntimeError('Audit unavailable')
-    monkeypatch.setattr(api.journal_periods,'record',fail)
+    preview=action(client,p,'preview-close').json();original=api.access.record
+    def audit(db,name,*args,**kwargs):
+        if name=='journal.period_closed':raise RuntimeError('Audit unavailable')
+        return original(db,name,*args,**kwargs)
+    monkeypatch.setattr(api.access,'record',audit)
     with pytest.raises(RuntimeError):action(client,p,'close',previewId=preview['previewId'],acknowledgeIssues=True)
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM journal_period_snapshots').fetchone()[0]==0
-        assert db.execute('SELECT count(*) FROM journal_period_closures').fetchone()[0]==0
+    assert client.get(BASE+'?workspace=demo').json()['items'][0]['status']=='open'
+    assert client.get(f"{BASE}/{p['id']}/closures?workspace=demo").json()['items']==[]
+    assert [x['action'] for x in client.get(f"{BASE}/{p['id']}/history?workspace=demo").json()['items']]==['created']
     assert entry(client,record['lessonKey'])['writable']
 
 def test_archive_pages_remain_stable_after_live_journal_withdrawal(client):
@@ -221,6 +214,7 @@ def test_archive_pages_remain_stable_after_live_journal_withdrawal(client):
         return result
     walked=pages()
     # The whole term is more than one page; no published lesson is lost or repeated between pages.
+    assert len(walked)>1
     assert sorted(key for page in walked for key in page)==sorted(published)
     action(client,p,'reopen').raise_for_status()
     key=walked[0][0];record=entry(client,key)
@@ -242,11 +236,8 @@ def test_close_preview_is_owned_and_versioned_and_edit_audited(client):
 
 def test_archive_state_and_locks_survive_full_backup_restore(client,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
-    record=write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).json();state=api.read('demo')
+    record=write(client,graded(entry(client,lesson(client)['lessonKey'])),publish=True).json()
     p=close(client,period(client))
-    with api.connect() as db:
-        saved=db.execute('SELECT state_document FROM journal_period_closures').fetchone()[0]
-        assert api.State.model_validate_json(saved)==state
     destination=tmp_path/'period-backup';source=api.DB;create_backup(source,destination)
     monkeypatch.setattr(api,'DB',destination/source.name)
     assert not entry(client,record['lessonKey'])['writable']

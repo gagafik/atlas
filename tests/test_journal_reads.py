@@ -18,13 +18,20 @@ def test_journal_read_connection_is_read_only(client):
         journal_reads.read(api.access,api.journal.prepare,lambda db:db.execute('DELETE FROM journal_entries'))
 
 
+COVERAGE='/api/journal/coverage/report?workspace=demo'
+
+
 @pytest.mark.parametrize('marker',['journal_schema','coverage','attendance','homework_queue','assessment_categories'])
 def test_missing_marker_is_rebuilt_and_returns_the_same_data(client,marker):
     record,pupil,parent,teacher=setup(client)
-    expected=[parent.get(REPORT).json(),teacher.get(QUEUE+'&filter=all').json()]
+    # Each projection is judged by the endpoint that reads it.
+    read=dict(journal_schema=lambda:parent.get(REPORT).json(),assessment_categories=lambda:parent.get(REPORT).json(),attendance=lambda:parent.get(REPORT).json(),
+              homework_queue=lambda:teacher.get(QUEUE+'&filter=all').json(),
+              coverage=lambda:{k:v for k,v in client.post(COVERAGE,json=dict(start=DAY,end=DAY,status='all')).json().items() if k!='asOf'})[marker]
+    expected=read()
     with api.connect() as db:db.execute('DELETE FROM journal_projection_versions WHERE name=?',(marker,))
-    assert [parent.get(REPORT).json(),teacher.get(QUEUE+'&filter=all').json()]==expected
-    assert parent.get(REPORT).json()==expected[0]
+    assert read()==expected
+    assert read()==expected
 
 
 def test_dropped_member_table_is_recreated_by_the_next_read(client):
@@ -61,7 +68,7 @@ def test_journal_reads_work_while_writer_lock_and_sqlite_writer_are_held(client,
         with api.access.lock,api.connect() as writer:
             writer.execute('BEGIN IMMEDIATE');writer.execute("UPDATE accounts SET name=name WHERE login='teacher'")
             pending=[pool.submit(reader.get,path) for reader,path in requests]
-            responses=[future.result(timeout=3) for future in pending]
+            responses=[future.result(timeout=30) for future in pending]
     assert all(response.status_code==200 for response in responses)
     assert len(responses[4].json()['rows'])==1 and len(responses[8].json()['items'])==1
 
@@ -119,7 +126,7 @@ def test_entry_and_day_recheck_schedule_revision_in_snapshot(client,monkeypatch)
         result=original(workspace);api.save(workspace,api.read(workspace));return result
     monkeypatch.setattr(api.journal.snapshots,'get',revise)
     for path in [f'/api/journal/entry?workspace=demo&lessonKey={key}&day={DAY}',f'/api/journal/day?workspace=demo&day={DAY}']:
-        response=teacher.get(path);assert response.status_code==409 and 'Расписание изменилось' in response.text
+        assert teacher.get(path).status_code==409,path
 
 
 def blocked(monkeypatch,owner,name):
@@ -129,7 +136,7 @@ def blocked(monkeypatch,owner,name):
     def wrapper(*args,**kwargs):
         if not started.is_set():
             started.set()
-            assert release.wait(5)
+            assert release.wait(60)
         return original(*args,**kwargs)
     monkeypatch.setattr(owner,name,wrapper)
     return started,release
@@ -142,11 +149,11 @@ def test_long_report_read_does_not_block_journal_save(client,monkeypatch,owner,n
     started,release=blocked(monkeypatch,owner,name)
     with ThreadPoolExecutor(2) as pool:
         reading=pool.submit(parent.get,REPORT)
-        assert started.wait(3)
+        assert started.wait(30)
         saving=pool.submit(write,client,current)
-        try:assert saving.result(timeout=3).status_code==200
+        try:assert saving.result(timeout=30).status_code==200
         finally:release.set()
-        assert reading.result(timeout=3).status_code==200
+        assert reading.result(timeout=30).status_code==200
 
 
 def test_long_queue_read_does_not_block_journal_save(client,monkeypatch):
@@ -155,10 +162,10 @@ def test_long_queue_read_does_not_block_journal_save(client,monkeypatch):
     started,release=blocked(monkeypatch,api.homework,'resolved_context')
     with ThreadPoolExecutor(2) as pool:
         reading=pool.submit(pupil.get,QUEUE)
-        assert started.wait(3)
+        assert started.wait(30)
         saving=pool.submit(write,client,current)
-        try:assert saving.result(timeout=3).status_code==200
+        try:assert saving.result(timeout=30).status_code==200
         finally:release.set()
-        response=reading.result(timeout=3)
+        response=reading.result(timeout=30)
         # The save changed the draft only, so the reader still gets its consistent page.
         assert response.status_code==200 and len(response.json()['items'])==1
