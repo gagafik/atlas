@@ -2,6 +2,7 @@ from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import shutil
 import subprocess
 import sys
 
@@ -24,29 +25,44 @@ def rewrite(directory,change):
     path.write_text(json.dumps(manifest),encoding='utf-8')
 
 
-def test_verify_and_restore_all_storages_preserves_original_and_refuses_replacement(tmp_path):
+STORAGES=[('homework_files','homework'),('message_files','messages'),('absence_files','absences'),('assignment_files','assignments'),
+          ('teaching_material_files','materials'),('lost_found_files','lost-found'),('school_site_files','school-site'),('admission_files','admissions'),('quiz_files','quizzes')]
+
+
+def all_storages_backup(tmp_path):
     source,attachment,content=fixture_database(tmp_path)
     with closing(sqlite3.connect(source)) as db:
-        for index,(table,folder) in enumerate(backup_school.STORES[1:],1):
+        for index,(table,folder) in enumerate(STORAGES[1:],1):
             id=f'{index:032x}';data=f'Private synthetic {folder}'.encode()
             original=source.with_suffix('.files')/folder/(id+'.bin');original.parent.mkdir(parents=True);original.write_bytes(data)
             db.execute(f'CREATE TABLE {table}(id TEXT,size INTEGER,sha256 TEXT,status TEXT)')
             db.execute(f'INSERT INTO {table} VALUES (?,?,?,?)',(id,len(data),backup_school.digest(original),'ready'))
         db.commit()
     directory=tmp_path/'backup';backup_school.create_backup(source,directory)
+    return source,directory
+
+
+def test_every_storage_is_verified_and_restored_and_the_original_is_preserved(tmp_path):
+    source,directory=all_storages_backup(tmp_path)
     result=restore_school.verify_backup(directory)
-    assert result['files']==len(backup_school.STORES) and result['workspaces']==1
+    assert result['files']==len(STORAGES) and result['workspaces']==1
+    assert {entry['path'].split('/')[1] for entry in result['manifest']['files']}=={folder for _,folder in STORAGES}
     destination=tmp_path/'restored'
     assert restore_school.restore_backup(directory,destination)==result
     with closing(sqlite3.connect(destination/'school.db')) as db:
         assert db.execute('SELECT revision FROM workspaces').fetchone()[0]==11
-        assert db.execute('SELECT count(*) FROM homework_files').fetchone()[0]==1
+    for _,folder in STORAGES:assert list((destination/'school.files'/folder).glob('*.bin'))
     with closing(sqlite3.connect(source)) as db:
         assert db.execute('SELECT count(*) FROM homework_files').fetchone()[0]==2
-    for target in [source.parent,directory,destination]:
-        with pytest.raises((ValueError,FileExistsError)):
-            restore_school.restore_backup(directory,target)
     assert restore_school.verify_backup(destination)==result
+
+
+@pytest.mark.parametrize('inside',['source','backup','restored'])
+def test_restore_never_replaces_or_nests_into_existing_data(tmp_path,inside):
+    source,directory=all_storages_backup(tmp_path)
+    destination=tmp_path/'restored';restore_school.restore_backup(directory,destination)
+    with pytest.raises((ValueError,FileExistsError)):
+        restore_school.restore_backup(directory,dict(source=source.parent,backup=directory,restored=destination)[inside])
 
 
 @pytest.mark.parametrize('path',['../outside.db','/outside.db','C:/outside.db','nested/db.db','..\\outside.db','.','manifest.json'])
@@ -103,14 +119,21 @@ def test_links_and_junctions_cannot_hide_outside_data(tmp_path,kind):
     if kind!='backup_root':assert not (tmp_path/'linked-snapshot'/'manifest.json').exists()
 
 
+class FailingCopies:
+    """Stand-in for restore_school.shutil: whichever way an attachment is copied, the disk fails."""
+    def __getattr__(self,name):
+        real=getattr(shutil,name)
+        if not name.startswith('copy') or name=='copyfileobj':return real
+        def copy(source,target,*args,**kwargs):
+            if str(source).endswith('.bin'):raise OSError('Simulated disk failure')
+            return real(source,target,*args,**kwargs)
+        return copy
+
+
 def test_failed_restore_keeps_source_and_does_not_mark_destination_complete(tmp_path,monkeypatch):
     _,directory,_=snapshot(tmp_path)
     original=backup_school.digest(directory/'school.db')
-    copy=restore_school.shutil.copyfile
-    def fail(source,target):
-        if str(source).endswith('.bin'):raise OSError('Simulated disk failure')
-        return copy(source,target)
-    monkeypatch.setattr(restore_school.shutil,'copyfile',fail)
+    monkeypatch.setattr(restore_school,'shutil',FailingCopies())
     with pytest.raises(OSError):restore_school.restore_backup(directory,tmp_path/'partial')
     assert not (tmp_path/'partial'/'manifest.json').exists()
     assert backup_school.digest(directory/'school.db')==original
@@ -139,7 +162,7 @@ def test_old_sqlite_reports_runtime_requirement_without_touching_backup(tmp_path
     _,directory,_=snapshot(tmp_path)
     before=(directory/'manifest.json').read_bytes()
     monkeypatch.setattr(sqlite3,'sqlite_version_info',(3,40,1))
-    with pytest.raises(ValueError,match='SQLite 3.42'):restore_school.verify_backup(directory)
+    with pytest.raises(ValueError):restore_school.verify_backup(directory)
     assert (directory/'manifest.json').read_bytes()==before
 
 

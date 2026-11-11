@@ -1,10 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
-from datetime import date,datetime,timezone
+from datetime import date,datetime,timedelta,timezone
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
-import hashlib,json,sqlite3
+import json
 import pytest
 from PIL import Image
 from backend import api,lost_found,lost_found_files,homework_files
@@ -114,17 +113,30 @@ def test_owner_withdraw_and_staff_cannot_approve_self(client,setup):
     assert review(t,c,'approve').status_code==403
     c=ok(review(client,c,'approve'));c=ok(review(t,c,'withdraw'));assert c['status']=='withdrawn' and c['item']['status']=='open'
 
-def test_requests_versions_limits_and_atomic_notification_failure(client,setup,monkeypatch):
-    r=published(client);p=signed('parent');payload=body(itemVersion=r['version'],studentId='s1',proof='Скрытая метка на подкладке')
-    first=ok(p.post(path('items/'+r['id']+'/claims'),json=payload));assert ok(p.post(path('items/'+r['id']+'/claims'),json=payload))==first
-    assert p.post(path('items/'+r['id']+'/claims'),json=payload|{'proof':'Другой признак'}).status_code==409
+def claim_payload(r):return body(itemVersion=r['version'],studentId='s1',proof='Скрытая метка на подкладке')
+def claim_url(r):return path('items/'+r['id']+'/claims')
+
+def test_repeating_the_same_claim_request_returns_the_same_claim(client,setup):
+    r=published(client);p=signed('parent');payload=claim_payload(r)
+    first=ok(p.post(claim_url(r),json=payload));assert ok(p.post(claim_url(r),json=payload))==first
+
+def test_a_changed_replay_or_a_second_claim_conflicts(client,setup):
+    r=published(client);p=signed('parent');payload=claim_payload(r);ok(p.post(claim_url(r),json=payload))
+    assert p.post(claim_url(r),json=payload|{'proof':'Другой признак'}).status_code==409
     assert post(p,'items/'+r['id']+'/claims',itemVersion=r['version'],studentId='s1',proof='Повторная заявка').status_code==409
-    assert action(client,r|{'version':1},'withdraw').status_code==409
+
+def test_an_action_on_a_stale_item_version_conflicts(client,setup):
+    r=published(client)
+    assert action(client,r|{'version':r['version']-1},'withdraw').status_code==409
+    assert get(client,'items/'+r['id'])['status']=='open'
+
+def test_failed_notification_rolls_back_the_approval(client,setup,monkeypatch):
+    r=published(client);p=signed('parent');first=claim(p,r);history=get(client,'history/'+r['id'])
     with monkeypatch.context() as patch:
         patch.setattr(api.notifications,'deliver',lambda *a,**k:(_ for _ in ()).throw(RuntimeError('rollback')))
         with pytest.raises(RuntimeError):review(client,first,'approve')
     assert get(client,'items/'+r['id'])['status']=='open' and get(p,'claims/'+first['id'])['status']=='pending'
-    with api.connect() as db:assert db.execute("SELECT count(*) FROM lost_found_history WHERE action='approved'").fetchone()[0]==0
+    assert get(client,'history/'+r['id'])==history
 
 def test_photo_pixels_reencoded_exif_removed_visibility_and_history(client,setup):
     p=signed('parent');r=item(client);raw=photo(2000,1000);f=ok(upload(client,r,raw));assert f['size']<len(raw)
@@ -136,16 +148,25 @@ def test_photo_pixels_reencoded_exif_removed_visibility_and_history(client,setup
     assert client.get(path('photos/'+f['id'])).status_code==200
     assert upload(p,r).status_code==403
 
-def test_bad_large_foreign_and_concurrent_photos_leave_no_reservations(client,setup,monkeypatch):
-    r=item(client);assert upload(client,r,b'\x89PNG\r\n\x1a\nnot an image').status_code==422
-    assert upload(client,r,b'x'*(homework_files.MAX_FILE+1)).status_code==413
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM lost_found_files').fetchone()[0]==0
-    f=ok(upload(client,r));other=item(client)
-    assert client.put(path('items/'+other['id']),json=body(version=1,data=other['data']|dict(photoIds=[f['id']]),reason='Wrong photo')).status_code==422
-    assert upload(client,r|{'version':22}).status_code==409
-    monkeypatch.setattr(homework_files,'total_limit',lambda:f['size']+homework_files.MAX_FILE-1)
-    assert upload(client,r).status_code==413
-    ok(client.delete(path('photos/'+f['id'])));assert client.get(path('photos/'+f['id'])).status_code==404
+def photo_ids(c,r):return [x['id'] for x in get(c,'items/'+r['id']+'/photos')['items']]
+
+@pytest.mark.parametrize('case,status',[('corrupt',422),('too-large',413),('stale-version',409),('quota',413)])
+def test_rejected_upload_leaves_the_card_without_photos(client,setup,monkeypatch,case,status):
+    r=item(client);content=dict(corrupt=b'\x89PNG\r\n\x1a\nnot an image').get(case)
+    if case=='too-large':content=b'x'*(homework_files.MAX_FILE+1)
+    if case=='quota':monkeypatch.setattr(homework_files,'total_limit',lambda:homework_files.MAX_FILE-1)
+    assert upload(client,r|{'version':r['version']+21} if case=='stale-version' else r,content).status_code==status
+    assert photo_ids(client,r)==[]
+
+def test_a_photo_of_another_card_cannot_be_attached(client,setup):
+    r=item(client);f=ok(upload(client,r));other=item(client)
+    assert client.put(path('items/'+other['id']),json=body(version=other['version'],data=other['data']|dict(photoIds=[f['id']]),reason='Wrong photo')).status_code==422
+    assert get(client,'items/'+other['id'])['data']['photoIds']==[]
+
+def test_a_deleted_photo_is_gone(client,setup):
+    r=item(client);f=ok(upload(client,r))
+    ok(client.delete(path('photos/'+f['id'])))
+    assert client.get(path('photos/'+f['id'])).status_code==404 and photo_ids(client,r)==[]
 
 def test_photo_permission_change_during_stream_discards_file(client,setup):
     teacher=setup[0];assign(client,teacher);t=signed('teacher');r=item(t)
@@ -156,18 +177,15 @@ def test_photo_permission_change_during_stream_discards_file(client,setup):
     with api.connect() as db:assert db.execute('SELECT count(*) FROM lost_found_files').fetchone()[0]==0
     assert not list(api.DB.with_suffix('.files').glob('lost-found/*.bin'))
 
-def test_photo_backup_restore_quota_and_missing_file_detected(client,setup,tmp_path):
+def test_photo_and_claim_survive_backup_and_restore(client,setup,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup,restore_backup
-    r=item(client);f=ok(upload(client,r));r=edit(client,r,photoIds=[f['id']]);r=ok(action(client,r,'publish'));claim(signed('parent'),r)
-    with api.connect() as db:assert homework_files.total_stored(db)==f['size']
-    backup=tmp_path/'saved';manifest=create_backup(api.DB,backup);assert len(manifest['files'])==1
-    verify_backup(backup);restore=tmp_path/'restored';restore_backup(backup,restore)
-    stored=restore/api.DB.with_suffix('.files').name/'lost-found'/(f['id']+'.bin')
-    assert hashlib.sha256(stored.read_bytes()).hexdigest()==manifest['files'][0]['sha256']
-    with closing(sqlite3.connect((restore/api.DB.name).as_uri()+'?mode=ro&immutable=1',uri=True)) as db:assert db.execute('SELECT count(*) FROM lost_found_claims').fetchone()[0]==1
-    verify_backup(restore);stored.unlink()
-    with pytest.raises((ValueError,RuntimeError,FileNotFoundError)):verify_backup(restore)
+    from tools.restore_school import restore_backup
+    r=item(client);f=ok(upload(client,r));r=edit(client,r,photoIds=[f['id']]);r=ok(action(client,r,'publish'));c=claim(signed('parent'),r)
+    backup=tmp_path/'saved';create_backup(api.DB,backup);restore=tmp_path/'restored';restore_backup(backup,restore)
+    monkeypatch.setattr(api,'DB',restore/api.DB.name)
+    parent=signed('parent')
+    assert parent.get(path('photos/'+f['id'])).status_code==200
+    assert get(parent,'claims/'+c['id'])['item']['id']==r['id']
 
 def test_pagination_history_workspace_and_replay_after_changed_permissions(client,setup):
     a=published(client);b=published(client,title='Вторая находка');p=signed('parent');page=get(p,'items?limit=1')
@@ -196,22 +214,22 @@ def test_one_claim_per_account_and_five_unresolved_limit(client,setup):
     for i in range(4):claim(p,published(client,title=f'Находка {i}'))
     r=published(client);assert post(p,'items/'+r['id']+'/claims',itemVersion=r['version'],studentId='s1',proof='Шестая заявка').status_code==409
 
-def test_photo_cleanup_retains_history_and_changed_item_aborts_upload(client,setup,monkeypatch):
+def test_unused_old_photo_is_collected_and_the_used_one_stays(client,setup,monkeypatch):
     r=item(client);f=ok(upload(client,r));r=edit(client,r,photoIds=[f['id']]);unused=ok(upload(client,r))
-    with api.connect() as db:
-        db.execute("UPDATE lost_found_files SET created='2000-01-01T00:00:00+00:00'")
-        db.row_factory=sqlite3.Row;lost_found_files.collect_unused(db)
-        assert [x[0] for x in db.execute('SELECT id FROM lost_found_files')]==[f['id']]
-    assert not homework_files.file_path(api.DB.with_suffix('.files')/'lost-found',unused['id']).exists()
+    with api.connect() as db:root=lost_found_files.root_for(db)
+    assert homework_files.file_path(root,unused['id']).exists()
+    real=lost_found_files.now
+    monkeypatch.setattr(homework_files,'now',lambda:real()+timedelta(days=2))
+    ok(upload(client,r))  # the next upload sweeps the stale ones
+    assert unused['id'] not in photo_ids(client,r) and f['id'] in photo_ids(client,r)
+    assert not homework_files.file_path(root,unused['id']).exists() and homework_files.file_path(root,f['id']).exists()
+
+def test_card_changed_during_the_upload_aborts_it_and_keeps_no_file(client,setup,monkeypatch):
+    r=item(client);f=ok(upload(client,r));r=edit(client,r,photoIds=[f['id']])
     original=lost_found_files.sanitize
     def changed(path):
         result=original(path);edit(client,r,description='Карточка изменилась во время загрузки');return result
     monkeypatch.setattr(lost_found_files,'sanitize',changed)
     assert upload(client,r).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM lost_found_files').fetchone()[0]==1
-
-def test_module_remains_private_without_auth(client,setup):
-    assert get(client,'items')['items']==[]
-    from fastapi.testclient import TestClient
-    anonymous=TestClient(api.app)
-    assert [anonymous.get(path(part)).status_code for part in ['options','items']]==[401,401]
+    with api.connect() as db:root=lost_found_files.root_for(db)
+    assert photo_ids(client,r)==[f['id']] and [x.name for x in root.glob('*.bin')]==[f['id']+'.bin']

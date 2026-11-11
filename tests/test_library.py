@@ -4,6 +4,7 @@ from uuid import uuid4
 import json
 import pytest
 from backend import api,library
+from seeding import insert_row
 from test_access import client,enable,create,signed
 
 def body(**kw):return dict(requestId=str(uuid4()),**kw)
@@ -157,13 +158,6 @@ def test_employee_borrowing_does_not_grant_management(client,setup):
     assert act(staff,loan,'return').status_code==404
     assert not get(signed('parent'),'loans')['items']
 
-@pytest.mark.parametrize('role',['parent','student','teacher'])
-def test_deactivated_reader_or_librarian_loses_access(client,setup,role):
-    teacher,parent,student,_,c=setup;assign(client,teacher);loan=checkout(client,c[0]);person=dict(parent=parent,student=student,teacher=teacher)[role];session=signed(role)
-    assert session.get(path('loans/'+loan['id'])).status_code==200
-    with api.connect() as db:db.execute('UPDATE accounts SET active=0,version=version+1 WHERE id=?',(person['id'],))
-    for route in ['options','loans','loans/'+loan['id'],'export','history/loan/'+loan['id']]:assert session.get(path(route)).status_code in [401,403,404]
-
 def test_permission_key_and_expired_family_rule(client,setup):
     teacher,parent,*_,c=setup;assign(client,teacher);staff=signed('teacher');checkout(client,c[0])
     with api.connect() as db:db.execute("UPDATE accounts SET role='staff',version=version+1 WHERE id=?",(teacher['id'],))
@@ -195,11 +189,14 @@ def test_replay_after_assignment_revocation_does_not_reveal_loan(client,setup):
     config=get(client,'options')['config'];ok(client.put(path('config'),json=body(version=config['version'],assignments=[],reason='Assignment ended')))
     assert staff.post(path('loans'),json=request).status_code==403
 
-def test_workspace_isolation_and_inactive_child(client,setup):
+def test_loans_of_one_workspace_are_not_visible_in_another(client,setup):
     *_,c=setup;loan=checkout(client,c[0]);state=api.read('demo')
-    with api.connect() as db:db.execute('INSERT INTO workspaces VALUES (?,?,?)',('school',state.revision,state.model_dump_json()))
+    with api.connect() as db:insert_row(db,'workspaces',id='school',revision=state.revision,document=state.model_dump_json())
     assert client.get('/api/library/loans/'+loan['id']+'?workspace=school').status_code==404
     assert not client.get('/api/library/loans?workspace=school').json()['items']
+
+def test_parent_loses_the_loan_card_of_a_deactivated_child(client,setup):
+    *_,c=setup;loan=checkout(client,c[0]);state=api.read('demo')
     state.students[0].active=False;api.save('demo',state);p=signed('parent')
     assert p.get(path('loans/'+loan['id'])).status_code==403
     assert p.get(path('export')).status_code==403

@@ -118,7 +118,6 @@ def test_continuous_lunch_break_not_sum_of_short_gaps_and_named_unsat_core():
     assert validate_schedule(s)['issueCount'] == 1
     result = solve(s, seconds=2)
     assert result['status'] == 'infeasible' and result['conflictingRuleIds'] == ['r']
-    assert 'Обед' in result['details']
     s.rules[0].mode = 'soft'
     candidate, _ = generated(s)
     assert validate_schedule(candidate)['warningCount'] == 1

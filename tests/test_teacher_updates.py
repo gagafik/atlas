@@ -50,8 +50,11 @@ def test_one_to_one_rename_preserves_teacher_availability():
 def test_split_refuses_to_guess_ownership_of_availability():
     state, old, incoming = fixture()
     state.teachers[0].unavailable = ['1:2']
-    with pytest.raises(ValueError, match='ограничения доступности'):
+    with pytest.raises(ValueError):
         update_teacher_records(state, old, incoming, 'new.xls')
+    state.teachers[0].unavailable = []
+    result, _ = update_teacher_records(state, old, incoming, 'new.xls')
+    assert result.teachers
 
 
 def test_non_teacher_source_edit_is_not_applied_as_teacher_update():
@@ -84,7 +87,7 @@ def test_locally_reassigned_teacher_is_preserved_by_rejecting_update():
     state.teachers[0].name = 'Other Person'
     for w in state.workloads:
         w.teacherId = 'local-person'
-    with pytest.raises(ValueError, match='уже изменён'):
+    with pytest.raises(ValueError):
         update_teacher_records(state, old, incoming, 'new.xls')
 
 

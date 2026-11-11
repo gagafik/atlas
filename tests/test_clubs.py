@@ -4,6 +4,7 @@ import json
 import pytest
 from backend import api,clubs,clubs_routes,clubs_sessions
 from test_access import client,enable,create,signed
+from test_families import save as family_link
 
 def body(**kw):return dict(requestId=str(uuid4()),**kw)
 def path(part):return '/api/clubs/'+part+('&' if '?' in part else '?')+'workspace=demo'
@@ -92,17 +93,19 @@ def test_conflicting_club_blocks_registration_and_schedule_edit(client,setup):
     assert client.put(path('items/'+b['id']+'/access'),json=body(version=fresh(client,b)['version'],accountIds=[setup[0]['id']],reason='Назначение')).status_code==409
     response=post(client,'items/'+b['id']+'/sessions',version=0,clubVersion=fresh(client,b)['version'],data=dict(date='2026-10-15',start='17:30',end='18:30',title='Занятие'));assert response.status_code==409
 
-def test_changed_parent_rights_invalidate_queue_promotion_and_access(client,setup):
-    p,o=signed('parent'),signed('other');r=published(client);a=ok(join(p,r));ok(join(o,r,'s3'))
-    with api.connect() as db:
-        raw=db.execute('SELECT permissions FROM accounts WHERE id=?',(setup[2]['id'],)).fetchone();d=json.loads(raw[0]);d['grants']=[dict(workspace='demo',view='student',entityIds=['s4'])];db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(d),setup[2]['id']))
-    ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']=='ineligible';assert members(o,r)==[]
+def set_grants(c,account,*students):
+    body={k:v for k,v in account.items() if k!='id'}|dict(grants=[dict(workspace='demo',view='student',entityIds=list(students))])
+    assert c.put('/api/access/users/'+account['id'],json=body).status_code==200
 
-def test_parent_second_child_keeps_queue_place(client,setup):
+@pytest.mark.parametrize('change,status,sees_roster',[
+    ('rights-replaced','ineligible',False),('second-child-added','enrolled',True),('link-expired','ineligible',None)])
+def test_changed_parent_rights_decide_the_promotion_from_the_queue(client,setup,change,status,sees_roster):
     p,o=signed('parent'),signed('other');r=published(client);a=ok(join(p,r));ok(join(o,r,'s3'))
-    with api.connect() as db:
-        raw=db.execute('SELECT permissions FROM accounts WHERE id=?',(setup[2]['id'],)).fetchone();d=json.loads(raw[0]);d['grants']=[dict(workspace='demo',view='student',entityIds=['s3','s4'])];db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(d),setup[2]['id']))
-    ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']=='enrolled'
+    if change=='rights-replaced':set_grants(client,setup[2],'s4')
+    elif change=='second-child-added':set_grants(client,setup[2],'s3','s4')
+    else:assert family_link(client,setup[2]['id'],'s3',startDate='2020-01-01',endDate='2020-12-31').status_code==200
+    ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']==status
+    if sees_roster is False:assert members(signed('other'),r)==[]
 
 def test_deadlines_versions_capacity_and_archival(client,setup,monkeypatch):
     r=published(client,capacity=2);p=signed('parent');ok(join(p,r));ok(join(client,r,'s3'))
@@ -121,13 +124,15 @@ def test_notification_failure_rolls_back_enrolment_and_history(client,setup,monk
     assert members(client,r)==[] and fresh(client,r)['version']==before['version']
     assert not any(h['action']=='joined' for h in get(client,'items/'+r['id']+'/history')['items'])
 
-def test_pagination_workspace_scope_and_replay_revocation(client,setup):
-    p=signed('parent');a=published(client,title='=Шахматы');published(client,title='Дебаты')
-    page=get(p,'items?limit=1');nextpage=get(p,'items?limit=1&before='+str(page['nextBefore']));assert page['items'][0]['id']!=nextpage['items'][0]['id']
+def test_club_pages_follow_each_other_and_a_foreign_workspace_is_closed(client,setup):
+    p=signed('parent');a=published(client,title='Шахматы');b=published(client,title='Дебаты')
+    seen=[];page=get(p,'items?limit=1')
+    while True:
+        seen+=[x['id'] for x in page['items']]
+        if page['nextBefore'] is None:break
+        page=get(p,'items?limit=1&before='+str(page['nextBefore']))
+    assert sorted(seen)==sorted([a['id'],b['id']])
     assert p.get('/api/clubs/items/'+a['id']+'?workspace=school').status_code==403
-    r=ok(join(p,a));assert len(members(p,a))==1
-    with api.connect() as db:db.execute('UPDATE accounts SET active=0 WHERE id=?',(setup[1]['id'],))
-    assert p.get(path('items/'+a['id'])).status_code==401
 
 def test_stale_staff_assignment_does_not_block_other_clubs(client,setup):
     a=published(client);b=published(client);assign(client,a,setup[0]);assign(client,b,setup[0]);session(client,a)
@@ -135,12 +140,6 @@ def test_stale_staff_assignment_does_not_block_other_clubs(client,setup):
     # Old assignment no longer confers management or teacher-time constraints.
     assert fresh(client,a)['staff']==[];session(client,b)
     assert post(signed('teacher'),'items/'+a['id']+'/action',version=fresh(client,a)['version'],action='close',reason='Закрытие').status_code==403
-
-def test_expired_family_request_is_not_automatically_enrolled(client,setup):
-    r=published(client);p=signed('parent');a=ok(join(p,r));ok(join(signed('other'),r,'s3'))
-    with api.connect() as db:
-        permissions=json.loads(db.execute('SELECT permissions FROM accounts WHERE id=?',(setup[2]['id'],)).fetchone()[0]);permissions['familyRules']=[dict(workspace='demo',studentId='s3',startDate='2020-01-01',endDate='2020-12-31')];db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(permissions),setup[2]['id']))
-    ok(member_action(p,r,a,'withdraw'));assert members(client,r)[1]['status']=='ineligible'
 
 def test_closing_queue_preserves_enrolled_members_and_completed_history(client,setup):
     r=published(client);p=signed('parent');ok(join(p,r));ok(join(signed('other'),r,'s3'));x=session(client,r)

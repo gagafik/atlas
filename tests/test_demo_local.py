@@ -44,10 +44,9 @@ def test_an_interrupted_reseed_is_redone_on_the_next_run(guarded, monkeypatch):
     work.mkdir()
     (work / 'demo.db').write_bytes(b'old')
     (work / 'meta.json').write_text(json.dumps({'roles': {'admin': {'login': 'a', 'password': 'b'}}}), encoding='utf-8')
-    seeded = []
     def seed(command, **kwargs):
-        seeded.append(command)
-        if len(seeded) == 1:
+        if (work / 'demo.db').read_bytes() == b'old':
+            (work / 'demo.db').write_bytes(b'half')
             raise subprocess.CalledProcessError(1, command)
         (work / 'demo.db').write_bytes(b'new')
         (work / 'meta.json').write_text(json.dumps({'roles': {'admin': {'login': 'a', 'password': 'c'}}}), encoding='utf-8')
@@ -58,5 +57,4 @@ def test_an_interrupted_reseed_is_redone_on_the_next_run(guarded, monkeypatch):
     # The half-built database is not served with the credentials of the old one.
     assert not (work / 'meta.json').exists()
     local.main(['--workdir', str(work), '--no-browser'])
-    assert len(seeded) == 2
     assert json.loads((work / 'meta.json').read_text(encoding='utf-8'))['roles']['admin']['password'] == 'c'
