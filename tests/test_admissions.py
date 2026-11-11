@@ -41,7 +41,8 @@ def setup(client):
     c=action(client,campaign(client));return c,teacher,staff
 
 def test_separate_identity_cookies_public_routes_and_no_school_access(client,setup):
-    c,*_=setup;before=api.read('demo');f,u,code=signup(c)
+    c,*_=setup;before=api.read('demo');f,u,code=signup(c,'test-family')
+    assert TestClient(api.app,headers=HEADERS).post('/api/auth/login',json=dict(login='test-family',password=PASSWORD)).status_code==401
     assert f.get('/api/state?workspace=demo').status_code==401
     assert f.get(path('campaigns')).status_code==401
     assert signed('parent').get(path('options')).status_code==403
@@ -83,6 +84,8 @@ def test_repeated_wrong_logins_are_eventually_rate_limited(client,setup):
     c,*_=setup;other=TestClient(api.app,headers=HEADERS)
     statuses=[other.post(own('login'),json=dict(login='absent',password=PASSWORD)).status_code for _ in range(100)]
     assert 429 in statuses and set(statuses[:statuses.index(429)])=={401}
+    # the single login was limited on its own, before the client as a whole
+    assert other.post(own('login'),json=dict(login='another',password=PASSWORD)).status_code==401
 
 def test_a_huge_request_body_is_refused(client,setup):
     other=TestClient(api.app,headers=HEADERS)
@@ -222,6 +225,14 @@ def test_search_csv_formula_protection_and_paging(client,setup):
     assert not get(client,'campaigns/'+c['id']+'/applications?offset=30')['items']
     assert "'=Демо" in client.get(path('campaigns/'+c['id']+'/export')).text
     assert 'Документ ребёнка' not in client.get(path('campaigns/'+c['id']+'/export')).text
+
+def test_submitted_documents_survive_backup_and_restore(client,setup,tmp_path,monkeypatch):
+    from tools.backup_school import create_backup
+    from tools.restore_school import restore_backup
+    c,*_=setup;f,_,_=signup(c);r,file=submit(f,c)
+    backup=tmp_path/'backup';create_backup(api.DB,backup);destination=tmp_path/'restored';restore_backup(backup,destination)
+    monkeypatch.setattr(api,'DB',destination/api.DB.name)
+    assert f.get(own('files/'+file['id'])).content==b'%PDF-1.4\n synthetic document'
 
 def test_revoked_reviewer_cannot_replay_and_withdrawn_case_stays_withdrawn(client,setup):
     c,t,_=setup;assign(client,c,t['id']);teacher=signed('teacher');f,_,_=signup(c);r,_=submit(f,c)

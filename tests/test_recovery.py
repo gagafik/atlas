@@ -190,6 +190,7 @@ def test_failed_attempts_limit_recovery_then_expire_and_do_not_block_login(clien
     enable(client)
     result = issue(client)
     blocked_after(lambda _: recover('bad').status_code)
+    assert recover('bad', login='someone-else').status_code == 400  # the account was limited on its own, not the whole client
     assert recover(result['codes'][0]).status_code == 429
     assert signed('admin').get(OPTIONS).status_code == 200
     stamp = recovery.now() + timedelta(days=1)

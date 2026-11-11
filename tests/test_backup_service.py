@@ -120,7 +120,7 @@ def test_low_space_fails_the_run_and_preserves_existing_data(tmp_path):
     assert verify_backup(c.destination/old['id'])['files']==1
 
 
-def test_crash_recovery_cleans_only_recorded_incomplete_run_and_retries(tmp_path):
+def test_crash_recovery_cleans_only_recorded_incomplete_run_and_retries(tmp_path,monkeypatch):
     c=config(tmp_path)
     assert service.Worker(c).run(once=True)
     state=service.read_json(c.control/'status.json');last=state['lastSuccess']
@@ -129,7 +129,11 @@ def test_crash_recovery_cleans_only_recorded_incomplete_run_and_retries(tmp_path
     (c.destination/id).mkdir();(c.destination/id/'partial.bin').write_bytes(b'partial')
     state.update(runId=id,phase='snapshot',childDeadline=0)
     service.atomic_json(c.control/'status.json',state)
-    assert service.Worker(c).run(once=True)
+    worker=service.Worker(c)
+    clock=FixedTime(time.time())  # the next scheduled run is still ahead: only the interrupted run can make the daemon copy now
+    clock.sleep=lambda seconds:setattr(worker,'stop',True)
+    monkeypatch.setattr(service,'time',clock)
+    assert worker.run()
     assert not (c.control/id).exists() and not (c.destination/id).exists()
     assert (c.destination/last['id']).is_dir() and verify_backup(c.destination/last['id'])['files']==1
     state=service.read_json(c.control/'status.json')

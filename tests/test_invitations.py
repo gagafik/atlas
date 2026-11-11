@@ -167,6 +167,7 @@ def refused_after(statuses_of,limit=100):
 def test_one_wrong_code_is_blocked_after_repeated_attempts(client):
     enable(client)
     refused_after(lambda i:register(visitor(),'z'*43).status_code)
+    assert register(visitor(),'y'*43).status_code == 400  # only the repeated code is limited, not the whole client
 
 def test_many_wrong_codes_block_even_a_valid_one_until_the_window_passes(client,monkeypatch):
     enable(client);invite=issue(client)

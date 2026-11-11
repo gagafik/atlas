@@ -162,6 +162,7 @@ def test_login_attempts_are_limited_and_dont_disclose_account_existence(client):
     assert wrong.status_code==unknown.status_code==401 and wrong.json()==unknown.json()
     statuses=[other.post('/api/auth/login',json=dict(login='admin',password='wrong')).status_code for _ in range(100)]
     assert 429 in statuses and set(statuses[:statuses.index(429)])=={401}
+    assert other.post('/api/auth/login',json=dict(login='unknown',password='wrong')).status_code==401  # only the attacked login is limited
     assert other.post('/api/auth/login',json=dict(login='admin',password=PASSWORD)).status_code==429
 
 def test_publication_link_stays_public_without_exposing_workspace(client):
