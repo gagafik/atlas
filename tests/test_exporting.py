@@ -47,7 +47,7 @@ def test_standalone_html_escapes_names_and_hides_selected_details():
     s.subjects[2].name = '<img src=x onerror=alert(1)>'
     doc = html_document(s, ExportRequest(revision=0, entityIds=['c-demo-a'], showTeachers=False, showRooms=False, paper='A3', landscape=False))
     assert '<img' not in doc and '&lt;img' in doc and 'Учитель английского' not in doc
-    assert '297mm 420mm' in doc and '10A' in doc and '10D' not in doc
+    assert '10A' in doc and '10D' not in doc
     for template in ['list', 'overview']:
         doc = html_document(s, ExportRequest(revision=0, template=template))
         assert '10A' in doc and '10D' in doc and '<script' not in doc

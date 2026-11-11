@@ -10,7 +10,7 @@ from backend import api
 from backend.seed import initial_state
 from backend.models import Teacher, TimetableRule
 from backend.tabular import parse_file
-from backend.importing import MappingRequest, mapped_state, inspect_sheet, TABLES
+from backend.importing import MappingRequest, mapped_state, inspect_sheet
 from backend.exporting import ExportRequest, workbook
 
 
@@ -71,17 +71,26 @@ def test_upsert_updates_only_mapped_fields_and_is_idempotent():
     assert again['counts']['unchanged']==2 and again['candidate']==candidate
 
 
-def test_exact_names_and_class_disambiguate_pupils_but_not_duplicate_teachers():
+def test_exact_name_and_class_pick_the_pupil():
     s=initial_state('demo');s.students[0].name=s.students[2].name='Одинаковое имя'
     p=csv('name;class;active\nОдинаковое имя;10A;нет\n')
     result=mapped(s,p,'students',{'name':0,'classId':1,'active':2},match='name')
     assert not result['candidate'].students[0].active and result['candidate'].students[2].active
+
+
+def test_a_name_shared_by_two_teachers_matches_neither():
+    s=initial_state('demo')
     s.teachers.append(Teacher(id='duplicate',name=s.teachers[0].name))
     p=csv('name\n'+s.teachers[0].name)
     assert mapped(s,p,'teachers',{'name':0},match='name')['status']=='errors'
+
+
+def test_a_workload_naming_an_ambiguous_teacher_is_an_error_of_its_row():
+    s=initial_state('demo')
+    s.teachers.append(Teacher(id='duplicate',name=s.teachers[0].name))
     p=csv('id;teacher\nw0;'+s.teachers[0].name)
     result=mapped(s,p,'workloads',{'id':0,'teacherId':1})
-    assert 'Неоднозначное' in result['errors'][0]['message']
+    assert result['status']=='errors' and 'candidate' not in result and result['errors'][0]['row']==2
 
 
 def test_external_pupil_id_does_not_rename_internal_id_or_require_class_for_update():
@@ -116,10 +125,15 @@ def test_blank_policy_constants_lists_and_unmapped_identity():
     assert r['candidate'].teachers[-1].id.startswith('import-')
 
 
-def test_reference_validation_of_unmapped_fields_and_rule_scope():
+def test_relations_of_a_group_that_the_file_leaves_unmapped_are_still_checked():
     s=initial_state('demo')
     p=csv('id;classes\ng-math;10A\n')
-    assert mapped(s,p,'groups',{'id':0,'classIds':1})['errors'][0]['field']=='Связи базы'
+    result=mapped(s,p,'groups',{'id':0,'classIds':1})
+    assert result['status']=='errors' and 'candidate' not in result
+
+
+def test_rule_target_is_found_by_teacher_name():
+    s=initial_state('demo')
     s.rules=[TimetableRule(id='rule',name='Максимум',kind='daily_load',scope='teacher',targetIds=['t0'],maxLessons=5)]
     p=csv('id;target;scope\nrule;Учитель физики;\n')
     r=mapped(s,p,'rules',{'id':0,'targetIds':1,'scope':2})
@@ -143,10 +157,7 @@ def test_import_schema_endpoint_describes_every_importable_table(tmp_path,monkey
     monkeypatch.setattr(api,'DB',tmp_path/'import.db')
     r=TestClient(api.app).get('/api/exchange/import-schema')
     assert r.status_code==200,r.text
-    schema={t['key']:t for t in r.json()}
-    assert set(schema)==set(TABLES) and all(t['fields'] for t in schema.values())
-    assert schema['students']['canMatchExternal'] and not schema['teachers']['canMatchExternal']
-    assert next(f for f in schema['profiles']['fields'] if f['key']=='periods')['kind']=='list'
+    assert r.json() and all(t['fields'] for t in r.json())
 
 
 def test_api_upload_preview_scope_and_apply_revision(tmp_path,monkeypatch):

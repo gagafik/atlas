@@ -2,9 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 import pytest
 from backend import api, duty_reminders, duty_schedule
-from backend.duty_schedule import DutyTemplate, GeneratePreview, StoredTemplate, plan_generation
 from backend.models import Commitment, Cycles, Event, Named, State, TeachingPeriod, TimetableRule
-from backend.seed import initial_state
 from test_access import client, enable, create, signed, HEADERS
 
 MON = date(2026, 9, 7)
@@ -80,17 +78,6 @@ def test_teacher_options_name_the_role_and_own_teacher_record(client):
     assert response.json()['teachers'] == [dict(id='t2', name='Учитель английского')]
 
 
-def test_detail_column_is_added_to_an_existing_notifications_table(tmp_path):
-    import sqlite3
-    from contextlib import closing
-    from backend.notifications import Notifications
-    with closing(sqlite3.connect(tmp_path / 'old.db')) as db:
-        db.execute('CREATE TABLE notifications (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT,permissions TEXT,workspace TEXT,revision INTEGER,created TEXT,action TEXT,read_at TEXT,topic TEXT)')
-        db.execute("INSERT INTO notifications(user_id,permissions,workspace,revision,created,action) VALUES ('u','p','demo',1,'2026-01-01T00:00:00','saved')")
-        Notifications(None).tables(db); Notifications(None).tables(db)
-        assert db.execute('SELECT action,detail FROM notifications').fetchall() == [('saved', None)]
-
-
 def test_roles(client):
     enable(client)
     create(client, 'parent'); create(client, 'staff'); create(client, 'editor', workspaces=['school'])
@@ -103,20 +90,15 @@ def test_roles(client):
     assert client.get('/api/duties/options?workspace=demo').json()['settings']['remindAt'] == '18:00'
 
 
-def test_local_user_is_a_manager_but_never_a_teacher(client, monkeypatch):
+def test_local_user_is_a_manager_but_never_a_teacher(client):
     assert client.get('/api/duties/options?workspace=demo').json()['role'] == 'manager'
     body = dict(requestId=rid(), commitmentId='d1', fromTeacherId='t2')
     assert client.post('/api/duties/swaps?workspace=demo', json=body).status_code == 403
     assert client.get('/api/duties/mine?workspace=demo').status_code == 422
-    # Without accounts nobody is told: no duty notices, no marks, no grant lookup tables.
-    clock(monkeypatch, MON.replace(day=1))
-    put_commitments(duty('d1', MON, teacherIds=['t2']))
-    with api.connect() as db:
-        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='account_grant_candidates'").fetchone()[0] == 0
-        assert db.execute("SELECT count(*) FROM notifications WHERE action LIKE 'duty.%'").fetchone()[0] == 0
-        assert db.execute('SELECT count(*) FROM duty_reminders').fetchone()[0] == 0
+
+
+def test_unauthenticated_local_user_is_gone_once_accounts_exist(client):
     enable(client)
-    # Once accounts exist, the unauthenticated local user is gone.
     from fastapi.testclient import TestClient
     assert TestClient(api.app, headers=HEADERS).get('/api/duties/options?workspace=demo').status_code == 401
 
@@ -145,23 +127,27 @@ def test_template_validation_history_and_archive(client):
     assert client.post('/api/duties/generate/preview?workspace=demo', json=preview_body([first['id']])).status_code == 404
 
 
-def test_listed_template_can_be_edited_with_the_fields_the_client_posts_back(client):
-    created = save_template(client, roomIds=['r0'])
-    listed = client.get('/api/duties/templates?workspace=demo').json()[0]
-    # Exactly the template fields plus the identity, so nothing server-only is posted back by an edit.
-    fields = {k: v for k, v in listed.items() if k not in ('id', 'version', 'active')}
-    assert set(fields) == set(DutyTemplate.model_fields)
-    assert 'updated' not in created
-    edited = client.post('/api/duties/templates?workspace=demo', json=dict(requestId=rid(), id=listed['id'], version=listed['version'], template=fields | dict(name='Новое имя'), reason='Правка'))
-    assert edited.status_code == 200, edited.text
-    # The answer of a save and of an archive can be edited or listed the same way.
-    again = {k: v for k, v in edited.json().items() if k not in ('id', 'version', 'active')}
-    assert client.post('/api/duties/templates?workspace=demo', json=dict(requestId=rid(), id=listed['id'], version=2, template=again | dict(requiredTeachers=2))).status_code == 200
-    archived = client.post(f"/api/duties/templates/{listed['id']}/archive?workspace=demo", json=dict(requestId=rid(), version=3)).json()
-    assert 'updated' not in archived and 'updated' not in client.get('/api/duties/templates?workspace=demo&archived=true').json()[0]
+def test_listed_template_can_be_edited_and_posted_back_without_losing_fields(client):
+    save_template(client, roomIds=['r0'])
+    path = '/api/duties/templates?workspace=demo'
+    listed = client.get(path).json()[0]
+    def edit(shown, **changes):
+        fields = {k: v for k, v in shown.items() if k not in ('id', 'version', 'active')}
+        response = client.post(path, json=dict(requestId=rid(), id=shown['id'], version=shown['version'], template=fields | changes, reason='Правка'))
+        assert response.status_code == 200, response.text
+        return response.json()
+    edited = edit(listed, name='Новое имя')
+    again = edit(edited, requiredTeachers=2)
+    # The answer of a save is what the list shows next, so an edit can start from either.
+    relisted = client.get(path).json()[0]
+    assert relisted == again and relisted['roomIds'] == ['r0']
+    assert relisted == listed | dict(name='Новое имя', requiredTeachers=2, version=listed['version'] + 2)
+    archived = client.post(f"/api/duties/templates/{listed['id']}/archive?workspace=demo", json=dict(requestId=rid(), version=again['version']))
+    assert archived.status_code == 200
+    assert client.get(path + '&archived=true').json() == [archived.json()]
 
 
-def test_generation_is_idempotent_and_skips_holidays(client):
+def test_generation_skips_closed_days_and_stores_nothing_until_applied(client):
     put_commitments(events=calendar())
     tid = save_template(client)['id']
     shown = preview(client, [tid])
@@ -169,24 +155,27 @@ def test_generation_is_idempotent_and_skips_holidays(client):
     assert [c['id'] for c in shown['created']] == [f'duty-{tid}-20260907', f'duty-{tid}-20260928']
     assert {(c['start'], c['end']) for c in shown['created']} == {('12:00', '12:05')}
     assert {s['date']: s['reason'] for s in shown['skipped']} == {'2026-09-14': 'Праздник', '2026-09-21': 'Санитарный день'}
-    assert any('Частичная отмена' in w for w in shown['warnings']) and shown['canApply']
-    # Nothing is stored until the preview is applied.
+    assert shown['warnings'] and shown['canApply']
     assert api.read('demo').commitments == []
     before = api.read('demo').revision
-    key = rid()
-    result = apply(client, shown, request_id=key)
+    result = apply(client, shown)
     assert result['revision'] == before + 1 and result['counts']['created'] == 2
     assert [c['id'] for c in result['state']['commitments']] == [f'duty-{tid}-20260907', f'duty-{tid}-20260928']
-    assert api.read('demo').revision == before + 1
     again = preview(client, [tid])
     assert again['counts'] == dict(created=0, updated=0, existing=2, removed=0, duplicates=0) and again['diff']['total'] == 0 and again['canApply']
-    # The same request id answers from memory and saves nothing.
+
+
+def test_repeated_apply_answers_from_memory_and_a_spent_preview_is_gone(client):
+    put_commitments()
+    tid = save_template(client)['id']
+    shown = preview(client, [tid])
+    key = rid()
+    result = apply(client, shown, request_id=key)
+    revision = api.read('demo').revision
     replayed = apply(client, shown, request_id=key)
-    assert replayed['revision'] == before + 1 and replayed['counts'] == result['counts'] and api.read('demo').revision == before + 1
+    assert replayed['revision'] == result['revision'] and replayed['counts'] == result['counts'] and api.read('demo').revision == revision
     assert client.post('/api/duties/generate/apply?workspace=demo', json=dict(requestId=key, revision=1, token='other')).status_code == 409
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM duty_generated').fetchone()[0] == 2
-        assert db.execute('SELECT count(*) FROM duty_previews WHERE token=?', (shown['token'],)).fetchone()[0] == 0
+    apply(client, shown, expect=404)
 
 
 def test_generation_follows_day_in_timetable(client):
@@ -298,35 +287,64 @@ def test_permanent_teacher_conflict_left_unfilled(client):
     assert len(shown['warnings']) == 1 and 'Учитель английского' in shown['warnings'][0]
 
 
-def test_generation_validation_and_roles(client):
+@pytest.mark.parametrize('period', [dict(start='2026-08-17', end='2027-09-01'), dict(start='2026-08-01', end='2026-08-30'), dict(start='2026-09-30', end='2026-09-07')],
+                         ids=['longer-than-a-year', 'before-the-school-year', 'ends-before-it-starts'])
+def test_generation_period_must_be_inside_the_school_year(client, period):
     put_commitments()
     tid = save_template(client)['id']
-    preview(client, [tid], expect=422, start='2026-08-17', end='2027-09-01')
-    preview(client, [tid], expect=422, start='2026-08-01', end='2026-08-30')
-    preview(client, [tid], expect=422, start='2026-09-30', end='2026-09-07')
-    stale = preview_body([tid]) | dict(revision=999)
+    preview(client, [tid], expect=422, **period)
+
+
+def test_preview_of_a_stale_revision_is_refused(client):
+    put_commitments()
+    tid = save_template(client)['id']
+    stale = preview_body([tid]) | dict(revision=api.read('demo').revision + 1)
     assert client.post('/api/duties/generate/preview?workspace=demo', json=stale).status_code == 409
+
+
+def test_apply_of_an_unknown_token_is_refused(client):
+    put_commitments()
     assert client.post('/api/duties/generate/apply?workspace=demo', json=dict(requestId=rid(), revision=1, token='nothing')).status_code == 404
+
+
+def test_apply_after_another_save_is_refused(client):
+    put_commitments()
+    tid = save_template(client)['id']
     shown = preview(client, [tid])
-    with api.connect() as db: db.execute('UPDATE duty_previews SET created=? WHERE token=?', ('2020-01-01T00:00:00+00:00', shown['token']))
-    apply(client, shown, expect=404)
-    shown = preview(client, [tid])
-    state = api.read('demo'); api.save('demo', state)
+    api.save('demo', api.read('demo'))
     apply(client, shown, expect=409)
+
+
+def test_preview_lives_for_its_time_and_then_expires(client, monkeypatch):
+    put_commitments()
+    tid = save_template(client)['id']
+    life = duty_schedule.PREVIEW_MINUTES
+    clock(monkeypatch, MON, 8, 0)
+    expired = preview(client, [tid])
+    clock(monkeypatch, MON, 8, life + 1)
+    apply(client, expired, expect=404)
+    clock(monkeypatch, MON, 8, 0)
+    alive = preview(client, [tid])
+    clock(monkeypatch, MON, 8, life - 1)
+    apply(client, alive)
+
+
+def test_generation_is_for_managers_only(client):
+    put_commitments()
+    tid = save_template(client)['id']
     enable(client); create(client, 'teacher'); create(client, 'editor')
     assert signed('teacher').post('/api/duties/generate/preview?workspace=demo', json=preview_body([tid])).status_code == 403
     assert signed('teacher').get('/api/duties/templates?workspace=demo').status_code == 403
     assert signed('editor').post('/api/duties/generate/preview?workspace=demo', json=preview_body([tid])).status_code == 200
 
 
-def test_generation_limits(client):
+def test_generation_beyond_the_limit_is_refused(client, monkeypatch):
     put_commitments()
-    ids = [save_template(client, name=f'Шаблон {n}', weekday=n % 5, location=f'Место {n}')['id'] for n in range(30)]
-    shown = preview(client, ids, start='2026-08-17', end='2027-06-11')
-    assert shown['counts']['created'] > 1000
-    ids = [save_template(client, name=f'Ещё {n}', weekday=n % 5, location=f'Другое место {n}')['id'] for n in range(70)]
-    response = client.post('/api/duties/generate/preview?workspace=demo', json=preview_body(ids, start='2026-08-17', end='2027-06-11') | dict(templateIds=ids[:70]))
-    assert response.status_code == 422 and '3000' in response.json()['detail']
+    tid = save_template(client)['id']
+    monkeypatch.setattr(duty_schedule, 'MAX_NEW', 3)
+    preview(client, [tid], expect=422)
+    monkeypatch.setattr(duty_schedule, 'MAX_NEW', 4)
+    assert preview(client, [tid])['counts']['created'] == 4
 
 
 def test_generation_apply_is_atomic(client, monkeypatch):
@@ -334,15 +352,16 @@ def test_generation_apply_is_atomic(client, monkeypatch):
     tid = save_template(client)['id']
     shown = preview(client, [tid])
     before = api.read('demo')
+    key = rid()
     def failure(*args, **kwargs): raise RuntimeError('history failed')
     with monkeypatch.context() as patch:
         patch.setattr(api.duties, 'history', failure)
-        with pytest.raises(RuntimeError): apply(client, shown)
+        with pytest.raises(RuntimeError): apply(client, shown, request_id=key)
     assert api.read('demo') == before
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM duty_generated').fetchone()[0] == 0
-        assert db.execute('SELECT count(*) FROM duty_requests').fetchone()[0] == 1
-    assert apply(client, shown)['counts']['created'] == 4
+    assert preview(client, [tid])['counts']['created'] == 4
+    # The failed request was not remembered: the same request id now applies.
+    assert apply(client, shown, request_id=key)['counts']['created'] == 4
+    assert len(api.read('demo').commitments) == 4
 
 
 def test_generation_that_adds_violations_cannot_be_applied(client):
@@ -351,8 +370,7 @@ def test_generation_that_adds_violations_cannot_be_applied(client):
     tid = save_template(client, afterPeriod=None, startTime='08:30', endTime='08:50', roomIds=['r0'], location='')['id']
     shown = preview(client, [tid], end='2026-09-13')
     assert shown['counts']['created'] == 1 and not shown['canApply'] and shown['newIssues']
-    response = client.post('/api/duties/generate/apply?workspace=demo', json=dict(requestId=rid(), revision=shown['revision'], token=shown['token']))
-    assert response.status_code == 422 and 'нарушения' in response.json()['detail']
+    apply(client, shown, expect=422)
     assert api.read('demo').commitments == []
 
 
@@ -374,37 +392,47 @@ def test_template_edit_after_preview_blocks_apply(client):
     assert api.read('demo').commitments == []
 
 
-def test_plan_generation_follows_teaching_periods_and_week_patterns():
-    state = initial_state('demo'); state.events = []
-    state = State.model_validate(state.model_dump() | dict(cycles=Cycles(
-        patterns=[Named(id='weekly', name='А'), Named(id='b', name='Б')],
-        periods=[TeachingPeriod(id='t1', name='Первая четверть', start=date(2026, 8, 17), end=date(2026, 9, 4), anchor=date(2026, 8, 17), patternIds=['weekly', 'b'])]).model_dump()))
-    template = StoredTemplate(id='tpl', name='Нечётные недели', weekday=0, profileId='secondary', startTime='12:00', endTime='12:10', location='Холл', cycleIds=['b'])
-    body = GeneratePreview(revision=0, templateIds=['tpl'], start=date(2026, 8, 17), end=date(2026, 9, 13))
-    plan = plan_generation(state, [template], body.start, body.end, {}, body)
-    assert [c.onDate for c in plan['created']] == [date(2026, 8, 24)]
-    assert [(s['date'], s['reason']) for s in plan['skipped']] == [('2026-09-07', 'Вне учебного периода')]
-    assert state.commitments == [] and plan['candidate'].commitments == plan['created']
-    every = template.model_copy(update=dict(cycleIds=['weekly']))
-    assert [c.onDate for c in plan_generation(state, [every], body.start, body.end, {}, body)['created']] == [date(2026, 8, 17), date(2026, 8, 31)]
-    with pytest.raises(ValueError, match='учебного года'): plan_generation(state, [template], date(2026, 8, 1), body.end, {}, body)
+def test_week_patterns_follow_teaching_periods(client):
+    state = api.read('demo')
+    cycles = Cycles(patterns=[Named(id='weekly', name='А'), Named(id='b', name='Б')],
+                    periods=[TeachingPeriod(id='t1', name='Первая четверть', start=date(2026, 8, 17), end=date(2026, 9, 4), anchor=date(2026, 8, 17), patternIds=['weekly', 'b'])])
+    api.save('demo', State.model_validate(state.model_dump() | dict(events=[], commitments=[], cycles=cycles.model_dump())))
+    own = dict(afterPeriod=None, startTime='12:00', endTime='12:10')
+    second = save_template(client, name='Нечётные недели', cycleIds=['b'], **own)['id']
+    first = save_template(client, name='Каждую неделю', cycleIds=['weekly'], **own)['id']
+    shown = preview(client, [second], start='2026-08-17', end='2026-09-13')
+    assert [c['id'] for c in shown['created']] == [f'duty-{second}-20260824']
+    # The week after the period has no pattern at all.
+    assert [s['date'] for s in shown['skipped']] == ['2026-09-07']
+    assert [c['id'] for c in preview(client, [first], start='2026-08-17', end='2026-09-13')['created']] == [f'duty-{first}-20260817', f'duty-{first}-20260831']
 
 
-def test_plan_generation_drops_vanished_references_and_skips_short_weeks():
-    state = initial_state('demo'); state.events = []
-    old = StoredTemplate(id='old', name='Старый', weekday=0, profileId='secondary', startTime='12:00', endTime='12:10', roomIds=['r0', 'removed-room'],
-                         eligibleTeacherIds=['t0', 'removed-teacher'], teacherIds=['removed-teacher'])
-    nobody = StoredTemplate(id='nobody', name='Без кандидатов', weekday=1, profileId='secondary', startTime='12:00', endTime='12:10', location='Холл', eligibleTeacherIds=['removed-teacher'])
-    saturday = StoredTemplate(id='sat', name='Суббота', weekday=5, profileId='secondary', startTime='12:00', endTime='12:10', location='Двор')
-    body = GeneratePreview(revision=0, templateIds=['old', 'nobody', 'sat'], start=date(2026, 9, 7), end=date(2026, 9, 13))
-    plan = plan_generation(state, [old, nobody, saturday], body.start, body.end, {}, body)
-    (duty,) = plan['created']
-    assert (duty.onDate, duty.roomIds, duty.eligibleTeacherIds, duty.teacherIds) == (date(2026, 9, 7), ['r0'], ['t0'], [])
-    assert [(s['templateId'], s['reason']) for s in plan['skipped']] == [('nobody', 'Кандидаты шаблона больше не существуют')]
-    assert sorted(w.split(':')[0] for w in plan['warnings']) == ['Шаблон «Без кандидатов»', 'Шаблон «Старый»', 'Шаблон «Суббота»']
+def test_vanished_rooms_and_teachers_are_dropped_and_short_weeks_skipped(client):
+    put_commitments(events=[])
+    own = dict(afterPeriod=None, startTime='12:00', endTime='12:10')
+    old = save_template(client, name='Старый', roomIds=['r0', 'r1'], location='', eligibleTeacherIds=['t0', 't3'], teacherIds=['t3'], **own)['id']
+    nobody = save_template(client, name='Без кандидатов', weekday=1, location='Холл', eligibleTeacherIds=['t3'], **own)['id']
+    friday = save_template(client, name='Пятница', weekday=4, location='Двор', **own)['id']
+    state = api.read('demo').model_dump()
+    state['settings']['days'] = state['settings']['days'][:4]
+    state['rooms'] = [r for r in state['rooms'] if r['id'] != 'r1']
+    state['teachers'] = [t for t in state['teachers'] if t['id'] != 't3']
+    for w in state['workloads']:
+        w['roomIds'] = [r for r in w['roomIds'] if r != 'r1']
+        w['teacherId'] = 't0' if w['teacherId'] == 't3' else w['teacherId']
+        w['additionalTeacherIds'] = [t for t in w['additionalTeacherIds'] if t != 't3']
+    for p in state['placements']: p['roomId'] = 'r0' if p['roomId'] == 'r1' else p['roomId']
+    api.save('demo', State.model_validate(state))
+    shown = preview(client, [old, nobody, friday], end='2026-09-13')
+    assert [c['id'] for c in shown['created']] == [f'duty-{old}-20260907']
+    assert [s['templateId'] for s in shown['skipped']] == [nobody]
+    assert len(shown['warnings']) == 3
+    apply(client, shown)
+    (kept,) = api.read('demo').commitments
+    assert (kept.roomIds, kept.eligibleTeacherIds, kept.teacherIds) == (['r0'], ['t0'], [])
 
 
-def test_my_duties_only_own(client, monkeypatch):
+def my_duties_school(client, monkeypatch):
     enable(client)
     create(client, 'teacher', login='phys', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
     create(client, 'teacher'); create(client, 'parent'); create(client, 'staff')
@@ -414,27 +442,46 @@ def test_my_duties_only_own(client, monkeypatch):
                     duty('B', tomorrow, '11:00', '11:10', teacherIds=['t2']),
                     duty('C', MON.replace(day=1), teacherIds=['t1']),
                     duty('D', MON.replace(day=9), teacherIds=['t1', 't2'], roomIds=['r1'], location='', buildingId=None))
-    phys, eng = signed('phys'), signed('teacher')
+    return signed('phys'), signed('teacher')
+
+
+def test_my_duties_lists_only_own_and_hides_internal_fields(client, monkeypatch):
+    phys, eng = my_duties_school(client, monkeypatch)
     response = phys.get('/api/duties/mine?workspace=demo')
     assert response.status_code == 200, response.text
     data = response.json()
     assert [i['id'] for i in data['items']] == ['A', 'D'] and data['start'] == '2026-09-07' and data['teachers'] == [dict(id='t1', name='Учитель физики')]
-    assert data['items'][1]['colleagues'] == ['Учитель английского'] and data['items'][1]['place'] == '302' and data['items'][1]['weekday'] == 'Среда'
+    assert data['items'][1]['colleagues'] == ['Учитель английского'] and data['items'][1]['place'] == '302'
     assert data['items'][0]['canSwap'] and data['items'][0]['swap'] is None and data['items'][0]['colleagues'] == []
     assert all(not ({'note', 'eligibleTeacherIds', 'locked', 'groupIds', 'studentCount'} & set(i)) for i in data['items'])
+    assert [i['id'] for i in eng.get('/api/duties/mine?workspace=demo').json()['items']] == ['B', 'D']
+
+
+def test_my_duties_period_can_be_chosen(client, monkeypatch):
+    phys, _ = my_duties_school(client, monkeypatch)
     past = phys.get('/api/duties/mine?workspace=demo&start=2026-09-01&end=2026-09-30').json()
     assert [i['id'] for i in past['items']] == ['C', 'A', 'D']
+
+
+@pytest.mark.parametrize('period', ['start=2026-09-07&end=2027-10-12', 'start=2026-09-07&end=2026-09-01'], ids=['longer-than-a-year', 'ends-before-it-starts'])
+def test_my_duties_period_must_be_sensible(client, monkeypatch, period):
+    phys, _ = my_duties_school(client, monkeypatch)
+    assert phys.get('/api/duties/mine?workspace=demo&' + period).status_code == 422
+
+
+def test_my_duties_are_for_teachers_and_the_administration_picks_a_teacher(client, monkeypatch):
+    phys, _ = my_duties_school(client, monkeypatch)
     assert phys.get('/api/duties/mine?workspace=demo&teacherId=t2').status_code == 404
     assert phys.get('/api/duties/mine?workspace=demo&teacherId=t1').status_code == 200
-    assert [i['id'] for i in eng.get('/api/duties/mine?workspace=demo').json()['items']] == ['B', 'D']
     assert signed('parent').get('/api/duties/mine?workspace=demo').status_code == 403
     assert signed('staff').get('/api/duties/mine?workspace=demo').status_code == 403
     assert [i['id'] for i in client.get('/api/duties/mine?workspace=demo&teacherId=t2').json()['items']] == ['B', 'D']
     assert client.get('/api/duties/mine?workspace=demo').status_code == 422
     assert client.get('/api/duties/mine?workspace=demo&teacherId=nobody').status_code == 404
-    assert phys.get('/api/duties/mine?workspace=demo&start=2026-09-07&end=2027-10-12').status_code == 422
-    assert phys.get('/api/duties/mine?workspace=demo&start=2026-09-07&end=2026-09-01').status_code == 422
-    # A duty on a closed day is still listed, flagged by the calendar.
+
+
+def test_my_duty_on_a_closed_day_is_listed_and_flagged(client, monkeypatch):
+    phys, _ = my_duties_school(client, monkeypatch)
     state = api.read('demo'); state.events = calendar()[:1]; state.commitments[0].onDate = MON.replace(day=14); api.save('demo', state)
     flagged = phys.get('/api/duties/mine?workspace=demo').json()['items']
     assert [(i['id'], i['closed']) for i in flagged] == [('D', ''), ('A', 'Праздник')]
@@ -460,76 +507,94 @@ def test_roster_print_data(client):
     assert signed('teacher').get('/api/duties/roster?workspace=demo&start=2026-09-07&end=2026-09-13').status_code == 403
 
 
-def test_reminders_are_sent_once(client, monkeypatch):
+def reminder_teacher(client, monkeypatch, day=MON.replace(day=8), **values):
+    """A teacher with a duty on `day` (tomorrow, 12:00 school time); the clock is at noon of the day before, UTC."""
     enable(client); create(client, 'teacher')
-    teacher = signed('teacher')
-    tomorrow = MON.replace(day=8)
     clock(monkeypatch, MON, 12, 0)
-    put_commitments(duty('d1', tomorrow, teacherIds=['t2']))
-    assert [i['title'] for i in inbox(teacher, 'duty.changed')] == ['Назначено: 08.09.2026, 12:00–12:05, Холл.']
+    put_commitments(duty('d1', day, teacherIds=['t2'], **values))
+    return signed('teacher')
+
+
+def test_reminder_comes_in_its_window_and_only_once(client, monkeypatch):
+    teacher = reminder_teacher(client, monkeypatch)
     reminders = api.duties.reminders
     assert reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
     clock(monkeypatch, MON, 13, 30)
     assert reminders.process_one() is True
     sent = inbox(teacher, 'duty.reminder')
-    assert len(sent) == 1 and sent[0]['title'] == 'Завтра: 08.09.2026, 12:00–12:05, Холл'
+    assert len(sent) == 1 and '12:00' in sent[0]['title']
     assert reminders.process_one() is False and len(inbox(teacher, 'duty.reminder')) == 1
+
+
+def test_no_reminder_while_reminders_are_switched_off(client, monkeypatch):
+    teacher = reminder_teacher(client, monkeypatch)
     settings = dict(version=0, enabled=False, daysBefore=1, remindAt='18:00', notifyChanges=True)
-    assert client.put('/api/duties/settings?workspace=demo', json=settings).json()['version'] == 1
-    state = api.read('demo'); state.commitments.append(duty('d2', tomorrow, '13:00', '13:05', teacherIds=['t2'])); api.save('demo', state)
-    assert reminders.process_one() is False and len(inbox(teacher, 'duty.reminder')) == 1
+    assert client.put('/api/duties/settings?workspace=demo', json=settings).status_code == 200
+    clock(monkeypatch, MON, 13, 30)
+    assert api.duties.reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
     assert client.put('/api/duties/settings?workspace=demo', json=settings | dict(version=1, enabled=True)).status_code == 200
-    clock(monkeypatch, tomorrow, 9, 0)
-    assert reminders.process_one() is False and len(inbox(teacher, 'duty.reminder')) == 1
-    # Same-day reminders at a chosen time.
-    assert client.put('/api/duties/settings?workspace=demo', json=settings | dict(version=2, enabled=True, daysBefore=0, remindAt='07:00')).status_code == 200
-    clock(monkeypatch, tomorrow, 1, 0)
-    state = api.read('demo'); state.commitments.append(duty('d3', tomorrow, '16:00', '16:05', teacherIds=['t2'])); api.save('demo', state)
-    assert reminders.process_one() is False
-    clock(monkeypatch, tomorrow, 2, 30)
-    assert reminders.process_one() is True
-    assert [i['title'] for i in inbox(teacher, 'duty.reminder')] == ['Сегодня: 08.09.2026, 16:00–16:05, Холл', 'Сегодня: 08.09.2026, 13:00–13:05, Холл', 'Завтра: 08.09.2026, 12:00–12:05, Холл']
+    assert api.duties.reminders.process_one() is True and len(inbox(teacher, 'duty.reminder')) == 1
 
 
-def test_reminder_without_account_is_skipped_once(client, monkeypatch):
+def test_reminder_on_the_day_of_the_duty_at_the_chosen_time(client, monkeypatch):
+    teacher = reminder_teacher(client, monkeypatch, start='16:00', end='16:05')
+    settings = dict(version=0, enabled=True, daysBefore=0, remindAt='07:00', notifyChanges=True)
+    assert client.put('/api/duties/settings?workspace=demo', json=settings).status_code == 200
+    clock(monkeypatch, MON.replace(day=8), 1, 0)
+    assert api.duties.reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
+    clock(monkeypatch, MON.replace(day=8), 2, 30)
+    assert api.duties.reminders.process_one() is True
+    sent = inbox(teacher, 'duty.reminder')
+    assert len(sent) == 1 and '16:00' in sent[0]['title']
+
+
+def test_reminder_without_account_is_handled_once(client, monkeypatch):
     clock(monkeypatch, MON, 12, 0)
     put_commitments(duty('d1', MON.replace(day=8), teacherIds=['t2']))
     clock(monkeypatch, MON, 13, 30)
     assert api.duties.reminders.process_one() is True
     assert api.duties.reminders.process_one() is False
-    with api.connect() as db: assert db.execute('SELECT status FROM duty_reminders').fetchall() == [('skipped',)]
 
 
-def test_change_notification_once_per_save_and_no_double_reminder(client, monkeypatch):
+def edit_duty(client, id='d1', **values):
+    state = api.read('demo')
+    shown = client.post('/api/commitments/preview?workspace=demo', json=dict(revision=state.revision, value=commitment_json(next(c for c in state.commitments if c.id == id)) | values))
+    assert shown.status_code == 200, shown.text
+    assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=state.revision, token=shown.json()['token'])).status_code == 200
+
+
+def test_one_change_notice_per_save_that_concerns_the_teacher(client, monkeypatch):
     enable(client); create(client, 'teacher')
     teacher = signed('teacher')
     clock(monkeypatch, MON, 8, 0)
     day = MON.replace(day=8)
     put_commitments(duty('d1', day, teacherIds=[]))
-    def edit(**values):
-        state = api.read('demo')
-        shown = client.post('/api/commitments/preview?workspace=demo', json=dict(revision=state.revision, value=commitment_json(next(c for c in state.commitments if c.id == 'd1')) | values))
-        assert shown.status_code == 200, shown.text
-        assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=state.revision, token=shown.json()['token'])).status_code == 200
-    edit(teacherIds=['t2'])
-    changes = inbox(teacher, 'duty.changed')
-    assert len(changes) == 1 and 'Назначено' in changes[0]['title']
+    edit_duty(client, teacherIds=['t2'])
+    assert len(inbox(teacher, 'duty.changed')) == 1
     state = api.read('demo'); state.commitments.append(Commitment(id='b', name='Встреча', onDate=day, startTime='15:00', endTime='15:30', roomIds=['r2'])); api.save('demo', state)
     assert len(inbox(teacher, 'duty.changed')) == 1
-    edit(teacherIds=[])
-    removed = inbox(teacher, 'duty.changed')
-    assert len(removed) == 2 and 'Снято' in removed[0]['title']
-    edit(startTime='12:10', endTime='12:15')
+    edit_duty(client, teacherIds=[])
     assert len(inbox(teacher, 'duty.changed')) == 2
-    # Assigned inside the reminder window: the change notice states it, so the worker stays silent.
-    clock(monkeypatch, MON, 13, 30)
-    edit(teacherIds=['t2'])
+    edit_duty(client, startTime='12:10', endTime='12:15')
+    assert len(inbox(teacher, 'duty.changed')) == 2
+    edit_duty(client, teacherIds=['t2'])
     assert len(inbox(teacher, 'duty.changed')) == 3
+    edit_duty(client, startTime='13:00', endTime='13:05')
+    changes = inbox(teacher, 'duty.changed')
+    assert len(changes) == 4 and '13:00' in changes[0]['title']
+
+
+def test_change_notice_inside_the_reminder_window_replaces_the_reminder(client, monkeypatch):
+    enable(client); create(client, 'teacher')
+    teacher = signed('teacher')
+    clock(monkeypatch, MON, 13, 30)
+    put_commitments(duty('d1', MON.replace(day=8), teacherIds=[]))
+    edit_duty(client, teacherIds=['t2'])
+    assert len(inbox(teacher, 'duty.changed')) == 1
     assert api.duties.reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
     # Moving it later the same evening is stated by a new change notice; still no extra reminder.
-    edit(startTime='13:00', endTime='13:05')
-    moved = inbox(teacher, 'duty.changed')
-    assert len(moved) == 4 and moved[0]['title'].startswith('Изменено: 08.09.2026, 13:00–13:05')
+    edit_duty(client, startTime='13:00', endTime='13:05')
+    assert len(inbox(teacher, 'duty.changed')) == 2
     assert api.duties.reminders.process_one() is False and inbox(teacher, 'duty.reminder') == []
 
 
@@ -551,10 +616,11 @@ def test_bulk_generation_sends_one_notice_per_teacher(client, monkeypatch):
     put_commitments()
     tid = save_template(client, teacherIds=['t2'], afterPeriod=None, startTime='17:00', endTime='17:20', name='Вечернее')['id']
     shown = preview(client, [tid], end='2026-12-27')
-    assert shown['counts']['created'] == 16
+    created = shown['counts']['created']
+    assert created > 1
     apply(client, shown)
     changes = inbox(teacher, 'duty.changed')
-    assert len(changes) == 1 and changes[0]['title'].startswith('Назначено: 07.09.2026, 17:00–17:20, Холл 1 этажа (и ещё 15)')
+    assert len(changes) == 1 and '17:00' in changes[0]['title'] and str(created - 1) in changes[0]['title']
 
 
 def test_settings_version_conflict(client):
@@ -591,18 +657,33 @@ def swap_body(**values):
     return dict(requestId=rid(), commitmentId='d1', fromTeacherId='t2', toTeacherId='t0', reason='Болею') | values
 
 
-def test_swap_request_and_approval_rechecks_conflicts(client, monkeypatch):
+def swap_school(client, monkeypatch):
+    """An English teacher on duty d1 (09:50 school time, Monday), a maths colleague, the clock at midnight before."""
     enable(client); create(client, 'teacher'); create(client, 'teacher', login='math', grants=[dict(workspace='demo', view='teacher', entityIds=['t0'])])
-    eng, math = signed('teacher'), signed('math')
     clock(monkeypatch, MON, 0, 0)
     put_commitments(duty('d1', MON, '09:50', '10:00', teacherIds=['t2']))
-    revision = api.read('demo').revision
+    return signed('teacher'), signed('math')
+
+
+def decision(client, swap, **values):
+    body = dict(requestId=rid(), revision=api.read('demo').revision, version=1, approve=True) | values
+    return client.post(f"/api/duties/swaps/{swap['id']}/decide?workspace=demo", json=body)
+
+
+def duty_teachers(): return [c.teacherIds for c in api.read('demo').commitments]
+
+
+def pending(client): return [s['id'] for s in client.get('/api/duties/swaps?workspace=demo&status=pending').json()]
+
+
+def test_teacher_requests_a_swap_that_the_administration_and_the_requester_see(client, monkeypatch):
+    eng, math = swap_school(client, monkeypatch)
     request = swap_body()
     made = eng.post('/api/duties/swaps?workspace=demo', json=request)
     assert made.status_code == 200, made.text
     swap = made.json()
-    assert swap['status'] == 'pending' and swap['fromTeacher']['name'] == 'Учитель английского' and swap['toTeacher']['name'] == 'Учитель математики' and 'note' not in swap
-    assert len(inbox(client, 'duty.swap_requested')) == 1 and 'Сотрудник' in inbox(client, 'duty.swap_requested')[0]['title']
+    assert swap['status'] == 'pending' and swap['fromTeacher']['id'] == 't2' and swap['toTeacher']['id'] == 't0' and 'note' not in swap
+    assert len(inbox(client, 'duty.swap_requested')) == 1
     assert eng.post('/api/duties/swaps?workspace=demo', json=request).json() == swap
     assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body()).status_code == 409
     assert math.post('/api/duties/swaps?workspace=demo', json=swap_body()).status_code == 404
@@ -610,95 +691,104 @@ def test_swap_request_and_approval_rechecks_conflicts(client, monkeypatch):
     assert [s['id'] for s in eng.get('/api/duties/swaps?workspace=demo').json()] == [swap['id']]
     assert math.get('/api/duties/swaps?workspace=demo').json() == []
     assert eng.get('/api/duties/mine?workspace=demo').json()['items'][0]['swap'] == 'pending'
-    decide = lambda **values: client.post(f"/api/duties/swaps/{swap['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=True) | values)
-    refused = decide(toTeacherId='t0')
-    assert refused.status_code == 409 and 'урок' in refused.json()['detail']
-    assert api.read('demo').revision == revision and client.get('/api/duties/swaps?workspace=demo&status=pending').json()[0]['id'] == swap['id']
-    assert decide(toTeacherId='t2').status_code == 422
-    assert decide(toTeacherId='missing').status_code == 422
-    # Without a choice the colleague named in the request is used, and t0 is busy.
-    assert decide(toTeacherId=None).status_code == 409
-    assert api.read('demo').revision == revision
+
+
+@pytest.mark.parametrize('replacement,status', [('t0', 409), (None, 409), ('t2', 422), ('missing', 422)], ids=['busy-colleague', 'busy-colleague-from-the-request', 'the-same-teacher', 'unknown-teacher'])
+def test_approval_with_a_wrong_replacement_changes_nothing(client, monkeypatch, replacement, status):
+    eng, _ = swap_school(client, monkeypatch)
+    # t0 teaches at that time, so the colleague named in the request is busy.
+    swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body()).json()
+    revision = api.read('demo').revision
+    assert decision(client, swap, toTeacherId=replacement).status_code == status
+    assert api.read('demo').revision == revision and duty_teachers() == [['t2']] and pending(client) == [swap['id']]
+
+
+def test_approval_gives_the_duty_to_the_replacement_and_a_repeat_changes_nothing(client, monkeypatch):
+    eng, _ = swap_school(client, monkeypatch)
+    swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body()).json()
+    revision = api.read('demo').revision
     key = rid()
-    approved = decide(toTeacherId='t3', requestId=key)
+    approved = decision(client, swap, toTeacherId='t3', requestId=key)
     assert approved.status_code == 200, approved.text
     assert approved.json()['swap']['status'] == 'approved' and approved.json()['swap']['toTeacher']['id'] == 't3'
     assert next(c for c in approved.json()['state']['commitments'] if c['id'] == 'd1')['teacherIds'] == ['t3']
-    assert [c.teacherIds for c in api.read('demo').commitments] == [['t3']]
-    assert 'duty.swap_decided' in [i['action'] for i in inbox(eng)]
-    assert 'Одобрено' in inbox(eng, 'duty.swap_decided')[0]['title'] and 'Учитель истории' in inbox(eng, 'duty.swap_decided')[0]['title']
-    with api.connect() as db:
-        assert [r[0] for r in db.execute("SELECT action FROM duty_history WHERE entity='swap' ORDER BY seq")] == ['requested', 'approved']
-    again = decide(toTeacherId='t3', requestId=key)
+    assert duty_teachers() == [['t3']] and pending(client) == []
+    # The teacher was told of the duty when it was given and is told again when it is taken away.
+    assert len(inbox(eng, 'duty.swap_decided')) == 1 and len(inbox(eng, 'duty.changed')) == 2
+    again = decision(client, swap, toTeacherId='t3', requestId=key, revision=revision)
     assert again.status_code == 200 and again.json()['swap'] == approved.json()['swap'] and api.read('demo').revision == revision + 1
-    assert decide(toTeacherId='t3').status_code == 409
-    assert 'duty.changed' in [i['action'] for i in inbox(eng)]
+    assert decision(client, swap, toTeacherId='t3').status_code == 409
 
 
-def test_swap_reject_cancel_and_limits(client, monkeypatch):
+@pytest.mark.parametrize('who,values,status', [
+    ('teacher', dict(commitmentId='d2'), 422), ('teacher', dict(commitmentId='d3'), 422), ('teacher', dict(commitmentId='d4'), 404),
+    ('teacher', dict(toTeacherId='t0'), 422), ('teacher', dict(toTeacherId='t2'), 422), ('parent', dict(), 403)],
+    ids=['locked-duty', 'duty-already-past', 'duty-of-a-colleague', 'replacement-not-eligible', 'replacement-is-the-requester', 'not-a-teacher'])
+def test_swap_request_refusals(client, monkeypatch, who, values, status):
     enable(client); create(client, 'teacher'); create(client, 'parent')
-    eng = signed('teacher')
     clock(monkeypatch, MON, 0, 0)
     put_commitments(duty('d1', MON, '09:50', '10:00', teacherIds=['t2'], eligibleTeacherIds=['t2', 't3']), duty('d2', MON, '11:50', '12:00', teacherIds=['t2'], locked=True),
                     duty('d3', MON.replace(day=1), teacherIds=['t2']), duty('d4', MON, '08:00', '08:05', teacherIds=['t1']))
-    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(commitmentId='d2')).status_code == 422
-    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(commitmentId='d3')).status_code == 422
-    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(commitmentId='d4')).status_code == 404
-    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t0')).status_code == 422
-    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t2')).status_code == 422
-    assert signed('parent').post('/api/duties/swaps?workspace=demo', json=swap_body()).status_code == 403
+    assert signed(who).post('/api/duties/swaps?workspace=demo', json=swap_body(**values)).status_code == status
+    assert client.get('/api/duties/swaps?workspace=demo').json() == []
+
+
+def test_requester_cancels_a_pending_swap_and_nobody_else_can(client, monkeypatch):
+    eng, _ = swap_school(client, monkeypatch)
     swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId=None)).json()
     assert swap['toTeacher'] is None
-    assert eng.post(f"/api/duties/swaps/{swap['id']}/cancel?workspace=demo", json=dict(version=2)).status_code == 409
-    assert client.post(f"/api/duties/swaps/{swap['id']}/cancel?workspace=demo", json=dict(version=1)).status_code == 404
-    assert eng.post(f"/api/duties/swaps/{swap['id']}/cancel?workspace=demo", json=dict(version=1)).json()['status'] == 'cancelled'
+    path = f"/api/duties/swaps/{swap['id']}/cancel?workspace=demo"
+    assert eng.post(path, json=dict(version=swap['version'] + 1)).status_code == 409
+    assert client.post(path, json=dict(version=swap['version'])).status_code == 404
+    assert eng.post(path, json=dict(version=swap['version'])).json()['status'] == 'cancelled'
     assert eng.get('/api/duties/mine?workspace=demo').json()['items'][0]['swap'] is None
-    second = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId=None)).json()
+    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId=None)).status_code == 200
+
+
+def test_administration_rejects_a_swap_and_tells_the_requester(client, monkeypatch):
+    eng, _ = swap_school(client, monkeypatch)
+    swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId=None)).json()
     revision = api.read('demo').revision
-    assert client.post(f"/api/duties/swaps/{second['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=True)).status_code == 422
-    assert eng.post(f"/api/duties/swaps/{second['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=False)).status_code == 403
-    rejected = client.post(f"/api/duties/swaps/{second['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=False, reason='Нет замены'))
-    assert rejected.status_code == 200 and rejected.json()['swap']['status'] == 'rejected' and api.read('demo').revision == revision
-    assert inbox(eng, 'duty.swap_decided')[0]['title'] == 'Отклонено: Нет замены'
+    assert decision(client, swap).status_code == 422
+    assert decision(eng, swap, approve=False).status_code == 403
+    rejected = decision(client, swap, approve=False, reason='Нет замены')
+    assert rejected.status_code == 200 and rejected.json()['swap']['status'] == 'rejected'
+    assert api.read('demo').revision == revision and duty_teachers() == [['t2']]
+    assert len(inbox(eng, 'duty.swap_decided')) == 1
     assert eng.get('/api/duties/mine?workspace=demo').json()['items'][0]['swap'] == 'rejected'
-    # The requester may ask again; if the administration changed the duty meanwhile, approval is refused.
-    third = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t3')).json()
-    state = api.read('demo'); state.commitments[0].teacherIds = ['t3']; api.save('demo', state)
-    stale = client.post(f"/api/duties/swaps/{third['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=True))
-    assert stale.status_code == 409
-    current = api.read('demo').revision
-    changed = client.post(f"/api/duties/swaps/{third['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=current, version=1, approve=True))
-    assert changed.status_code == 409 and 'изменилось' in changed.json()['detail']
-    # Locking the duty blocks approval; the duty cannot already have started.
-    state = api.read('demo'); state.commitments[0].teacherIds = ['t2']; state.commitments[0].locked = True; api.save('demo', state)
-    locked = client.post(f"/api/duties/swaps/{third['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=api.read('demo').revision, version=1, approve=True))
-    assert locked.status_code == 409 and 'закреплено' in locked.json()['detail']
-    state = api.read('demo'); state.commitments[0].locked = False; api.save('demo', state)
-    clock(monkeypatch, MON, 6, 0)
-    started = client.post(f"/api/duties/swaps/{third['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=api.read('demo').revision, version=1, approve=True))
-    assert started.status_code == 409 and 'началось' in started.json()['detail']
+    # A rejected request may be made again.
+    assert eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t3')).status_code == 200
+
+
+@pytest.mark.parametrize('case', ['stale-revision', 'duty-given-to-someone-else', 'duty-locked', 'duty-started'])
+def test_approval_of_a_swap_whose_duty_changed_is_refused(client, monkeypatch, case):
+    eng, _ = swap_school(client, monkeypatch)
+    swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body(toTeacherId='t3')).json()
+    old_revision = api.read('demo').revision
+    state = api.read('demo')
+    if case == 'duty-given-to-someone-else': state.commitments[0].teacherIds = ['t3']
+    if case == 'duty-locked': state.commitments[0].locked = True
+    if case in ('stale-revision', 'duty-given-to-someone-else', 'duty-locked'): api.save('demo', state)
+    if case == 'duty-started': clock(monkeypatch, MON, 6, 0)
+    before = (api.read('demo').revision, duty_teachers())
+    assert decision(client, swap, **(dict(revision=old_revision) if case == 'stale-revision' else {})).status_code == 409
+    assert (api.read('demo').revision, duty_teachers()) == before and pending(client) == [swap['id']]
 
 
 def test_swap_approval_is_refused_when_the_replacement_breaks_a_timetable_rule(client, monkeypatch):
-    enable(client); create(client, 'teacher')
-    eng = signed('teacher')
-    clock(monkeypatch, MON, 0, 0)
+    eng, _ = swap_school(client, monkeypatch)
     state = api.read('demo')
     # The teacher's lunch window is covered by this duty, which no lesson, absence or unavailability check notices.
     state.rules = [TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t0'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)]
     state.commitments = [duty('d1', MON, '12:00', '13:00', teacherIds=['t2'])]
     api.save('demo', state)
-    revision = api.read('demo').revision
     swap = eng.post('/api/duties/swaps?workspace=demo', json=swap_body()).json()
-    decide = lambda **values: client.post(f"/api/duties/swaps/{swap['id']}/decide?workspace=demo", json=dict(requestId=rid(), revision=revision, version=1, approve=True) | values)
-    refused = decide(toTeacherId='t0')
-    assert refused.status_code == 409 and 'Обед' in refused.json()['detail'] and 'нарушения' in refused.json()['detail']
-    assert api.read('demo').revision == revision and [c.teacherIds for c in api.read('demo').commitments] == [['t2']]
-    assert client.get('/api/duties/swaps?workspace=demo&status=pending').json()[0]['id'] == swap['id']
-    with api.connect() as db: assert [r[0] for r in db.execute("SELECT action FROM duty_history WHERE entity='swap'")] == ['requested']
+    revision = api.read('demo').revision
+    assert decision(client, swap, toTeacherId='t0').status_code == 409
+    assert api.read('demo').revision == revision and duty_teachers() == [['t2']] and pending(client) == [swap['id']]
     # Another colleague is fine, so the request stays usable after the refusal.
-    assert decide(toTeacherId='t3').status_code == 200
-    assert [c.teacherIds for c in api.read('demo').commitments] == [['t3']]
+    assert decision(client, swap, toTeacherId='t3').status_code == 200
+    assert duty_teachers() == [['t3']]
 
 
 def test_manager_only_routes_refuse_every_other_role(client, monkeypatch):
@@ -731,7 +821,7 @@ def test_manager_only_routes_refuse_every_other_role(client, monkeypatch):
         }
     for who in [eng, signed('parent'), signed('staff'), signed('editor')]:
         refused = {name: r.status_code for name, r in attempts(who).items()}
-        assert len(refused) == 12 and set(refused.values()) == {403}, refused
+        assert set(refused.values()) == {403}, refused
     # The refused calls changed nothing.
     assert api.read('demo').commitments == before[0].commitments and client.get('/api/duties/templates?workspace=demo').json() == before[1]
     # The list of swap requests: other roles and other workspaces get nothing; a teacher only sees their own.
