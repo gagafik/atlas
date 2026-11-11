@@ -195,14 +195,16 @@ def test_evidence_with_a_wrong_type_is_refused(client,content,name):
 
 
 def test_unsent_evidence_expires_but_attached_evidence_stays(client,monkeypatch):
+    moment=datetime(2026,8,17,9,tzinfo=timezone.utc);monkeypatch.setattr(absence_files,'now',lambda:moment)
     _,_,parent,teacher=setup(client);payload=body();attached=upload(parent,payload).json();send(parent,payload|dict(fileIds=[attached['id']]))
     draft=body();pending=upload(parent,draft).json()
     unsent=lambda:[f['id'] for f in parent.get('/api/journal/absence-files',params=dict(workspace='demo',studentId='s1',draftId=draft['requestId'])).json()['items']]
     assert unsent()==[pending['id']]
-    clock=absence_files.now;monkeypatch.setattr(absence_files,'now',lambda:clock()+timedelta(days=2))
+    monkeypatch.setattr(absence_files,'now',lambda:moment+timedelta(days=2))
     # Any later upload clears the drafts nobody sent.
     assert upload(parent,body()).status_code==200
-    assert unsent()==[] and teacher.get(file_url(attached['id'])).content==b'Private evidence'
+    assert unsent()==[] and parent.get(file_url(pending['id'])).status_code==404
+    assert teacher.get(file_url(attached['id'])).content==b'Private evidence'
 
 
 def test_evidence_is_refused_when_the_storage_is_full(client,monkeypatch):
