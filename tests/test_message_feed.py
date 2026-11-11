@@ -176,26 +176,33 @@ def test_likes_idempotent_and_anonymous(client):
     assert item(teacher,id)['status']=='withdrawn' and not item(teacher,id)['canLike']
 
 
-def test_reply_idempotency_and_old_database(client,tmp_path):
-    people=setup(client);teacher=signed('teacher');parent=signed('parent')
+def test_reply_is_idempotent_by_request_id(client):
+    setup(client);teacher=signed('teacher');parent=signed('parent')
     id=announce(teacher,replies='author');request=str(uuid4())
     first=parent.post(url('threads/'+id+'/replies'),json=dict(requestId=request,text='Один раз.'))
     again=parent.post(url('threads/'+id+'/replies'),json=dict(requestId=request,text='Один раз.'))
     assert first.status_code==200 and again.json()==first.json() and len(replies(parent,id))==1
     assert parent.post(url('threads/'+id+'/replies'),json=dict(requestId=request,text='Другое.')).status_code==409
+
+
+def test_old_posts_table_gains_reply_columns_and_keeps_rows(tmp_path):
     import sqlite3
     from contextlib import closing
+    from seeding import insert_row,read_row
     with closing(sqlite3.connect(tmp_path/'old.db')) as db:
         db.execute('CREATE TABLE message_posts (id INTEGER PRIMARY KEY AUTOINCREMENT,thread_id TEXT,author_id TEXT,author_name TEXT,created TEXT,body TEXT)')
-        db.execute("INSERT INTO message_posts (thread_id,author_id,author_name,created,body) VALUES ('t','u','Имя','2026-01-01','Старое')")
+        insert_row(db,'message_posts',thread_id='t',author_id='u',author_name='Имя',created='2026-01-01',body='Старое')
         api.messages.tables(db);api.messages.tables(db)
-        assert {'reply_to','reply_public'}<={r[1] for r in db.execute('PRAGMA table_info(message_posts)')}
-        assert db.execute('SELECT thread_id,body,reply_to,reply_public FROM message_posts').fetchall()==[('t','Старое',None,None)]
+        old=read_row(db,'message_posts',thread_id='t')
+        assert (old['body'],old['reply_to'],old['reply_public'])==('Старое',None,None)
 
 
-def test_replies_are_rate_limited_like_posts(client):
+def test_replies_are_rate_limited_like_posts(client,monkeypatch):
+    fixed=now();monkeypatch.setattr('backend.messages.now',lambda:fixed)
     people=setup(client);teacher=signed('teacher');parent=signed('parent')
     id=announce(teacher,replies='author')
-    with api.connect() as db:
-        for i in range(30):db.execute('INSERT INTO message_posts (thread_id,author_id,author_name,created,body,reply_to) VALUES (?,?,?,?,?,1)',(id,people['parent']['id'],'Родитель',now().isoformat(),str(i)))
-    assert respond(parent,id,'Ещё').status_code==429
+    codes=[]
+    for i in range(300):
+        codes.append(respond(parent,id,f'Ответ {i}').status_code)
+        if codes[-1]==429:break
+    assert codes[0]==200 and codes[-1]==429 and set(codes[:-1])=={200}
