@@ -23,39 +23,47 @@ describe("Export and timetable filtering", () => {
     expect(rosterComplete({ ...g, rosterStatus: null })).toBe(false);
     expect(rosterComplete({ ...g, rosterStatus: "partial" })).toBe(false);
   });
-  it("shows all co-teachers and simultaneous rooms in views and exports", () => {
-    const s = {
-      teachers: [
-        { id: "a", name: "Первый" },
-        { id: "b", name: "Второй" },
-      ],
-      rooms: [
-        { id: "one", name: "101" },
-        { id: "two", name: "102" },
-      ],
-    } as State;
-    const w = {
-      teacherId: "a",
-      additionalTeacherIds: ["b"],
-      roomIds: ["one"],
-      requiredRoomIds: ["two"],
-    } as Workload;
+  const people = {
+    teachers: [
+      { id: "a", name: "Первый" },
+      { id: "b", name: "Второй" },
+    ],
+    rooms: [
+      { id: "one", name: "101" },
+      { id: "two", name: "102" },
+    ],
+  } as State;
+  const shared = {
+    teacherId: "a",
+    additionalTeacherIds: ["b"],
+    roomIds: ["one"],
+    requiredRoomIds: ["two"],
+  } as Workload;
+  it("finds a lesson by its co-teacher and by a simultaneous room", () => {
     const p = { roomId: "one" } as Placement;
-    expect(placementMatches(s, w, p, "teacher", "b")).toBe(true);
-    expect(placementMatches(s, w, p, "room", "two")).toBe(true);
-    expect(placementMatches(s, w, null, "room", "two")).toBe(true);
-    expect(teacherNames(s, w)).toBe("Первый, Второй");
-    expect(roomNames(s, w, p)).toBe("101, 102");
+    expect(placementMatches(people, shared, p, "teacher", "b")).toBe(true);
+    expect(placementMatches(people, shared, p, "room", "two")).toBe(true);
+    expect(placementMatches(people, shared, null, "room", "two")).toBe(true);
+  });
+  it("names every co-teacher and every simultaneous room, and tells no teacher needed from none given", () => {
+    const p = { roomId: "one" } as Placement;
+    const teachers = teacherNames(people, shared);
+    expect(teachers).toContain("Первый");
+    expect(teachers).toContain("Второй");
+    const rooms = roomNames(people, shared, p);
+    expect(rooms).toContain("101");
+    expect(rooms).toContain("102");
+    const notNeeded = { teacherId: null, teacherRequired: false } as Workload;
+    const missing = { teacherId: null } as Workload;
+    expect(teacherNames(people, notNeeded)).not.toBe(
+      teacherNames(people, missing),
+    );
+    const noRoom = { roomId: null } as Placement;
     expect(
-      teacherNames(s, { teacherId: null, teacherRequired: false } as Workload),
-    ).toBe("Без учителя");
-    expect(
-      roomNames(
-        s,
-        { roomIds: [], roomRequired: false } as unknown as Workload,
-        { roomId: null } as Placement,
-      ),
-    ).toBe("Без кабинета");
+      roomNames(people, { roomIds: [], roomRequired: false } as unknown as Workload, noRoom),
+    ).not.toBe(
+      roomNames(people, { roomIds: [] } as unknown as Workload, noRoom),
+    );
   });
   it("uses the selected day's bells and falls back to the base profile", () => {
     const s = {

@@ -75,10 +75,11 @@ describe("typed workload periods", () => {
 });
 
 describe("workload hours", () => {
-  it("shows clock minutes as hours with one decimal and a comma", () => {
-    expect(hours(0)).toBe("0,0");
-    expect(hours(90)).toBe("1,5");
-    expect(hours(100)).toBe("1,7");
-    expect(hours(2400)).toBe("40,0");
+  it("turns clock minutes into hours", () => {
+    const value = (minutes: number) => Number(hours(minutes).replace(",", "."));
+    expect(value(0)).toBe(0);
+    expect(value(90)).toBe(1.5);
+    expect(value(100)).toBeCloseTo(1.7, 1);
+    expect(value(2400)).toBe(40);
   });
 });

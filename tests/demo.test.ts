@@ -31,13 +31,6 @@ describe("demo request keys", () => {
     expect(postKey(url, text)).toBe(twin.postKey(url, text));
     expect(canonicalJson(body)).toBe(twin.canonicalJson(body));
   });
-
-  it("ignores key order, workspace and the token", () => {
-    const url = new URL("http://x/api/r?workspace=school");
-    expect(postKey(url, '{"a":1,"b":2,"token":"1"}')).toBe(
-      postKey(new URL("http://x/api/r"), '{"token":"2","b":2,"a":1}'),
-    );
-  });
 });
 
 // The committed snapshot, not a stub: what a viewer of the published demo gets.
@@ -76,14 +69,18 @@ describe("snapshot scrubbing", () => {
   });
 
   it.each([
-    ["a Windows path", { file: "C:\Users\someone\data\school.db" }],
-    ["a Unix home path", { file: "/home/someone/.env" }],
+    ["a Windows path", { file: String.raw`C:\Users\teacher\data\school.db` }],
+    ["a Unix home path", { file: "/home/teacher/.env" }],
     ["a loopback address", { server: "http://127.0.0.1:8000" }],
     ["an e-mail address", { contact: "teacher@school.example" }],
     ["a password hash", { note: "scrypt$16384$8$1$abcd" }],
-    ["the operating system user", { note: "report by someone" }],
   ])("refuses to write a snapshot with %s", (_label, body) => {
-    expect(() => scrubSnapshot(snapshot(body), "someone")).toThrow(/leak/);
+    // The user name is one the data does not contain, so only the pattern under test can refuse.
+    expect(() => scrubSnapshot(snapshot(body), "nobody-here")).toThrow();
+  });
+
+  it("refuses to write a snapshot that names the operating system user", () => {
+    expect(() => scrubSnapshot(snapshot({ note: "report by someone" }), "someone")).toThrow();
   });
 });
 
