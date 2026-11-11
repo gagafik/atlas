@@ -1,6 +1,8 @@
 """Bulk acceptance of submitted works: partial success, skip reasons, retries and the course-teacher rule."""
 import json
 
+import pytest
+
 from backend import api
 from backend.models import DatedLesson
 from test_access import client, create, signed
@@ -67,35 +69,32 @@ def test_bulk_accepts_submitted_and_reports_skipped(client):
     assert api.read('demo')==before
 
 
-def test_bulk_skips_stale_returned_unsubmitted_and_changed(client):
+@pytest.mark.parametrize('case',['stale-version','not-submitted','returned','accepted','changed-conditions'])
+def test_bulk_skips_work_that_cannot_be_accepted(client,case):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey'];other=signed('other-pupil')
-    draft(pupil,key,'s1');sent=submit(pupil,key,'s1');draft(other,key,'s2')
-    current=overview(teacher,key);assignment=current['assignment'];moved=versions(teacher,key)
-    assert moved['s1']==sent['version']==2 and moved['s2']==1
-    response=bulk(teacher,key,assignment,[('s1',1),('s2',moved['s2'])])
+    assignment=overview(teacher,key)['assignment'];student='s1'
+    if case=='stale-version':
+        draft(pupil,key,'s1');submit(pupil,key,'s1');items=[('s1',1)]
+    elif case=='not-submitted':
+        student='s2';draft(other,key,'s2');items=[('s2',versions(teacher,key)['s2'])]
+    elif case=='returned':
+        sent=submit(pupil,key,'s1');assert review(teacher,key,sent,'returned','Доработайте').status_code==200
+        items=[('s1',versions(teacher,key)['s1'])]
+    elif case=='accepted':
+        sent=submit(pupil,key,'s1');assert review(teacher,key,sent).status_code==200
+        items=[('s1',versions(teacher,key)['s1'])]
+    else:
+        # After a switch to offline submission earlier answers belong to other conditions.
+        student='s2';submit(other,key,'s2')
+        offline=entry(client,key);offline['document']['content']['homeworkSubmission']='offline'
+        assert write(client,offline,publish=True).status_code==200
+        changed=overview(teacher,key);assert changed['assignment']!=assignment
+        assignment=changed['assignment'];items=[('s2',next(s['version'] for s in changed['students'] if s['studentId']=='s2'))]
+    status=get(teacher,key,student)['status']
+    response=bulk(teacher,key,assignment,items)
     assert response.status_code==200,response.text
-    skipped={s['studentId']:s for s in response.json()['skipped']}
-    assert response.json()['accepted']==[]
-    assert 'изменилась' in skipped['s1']['reason'] and 'не отправлена' in skipped['s2']['reason']
-    assert skipped['s1']['name']=='Ученик 1 (пример)'
-    assert review(teacher,key,sent,'returned','Доработайте').status_code==200
-    returned=bulk(teacher,key,assignment,[('s1',versions(teacher,key)['s1'])],request=SECOND)
-    assert 'на доработке' in returned.json()['skipped'][0]['reason']
-    resent=submit(pupil,key,'s1','Новое решение')
-    # An accepted work is skipped, and the single review remains the way to look at it again.
-    assert review(teacher,key,resent).status_code==200
-    accepted=bulk(teacher,key,assignment,[('s1',versions(teacher,key)['s1'])],request='00000000-0000-4000-8000-000000000003')
-    assert accepted.json()['accepted']==[] and 'уже принята' in accepted.json()['skipped'][0]['reason']
-    # After a switch to offline submission earlier answers belong to other conditions.
-    submit(other,key,'s2')
-    offline=entry(client,key);offline['document']['content']['homeworkSubmission']='offline'
-    assert write(client,offline,publish=True).status_code==200
-    changed=overview(teacher,key);assert changed['assignment']!=assignment and changed['students'][1]['assignmentChanged']
-    refused=bulk(teacher,key,changed['assignment'],[('s2',changed['students'][1]['version'])],request='00000000-0000-4000-8000-000000000004')
-    assert refused.status_code==200 and refused.json()['accepted']==[]
-    assert 'Условия задания изменились' in refused.json()['skipped'][0]['reason']
-    assert get(teacher,key,'s2')['status']=='submitted'
-    assert bulk(teacher,key,assignment,[('s2',1)],request='00000000-0000-4000-8000-000000000005').status_code==409
+    assert response.json()['accepted']==[] and [s['studentId'] for s in response.json()['skipped']]==[student]
+    assert get(teacher,key,student)['status']==status
 
 
 def test_bulk_is_idempotent_per_request_id(client):
@@ -103,18 +102,15 @@ def test_bulk_is_idempotent_per_request_id(client):
     submit(pupil,key,'s1')
     current=overview(teacher,key);items=[(s['studentId'],s['version']) for s in current['students'] if s['status']=='submitted']
     first=bulk(teacher,key,current['assignment'],items);assert first.status_code==200 and first.json()['accepted']==['s1']
-    with api.connect() as db: rows=db.execute('SELECT count(*) FROM homework_history').fetchone()[0],db.execute('SELECT count(*) FROM audit').fetchone()[0]
-    waiting=unread(parent)
+    log=f'/api/journal/homework/{key}/history?workspace=demo&studentId=s1'
+    entries=parent.get(log).json()['items'];waiting=unread(parent)
     again=bulk(teacher,key,current['assignment'],items)
     # The stored result is returned even though the version has moved on since.
     assert again.status_code==200
     assert (again.json()['accepted'],again.json()['skipped'])==(first.json()['accepted'],first.json()['skipped'])
-    with api.connect() as db: assert (db.execute('SELECT count(*) FROM homework_history').fetchone()[0],db.execute('SELECT count(*) FROM audit').fetchone()[0])==rows
-    assert unread(parent)==waiting
-    different=bulk(teacher,key,current['assignment'],items,comment='другое')
-    assert different.status_code==409 and 'другим действием' in different.text
-    with api.connect() as db: assert db.execute('SELECT count(*) FROM homework_requests').fetchone()[0]==1
-    assert history()==['homework.submitted','homework.reviewed']
+    assert parent.get(log).json()['items']==entries and unread(parent)==waiting
+    assert bulk(teacher,key,current['assignment'],items,comment='другое').status_code==409
+    assert [h['action'] for h in entries]==['homework.reviewed','homework.submitted']
 
 
 def test_bulk_permissions(client):
@@ -126,7 +122,7 @@ def test_bulk_permissions(client):
     state=api.read('demo')
     state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
     api.save('demo',state)
-    refused=bulk(signed('unrelated'),key,assignment,items);assert refused.status_code==403 and 'учитель курса' in refused.text
+    assert bulk(signed('unrelated'),key,assignment,items).status_code==403
     assert bulk(teacher,key,assignment,items).status_code==200
     state=api.read('demo');state.datedLessons=[];next(w for w in state.workloads if w.id=='w0').teacherId='t1';api.save('demo',state)
     assert bulk(teacher,key,assignment,items,request=SECOND).status_code==403

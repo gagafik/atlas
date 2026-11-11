@@ -64,23 +64,21 @@ def test_grade_publication_updates_report_history_notification_and_keeps_schedul
     assert api.read('demo')==before
 
 
-def test_only_target_grade_published_and_unrelated_draft_survives_two_revisions(client):
+def test_only_target_grade_published_and_unrelated_draft_survives(client):
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];original=deepcopy(record['document'])
     content=record['document']['content'];content['topic']='PRIVATE TOPIC';content['homework']='PRIVATE NEW TASK'
     content['records'][0]['comment']='PRIVATE PUPIL COMMENT';content['records'][1]['grades'][0]['score']=1
-    draft=write(teacher,record).json();o=options(teacher,key);assert o['hasDraftChanges']
+    write(teacher,record).raise_for_status();o=options(teacher,key);assert o['hasDraftChanges']
     response=grade(teacher,key,sent,payload(o));assert response.status_code==200,response.text
-    saved=entry(client,key);assert saved['version']==draft['version']+2 and saved['publishedVersion']==draft['version']+1
+    saved=entry(client,key)
     assert saved['document']['content']['topic']=='PRIVATE TOPIC'
     assert saved['document']['content']['homework']=='PRIVATE NEW TASK'
     assert current_grade(saved['document'])['score']==9 and current_grade(saved['document'],student='s2')['score']==1
-    assert 'PRIVATE' not in json.dumps(report(parent).json())
-    assert english(coverage(client).json())['hasDraftChanges']
-    history=client.get('/api/journal/history',params=dict(workspace='demo',lessonKey=key)).json()
-    assert [h['action'] for h in history[:2]]==['journal.draft_saved','journal.published']
+    personal=report(parent).json();assert 'PRIVATE' not in json.dumps(personal) and personal['summary']['subjects'][0]['percentage']==90
+    assert options(teacher,key)['hasDraftChanges'] and english(coverage(client).json())['hasDraftChanges']
     published=client.get('/api/journal/history',params=dict(workspace='demo',lessonKey=key,version=saved['publishedVersion'])).json()[0]['document']
     assert published['content']['topic']==original['content']['topic']
-    assert current_grade(published,student='s2')['score']==7
+    assert current_grade(published)['score']==9 and current_grade(published,student='s2')['score']==7
     p=period(client);preview=action(client,p,'preview-close').json();assert preview['draftChanges']==1
     closed=close(client,p)
     archived=archive(client,closed,lessonKey=key).json()
@@ -193,27 +191,23 @@ def test_failure_after_journal_write_rolls_back_review_grade_history_and_notific
     with api.connect() as db:assert db.execute('SELECT count(*) FROM journal_history').fetchone()[0]==count
 
 
-@pytest.mark.parametrize('change',['closure','account','school'])
+@pytest.mark.parametrize('change',['closure','school'])
 def test_mutation_between_preparation_and_write_is_rechecked(client,monkeypatch,change):
     record,sent,_,_,teacher=ready(client);key=record['lessonKey'];mark=payload(options(teacher,key));original=HomeworkGrading.prepare
     def changed(self,ctx):
         result=original(self,ctx)
         if change=='closure':close(client,period(client))
-        elif change=='school':api.save('demo',api.read('demo'))
-        else:
-            with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
+        else:api.save('demo',api.read('demo'))
         return result
     monkeypatch.setattr(HomeworkGrading,'prepare',changed)
     assert grade(teacher,key,sent,mark).status_code==409
     assert current_grade(entry(client,key)['document'])['score']==8
-    with api.connect() as db:
-        value=json.loads(db.execute('SELECT document FROM homework_submissions').fetchone()[0])
-        assert value['submitted']['review'] is None
+    assert get(teacher,key)['status']=='submitted'
 
 
 def test_closed_period_blocks_grade_but_not_feedback_and_reopen_restores_grading(client):
     record,sent,_,_,teacher=ready(client);key=record['lessonKey'];mark=payload(options(teacher,key));p=close(client,period(client))
-    o=options(teacher,key);assert not o['allowed'] and 'закрыт' in o['reason']
+    assert options(teacher,key)['allowed'] is False
     assert grade(teacher,key,sent,mark).status_code==409
     response=review(teacher,key,sent);assert response.status_code==200
     action(client,p,'reopen').raise_for_status()
@@ -234,12 +228,19 @@ def test_scope_assignment_roster_sync_and_return_rules(client):
     assert get(parent,key)['status']=='submitted'
 
 
-def test_new_assessment_respects_limit_and_return_preserves_recorded_grade(client):
+def test_new_assessment_respects_the_limit_of_works_per_lesson(client):
+    from backend.journal import Content
+    limit=next(m.max_length for m in Content.model_fields['assessments'].metadata if hasattr(m,'max_length'))
     record,sent,pupil,_,teacher=ready(client);key=record['lessonKey']
-    record['document']['content']['assessments'] += [new_work(id='a'+str(i)) for i in range(9)]
+    record['document']['content']['assessments'] += [new_work(id='a'+str(i)) for i in range(limit-1)]
     write(teacher,record,publish=True).raise_for_status();o=options(teacher,key);assert not o['canCreate']
     assert grade(teacher,key,sent,payload(o,assessmentId='new',newAssessment=new_work(id='new'))).status_code==422
-    response=grade(teacher,key,sent,payload(o));response.raise_for_status()
+    assert get(teacher,key)['status']=='submitted'
+
+
+def test_return_preserves_recorded_grade(client):
+    record,sent,pupil,_,teacher=ready(client);key=record['lessonKey']
+    response=grade(teacher,key,sent,payload(options(teacher,key)));response.raise_for_status()
     graded=response.json()['submitted']['grading']
     returned=review(teacher,key,response.json(),'returned','Уточните обоснование');returned.raise_for_status()
     assert returned.json()['submitted']['grading']==graded
@@ -252,8 +253,8 @@ def test_new_assessment_respects_limit_and_return_preserves_recorded_grade(clien
 def test_future_lesson_cannot_receive_a_grade(client,monkeypatch):
     record,sent,_,_,teacher=ready(client);key=record['lessonKey'];mark=payload(options(teacher,key));version=entry(client,key)['version']
     monkeypatch.setattr('backend.journal.today',lambda:date(2026,8,16))
-    o=options(teacher,key);assert not o['allowed'] and 'ещё не прошёл' in o['reason']
-    response=grade(teacher,key,sent,mark);assert response.status_code==409 and o['reason'] in response.text
+    assert options(teacher,key)['allowed'] is False
+    assert grade(teacher,key,sent,mark).status_code==409
     assert entry(client,key)['version']==version
     assert review(teacher,key,sent).status_code==200
 

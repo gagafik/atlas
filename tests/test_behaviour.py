@@ -75,7 +75,7 @@ def test_author_edit_keeps_history_and_praise_needs_no_acknowledgement(client):
     ok(note(t, ['s2']))
     item = staff_list(t)[0]
     edited = ok(t.post(url(f'notes/{item["id"]}/edit'), json=dict(version=item['version'], categoryId='help', text='Помог другу', reason='Точнее')))
-    assert edited['category'] == 'Помощь одноклассникам' and edited['version'] == 2
+    assert edited['categoryId'] == 'help' and edited['version'] == 2
     seen = ok(family(mother, 's2'))['items'][0]
     assert seen['text'] == 'Помог другу' and not seen['requireAck']
     assert mother.post(url(f'notes/{item["id"]}/acknowledge'), json=dict(version=seen['version'])).status_code == 409
@@ -126,34 +126,50 @@ def assign_class_teacher(client, account, cls='c-demo-a'):
                                                                        assignments={cls: [dict(accountId=account['id'], capabilities=['behaviour_notes'])]})))
 
 
-def test_approval_queue_publishes_numbered_letter_only_after_admin_decision(client):
-    enable(client); class_teacher = teacher(client, 'class', 't1'); guardian(client, 'mother', 's2')
+def pending_warning(client):
+    class_teacher = teacher(client, 'class', 't1'); guardian(client, 'mother', 's2')
     t, mother = signed('class'), signed('mother'); assign_class_teacher(client, class_teacher)
-    created = ok(note(t, ['s2'], 'performance-warning', 'Три неудовлетворительные работы'))
-    assert created['status'] == 'pending'
+    ok(note(t, ['s2'], 'performance-warning', 'Три неудовлетворительные работы'))
+    return t, mother, ok(client.get(url('queue')))['items'][0]
+
+
+def test_approval_queue_holds_a_remark_until_the_admin_decides(client):
+    enable(client)
+    t, mother, queued = pending_warning(client)
+    assert staff_list(t)[0]['status'] == 'pending'
     assert ok(family(mother, 's2'))['items'] == [] and mother.get('/api/notifications/inbox').json()['unread'] == 0
     assert client.get('/api/notifications/inbox').json()['unread'] == 1
-    queued = ok(client.get(url('queue')))['items']
-    assert len(queued) == 1 and queued[0]['canDecide'] and not queued[0]['letter']
-    assert t.post(url(f'notes/{queued[0]["id"]}/approve'), json=dict(version=queued[0]['version'])).status_code == 403
-    assert t.get(url(f'notes/{queued[0]["id"]}/letter')).status_code == 409
-    approved = ok(client.post(url(f'notes/{queued[0]["id"]}/approve'), json=dict(version=queued[0]['version'], reason='Согласовано')))
+    assert queued['canDecide'] and not queued['letter']
+    assert t.post(url(f'notes/{queued["id"]}/approve'), json=dict(version=queued['version'])).status_code == 403
+    assert t.get(url(f'notes/{queued["id"]}/letter')).status_code == 409
+    approved = ok(client.post(url(f'notes/{queued["id"]}/approve'), json=dict(version=queued['version'], reason='Согласовано')))
     assert approved['status'] == 'published' and approved['letterNumber'] == f'{today().year}-0001' and approved['approvedBy'] == 'Администратор'
     assert client.post(url(f'notes/{approved["id"]}/approve'), json=dict(version=approved['version'])).status_code == 409
-    seen = ok(family(mother, 's2'))['items'][0]
-    assert seen['requireAck'] and seen['letter'] and seen['levelTitle'] == 'Классный руководитель' and 'approvedBy' not in seen
-    letter = ok(mother.get(url(f'notes/{seen["id"]}/letter')))
-    assert letter['number'] == approved['letterNumber'] and letter['title'] == 'Предупреждение о неуспеваемости' and letter['student'] == 'Ученик 2 (пример)'
-    assert t.get('/api/notifications/inbox').json()['unread'] == 1
     mine = staff_list(t)[0]
     assert not mine['canChange'] and t.post(url(f'notes/{mine["id"]}/withdraw'), json=dict(version=mine['version'], reason='x')).status_code == 403
-    second = ok(note(t, ['s1'], 'performance-warning'))
-    pending = ok(client.get(url('queue')))['items'][0]
-    assert client.post(url(f'notes/{pending["id"]}/reject'), json=dict(version=pending['version'])).status_code == 422
-    rejected = ok(client.post(url(f'notes/{pending["id"]}/reject'), json=dict(version=pending['version'], reason='Недостаточно оснований')))
-    assert rejected['status'] == 'rejected' and rejected['decision'] == 'Недостаточно оснований' and second['ids'] == [pending['id']]
     actions = [h['action'] for h in ok(t.get(url(f'notes/{approved["id"]}/history')))['items']]
     assert actions == ['created', 'approved']
+
+
+def test_approved_remark_reaches_the_family_with_a_numbered_letter(client):
+    enable(client)
+    t, mother, queued = pending_warning(client)
+    approved = ok(client.post(url(f'notes/{queued["id"]}/approve'), json=dict(version=queued['version'], reason='Согласовано')))
+    seen = ok(family(mother, 's2'))['items'][0]
+    assert seen['requireAck'] and seen['letter'] and seen['level'] == 'class_teacher' and 'approvedBy' not in seen
+    letter = ok(mother.get(url(f'notes/{seen["id"]}/letter')))
+    title = next(c['title'] for c in ok(client.get(url('options')))['categories'] if c['id'] == 'performance-warning')
+    assert letter['number'] == approved['letterNumber'] and letter['title'] == title and letter['student'] == 'Ученик 2 (пример)'
+    assert t.get('/api/notifications/inbox').json()['unread'] == 1
+
+
+def test_rejecting_a_remark_requires_a_reason(client):
+    enable(client)
+    t, mother, queued = pending_warning(client)
+    assert client.post(url(f'notes/{queued["id"]}/reject'), json=dict(version=queued['version'])).status_code == 422
+    rejected = ok(client.post(url(f'notes/{queued["id"]}/reject'), json=dict(version=queued['version'], reason='Недостаточно оснований')))
+    assert rejected['status'] == 'rejected' and rejected['decision'] == 'Недостаточно оснований'
+    assert ok(family(mother, 's2'))['items'] == []
 
 
 def test_measure_levels_hidden_notes_and_teacher_limits(client):

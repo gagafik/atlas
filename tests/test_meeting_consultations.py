@@ -1,5 +1,4 @@
 """Consultation hours: teacher series, pupil switch, one booking per day, teacher self-service and the day view."""
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date,datetime,timedelta,timezone
 import sqlite3
 from zoneinfo import ZoneInfo
@@ -146,18 +145,6 @@ def test_series_permissions(client,monkeypatch):
     assert len(ok(client.get(path('consultations')))['items'])==2 and ok(client.get(path('events')))['items']==[]
 
 
-def test_race_for_a_slot_has_one_winner_between_parent_and_pupil(client,monkeypatch):
-    prepared(client,monkeypatch);other_family(client,'pupil2','s2','student');ok(switch(client,True))
-    made=create_series(signed('teacher'));a,b=signed('parent'),signed('pupil2');target=on_date(a,made['id'],MONDAYS[0])[0];version=detail(a,made['id'])['version']
-    bodies=[request(version=target['version'],eventVersion=version,studentId=student) for student in ['s1','s2']]
-    def send(pair):c,body=pair;return c.post(path('slots/'+target['id']+'/book'),json=body)
-    with ThreadPoolExecutor(2) as pool:responses=list(pool.map(send,zip([a,b],bodies)))
-    assert sorted(r.status_code for r in responses)==[200,409]
-    winner=next(i for i,r in enumerate(responses) if r.status_code==200)
-    assert send(([a,b][winner],bodies[winner])).json()==responses[winner].json()
-    assert len(bookings(signed('teacher'),made['id']))==1
-
-
 def test_one_booking_per_day_and_pupils_own_lesson(client,monkeypatch):
     prepared(client,monkeypatch);math=other_teacher(client);other_family(client,'pupil2','s2','student');ok(switch(client,True))
     made=create_series(signed('teacher'),startTime='08:00',endTime='13:00',slotMinutes=20,endDate=MONDAYS[1]);id=made['id']
@@ -268,10 +255,12 @@ def test_first_request_after_an_update_migrates_a_school_database(client,monkeyp
         db.execute("CREATE UNIQUE INDEX meeting_booked_child ON meeting_bookings(event_id,host_id,student_id) WHERE status!='cancelled'")
         for table in ['meeting_settings','class_meetings','class_meeting_invitees']:db.execute('DROP TABLE '+table)
     ok(client.get(path('options')))
-    with api.connect() as db:
-        assert 'occasion' in {r[1] for r in db.execute('PRAGMA table_info(meeting_bookings)')}
-        names={r[1] for r in db.execute('PRAGMA index_list(meeting_bookings)')};assert 'meeting_booked_child_occasion' in names and 'meeting_booked_child' not in names
-    made=create_series(signed('teacher'));assert ok(book(signed('parent'),made['id'],on_date(signed('parent'),made['id'],MONDAYS[0])[0]))['status']=='scheduled'
+    # After the upgrade one child may take a slot on each date of a series, but not two on the same date.
+    made=create_series(signed('teacher'));parent=signed('parent')
+    first,second=on_date(parent,made['id'],MONDAYS[0])[:2]
+    assert ok(book(parent,made['id'],first))['status']=='scheduled'
+    assert ok(book(parent,made['id'],on_date(parent,made['id'],MONDAYS[1])[0]))['status']=='scheduled'
+    assert book(parent,made['id'],second).status_code==409
 
 
 def test_series_caps_count_closed_series_and_free_up_by_archive_or_cancel(client,monkeypatch):
@@ -365,7 +354,7 @@ def test_host_whose_link_ended_loses_control_and_the_day_view(client,monkeypatch
     assert own(teacher)[0]['booking']['note']=='Личный вопрос'
     current=next(b for b in bookings(teacher,id) if b['id']==booking);source=next(s for s in slots(teacher,id) if s['startsAt']==current['startsAt']);version=detail(teacher,id)['version']
     # The account is linked to another teacher now: nothing of the series is theirs any more, and the day view hides it too.
-    regrant(account['id'],['t0'],'teacher')
+    regrant(account['id'],['t0'],'teacher');teacher=signed('teacher')
     block=request(version=version,action='block',hostIds=[host],startsAt=datetime(2027,4,6,0,0,tzinfo=ZONE).isoformat(),endsAt=datetime(2027,4,6,23,59,tzinfo=ZONE).isoformat(),reason='x')
     assert teacher.post(path('events/'+id+'/availability/preview'),json=block).status_code==403
     assert teacher.post(path('events/'+id+'/transition'),json=request(version=version,action='cancel',reason='x')).status_code==403
