@@ -324,6 +324,10 @@ def test_override_applies_to_duty_allocation():
     hard = TimetableRule(id='hard', name='Занят', kind='availability', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], unavailable=[dict(day=0, start='09:00', end='10:00')])
     assert run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50')]), 'a')['status'] == 'infeasible'
     assert run(ab_state(rules=[hard], commitments=[duty('a', '09:30', '09:50', next_week)]), 'a')['status'] == 'success'
+    # The lunch rule of that weekday also applies: two short duties leave no half hour free at noon.
+    lunch = TimetableRule(id='lunch', name='Обед', kind='day_shape', scope='teacher', targetIds=['t1'], days=[0], cycleIds=['B'], lunchStart='12:00', lunchEnd='13:00', lunchMinutes=30)
+    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20'), duty('b', '12:40', '13:00')]), 'a', 'b')['status'] == 'infeasible'
+    assert run(ab_state(rules=[lunch], commitments=[duty('a', '12:00', '12:20', next_week), duty('b', '12:40', '13:00', next_week)]), 'a', 'b')['status'] == 'success'
 
 
 def merge_state(capacity=25):

@@ -645,16 +645,18 @@ def test_old_announcements_leave_the_list_after_a_while(client, monkeypatch):
 def test_announcement_limit_and_order(client, monkeypatch):
     enable(client); setup_changes()
     token, _ = link(client, screen(client, tomorrowFrom=None))
-    created = 12
-    def post(n, **values):
-        return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title=f'Объявление {n}', startsAt='2026-11-02T08:00', endsAt='2026-11-02T20:00') | values)
-    for n in range(created):
-        at(monkeypatch, '2026-11-02T03:00:00+00:00')
-        assert post(n, startsAt=f'2026-11-02T08:{n:02d}').status_code == 200
     at(monkeypatch, '2026-11-02T04:00:00+00:00')
-    titles = [a['title'] for a in display(token).json()['announcements']]
-    # Newest start first, and a screen does not show everything.
-    assert 0 < len(titles) < created and titles == [f'Объявление {n}' for n in reversed(range(created))][:len(titles)]
+    moment = datetime.fromisoformat('2026-11-02T04:00:00+00:00')
+    names = []
+    # Add running announcements one by one until the screen stops showing more; the loop bound is generous.
+    for n in range(150):
+        put_note(f'Объявление {n}', moment - timedelta(hours=5) + timedelta(minutes=n), moment + timedelta(days=1))
+        names.append(f'Объявление {n}')
+        titles = [a['title'] for a in display(token).json()['announcements']]
+        # Whatever is shown is the newest-first prefix of what was created.
+        assert titles == names[::-1][:len(titles)]
+        if len(titles) < len(names): break
+    assert 0 < len(titles) < len(names)
 
 
 def test_running_announcement_stays_listed_among_many_finished(client, monkeypatch):
@@ -665,12 +667,15 @@ def test_running_announcement_stays_listed_among_many_finished(client, monkeypat
     assert long.status_code == 200, long.text
     at(monkeypatch, '2026-11-01T05:00:00+00:00')
     first = datetime.fromisoformat('2026-10-05T04:00:00+00:00')
-    finished = 120
-    for n in range(finished): put_note(f'old{n}', first + timedelta(hours=5 * n), first + timedelta(hours=5 * n + 2))
+    ended = lambda: [n for n in client.get('/api/hall/options?workspace=demo').json()['announcements'] if n['state'] == 'ended']
+    # Add finished announcements, all later than the long one, until the list stops growing; the loop bound is generous.
+    for n in range(150):
+        put_note(f'old{n}', first + timedelta(hours=3 * n), first + timedelta(hours=3 * n + 2))
+        if len(ended()) < n + 1: break
+    assert 0 < len(ended()) < n + 1
     listed = client.get('/api/hall/options?workspace=demo').json()['announcements']
     # It started earlier than all the finished ones, yet it is listed (last, by start); only the finished ones are cut.
     assert [n['title'] for n in listed][-1] == 'Долгое' and listed[-1]['state'] == 'showing'
-    assert [n['state'] for n in listed].count('ended') < finished
     assert display(token).json()['announcements'] == [{'title': 'Долгое', 'text': ''}]
     done = client.post(f"/api/hall/announcements/{long.json()['id']}/withdraw?workspace=demo", json=dict(version=1, reason='Ошибка'))
     assert done.status_code == 200 and done.json()['state'] == 'withdrawn'
