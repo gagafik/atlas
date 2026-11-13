@@ -489,7 +489,7 @@ export function lessonChoices(lessons: OfferedLesson[]) {
       label:
         ruDay(l.day) +
         ((perDay.get(l.day) ?? 0) > 1 ? ` · ${l.start}–${l.end}` : "") +
-        (l.full ? " · уже 10 работ" : ""),
+        (l.full ? ` · уже ${l.works} работ` : ""),
     }));
 }
 

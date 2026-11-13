@@ -213,10 +213,10 @@ def test_every_course_of_the_picker_has_its_tables(role):
     scale = next(s for s in entries[get_key('/api/final-grades/options')]['b']['scales'] if s['active'] and s['kind'] == 'thresholds')
     finals = 0
     for course in picker['courses']:
-        # «Новая работа» of a course the account teaches names the lesson to open.
-        if course['canEdit']:
-            assert get_key('/api/journal/course-table/latest', groupId=course['groupId'], subjectId=course['subjectId']) in entries, (role, course['group'], course['subject'])
         for period in picker['periods']:
+            # «Новое назначение» of a course the account teaches lists the lessons of the period.
+            if course['canEdit']:
+                assert get_key('/api/journal/course-table/lessons', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end']) in entries, (role, course['group'], course['subject'], period['name'])
             key = get_key('/api/journal/course-table', groupId=course['groupId'], subjectId=course['subjectId'], start=period['start'], end=period['end'], scaleId=scale['id'], periodId=period['id'])
             assert key in entries, (role, course['group'], course['subject'], period['name'])
             assert all('computed' in pupil for pupil in entries[key]['b']['pupils'])
