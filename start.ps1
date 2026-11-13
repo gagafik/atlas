@@ -13,9 +13,24 @@ if (-not (Test-Path -LiteralPath $dependencyStamp) -or (Get-Content -LiteralPath
     if ($LASTEXITCODE -ne 0) { throw 'Python dependencies could not be installed.' }
     Set-Content -LiteralPath $dependencyStamp -Value $requirementsHash
 }
-if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'dist\index.html'))) {
-    npm.cmd ci
-    if ($LASTEXITCODE -ne 0) { throw 'Node dependencies could not be installed.' }
+# The interface is rebuilt whenever its sources are newer than the build: after an update an old dist
+# would show last month's screens against today's server.
+$builtPage = Join-Path $PSScriptRoot 'dist\index.html'
+$sources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src'), (Join-Path $PSScriptRoot 'public') -Recurse -File)
+$sources += @('index.html', 'package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'tools\pwa.mjs') |
+    ForEach-Object { Get-Item -LiteralPath (Join-Path $PSScriptRoot $_) -ErrorAction SilentlyContinue }
+$newestSource = ($sources | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+if (-not (Test-Path -LiteralPath $builtPage) -or (Get-Item -LiteralPath $builtPage).LastWriteTimeUtc -lt $newestSource) {
+    $installed = Join-Path $PSScriptRoot 'node_modules\.package-lock.json'
+    $lock = Get-Item -LiteralPath (Join-Path $PSScriptRoot 'package-lock.json')
+    if (-not (Test-Path -LiteralPath $installed)) {
+        npm.cmd ci
+        if ($LASTEXITCODE -ne 0) { throw 'Node dependencies could not be installed.' }
+    } elseif ((Get-Item -LiteralPath $installed).LastWriteTimeUtc -lt $lock.LastWriteTimeUtc) {
+        # Not `npm ci` here: it empties node_modules first and leaves it broken when a running tool holds a file.
+        npm.cmd install --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw 'Node dependencies could not be updated.' }
+    }
     npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
 }
