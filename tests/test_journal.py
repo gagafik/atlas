@@ -341,7 +341,6 @@ def test_assessment_with_nan_or_infinity_is_never_stored(client,field,value):
     assert entry(client,record['lessonKey'])['version']==record['version']
 
 
-@pytest.mark.xfail(strict=True,reason='the 422 body echoes the NaN input and cannot be serialised, so the answer is a server error')
 @pytest.mark.parametrize('field,value',NOT_A_NUMBER)
 def test_assessment_with_nan_or_infinity_answers_422(client,field,value):
     record=graded(entry(client,lesson(client)['lessonKey']))
