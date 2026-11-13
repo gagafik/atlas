@@ -67,28 +67,35 @@ def test_a_work_is_added_to_a_lesson_that_already_has_works_and_a_publication(cl
     assert family_rows(parent) == seen
 
 
-def test_the_dialog_lists_only_days_where_a_work_can_be_added(client, clock, monkeypatch):
+def test_the_dialog_lists_the_open_days_up_to_today_and_drops_closed_periods(client, clock, monkeypatch):
     monkeypatch.setattr(journal_periods, 'now', lambda: datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     teacher, _ = staffed(client)
-    days = {l['day'] for l in ok(offered(teacher, end=FUTURE))['lessons']}
-    assert days >= {DAY, NEXT} and not any(d > TODAY.isoformat() for d in days)
-    # A lesson that already has a journal is judged by the editor's rules: a moved one (its roster and time need a sync), a substitute-led one
-    # and one of a closed period drop out.
-    course(teacher, DAY, [work('a')])
-    course(teacher, NEXT, [work('a')])
-    resave(lambda s: setattr(s, 'datedLessons', [DatedLesson(id='move', name='Перенос', kind='change', placementId='eng', sourceDate=date.fromisoformat(DAY),
-                                                         onDate=date.fromisoformat('2026-08-18'), startTime='14:00', endTime='14:40')]))
-    assert '2026-08-18' not in {l['day'] for l in ok(offered(teacher))['lessons']}
-    state = api.read('demo')
-    state.datedLessons = [DatedLesson(id='sub', name='Замена', kind='change', placementId='eng', sourceDate=date.fromisoformat(NEXT), onDate=date.fromisoformat(NEXT), teacherIds=['t1'])]
-    api.save('demo', state)
-    assert NEXT not in {l['day'] for l in ok(offered(teacher))['lessons']}
-    close(client, period(client))
     days = {l['day'] for l in ok(offered(teacher))['lessons']}
-    assert NEXT not in days
+    assert days >= {DAY, NEXT} and not any(l['day'] > TODAY.isoformat() for l in ok(offered(teacher, end=FUTURE))['lessons'])
     # The range narrows the answer; an inverted one is refused.
-    assert {l['day'] for l in ok(offered(teacher, start=NEXT, end=NEXT))['lessons']} <= {NEXT}
+    assert {l['day'] for l in ok(offered(teacher, start=NEXT, end=NEXT))['lessons']} == {NEXT}
     assert offered(teacher, start=END, end=DAY).status_code == 422
+    # A lesson with a journal of a closed period drops out, an open day stays.
+    ok(add(teacher, DAY)[0])
+    close(client, period(client))
+    after = {l['day'] for l in ok(offered(teacher))['lessons']}
+    assert DAY not in after and NEXT in after
+    # So does a lesson with no journal yet.
+    close(client, period(client, start=NEXT, end=NEXT))
+    assert {l['day'] for l in ok(offered(teacher))['lessons']} == days - {DAY, NEXT}
+
+
+def test_the_dialog_drops_moved_substituted_and_cancelled_lessons(client, clock):
+    teacher, _ = staffed(client)
+    bare = next(d for d in sorted({l['day'] for l in ok(offered(teacher))['lessons']}) if d not in (DAY, NEXT))
+    for day in (DAY, NEXT): course(teacher, day, [work('a')])
+    def lesson(id, name, kind, day, **extra):
+        return DatedLesson(id=id, name=name, kind=kind, placementId='eng', sourceDate=date.fromisoformat(day), **(dict(onDate=date.fromisoformat(day)) | extra))
+    state = api.read('demo')
+    state.datedLessons = [lesson('move', 'Перенос', 'change', DAY, onDate=date.fromisoformat('2026-08-18'), startTime='14:00', endTime='14:40'),
+                          lesson('sub', 'Замена', 'change', NEXT, teacherIds=['t1']), lesson('off', 'Отмена', 'cancel', bare)]
+    api.save('demo', state)
+    assert not {DAY, NEXT, bare} & {l['day'] for l in ok(offered(teacher))['lessons']}
 
 
 def test_a_lesson_fills_up_and_then_takes_no_more_works(client, clock):
