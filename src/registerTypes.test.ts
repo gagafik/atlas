@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   allPages,
   can,
@@ -20,21 +20,28 @@ const options = (capabilities: Options["capabilities"]): Options => ({
 });
 
 describe("register links", () => {
-  it("skips empty filters and encodes Cyrillic values", () => {
-    expect(
-      exportHref("visitors/export", "demo", { day: "2026-10-01", q: "" }),
-    ).toBe("/api/registers/visitors/export?workspace=demo&day=2026-10-01");
-    expect(
-      exportHref("inventory/export", "school", {
-        q: "Стол 1",
-        roomId: undefined,
-      }),
-    ).toBe(
-      "/api/registers/inventory/export?workspace=school&q=%D0%A1%D1%82%D0%BE%D0%BB%201",
+  const parsed = (href: string) => new URL(href, "http://x");
+  it("skips empty filters", () => {
+    const url = parsed(
+      exportHref("visitors/export", "demo", { day: "2026-10-01", q: "", roomId: undefined }),
     );
-    expect(exportHref("inventory/export", "demo")).toBe(
-      "/api/registers/inventory/export?workspace=demo",
-    );
+    expect(url.pathname).toBe("/api/registers/visitors/export");
+    expect(url.searchParams.get("workspace")).toBe("demo");
+    expect(url.searchParams.get("day")).toBe("2026-10-01");
+    expect(url.searchParams.has("q")).toBe(false);
+    expect(url.searchParams.has("roomId")).toBe(false);
+  });
+  it("hands Cyrillic values and separators over unchanged", () => {
+    const value = "Стол 1 & стул=2";
+    const url = parsed(exportHref("inventory/export", "school", { q: value }));
+    expect(url.pathname).toBe("/api/registers/inventory/export");
+    expect(url.searchParams.get("workspace")).toBe("school");
+    expect(url.searchParams.get("q")).toBe(value);
+    expect([...url.searchParams.keys()].sort()).toEqual(["q", "workspace"]);
+  });
+  it("needs no filters at all", () => {
+    const url = parsed(exportHref("inventory/export", "demo"));
+    expect([...url.searchParams.entries()]).toEqual([["workspace", "demo"]]);
   });
 });
 
@@ -60,27 +67,62 @@ describe("capabilities", () => {
 });
 
 describe("history of edits", () => {
-  it("names only the fields that changed", () => {
+  it("names a changed field once and not the ones that stayed", () => {
     expect(
       changedFields(
         { name: "А", note: "", badge: "1" },
         { name: "Б", note: "", badge: "1" },
       ),
-    ).toEqual(["Посетитель"]);
+    ).toHaveLength(1);
+  });
+  it("names two different fields differently, and one field kept under two keys once", () => {
+    const [first, second] = changedFields(
+      { name: "А", badge: "1" },
+      { name: "Б", badge: "2" },
+    );
+    expect(first).not.toBe(second);
+    expect(
+      changedFields({ hostId: "1", hostName: "А" }, { hostId: "2", hostName: "Б" }),
+    ).toHaveLength(1);
+  });
+  it("sees a change deep inside a list", () => {
     expect(
       changedFields(
         { parentNotices: [] },
         { parentNotices: [{ by: "Кл. руководитель" }] },
       ),
-    ).toEqual(["Сообщения родителям"]);
+    ).toHaveLength(1);
+  });
+  it("names nothing when nothing changed or one side is missing", () => {
+    expect(changedFields({ name: "А" }, { name: "А" })).toEqual([]);
     expect(changedFields(null, { name: "Б" })).toEqual([]);
   });
 });
 
 describe("file reading", () => {
-  it("refuses files over the 2 MB limit without reading them", async () => {
+  // Node has no FileReader: a stand-in that reads any file, so only the size limit can refuse one.
+  afterEach(() => vi.unstubAllGlobals());
+  const readsAnything = () =>
+    vi.stubGlobal(
+      "FileReader",
+      class {
+        result = "data:;base64,AAAA";
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        readAsDataURL() {
+          queueMicrotask(() => this.onload?.());
+        }
+      },
+    );
+  it("refuses files over the upload limit without reading them", async () => {
+    readsAnything();
     const big = new File([new Uint8Array(MAX_UPLOAD + 1)], "big.csv");
-    await expect(readBase64(big)).rejects.toThrow("Файл больше 2 МБ.");
+    await expect(readBase64(big)).rejects.toThrow();
+  });
+  it("reads a file of exactly the upload limit", async () => {
+    readsAnything();
+    const edge = new File([new Uint8Array(MAX_UPLOAD)], "edge.csv");
+    await expect(readBase64(edge)).resolves.toBe("AAAA");
   });
 });
 
@@ -110,12 +152,12 @@ describe("printing a paged list", () => {
       calls++;
       return page([], null);
     });
-    expect(all).toBe(first);
+    expect(all).toEqual(first);
     expect(calls).toBe(0);
   });
   it("refuses to print a list that never ends", async () => {
     await expect(
       allPages(page([1], 9), async (before) => page([before], before - 1), 3),
-    ).rejects.toThrow("Список слишком длинный для печати.");
+    ).rejects.toThrow();
   });
 });

@@ -145,13 +145,18 @@ def test_cross_month_leave_cannot_change_after_end_month_closed(client,school,mo
     assert action(client,request,'cancel',kind='leave',reason='Change').status_code==409
     assert report(client)['requests'][0]['status']=='approved'
 
-def test_csv_formula_escape_utf8_and_current_access_rechecked_inside_transaction(client,school,monkeypatch):
+def test_csv_export_neutralises_a_formula_and_starts_with_a_byte_order_mark(client,school):
     with api.connect() as db:db.execute('UPDATE accounts SET name=? WHERE id=?',('=SECRET()',school['id']))
     ok(save(client,school));export=client.get(path('export?month=2026-09'))
     assert export.content.startswith(b'\xef\xbb\xbf') and "'=SECRET()" in export.text
-    employee=signed('staff');original=api.staff_time.prepare
-    def revoke():
-        original()
+
+def test_access_revoked_during_a_request_is_rechecked_inside_the_transaction(client,school,monkeypatch):
+    ok(save(client,school))
+    employee=signed('staff');original=api.staff_time.snapshots.get
+    def revoked(workspace):
+        snapshot=original(workspace)
         with api.connect() as db:db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(school['id'],))
-    monkeypatch.setattr(api.staff_time,'prepare',revoke)
-    assert employee.get(path('report?month=2026-09')).status_code==409
+        return snapshot
+    monkeypatch.setattr(api.staff_time.snapshots,'get',revoked)
+    refused=employee.get(path('report?month=2026-09'))
+    assert refused.status_code==409 and 'workMinutes' not in refused.text

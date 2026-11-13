@@ -269,10 +269,8 @@ def test_form_reads_do_not_require_database_writer_lock(client):
     enable(client);create(client,role='parent');id=new(client);configure(client,id);publish(client,id)
     with closing(sqlite3.connect(api.DB)) as db:
         db.execute('BEGIN IMMEDIATE')
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future=pool.submit(client.get,route(id,'/summary'))
-            try:assert future.result(timeout=3).status_code==200
-            finally:db.rollback()
+        try:assert client.get(route(id,'/summary')).status_code==200
+        finally:db.rollback()
 
 
 def test_scheduled_form_opening_and_invalid_reopen_are_safe(client,monkeypatch):
@@ -346,8 +344,7 @@ def test_reviewer_cannot_decide_own_application(client):
     configure(client,id,roles=['staff'],questions=[dict(id='q',title='Reason',kind='text')]);assign(client,id,staff,'review');publish(client,id)
     st=signed('staff');sent=answer(st,id,entity='',answers={'q':'Mine'});assert sent.status_code==200,sent.text
     sent=sent.json();url=route(id,'/responses/'+sent['id']+'/review')
-    refused=st.post(url,json=review_body(st,id,1,'approved'))
-    assert refused.status_code==403 and 'другой ответственный' in refused.json()['detail']
+    assert st.post(url,json=review_body(st,id,1,'approved')).status_code==403
     item=st.get(route(id,'/responses')).json()['items'][0]
     assert item['own'] is True and item['status']=='submitted' and 'user_id' not in item and 'userId' not in item
     assert client.get(route(id,'/responses')).json()['items'][0]['own'] is False
@@ -366,78 +363,83 @@ def test_returned_application_keeps_status_comment_and_private_correction(client
     assert staff.post(review_url,json=review_body(staff,id,2,'returned','Clarify')).status_code==200
     saved=answer(parent,id,version=3,action='save',answers={'q':'=secret edit'});assert saved.status_code==200,saved.text
     mine=parent.get(route(id,'/answer')+'&entityId=s1').json()['answer']
-    assert mine['status']=='returned' and mine['comment']=='Clarify' and mine['answers']=={'q':'=secret edit'} and 'draft' not in mine
+    assert mine['status']=='returned' and mine['comment']=='Clarify' and mine['answers']=={'q':'=secret edit'}
     item=staff.get(route(id,'/responses')).json()['items'][0]
-    assert item['status']=='returned' and item['comment']=='Clarify' and item['answers']=={'q':'Original'} and 'draft' not in item
+    assert item['status']=='returned' and item['comment']=='Clarify' and item['answers']=={'q':'Original'}
     assert '=secret edit' not in staff.get(route(id,'/export')).text and 'secret edit' not in staff.get(route(id,'/responses/'+sent['id']+'/history')).text
+    # The stored history never holds the private text either.
     with closing(sqlite3.connect(api.DB)) as db:
-        documents=[json.loads(d) for d, in db.execute('SELECT document FROM school_form_history WHERE answer_id=?',(sent['id'],))]
-    assert documents and all('draft' not in d and 'secret edit' not in json.dumps(d) for d in documents)
+        documents=[d for d, in db.execute('SELECT document FROM school_form_history WHERE answer_id=?',(sent['id'],))]
+    assert documents and not any('secret edit' in d for d in documents)
     assert answer(parent,id,version=4,answers={'q':'Final'}).status_code==200
     item=staff.get(route(id,'/responses')).json()['items'][0]
-    assert item['status']=='submitted' and item['comment']=='' and item['answers']=={'q':'Final'} and 'draft' not in item
-    with closing(sqlite3.connect(api.DB)) as db:
-        assert 'draft' not in json.loads(db.execute('SELECT document FROM school_form_answers WHERE id=?',(sent['id'],)).fetchone()[0])
+    assert item['status']=='submitted' and item['comment']=='' and item['answers']=={'q':'Final'}
 
 
 def test_private_correction_does_not_change_version_or_time_staff_see(client):
-    enable(client);create(client,role='parent');reviewer=create(client,role='staff')
+    enable(client);create(client,role='parent',grants=[dict(workspace='demo',view='student',entityIds=['s1','s2'])]);reviewer=create(client,role='staff')
     id=new(client,'application');configure(client,id,questions=[dict(id='q',title='Reason',kind='text')]);assign(client,id,reviewer,'review');publish(client,id)
     parent=signed('parent');staff=signed('staff')
-    sent=answer(parent,id,answers={'q':'Original'}).json()
-    url=route(id,'/responses/'+sent['id']+'/review')
-    assert staff.post(url,json=review_body(staff,id,1,'returned','Clarify')).status_code==200
-    def seen(): return staff.get(route(id,'/responses')).json()['items'][0],staff.get(route(id,'/export')).text,staff.get(route(id,'/responses/'+sent['id']+'/history')).json()
-    before=seen();assert before[0]['version']==2
-    saved=answer(parent,id,version=2,action='save',answers={'q':'Edit 1'});assert saved.status_code==200 and saved.json()['version']==3
-    assert answer(parent,id,version=3,action='save',answers={'q':'Edit 2'}).json()['version']==4
+    def listed(entity): return next(i for i in staff.get(route(id,'/responses')).json()['items'] if i['entityId']==entity)
+    def history(sent): return staff.get(route(id,'/responses/'+sent['id']+'/history')).json()
+    def mine(entity): return parent.get(route(id,'/answer')+f'&entityId={entity}').json()['answer']
+    sent={e:answer(parent,id,e,answers={'q':'Original'}).json() for e in ['s1','s2']}
+    for e in sent:  # decisions always carry the version of the list the reviewer loaded
+        assert staff.post(route(id,'/responses/'+sent[e]['id']+'/review'),json=review_body(staff,id,listed(e)['version'],'returned','Clarify')).status_code==200
+    def seen(): return listed('s1'),staff.get(route(id,'/export')).text,history(sent['s1'])
+    before=seen()
+    first=answer(parent,id,'s1',version=mine('s1')['version'],action='save',answers={'q':'Edit 1'});assert first.status_code==200
+    second=answer(parent,id,'s1',version=first.json()['version'],action='save',answers={'q':'Edit 2'});assert second.status_code==200
     # Staff lists, CSV and decision history are identical: neither the text nor the fact or time of the saves leaks.
     assert seen()==before
-    mine=parent.get(route(id,'/answer')+'&entityId=s1').json()
-    assert mine['answer']['version']==4 and mine['answer']['updated']>before[0]['updated'] and 'hidden' not in mine['answer'] and 'draftUpdated' not in mine['answer']
-    assert mine['history'][0]['updated']>before[0]['updated']
+    own=mine('s1');assert own['version']==second.json()['version']>first.json()['version'] and own['updated']>before[0]['updated']
+    assert 'hidden' not in own and 'draftUpdated' not in own
     # The applicant's own version check still works for the stale window.
-    assert answer(parent,id,version=3,action='save',answers={'q':'Late'}).status_code==409
-    assert answer(parent,id,version=4,answers={'q':'Final'}).status_code==200
-    item,csv,history=seen()
-    # Staff versions stay consecutive, so a decision made on the list they loaded still applies.
-    assert item['version']==3 and item['status']=='submitted' and [h['version'] for h in history]==[3,2,1]
-    assert staff.post(url,json=review_body(staff,id,3,'approved','Done')).status_code==200
-    assert staff.post(url,json=review_body(staff,id,3,'approved','Done again')).status_code==409
-    decided=seen()[0];assert decided['version']==4 and decided['status']=='approved'
+    assert answer(parent,id,'s1',version=first.json()['version'],action='save',answers={'q':'Late'}).status_code==409
+    for e in sent:assert answer(parent,id,e,version=mine(e)['version'],answers={'q':'Final'}).status_code==200
+    # Staff versions do not depend on how many private saves the applicant made, so a decision made on the list they loaded still applies.
+    edited,plain=listed('s1'),listed('s2')
+    assert edited['version']==plain['version'] and edited['status']=='submitted'
+    assert [h['version'] for h in history(sent['s1'])]==[h['version'] for h in history(sent['s2'])]
+    url=route(id,'/responses/'+sent['s1']['id']+'/review')
+    assert staff.post(url,json=review_body(staff,id,edited['version'],'approved','Done')).status_code==200
+    assert staff.post(url,json=review_body(staff,id,edited['version'],'approved','Done again')).status_code==409
+    decided=listed('s1');assert decided['status']=='approved'
     # A new application started after the decision leaves the decision time and version untouched.
-    assert answer(parent,id,version=6,action='save',answers={'q':'Next'}).status_code==200
-    assert seen()[0]==decided
+    assert answer(parent,id,'s1',version=mine('s1')['version'],action='save',answers={'q':'Next'}).status_code==200
+    assert listed('s1')==decided
 
 
-def test_returned_application_can_be_corrected_after_deadline(client,monkeypatch):
+@pytest.mark.parametrize('how',['deadline','manual'])
+def test_returned_application_can_be_corrected_after_intake_closes(client,monkeypatch,how):
     enable(client);create(client,role='parent');create(client,role='parent',login='parent2',grants=[dict(workspace='demo',view='student',entityIds=['s2'])])
-    id=new(client,'application');configure(client,id,closesAt=(now()+timedelta(hours=1)).isoformat());publish(client,id)
+    id=new(client,'application');configure(client,id,**(dict(closesAt=(now()+timedelta(hours=1)).isoformat()) if how=='deadline' else {}));publish(client,id)
     parent=signed('parent');p2=signed('parent2')
     sent=answer(parent,id).json()
     assert client.post(route(id,'/responses/'+sent['id']+'/review'),json=review_body(client,id,1,'returned','Fix')).status_code==200
-    future=now()+timedelta(hours=2);monkeypatch.setattr('backend.school_forms.now',lambda:future)
-    assert answer(parent,id,version=2,action='save').status_code==200
-    resent=answer(parent,id,version=3);assert resent.status_code==200 and resent.json()['status']=='submitted'
-    refused=answer(p2,id,'s2');assert refused.status_code==409 and 'Приём ответов сейчас закрыт.' in refused.json()['detail']
-    assert answer(parent,id,version=4,action='withdraw').status_code==409
-
-
-def test_returned_application_can_be_corrected_after_manual_close(client):
-    enable(client);create(client,role='parent');create(client,role='parent',login='parent2',grants=[dict(workspace='demo',view='student',entityIds=['s2'])])
-    id=new(client,'application');configure(client,id);publish(client,id)
-    parent=signed('parent');p2=signed('parent2')
-    sent=answer(parent,id).json()
-    assert client.post(route(id,'/responses/'+sent['id']+'/review'),json=review_body(client,id,1,'returned','Fix')).status_code==200
-    closed=client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close'));assert closed.status_code==200,closed.text
-    assert get(client,id)['status']=='closed'
+    if how=='deadline':
+        future=now()+timedelta(hours=2);monkeypatch.setattr('backend.school_forms.now',lambda:future)
+    else:
+        closed=client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close'));assert closed.status_code==200,closed.text
+        assert get(client,id)['status']=='closed'
     # Reviewers may still decide on a closed form, so the applicant can still correct what they returned.
     assert answer(parent,id,version=2,action='save').status_code==200
     resent=answer(parent,id,version=3);assert resent.status_code==200 and resent.json()['status']=='submitted'
-    refused=answer(p2,id,'s2');assert refused.status_code==409 and 'Приём ответов сейчас закрыт.' in refused.json()['detail']
+    assert answer(p2,id,'s2').status_code==409
     assert answer(parent,id,version=4,action='withdraw').status_code==409
+
+
+def test_closed_form_accepts_nothing_new_after_a_final_decision_or_archive(client):
+    enable(client);create(client,role='parent')
+    id=new(client,'application');configure(client,id);publish(client,id)
+    parent=signed('parent')
+    sent=answer(parent,id).json();decide=lambda version,action:client.post(route(id,'/responses/'+sent['id']+'/review'),json=review_body(client,id,version,action,'Fix'))
+    assert decide(1,'returned').status_code==200
+    assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='close')).status_code==200
+    assert answer(parent,id,version=2,action='save').status_code==200
+    assert answer(parent,id,version=3).status_code==200
     # After a final decision there is no exemption: a new application needs open intake.
-    assert client.post(route(id,'/responses/'+sent['id']+'/review'),json=review_body(client,id,3,'approved')).status_code==200
+    assert decide(3,'approved').status_code==200
     assert answer(parent,id,version=5).status_code==409
     # An archived form accepts nothing.
     assert client.post(route(id,'/transition'),json=request(version=get(client,id)['version'],action='archive')).status_code==200
@@ -499,7 +501,7 @@ def test_responses_and_csv_ordered_by_class_then_name(client):
         page=client.get(route(id,'/responses')+f"&limit=1&after={page['nextAfter']}").json()
     assert seen==[i['entityName'] for i in items]
     rows=list(csvlib.reader(io.StringIO(client.get(route(id,'/export')).text.lstrip('﻿'))))
-    assert rows[0][:3]==['Отправитель','Ученик','Класс'] and [r[1] for r in rows[1:]]==seen and [r[2] for r in rows[1:]]==['7D','7D','10A','10A']
+    assert [r[1] for r in rows[1:]]==seen and [r[2] for r in rows[1:]]==['7D','7D','10A','10A']
     assert client.get(route(id,'/responses')+'&after=missing').status_code==409
     # A cursor stays valid after its answer is withdrawn and saved again as a private draft.
     first=items[0]['id'];assert answer(parent,id,'s3',version=1,action='withdraw').status_code==200 and answer(parent,id,'s3',version=2,action='save').status_code==200

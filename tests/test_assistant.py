@@ -133,27 +133,36 @@ def test_role_changed_while_model_runs_is_rechecked(monkeypatch,client):
     assert editor.post('/api/assistant/ask?workspace=demo',json=dict(token=p['token'])).status_code in [403,404]
 
 
-def test_ollama_http_contract_no_redirects_proxy_and_bounded_response(monkeypatch):
+def serve(monkeypatch,handler):
     import httpx
     original=httpx.Client
+    def factory(**kwargs):
+        assert kwargs['trust_env'] is False
+        return original(**kwargs,transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(assistant.httpx,'Client',factory)
+
+def test_ollama_request_goes_to_the_chat_path_with_the_bearer_key(monkeypatch):
+    import httpx
     seen=[]
     def handler(request):
         seen.append(request)
-        assert request.url.path=='/api/chat'
-        assert json.loads(request.content)['stream'] is False
         return httpx.Response(200,json=dict(message=dict(content='{}')))
-    def factory(**kwargs):
-        assert kwargs['trust_env'] is False and kwargs['follow_redirects'] is False
-        return original(**kwargs,transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(assistant.httpx,'Client',factory)
-    config=dict(url='http://127.0.0.1:11434',key='private')
-    result=assistant.model_request(config,'/api/chat',dict(stream=False))
-    assert result['message']['content']=='{}' and seen[0].headers['authorization']=='Bearer private'
-    def large(request): return httpx.Response(200,content=b'x'*260000)
-    monkeypatch.setattr(assistant.httpx,'Client',lambda **kw:original(**kw,transport=httpx.MockTransport(large)))
-    with pytest.raises(HTTPException) as error: assistant.model_request(config,'/api/tags')
-    assert error.value.status_code==502
-    def redirect(request): return httpx.Response(302,headers={'Location':'https://unexpected.example.test'})
-    monkeypatch.setattr(assistant.httpx,'Client',lambda **kw:original(**kw,transport=httpx.MockTransport(redirect)))
-    with pytest.raises(HTTPException) as error: assistant.model_request(config,'/api/tags')
+    serve(monkeypatch,handler)
+    result=assistant.model_request(dict(url='http://127.0.0.1:11434',key='private'),'/api/chat',dict(stream=False))
+    assert result['message']['content']=='{}' and seen[0].url.path=='/api/chat' and seen[0].headers['authorization']=='Bearer private'
+
+def test_a_redirect_is_not_followed(monkeypatch):
+    import httpx
+    seen=[]
+    def handler(request):
+        seen.append(request.url.host)
+        return httpx.Response(302,headers={'Location':'https://unexpected.example.test'})
+    serve(monkeypatch,handler)
+    with pytest.raises(HTTPException) as error: assistant.model_request(dict(url='http://127.0.0.1:11434',key=''),'/api/tags')
+    assert error.value.status_code==502 and 'unexpected.example.test' not in seen
+
+def test_a_response_far_beyond_the_size_limit_is_refused(monkeypatch):
+    import httpx
+    serve(monkeypatch,lambda request:httpx.Response(200,content=b'x'*(2*1024*1024)))
+    with pytest.raises(HTTPException) as error: assistant.model_request(dict(url='http://127.0.0.1:11434',key=''),'/api/tags')
     assert error.value.status_code==502

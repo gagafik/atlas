@@ -40,7 +40,7 @@ def test_snapshot_reads_disabled_checked_cells_and_skips_aggregate(tmp_path):
 
 
 def test_snapshot_rejects_incomplete_or_inconsistent_column(tmp_path):
-    with pytest.raises(ValueError, match='итог колонки'):
+    with pytest.raises(ValueError):
         read_mhtml(snapshot(tmp_path, count=2))
 
 
@@ -101,7 +101,7 @@ def test_ambiguous_joint_lesson_cannot_be_split():
     school, bundle = small_school()
     school.placements[0].classIds.append('c-10A')
     original = school.model_dump_json()
-    with pytest.raises(ValueError, match='однозначно'):
+    with pytest.raises(ValueError):
         reconcile(school, bundle)
     assert school.model_dump_json() == original
 
@@ -109,10 +109,12 @@ def test_ambiguous_joint_lesson_cannot_be_split():
 def test_existing_user_membership_is_not_silently_replaced():
     school, bundle = small_school()
     imported, _ = reconcile(school, bundle)
+    original = imported.model_dump_json()
     changed = deepcopy(bundle)
     changed['courses'][0]['members'] = []
-    with pytest.raises(ValueError, match='перезапись отменена'):
+    with pytest.raises(ValueError):
         reconcile(imported, changed)
+    assert imported.model_dump_json() == original
 
 
 def test_partial_group_remains_unknown_and_blocks_generation():

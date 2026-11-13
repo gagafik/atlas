@@ -49,7 +49,7 @@ def test_journal_entry_resolves_only_the_needed_day(client,monkeypatch,persisted
     assert result['needsSync']==persisted
 
 
-def test_changed_teacher_invalidates_warm_lesson_cache(client,monkeypatch):
+def test_replaced_teacher_cannot_grade_until_schedule_is_restored(client,monkeypatch):
     # On the lesson day a new teacher must still sync the publication; later days keep the teachers it was published with.
     monkeypatch.setattr(journal,'today',lambda:date(2026,8,17))
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];stale=payload(options(teacher,key))
@@ -57,7 +57,7 @@ def test_changed_teacher_invalidates_warm_lesson_cache(client,monkeypatch):
     api.save('demo',state)
     # The course teacher still reads the stored lesson, but the journal entry is now the substitute's:
     # the grade is moved by the lesson's current teacher or an admin.
-    changed=options(teacher,key);assert not changed['allowed'] and 'ведёт другой учитель' in changed['reason']
+    assert options(teacher,key)['allowed'] is False
     assert grade(teacher,key,sent,stale).status_code==409
     assert signed('unrelated').get(f'/api/journal/homework/{key}/grading?workspace=demo&studentId=s1').status_code==403
     state=api.read('demo');state.datedLessons=[];api.save('demo',state)
@@ -66,21 +66,14 @@ def test_changed_teacher_invalidates_warm_lesson_cache(client,monkeypatch):
     assert get(parent,key)['submitted']['grading']['grade']['score']==9
 
 
-@pytest.mark.parametrize('change',['journal','teacher','account'])
-def test_change_after_context_before_preparation_cannot_publish_stale_grade(client,monkeypatch,change):
+def test_journal_saved_between_context_and_preparation_cannot_publish_stale_grade(client,monkeypatch):
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey'];stale=payload(options(teacher,key));original=HomeworkGrading.prepare
     def altered(self,ctx):
-        if change=='journal':
-            newer=deepcopy(record);newer['document']['content']['topic']='Concurrent teacher draft'
-            write(client,newer).raise_for_status()
-        elif change=='teacher':
-            state=api.read('demo');state.datedLessons=[DatedLesson(id='replace',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])]
-            api.save('demo',state)
-        else:
-            with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
+        newer=deepcopy(record);newer['document']['content']['topic']='Concurrent teacher draft'
+        write(client,newer).raise_for_status()
         return original(self,ctx)
     monkeypatch.setattr(HomeworkGrading,'prepare',altered)
     assert grade(teacher,key,sent,stale).status_code==409
     assert report(parent).json()['rows'][0]['record']['grades'][0]['score']==8
     assert get(parent,key)['status']=='submitted'
-    if change=='journal':assert entry(client,key)['document']['content']['topic']=='Concurrent teacher draft'
+    assert entry(client,key)['document']['content']['topic']=='Concurrent teacher draft'

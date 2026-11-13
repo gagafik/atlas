@@ -99,7 +99,7 @@ describe("homework queue sections", () => {
     const groups = queueSections(rows, TODAY, "range");
     expect(groups).toHaveLength(1);
     expect(groups[0].key).toBe("all");
-    expect(groups[0].items).toBe(rows);
+    expect(groups[0].items).toEqual(rows);
   });
 });
 

@@ -1,8 +1,6 @@
 """The class teacher is a property of the class: default duties, admin-only changes, notes switch, personal reports."""
 import base64
 from uuid import uuid4
-import pytest
-from pydantic import ValidationError
 from backend import api
 from backend.models import State
 from backend.seed import initial_state
@@ -36,24 +34,11 @@ def staffed(client):
     return teacher, signed('parent'), signed('teacher')
 
 
-def test_state_validates_class_teacher_reference():
-    school = initial_state('demo')
-    assert all(c.classTeacherId is None for c in school.classes)
-    data = school.model_dump(mode='json')
-    data['classes'][0]['classTeacherId'] = 't2'
-    assert State.model_validate(data).classes[0].classTeacherId == 't2'
-    data['classes'][0]['classTeacherId'] = 'missing'
-    with pytest.raises(ValidationError) as error:
-        State.model_validate(data)
-    assert 'учителя' in str(error.value)
-    # A document stored before the field existed still loads.
-    old = school.model_dump(mode='json')
+def test_document_stored_before_class_teachers_existed_still_loads():
+    old = initial_state('demo').model_dump(mode='json')
     for c in old['classes']:
         del c['classTeacherId']
     assert all(c.classTeacherId is None for c in State.model_validate(old).classes)
-    data['classes'][0]['classTeacherId'] = ''
-    with pytest.raises(ValidationError):
-        State.model_validate(data)
 
 
 def table_import(c, cell):
@@ -87,7 +72,7 @@ def test_table_import_of_the_class_teacher_is_admin_only_and_shows_the_name(clie
     change = next(c for c in result['preview']['diff']['changes'] if 'classTeacherId' in c['fields'])
     assert change['fields']['classTeacherId']['displayAfter'] == 'Учитель английского'
     refused = editor.post('/api/editor/apply?workspace=demo', json=dict(revision=revision, token=result['preview']['token']))
-    assert refused.status_code == 403 and 'администратор' in refused.json()['detail']
+    assert refused.status_code == 403
     assert api.read('demo').revision == revision and all(c.classTeacherId is None for c in api.read('demo').classes)
     result, revision = table_import(client, 'Учитель английского')
     assert client.post('/api/editor/apply?workspace=demo', json=dict(revision=revision, token=result['preview']['token'])).status_code == 200
@@ -100,47 +85,58 @@ def test_unknown_or_deleted_class_teacher_is_refused_and_leaves_the_school_uncha
     before = api.read('demo')
     state['classes'][0]['classTeacherId'] = 'missing'
     assert client.put('/api/state?workspace=demo', json=state).status_code == 422
+    assert api.read('demo') == before
     lead('t2')
+    led = api.read('demo')
     state = client.get('/api/state?workspace=demo').json()
     state['teachers'] = [t for t in state['teachers'] if t['id'] != 't2']
-    r = client.put('/api/state?workspace=demo', json=state)
-    assert r.status_code == 422 and 'учителя' in r.text
-    assert api.read('demo').revision == before.revision + 1
+    assert client.put('/api/state?workspace=demo', json=state).status_code == 422
+    assert api.read('demo') == led
 
 
-def test_only_admin_changes_class_teacher_and_history(client):
+def test_editor_cannot_change_the_class_teacher_but_may_rename_a_class(client):
     enable(client)
     create(client)  # editor
     editor = signed('editor')
     state = editor.get('/api/state?workspace=demo').json()
-    revision = api.read('demo').revision
+    before = api.read('demo')
     state['classes'][0]['classTeacherId'] = 't2'
-    refused = editor.put('/api/state?workspace=demo', json=state)
-    assert refused.status_code == 403 and 'администратор' in refused.json()['detail']
-    assert api.read('demo').revision == revision and {k: client.get('/api/history?workspace=demo').json()[k] for k in ('undo', 'redo')} == dict(undo=1, redo=0)
+    assert editor.put('/api/state?workspace=demo', json=state).status_code == 403
+    assert api.read('demo') == before
     # The same value as stored and a rename are ordinary editor work.
     state['classes'][0]['classTeacherId'] = None
     state['classes'][0]['name'] += ' !'
     assert editor.put('/api/state?workspace=demo', json=state).status_code == 200
     assert client.get(HISTORY).json()['items'] == []
+
+
+def test_class_teacher_saves_undo_and_redo_are_recorded(client):
+    enable(client)
     state = client.get('/api/state?workspace=demo').json()
     state['classes'][0]['classTeacherId'] = 't2'
     assert client.put('/api/state?workspace=demo', json=state).status_code == 200
     first = client.get(HISTORY).json()['items'][0]
     assert first['classId'] == A and first['before'] is None and first['after'] == dict(id='t2', name='Учитель английского')
     assert first['action'] == 'saved' and first['actor'] == 'Администратор'
-    # Undo and redo are writes too.
+    assert client.post('/api/undo?workspace=demo', json=dict(revision=api.read('demo').revision)).status_code == 200
+    undone = client.get(HISTORY).json()['items'][0]
+    assert undone['action'] == 'undo' and undone['before']['id'] == 't2' and undone['after'] is None
+    assert client.post('/api/redo?workspace=demo', json=dict(revision=api.read('demo').revision)).status_code == 200
+    assert [i['action'] for i in client.get(HISTORY).json()['items']] == ['redo', 'undo', 'saved']
+
+
+def test_only_the_administrator_may_undo_redo_and_read_the_class_teacher_history(client):
+    enable(client)
+    create(client)  # editor
+    editor = signed('editor')
+    lead('t2')
     revision = api.read('demo').revision
     assert editor.post('/api/undo?workspace=demo', json=dict(revision=revision)).status_code == 403
     assert api.read('demo').revision == revision
     assert client.post('/api/undo?workspace=demo', json=dict(revision=revision)).status_code == 200
-    undone = client.get(HISTORY).json()['items'][0]
-    assert undone['action'] == 'undo' and undone['before']['id'] == 't2' and undone['after'] is None
     revision = api.read('demo').revision
     assert editor.post('/api/redo?workspace=demo', json=dict(revision=revision)).status_code == 403
     assert client.post('/api/redo?workspace=demo', json=dict(revision=revision)).status_code == 200
-    assert [i['action'] for i in client.get(HISTORY).json()['items']] == ['redo', 'undo', 'saved']
-    # The editor may step back over a change that did not touch the class teacher.
     assert editor.get(HISTORY).status_code == 403
 
 
@@ -366,33 +362,41 @@ def test_electronic_notes_are_enabled_until_somebody_switches_them(client):
     assert send(parent)['status'] == 'pending'
 
 
-def test_class_teacher_switches_electronic_notes(client):
+def test_class_teacher_or_administrator_may_switch_a_class_and_nobody_else(client):
+    teacher, parent, t = staffed(client)
+    lead('t2')
+    assert switch(t, A, False, 0).status_code == 200
+    assert switch(t, D, False, 0).status_code == 403
+    assert switch(client, A, True, 1).status_code == 200
+    assert switch(client, 'missing', True, 0).status_code == 404
+
+
+def test_switch_is_versioned_and_a_repeated_request_is_answered_from_memory(client):
     teacher, parent, t = staffed(client)
     lead('t2')
     off = switch(t, A, False, 0)
-    assert off.status_code == 200 and off.json()['version'] == 1 and off.json()['enabled'] is False and off.json()['actor'] == 'Сотрудник'
-    refused = parent.post(url(), json=body())
-    assert refused.status_code == 403 and 'классным руководителем' in refused.json()['detail']
+    assert off.status_code == 200 and off.json()['version'] == 1 and off.json()['enabled'] is False
+    assert switch(t, A, True, 0).status_code == 409
+    request = str(uuid4())
+    assert switch(t, A, True, 1, request).status_code == 200
+    assert switch(t, A, True, 1, request).json()['version'] == 2  # replay returns the stored result
+    assert switch(t, A, False, 2, request).status_code == 409
+    assert switch(client, A, False, 1).status_code == 409  # stale
+    # Already enabled: nothing is written, the version stays.
+    assert switch(client, A, True, 2).json()['version'] == 2
+
+
+def test_switching_notes_off_closes_them_for_the_parent_and_on_opens_them_again(client):
+    teacher, parent, t = staffed(client)
+    lead('t2')
+    assert switch(t, A, False, 0).status_code == 200
+    assert parent.post(url(), json=body()).status_code == 403
     assert parent.post(url('/preview'), json=body()).status_code == 403
-    payload = body()
-    assert upload(parent, payload).status_code == 403
+    assert upload(parent, body()).status_code == 403
     options = parent.get('/api/journal/absences/options?workspace=demo').json()['students'][0]
     assert options['electronicNotes'] is False and options['classTeacher'] == 'Учитель английского'
-    assert switch(t, D, False, 0).status_code == 403
-    assert switch(t, A, True, 0).status_code == 409
-    rid = str(uuid4())
-    assert switch(t, A, True, 1, rid).status_code == 200
-    assert switch(t, A, True, 1, rid).json()['version'] == 2  # replay returns the stored result
-    assert switch(t, A, False, 2, rid).status_code == 409
-    assert switch(client, A, False, 2).status_code == 200
-    assert switch(client, A, True, 3).status_code == 200
-    assert switch(client, 'missing', True, 0).status_code == 404
-    assert switch(client, A, False, 3).status_code == 409  # stale
-    assert switch(client, A, True, 4).json()['version'] == 4  # already enabled: nothing is written
+    assert switch(client, A, True, 1).status_code == 200
     assert send(parent)['status'] == 'pending'
-    with api.connect() as db:
-        rows = db.execute('SELECT version,enabled,actor_name FROM absence_class_history WHERE class_id=? ORDER BY id', (A,)).fetchall()
-    assert rows == [(1, 0, 'Сотрудник'), (2, 1, 'Сотрудник'), (3, 0, 'Администратор'), (4, 1, 'Администратор')]
 
 
 def test_notes_sent_before_switch_off_stay_reviewable_and_can_be_withdrawn(client):

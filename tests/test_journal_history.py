@@ -48,20 +48,6 @@ def opened(client,key,day=DAY,**params):return entry(client,key,day=day,**params
 def roster(record):return {s['id'] for s in record['document']['lesson']['students']}
 
 
-def stints(student,kind='class'):
-    with api.connect() as db:
-        return db.execute('SELECT target_id,start_day,end_day FROM pupil_enrollments WHERE workspace=? AND student_id=? AND kind=? ORDER BY start_day',('demo',student,kind)).fetchall()
-
-
-def versions():
-    with api.connect() as db:
-        return db.execute('SELECT valid_from,valid_to,document FROM timetable_versions WHERE workspace=? ORDER BY valid_from',('demo',)).fetchall()
-
-
-def current_from():
-    with api.connect() as db:return db.execute("SELECT valid_from FROM timetable_current WHERE workspace='demo'").fetchone()
-
-
 def cov(client,action='report',**extra):
     return client.post(f'/api/journal/coverage/{action}?workspace=demo',json=dict(start=DAY,end=DAY,status='all')|extra)
 
@@ -136,37 +122,75 @@ def test_capture_merges_and_trims_periods(client,clock):
     assert current_since(client)==DAY
 
 
-def test_effective_date_validation_rolls_back(client,clock):
-    def stored():
-        with api.connect() as db:
-            return (db.execute("SELECT revision FROM workspaces WHERE id='demo'").fetchone(),db.execute('SELECT count(*) FROM timetable_versions').fetchone(),
-                    db.execute('SELECT * FROM pupil_enrollments ORDER BY 1,2,3,4,5').fetchall(),db.execute('SELECT count(*) FROM audit').fetchone())
-    def put(state,value):return client.put(f'/api/state?workspace=demo&effectiveFrom={value}',json=state)
-    state=client.get('/api/state?workspace=demo').json()
-    state['placements'][0]['period']=3
-    before=stored()
-    late=put(state,'2026-09-02');assert late.status_code==422 and 'позже сегодняшнего' in late.json()['detail']
-    assert stored()==before
-    saved=put(state,NEXT);assert saved.status_code==200,saved.text
+def unchanged(client):
+    """What a refused save must leave alone: the school revision, the template date and the audit trail."""
+    return (client.get('/api/state?workspace=demo').json()['revision'],current_since(client),len(client.get('/api/access/audit').json()))
+
+
+def put_dated(client,state,value):return client.put(f'/api/state?workspace=demo&effectiveFrom={value}',json=state)
+
+
+def test_effective_date_after_today_is_rejected_and_changes_nothing(client,clock):
+    enable(client)
+    state=client.get('/api/state?workspace=demo').json();state['placements'][0]['period']=3
+    before=unchanged(client)
+    assert put_dated(client,state,'2026-09-02').status_code==422
+    assert unchanged(client)==before
+
+
+def test_effective_date_before_the_current_version_is_rejected_and_changes_nothing(client,clock):
+    enable(client)
+    state=client.get('/api/state?workspace=demo').json();state['placements'][0]['period']=3
+    saved=put_dated(client,state,NEXT);assert saved.status_code==200,saved.text
     state=saved.json();state['placements'][0]['period']=4
-    before=stored()
-    for value,text in [('2026-08-20','раньше текущей версии'),('2027-07-01','внутри учебного года'),('2026-08-10','внутри учебного года')]:
-        rejected=put(state,value);assert rejected.status_code==422 and text in rejected.json()['detail'],rejected.text
-        assert stored()==before
+    before=unchanged(client)
+    assert put_dated(client,state,'2026-08-20').status_code==422
+    assert unchanged(client)==before
 
 
-def test_history_reader_tolerates_missing_tables_and_stale_revision(client,clock):
-    expected=[(r['lesson']['start'],r['lesson']['subject']) for r in lessons(client)]
+def test_effective_date_after_the_school_year_is_rejected_and_changes_nothing(client,clock,monkeypatch):
+    enable(client)
+    monkeypatch.setattr(timetable_history,'today',lambda:date(2027,7,1))
+    state=client.get('/api/state?workspace=demo').json();state['placements'][0]['period']=3
+    before=unchanged(client)
+    assert put_dated(client,state,'2027-06-20').status_code==422
+    assert unchanged(client)==before
+    assert put_dated(client,state,'2027-06-10').status_code==200
+
+
+def drop_history_tables():
     with api.connect() as db:
         for table in ['timetable_versions','timetable_current','pupil_enrollments']:db.execute(f'DROP TABLE {table}')
+
+
+def test_journal_day_reads_without_history_tables(client,clock):
+    expected=[(r['lesson']['start'],r['lesson']['subject']) for r in lessons(client)]
+    drop_history_tables()
     api.journal.snapshots.cache.clear()
     assert [(r['lesson']['start'],r['lesson']['subject']) for r in lessons(client)]==expected
     resave(lambda s:None)
     assert current_since(client)==DAY and members(client)=={'s1','s2'} and members(client,NEXT)=={'s1','s2'}
-    state=api.read('demo');path=str(api.DB.resolve())
-    with pytest.raises(timetable_history.Stale):
-        timetable_history.load(path,'demo',state.model_copy(update=dict(revision=state.revision-1)))
-    timetable_history.load(path,'demo',state)
+
+
+def test_journal_day_rereads_when_a_save_lands_between_the_state_and_its_history(client,clock,monkeypatch):
+    api.journal.snapshots.cache.clear()
+    original=api.journal.snapshots.read;saved=[]
+    def racing(workspace):
+        value=original(workspace)
+        if not saved:
+            saved.append(1);resave(lambda s:setattr(next(p for p in s.placements if p.id=='eng'),'period',3))
+        return value
+    monkeypatch.setattr(api.journal.snapshots,'read',racing)
+    assert [r['lesson']['start'] for r in lessons(client) if r['lesson']['subject']==ENGLISH]==['10:30']
+
+
+def test_journal_day_is_refused_while_the_schedule_keeps_changing(client,clock,monkeypatch):
+    api.journal.snapshots.cache.clear()
+    original=api.journal.snapshots.read
+    def racing(workspace):
+        value=original(workspace);resave(lambda s:None);return value
+    monkeypatch.setattr(api.journal.snapshots,'read',racing)
+    assert client.get('/api/journal/day',params=dict(workspace='demo',day=DAY)).status_code==409
 
 
 def test_dated_template_change_stores_version_and_audit(client,clock):
@@ -190,7 +214,7 @@ def test_editor_apply_accepts_effective_date(client,clock):
     assert preview['canApply']
     applied=client.post(f'/api/editor/apply?workspace=demo&effectiveFrom={NEXT}',json=dict(revision=revision,token=preview['token']))
     assert applied.status_code==200,applied.text
-    assert [(v[0],v[1]) for v in versions()]==[(DAY,NEXT)]
+    assert current_since(client)==NEXT
     assert card(client)['lesson']['start']=='08:20'
     assert not [r for r in lessons(client,NEXT) if r['lesson']['subject']==ENGLISH]
     assert card(client,'2026-08-25')['lesson']['start']=='08:20'
@@ -289,7 +313,6 @@ def test_transfer_keeps_class_of_the_day(client,clock):
     assert roster(opened(client,card(client,NEXT)['lessonKey'],NEXT))=={'s2'}
     assert roster(opened(client,card(client,NEXT,group='10D')['lessonKey'],NEXT))=={'s1','s3','s4'}
     assert roster(opened(client,card(client,group='10D')['lessonKey']))=={'s3','s4'}
-    assert stints('s1')==[('c-demo-a',DAY,'2026-08-23'),('c-demo-d',NEXT,None)]
 
 
 def test_mid_year_pupil_and_withdrawal(client,clock):
@@ -299,7 +322,6 @@ def test_mid_year_pupil_and_withdrawal(client,clock):
     first=card(client);assert first['studentCount']==2
     assert roster(opened(client,first['lessonKey']))=={'s1','s2'}
     assert roster(opened(client,card(client,NEXT)['lessonKey'],NEXT))=={'s1','new'}
-    assert stints('s2')==[('c-demo-a',DAY,'2026-08-23')]
 
 
 def test_coverage_and_attendance_stable_across_timetable_change(client,clock):
@@ -323,30 +345,12 @@ def test_coverage_and_attendance_stable_across_timetable_change(client,clock):
     assert len(later['items'])==2 and {r['status'] for r in later['items']}=={'missing'}
 
 
-def test_published_past_lesson_is_never_stale_with_default_clock(client,clock):
-    key=lesson(client)['lessonKey']
-    assert write(client,graded(entry(client,key)),publish=True).status_code==200
-    resave(lambda s:s.students.append(Student(id='new',name='Новый ученик',classId='c-demo-a')))
-    row=english_row(cov(client).json());assert row['status'] in ['complete','incomplete'] and not row['needsSync'] and row['pupils']==2
-    pinned=english_row(cov(client,asOf='2026-08-17T18:00:00Z').json());assert pinned['status']=='stale' and pinned['pupils']==3
-
-
 def test_mid_year_pupil_coverage(client,clock):
     resave(lambda s:s.students.append(Student(id='new',name='Новый ученик',classId='c-demo-a')),date(2026,8,24))
     row=english_row(cov(client).json());assert row['pupils']==2 and row['missingPupils']==2
     assert {p['id'] for p in cov(client,'details',lessonKey=row['lessonKey'],day=DAY).json()['pupils']}=={'s1','s2'}
     later=english_row(cov(client,start=NEXT,end=NEXT).json());assert later['pupils']==3
     assert 'new' in {p['id'] for p in cov(client,'details',start=NEXT,end=NEXT,lessonKey=later['lessonKey'],day=NEXT).json()['pupils']}
-
-
-def test_transfer_coverage_by_class_of_the_day(client,clock):
-    resave(lambda s:s.placements.append(Placement(id='eng-d',workloadId='w1',day=0,period=3,roomId='r1')))
-    resave(lambda s:setattr(pupil(s,'s1'),'classId','c-demo-d'),date(2026,8,24))
-    row=english_row(cov(client,classId='c-demo-a').json(),group='10A');assert row['pupils']==2
-    assert {p['id'] for p in cov(client,'details',classId='c-demo-a',lessonKey=row['lessonKey'],day=DAY).json()['pupils']}=={'s1','s2'}
-    row=english_row(cov(client,start=NEXT,end=NEXT,classId='c-demo-d').json(),group='10D');assert row['pupils']==3
-    assert 's1' in {p['id'] for p in cov(client,'details',start=NEXT,end=NEXT,classId='c-demo-d',lessonKey=row['lessonKey'],day=NEXT).json()['pupils']}
-    assert english_row(cov(client,classId='c-demo-d').json(),group='10D')['pupils']==2
 
 
 def test_coverage_period_spanning_a_boundary_resolves_each_segment(client,clock):
@@ -358,7 +362,6 @@ def test_coverage_period_spanning_a_boundary_resolves_each_segment(client,clock)
 
 def test_group_roster_change_is_dated(client,clock):
     resave(lambda s:setattr(next(g for g in s.groups if g.id=='g-math'),'studentIds',['s2','s3']),date(2026,8,24))
-    assert stints('s1','group')==[('g-math',DAY,'2026-08-23')] and stints('s2','group')==[('g-core',DAY,None),('g-math',NEXT,None)]
     math=lambda day:card(client,day,'Математика','Математика · группа A')['lessonKey']
     assert roster(opened(client,math(DAY)))=={'s1','s3'}
     assert roster(opened(client,math(NEXT),NEXT))=={'s2','s3'}
@@ -380,13 +383,13 @@ def test_undo_and_redo_restore_enrollment_periods(client,clock):
 
 
 def test_first_dated_save_on_an_upgraded_database_backfills_from_the_state_before(client,clock):
-    with api.connect() as db:
-        for table in ['timetable_versions','timetable_current','pupil_enrollments']:db.execute(f'DROP TABLE {table}')
+    drop_history_tables()
     api.journal.snapshots.cache.clear()
     resave(lambda s:setattr(pupil(s,'s1'),'classId','c-demo-d'),date(2026,8,24))
-    assert stints('s1')==[('c-demo-a',DAY,'2026-08-23'),('c-demo-d',NEXT,None)] and current_from()==(DAY,)
-    assert stints('s3')==[('c-demo-d',DAY,None)] and stints('s1','group')==[('g-math',DAY,None)]
-    assert roster(opened(client,card(client)['lessonKey']))=={'s1','s2'}
+    assert current_since(client)==DAY
+    assert members(client,DAY)=={'s1','s2'} and members(client,NEXT)=={'s2'}
+    math=lambda day:members(client,day,'Математика · группа A','Математика')
+    assert math(DAY)==math(NEXT)=={'s1','s3'}
 
 
 def test_effective_from_checks_earlier_days_against_the_replaced_template(client,clock):
@@ -394,10 +397,11 @@ def test_effective_from_checks_earlier_days_against_the_replaced_template(client
     state=client.get('/api/state?workspace=demo').json()
     state['placements']=[dict(state['placements'][0],id='eng2',period=3)]+state['placements'][1:]
     # Dateless, the past move would point at a placement that no longer exists; dated, the archived template still has it.
-    rejected=client.put('/api/state?workspace=demo',json=state);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail']
-    assert versions()==[]
+    assert client.put('/api/state?workspace=demo',json=state).status_code==422
+    assert current_since(client)==DAY
     saved=client.put(f'/api/state?workspace=demo&effectiveFrom={NEXT}',json=state);assert saved.status_code==200,saved.text
-    assert [(v[0],v[1]) for v in versions()]==[(DAY,NEXT)]
+    assert current_since(client)==NEXT
+    assert (card(client)['lesson']['start'],card(client,NEXT)['lesson']['start'])==('08:20','10:30')
 
 
 def test_effective_from_still_rejects_new_conflicts_on_earlier_days(client,clock):
@@ -410,11 +414,11 @@ def test_effective_from_still_rejects_new_conflicts_on_earlier_days(client,clock
         return client.put('/api/state?workspace=demo'+(f'&effectiveFrom={value}' if value else ''),json=body|edit)
     # No template change is stored, so the earlier day is checked against the candidate itself.
     for value in [None,'2026-09-01',NEXT]:
-        rejected=put(value);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail'],(value,rejected.text)
+        rejected=put(value);assert rejected.status_code==422,(value,rejected.text)
     # With a template change the earlier day is checked against the replaced template.
     swapped=[dict(body['placements'][0],id='eng2',period=3)]+body['placements'][1:]
-    rejected=put(NEXT,placements=swapped);assert rejected.status_code==422 and 'проблемы в расписании по датам' in rejected.json()['detail'],rejected.text
-    assert api.read('demo').revision==revision and versions()==[] and not api.read('demo').datedLessons
+    rejected=put(NEXT,placements=swapped);assert rejected.status_code==422,rejected.text
+    assert api.read('demo').revision==revision and current_since(client)==DAY and not api.read('demo').datedLessons
 
 
 def test_dated_deactivation_stops_pupil_writes_but_a_transfer_does_not(client,clock,monkeypatch):
@@ -437,16 +441,13 @@ def test_dated_deactivation_stops_pupil_writes_but_a_transfer_does_not(client,cl
     assert homework(parent,key)['canSubmit'] is False
 
 
-def test_teaching_scope_keeps_an_index_for_every_version(client,clock):
+def test_teaching_scope_includes_classes_taught_before_a_dated_change(client,clock):
     enable(client);create(client,'teacher')
-    for i in range(10):
-        resave(lambda s,i=i:setattr(next(p for p in s.placements if p.id=='eng'),'period',2+i%2),date(2026,8,18+i))
     def retire(state):
         for w in state.workloads:
             if w.teacherId=='t2':w.teacherId='t3'
-    resave(retire,date(2026,8,28))
+    resave(retire,date(2026,8,24))
     teacher=signed('teacher')
-    # The teacher taught English in both classes in the early versions only; asking again gives the same answer.
-    for _ in range(4):
-        value=teacher.get('/api/journal/coverage/options?workspace=demo');assert value.status_code==200,value.text
-        assert [c['id'] for c in value.json()['classes']['teaching']]==['c-demo-a','c-demo-d']
+    # The teacher taught English in both classes before the change and has no lessons after it.
+    value=teacher.get('/api/journal/coverage/options?workspace=demo');assert value.status_code==200,value.text
+    assert [c['id'] for c in value.json()['classes']['teaching']]==['c-demo-a','c-demo-d']

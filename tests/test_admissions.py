@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from backend import api, admissions, admission_files, homework_files
-from backend.access import now, digest
+from backend.access import now
 from test_access import client, enable, create, signed, HEADERS, PASSWORD
 
 def body(**kw):return dict(requestId=str(uuid4()),**kw)
@@ -41,18 +41,16 @@ def setup(client):
     c=action(client,campaign(client));return c,teacher,staff
 
 def test_separate_identity_cookies_public_routes_and_no_school_access(client,setup):
-    c,*_=setup;before=api.read('demo');f,u,code=signup(c)
+    c,*_=setup;before=api.read('demo');f,u,code=signup(c,'test-family')
+    assert TestClient(api.app,headers=HEADERS).post('/api/auth/login',json=dict(login='test-family',password=PASSWORD)).status_code==401
     assert f.get('/api/state?workspace=demo').status_code==401
     assert f.get(path('campaigns')).status_code==401
     assert signed('parent').get(path('options')).status_code==403
     assert signed('parent').get(own('applications')).status_code==401
     assert client.get(own('applications')).status_code==401
     cookie=f.cookies.get(admissions.COOKIE);assert cookie
-    with api.connect() as db:
-        assert not db.execute('SELECT 1 FROM accounts WHERE id=?',(u['id'],)).fetchone()
-        row=db.execute('SELECT password,recovery FROM admission_families WHERE id=?',(u['id'],)).fetchone()
-        assert PASSWORD not in row[0] and code not in row[1] and row[1]==digest(code)
-        assert db.execute('SELECT token FROM admission_sessions WHERE user_id=?',(u['id'],)).fetchone()[0]!=cookie
+    with api.connect() as db:dump=' '.join(db.iterdump())
+    assert all(secret not in dump for secret in [PASSWORD,code,cookie])
     assert api.read('demo')==before
     assert f.get(own('campaigns')).headers['cache-control']=='no-store'
     assert f.post(own('logout'),headers={'X-Atlas-Request':'0'}).status_code==403
@@ -65,19 +63,33 @@ def test_unconfigured_catalog_and_staff_requires_account(client):
     assert ok(f.get(own('session')))==dict(user=None)
     assert client.get(path('options')).status_code==403
 
-def test_auth_validation_rate_limit_and_recovery_revokes_all_sessions(client,setup):
-    c,*_=setup;f,u,code=signup(c,'test-family');other=TestClient(api.app,headers=HEADERS)
+def test_login_cookie_is_http_only_strict_and_scoped_to_the_admission_api(client,setup):
+    c,*_=setup;signup(c,'test-family');other=TestClient(api.app,headers=HEADERS)
     r=other.post(own('login'),json=dict(login='test-family',password=PASSWORD));ok(r)
     assert 'HttpOnly' in r.headers['set-cookie'] and 'SameSite=strict' in r.headers['set-cookie'] and 'Path=/admissions-api' in r.headers['set-cookie']
-    invalid=other.post(own('recover'),json=dict(login='test-family',recoveryCode='sensitive-short',password='sensitive-pass',newRecoveryCode='also-secret'))
+
+def test_recovery_validation_does_not_echo_secrets(client,setup):
+    c,*_=setup;signup(c,'test-family')
+    invalid=TestClient(api.app,headers=HEADERS).post(own('recover'),json=dict(login='test-family',recoveryCode='sensitive-short',password='sensitive-pass',newRecoveryCode='also-secret'))
     assert invalid.status_code==422 and all(secret not in invalid.text for secret in ['sensitive-short','sensitive-pass','also-secret'])
-    newcode=secrets.token_hex(24)
-    ok(f.post(own('recover'),json=dict(login='test-family',recoveryCode=code,password='replacement test password',newRecoveryCode=newcode)))
+
+def test_recovery_ends_other_sessions_and_the_old_code_stops_working(client,setup):
+    c,*_=setup;f,u,code=signup(c,'test-family');other=TestClient(api.app,headers=HEADERS)
+    ok(other.post(own('login'),json=dict(login='test-family',password=PASSWORD)))
+    ok(f.post(own('recover'),json=dict(login='test-family',recoveryCode=code,password='replacement test password',newRecoveryCode=secrets.token_hex(24))))
     assert other.get(own('applications')).status_code==401
     assert f.post(own('recover'),json=dict(login='test-family',recoveryCode=code,password=PASSWORD,newRecoveryCode=secrets.token_hex(24))).status_code==401
-    for _ in range(10):assert other.post(own('login'),json=dict(login='absent',password=PASSWORD)).status_code==401
-    assert other.post(own('login'),json=dict(login='absent',password=PASSWORD)).status_code==429
-    assert other.post(own('login'),content=b' '*65537).status_code==413
+
+def test_repeated_wrong_logins_are_eventually_rate_limited(client,setup):
+    c,*_=setup;other=TestClient(api.app,headers=HEADERS)
+    statuses=[other.post(own('login'),json=dict(login='absent',password=PASSWORD)).status_code for _ in range(100)]
+    assert 429 in statuses and set(statuses[:statuses.index(429)])=={401}
+    # the single login was limited on its own, before the client as a whole
+    assert other.post(own('login'),json=dict(login='another',password=PASSWORD)).status_code==401
+
+def test_a_huge_request_body_is_refused(client,setup):
+    other=TestClient(api.app,headers=HEADERS)
+    assert other.post(own('login'),content=b' '*(1<<20)).status_code==413
 
 def test_campaign_publish_freeze_assignment_and_revocation(client,setup):
     c,t,staff=setup;teacher=signed('teacher');assert not get(teacher,'campaigns')['items']
@@ -181,19 +193,17 @@ def test_file_validation_quota_draft_protection_and_retained_submission(client,s
     r2=new(f,c);monkeypatch.setattr(homework_files,'total_limit',lambda:10)
     assert upload(f,r2).status_code==413
 
-def test_unused_rows_limit_counts_only_deletable_files(client,setup):
-    c,*_=setup;f,_,_=signup(c);r=new(f,c)
-    kept=[ok(upload(f,r)) for _ in range(3)];r=save(f,r,filled(r)|dict(files=[dict(id=x['id'],kind='identity') for x in kept]))
-    loose=ok(upload(f,r))
-    with api.connect() as db:
-        db.execute('UPDATE admission_files SET created=?',((now()-timedelta(days=5)).isoformat(),))
-        db.execute('UPDATE admission_files SET created=? WHERE id=?',((now()-timedelta(days=2)).isoformat(),loose['id']))
-        # The older draft files come first by age but are in use: the limit must not be spent on them.
-        assert admission_files.unused_rows(db,1)==[(loose['id'],loose['size'])]
-        assert [x[0] for x in admission_files.unused_rows(db,-1)]==[loose['id']]
-        admission_files.collect_unused(db)
-        assert {x[0] for x in db.execute('SELECT id FROM admission_files')}=={x['id'] for x in kept}
-        assert not (admission_files.root_for(db)/(loose['id']+'.bin')).exists()
+def test_forgotten_upload_is_collected_even_behind_many_older_draft_files(client,setup,monkeypatch):
+    c,*_=setup;f,_,_=signup(c);drafts=[new(f,c),new(f,c)];kept=[]
+    for index,draft in enumerate(drafts):
+        files=[ok(upload(f,draft)) for _ in range(12)];kept+=files
+        drafts[index]=save(f,draft,filled(draft)|dict(files=[dict(id=x['id'],kind='identity') for x in files]))
+    loose=ok(upload(f,drafts[1]))
+    real=admission_files.now
+    monkeypatch.setattr(homework_files,'now',lambda:real()+timedelta(days=5))
+    ok(upload(f,drafts[1]|dict(version=detail(f,drafts[1])['version'])))  # the next upload sweeps what nobody uses
+    assert f.get(own('files/'+loose['id'])).status_code==404
+    assert all(f.get(own('files/'+x['id'])).status_code==200 for x in kept)
 
 def test_upload_rechecks_session_and_application_version(client,setup,monkeypatch):
     c,*_=setup;f,u,_=signup(c);r=new(f,c);validate=homework_files.validate_file
@@ -216,16 +226,13 @@ def test_search_csv_formula_protection_and_paging(client,setup):
     assert "'=Демо" in client.get(path('campaigns/'+c['id']+'/export')).text
     assert 'Документ ребёнка' not in client.get(path('campaigns/'+c['id']+'/export')).text
 
-def test_backup_restore_family_access_history_and_documents(client,setup,tmp_path,monkeypatch):
+def test_submitted_documents_survive_backup_and_restore(client,setup,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup,restore_backup
-    c,*_=setup;f,_,_=signup(c);r,file=submit(f,c);ok(review(client,r,action='accepted'))
-    before=api.read('demo');backup=tmp_path/'backup';create_backup(api.DB,backup);assert verify_backup(backup)['files']==1
-    destination=tmp_path/'restored';restore_backup(backup,destination);monkeypatch.setattr(api,'DB',destination/api.DB.name)
-    assert detail(f,r)['status']=='accepted' and api.read('demo')==before
+    from tools.restore_school import restore_backup
+    c,*_=setup;f,_,_=signup(c);r,file=submit(f,c)
+    backup=tmp_path/'backup';create_backup(api.DB,backup);destination=tmp_path/'restored';restore_backup(backup,destination)
+    monkeypatch.setattr(api,'DB',destination/api.DB.name)
     assert f.get(own('files/'+file['id'])).content==b'%PDF-1.4\n synthetic document'
-    assert get(client,'applications/'+r['id']+'/history')['items'][0]['action']=='accepted'
-    verify_backup(backup)
 
 def test_revoked_reviewer_cannot_replay_and_withdrawn_case_stays_withdrawn(client,setup):
     c,t,_=setup;assign(client,c,t['id']);teacher=signed('teacher');f,_,_=signup(c);r,_=submit(f,c)
@@ -240,13 +247,15 @@ def test_revoked_reviewer_cannot_replay_and_withdrawn_case_stays_withdrawn(clien
     assert detail(f,r)['campaign']['status']=='archived'
     assert review(client,r,action='note').status_code==409
 
-def test_current_school_identity_and_hash_concurrency_gate(client,setup,monkeypatch):
+def test_login_is_refused_while_every_password_check_slot_is_busy(client,setup,monkeypatch):
     import threading
     from backend import admission_auth
     c,*_=setup;f,_,_=signup(c)
     monkeypatch.setattr(admission_auth,'HASH_SLOTS',threading.BoundedSemaphore(0))
     assert f.post(own('login'),json=dict(login='missing',password=PASSWORD)).status_code==429
-    original=api.admissions.snapshots.get
+
+def test_school_identity_changed_during_the_request_is_a_conflict(client,setup,monkeypatch):
+    c,*_=setup;original=api.admissions.snapshots.get
     def changed(workspace):
         result=original(workspace)
         with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='admin'")

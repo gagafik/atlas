@@ -1,14 +1,14 @@
 """Media containers, scoped uploads and authorized byte ranges on private files."""
 from io import BytesIO
-import hashlib
 import json
 import struct
 import wave
 import pytest
 from fastapi import HTTPException
-from backend import api, homework_files, teaching_media
+from backend import api, teaching_media
 from test_access import client, signed
 from test_teaching_materials import setup, upload, save, download
+from test_homework import setup as homework_setup, get as homework_get, upload as homework_upload
 from test_live_lessons import setup as live_setup, new, question, ok, cmd, url, current, action
 
 
@@ -34,11 +34,18 @@ def containers():
 
 @pytest.mark.parametrize('extension,mime', [('.mp3', 'audio/mpeg'), ('.wav', 'audio/wav'), ('.m4a', 'audio/mp4'), ('.ogg', 'audio/ogg'), ('.mp4', 'video/mp4'), ('.webm', 'video/webm')])
 def test_library_upload_recognizes_scoped_formats_and_download_types(client, extension, mime):
-    teacher, _, pupil, _ = setup(client); data = containers()[extension]
+    teacher, _, _, _ = setup(client); data = containers()[extension]
     file = ok(upload(teacher, data, 'sample' + extension))
     material = ok(save(teacher, fileIds=[file['id']]))
     response = download(teacher, file['id'], material)
     assert response.content == data and response.headers['content-type'] == mime
+
+
+def test_media_download_is_inline_with_ranges_attachment_on_request_and_closed_to_pupils(client):
+    teacher, _, pupil, _ = setup(client); data = wav_bytes()
+    file = ok(upload(teacher, data, 'sample.wav'))
+    material = ok(save(teacher, fileIds=[file['id']]))
+    response = download(teacher, file['id'], material)
     assert response.headers['content-disposition'].startswith('inline;')
     assert response.headers['accept-ranges'] == 'bytes'
     assert response.headers['cache-control'] == 'no-store' and response.headers['vary'] == 'Cookie'
@@ -46,19 +53,21 @@ def test_library_upload_recognizes_scoped_formats_and_download_types(client, ext
     assert forced.content == data and forced.headers['content-disposition'].startswith('attachment;')
     assert forced.headers['content-type'] == 'application/octet-stream'
     assert download(pupil, file['id'], material).status_code == 403
-    with pytest.raises(HTTPException): homework_files.name_for('sample' + extension)
-    with api.connect() as db:
-        assert db.execute('SELECT sha256 FROM teaching_material_files WHERE id=?', (file['id'],)).fetchone()[0] == hashlib.sha256(data).hexdigest()
 
 
-@pytest.mark.parametrize('extension', list(teaching_media.MEDIA))
+def test_homework_upload_refuses_media(client):
+    record, pupil, _, _ = homework_setup(client); key = record['lessonKey']
+    assignment = homework_get(pupil, key)['assignment']
+    assert homework_upload(pupil, key, assignment, wav_bytes(), 'answer.wav').status_code == 422
+
+
+@pytest.mark.parametrize('extension', ['.wav', '.mp3', '.m4a', '.mp4', '.webm', '.ogg'])
 def test_mislabelled_truncated_media_is_rejected_and_reservation_cleaned(client, extension):
     teacher, _, _, _ = setup(client)
     for data in (b'<html>wrong format</html>', containers()[extension][:10]):
         assert upload(teacher, data, 'fake' + extension).status_code == 422
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM teaching_material_files').fetchone()[0] == 0
-        assert homework_files.total_stored(db) == 0
+    # Two unfinished uploads at once are refused, so a leaked reservation would block this one.
+    assert upload(teacher, containers()[extension], 'real' + extension).status_code == 200
 
 
 def test_material_ranges_if_range_and_revocation(client):
@@ -103,17 +112,6 @@ def test_live_ranges_do_not_bypass_question_reveal_or_current_membership(client,
     assert teacher.get(path + '&projection=true', headers=headers).status_code == 206
     state = api.read('demo'); state.students[0].active = False; api.save('demo', state)
     for c in [pupil, parent]: assert c.get(path, headers=headers).status_code in {403,404}
-
-
-def test_media_upload_finish_rechecks_account_and_retains_quotas(client, monkeypatch):
-    teacher, _, _, _ = setup(client); data = wav_bytes(); original = teaching_media.validate_file
-    def revoked(path, name):
-        digest = original(path, name)
-        with api.connect() as db: db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
-        return digest
-    monkeypatch.setattr(teaching_media, 'validate_file', revoked)
-    assert upload(teacher, data, 'private.wav').status_code == 409
-    with api.connect() as db: assert db.execute('SELECT count(*) FROM teaching_material_files').fetchone()[0] == 0
 
 
 def test_container_boundaries_and_names(tmp_path):

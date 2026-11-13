@@ -3,9 +3,11 @@ from uuid import uuid4
 import json
 import time
 import pytest
+from fastapi.testclient import TestClient
 from backend import api
+from seeding import insert_row
 from backend.final_grades import recommendation, Scale
-from test_access import client,enable,create,signed
+from test_access import client,enable,create,signed,HEADERS,PASSWORD
 from test_journal import entry,lesson,write,graded
 from test_journal_periods import period,close,action,period_clock
 
@@ -82,20 +84,30 @@ def test_expected_unmarked_and_explicit_no_grade(client):
     assert proposal.json()['proposal']['calculation']['rawPercent'] is None
     assert prepare(client,p)['id']==b['id']
 
-def test_rounding_weight_missing_and_text_do_not_become_zero(client):
-    source=dict(weightedSum='149.99',weight='2',numeric=2)
-    s=Scale(version=0,name='Шкала',rounding='0',bands=[dict(label='Ниже',minPercent=0),dict(label='Выше',minPercent=75)]).model_dump(mode='json')
-    assert recommendation(source,s)['recommended']=='Выше'
-    s['rounding']='none';assert recommendation(source,s)['recommended']=='Ниже'
-    s['minCount']=3;assert recommendation(source,s)['recommended'] is None
-    s['minCount']=1;s['rounding']='none'
-    assert recommendation(dict(weightedSum='29999/400',weight='1',numeric=1),s)['recommended']=='Ниже'
-    s['rounding']='2'
-    assert recommendation(dict(weightedSum='29999/400',weight='1',numeric=1),s)['recommended']=='Выше'
-    assert recommendation(dict(weightedSum='3/2',weight='1/50',numeric=1),s)['recommended']=='Выше'
-    assert scale(client,rounding='1')['rounding']=='1'
-    for bands in [[dict(label='A',minPercent=1),dict(label='B',minPercent=50)],[dict(label='A',minPercent=0),dict(label='A',minPercent=50)],[dict(label='A',minPercent=0),dict(label='B',minPercent=0)]]:
-        assert client.put(BASE+'/scales/'+uuid4().hex+'?workspace=demo',json=dict(version=0,name='Bad',bands=bands)).status_code==422
+RECOMMENDATIONS=[
+    ('rounds half up',dict(weightedSum='149.99',weight='2',numeric=2),dict(rounding='0'),'Выше'),
+    ('no rounding',dict(weightedSum='149.99',weight='2',numeric=2),dict(rounding='none'),'Ниже'),
+    ('too few marks',dict(weightedSum='149.99',weight='2',numeric=2),dict(rounding='none',minCount=3),None),
+    ('exact just below the band',dict(weightedSum='29999/400',weight='1',numeric=1),dict(rounding='none'),'Ниже'),
+    ('rounded up to the band',dict(weightedSum='29999/400',weight='1',numeric=1),dict(rounding='2'),'Выше'),
+    ('fractional weight',dict(weightedSum='3/2',weight='1/50',numeric=1),dict(rounding='2'),'Выше'),
+    # A source with sums but no pinned policy is still a legacy source.
+    ('legacy source without a policy',dict(weightedSum='149.99',weight='2',numeric=2,categories={}),dict(rounding='0'),'Выше')]
+
+
+@pytest.mark.parametrize('source,changes,expected',[c[1:] for c in RECOMMENDATIONS],ids=[c[0] for c in RECOMMENDATIONS])
+def test_recommendation_follows_the_rounding_and_the_minimum_of_the_scale(source,changes,expected):
+    s=Scale(version=0,name='Шкала',rounding='0',bands=[dict(label='Ниже',minPercent=0),dict(label='Выше',minPercent=75)]).model_dump(mode='json')|changes
+    assert recommendation(source,s)['recommended']==expected
+
+
+@pytest.mark.parametrize('bands',[[dict(label='A',minPercent=1),dict(label='B',minPercent=50)],[dict(label='A',minPercent=0),dict(label='A',minPercent=50)],[dict(label='A',minPercent=0),dict(label='B',minPercent=0)]],
+                         ids=['no band from zero','label twice','threshold twice'])
+def test_invalid_scale_bands_are_refused(client,bands):
+    assert client.put(BASE+'/scales/'+uuid4().hex+'?workspace=demo',json=dict(version=0,name='Bad',bands=bands)).status_code==422
+
+
+def test_zero_weight_text_and_missing_marks_are_counted_apart_not_as_zero(client):
     record=graded(entry(client,lesson(client)['lessonKey']))
     content=record['document']['content'];content['assessments'] += [dict(id='zero',name='Нулевой вес',maxScore=10,weight=0),dict(id='text',name='Текст',kind='label'),dict(id='missing',name='Нет оценки')]
     content['records'][0]['grades'] += [dict(assessmentId='zero',score=0),dict(assessmentId='text',label='Отлично')]
@@ -140,7 +152,11 @@ def test_atomic_batch_stale_rows_and_assignment_revocation(client):
     batch(client,[r],'assign',teacherId='').raise_for_status()
     assert t.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').status_code==404
     assert propose(t,r,s).status_code==404
-    create(client,'editor');assert opts(signed('editor'))['detail']
+
+
+def test_an_editor_has_no_access_to_the_final_grades(client):
+    enable(client);create(client,'editor')
+    assert signed('editor').get(BASE+'/options?workspace=demo').status_code==403
 
 def test_scale_snapshot_and_concurrent_change(client):
     p,b,s,r,_=seeded(client);draft=propose(client,r,s).json()
@@ -161,36 +177,61 @@ def test_permissions_rechecked_before_write(client,monkeypatch):
     with api.connect() as db:assert db.execute('SELECT status FROM grading_rows WHERE id=?',(r['id'],)).fetchone()[0]=='draft'
 
 
-def test_report_read_does_not_wait_for_writer_and_family_revocation(client):
+def test_report_read_does_not_wait_for_a_writer(client):
     from concurrent.futures import ThreadPoolExecutor
     p,b,s,r,_=seeded(client);r=publish(client,propose(client,r,s).json());parent=signed('parent')
     with ThreadPoolExecutor(max_workers=1) as pool:
         with api.access.lock:
             future=pool.submit(report,parent,p)
-            response=future.result(timeout=5)
+            # The timeout only guards against a hang: a read that waited for the lock would never return.
+            response=future.result(timeout=30)
         assert response.status_code==200 and response.json()['items']
-    with api.connect() as db:
-        row=db.execute("SELECT id,permissions FROM accounts WHERE login='parent'").fetchone();permissions=json.loads(row[1]);permissions['grants']=[]
-        db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(permissions),row[0]))
+
+
+def test_family_loses_the_report_when_the_link_to_the_pupil_is_revoked(client):
+    p,b,s,r,_=seeded(client);r=publish(client,propose(client,r,s).json());parent=signed('parent')
+    assert report(parent,p).status_code==200
+    person=next(u for u in client.get('/api/access/users').json() if u['login']=='parent')
+    target=f"/api/access/families/{person['id']}/s1?workspace=demo";link=client.get(target).json()
+    value={k:link[k] for k in ['version','accountVersion','relationship','verified','evidence','reason','startDate','endDate','status']}
+    assert client.put(target,json=value|dict(status='revoked')).status_code==200
     assert report(parent,p).status_code==403
 
 
-def test_evidence_pagination_and_atomic_publication_rollback(client):
-    p,b,s,r,_=seeded(client);r=propose(client,r,s).json();r=batch(client,[r],'approve').json()['items'][0]
-    original=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json()['items'][0]
+def quiet(login='admin'):
+    # A client that answers an unhandled server error with a 500 instead of raising it into the test.
+    result=TestClient(api.app,headers=HEADERS,raise_server_exceptions=False)
+    response=result.post('/api/auth/login',json=dict(login=login,password=PASSWORD));assert response.status_code==200,response.text
+    return result
+
+
+def legacy_evidence(c,b,r,marks):
+    original=c.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json()['items'][0]
     with api.connect() as db:
         # A pre-upgrade book retains its existing evidence and cursor contract.
         db.execute("UPDATE grading_books SET source_kind='legacy' WHERE id=?",(b['id'],))
-        db.execute('INSERT INTO grading_marks(workspace,row_id,document) VALUES (?,?,?)',('demo',r['id'],json.dumps({k:v for k,v in original.items() if k!='id'})))
-        db.executemany('INSERT INTO grading_marks(workspace,row_id,document) VALUES (?,?,?)',[('demo',r['id'],json.dumps(dict(assessment=f'Work {i}',score=i))) for i in range(60)])
-        db.execute("CREATE TRIGGER reject_final_audit BEFORE INSERT ON grading_history WHEN NEW.action='publish' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
-    first=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo').json();assert len(first['items'])==50 and first['nextAfter']
-    rest=client.get(BASE+'/rows/'+r['id']+f'/evidence?workspace=demo&after={first["nextAfter"]}').json()
-    assert len(rest['items'])==11 and not rest['nextAfter'] and not ({x['id'] for x in first['items']} & {x['id'] for x in rest['items']})
-    import sqlite3
-    with pytest.raises(sqlite3.IntegrityError):batch(client,[r],'publish')
+        insert_row(db,'grading_marks',workspace='demo',row_id=r['id'],document=json.dumps({k:v for k,v in original.items() if k!='id'}))
+        for i in range(marks):insert_row(db,'grading_marks',workspace='demo',row_id=r['id'],document=json.dumps(dict(assessment=f'Work {i}',score=i)))
+
+
+def test_evidence_pages_of_an_old_book_cover_every_mark_once(client):
+    p,b,s,r,_=seeded(client);r=propose(client,r,s).json();r=batch(client,[r],'approve').json()['items'][0]
+    marks=120;legacy_evidence(client,b,r,marks)
+    ids=[];pages=0;after=''
+    while True:
+        page=client.get(BASE+'/rows/'+r['id']+'/evidence?workspace=demo'+after).json();ids+=[x['id'] for x in page['items']];pages+=1
+        if not page['nextAfter']:break
+        after=f"&after={page['nextAfter']}"
+    assert pages>1 and len(ids)==len(set(ids))==marks+1
+
+
+def test_a_failure_while_publishing_leaves_the_grade_approved_and_hidden_from_the_family(client):
+    p,b,s,r,_=seeded(client);r=propose(client,r,s).json();r=batch(client,[r],'approve').json()['items'][0]
+    with api.connect() as db:db.execute("CREATE TRIGGER reject_final_audit BEFORE INSERT ON grading_history WHEN NEW.action='publish' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
+    assert batch(quiet(),[r],'publish').status_code>=500
     assert report(signed('parent'),p).json()['items']==[]
-    with api.connect() as db:assert db.execute('SELECT version,status FROM grading_rows WHERE id=?',(r['id'],)).fetchone()==(r['version'],'approved')
+    now=next(v for v in sheet(client,b).json()['items'] if v['id']==r['id'])
+    assert (now['version'],now['status'])==(r['version'],'approved')
 
 
 def test_labels_scale_needs_no_explanation_for_manual_grade(client):
@@ -326,13 +367,6 @@ def test_category_policy_without_a_category_and_blocking(client):
     assert calc['rawPercent'] is None and calc['recommended'] is None and calc['blocked'] is True
     assert propose(client,row,s).status_code==422
     assert propose(client,row,s,explanation='Нет СОР и СОЧ, решение педсовета').status_code==200
-
-def test_legacy_source_keeps_old_recommendation():
-    s=Scale(version=0,name='Шкала',rounding='0',bands=[dict(label='Ниже',minPercent=0),dict(label='Выше',minPercent=75)]).model_dump(mode='json')
-    result=recommendation(dict(weightedSum='149.99',weight='2',numeric=2),s)
-    assert set(result)=={'rawPercent','roundedPercent','recommended'} and result['recommended']=='Выше'
-    # A source with sums but no pinned policy is still a legacy source.
-    assert set(recommendation(dict(weightedSum='149.99',weight='2',numeric=2,categories={}),s))==set(result)
 
 def test_existing_final_results_survive_backfill_and_policy_change(client):
     p,b,s,r,record=seeded(client);r=publish(client,propose(client,r,s).json());parent=signed('parent')

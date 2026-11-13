@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from backend import api
 from backend.models import Placement, DatedLesson
 from backend.seed import initial_state
+import backend.access as access_module
 from backend.access import COOKIE, password_matches
 
 PASSWORD='test password with spaces '
@@ -66,18 +67,17 @@ def test_setup_enables_auth_atomically_without_changing_schedule(client):
     assert stored!=client.cookies.get(COOKIE)
 
 
-def test_cookies_csrf_logout_and_expiry(client):
+def test_cookies_csrf_logout_and_expiry(client,monkeypatch):
     response=client.post('/api/auth/setup',json=dict(name='Admin',login='admin',password=PASSWORD))
     cookie=response.headers['set-cookie']
-    assert 'HttpOnly' in cookie and 'SameSite=strict' in cookie and 'Max-Age=43200' in cookie
+    assert 'HttpOnly' in cookie and 'SameSite=strict' in cookie and 'Max-Age=' in cookie
     assert client.post('/api/auth/logout',headers={'X-Atlas-Request':'0'}).status_code==403
     assert client.post('/api/auth/logout',headers={'Origin':'https://evil.example'}).status_code==403
     assert client.post('/api/auth/logout').status_code==200
     assert client.get('/api/state').status_code==401
-    c=signed('admin')
-    with api.connect() as db: db.execute('UPDATE sessions SET expires=?',((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
+    c=signed('admin');assert c.get('/api/state').status_code==200
+    monkeypatch.setattr(access_module,'now',lambda:datetime.now(timezone.utc)+timedelta(days=30))
     assert c.get('/api/state').status_code==401
-
 
 def test_editor_workspace_access_cas_and_attribution(client):
     enable(client);user=create(client)
@@ -157,12 +157,13 @@ def test_password_change_revokes_other_sessions_and_preserves_current(client):
 
 def test_login_attempts_are_limited_and_dont_disclose_account_existence(client):
     enable(client);other=TestClient(api.app,headers=HEADERS)
-    for _ in range(8):
-        assert other.post('/api/auth/login',json=dict(login='admin',password='wrong')).status_code==401
-    assert other.post('/api/auth/login',json=dict(login='admin',password=PASSWORD)).status_code==429
+    wrong=other.post('/api/auth/login',json=dict(login='admin',password='wrong'))
     unknown=other.post('/api/auth/login',json=dict(login='unknown',password='wrong'))
-    assert unknown.status_code==401 and unknown.json()['detail']=='Неверный логин или пароль.'
-
+    assert wrong.status_code==unknown.status_code==401 and wrong.json()==unknown.json()
+    statuses=[other.post('/api/auth/login',json=dict(login='admin',password='wrong')).status_code for _ in range(100)]
+    assert 429 in statuses and set(statuses[:statuses.index(429)])=={401}
+    assert other.post('/api/auth/login',json=dict(login='unknown',password='wrong')).status_code==401  # only the attacked login is limited
+    assert other.post('/api/auth/login',json=dict(login='admin',password=PASSWORD)).status_code==429
 
 def test_publication_link_stays_public_without_exposing_workspace(client):
     enable(client)
@@ -181,23 +182,30 @@ def test_unconfigured_remote_access_and_dns_rebinding_host_are_denied(client):
     assert rebound.get('/api/state').status_code==403
 
 
-def test_presence_shows_other_editors_and_remote_revision_without_overwriting(client):
-    enable(client);create(client);editor=signed('editor')
-    before=api.read('demo')
-    p=editor.post('/api/collaboration/presence?workspace=demo',json=dict(clientId='editor-tab',page='planner')).json()
-    assert p['revision']==before.revision
-    p=client.post('/api/collaboration/presence?workspace=demo',json=dict(clientId='admin-tab',page='access')).json()
-    assert p['peers'][0]['name']=='Сотрудник' and p['peers'][0]['page']=='planner'
-    changed=before.model_copy(deep=True);changed.settings.name='Новая версия';api.save('demo',changed)
-    p=editor.post('/api/collaboration/presence?workspace=demo',json=dict(clientId='editor-tab',page='planner')).json()
-    assert p['revision']==before.revision+1
-    assert editor.put('/api/state?workspace=demo',json=before.model_dump(mode='json')).status_code==409
-    with api.connect() as db: db.execute('UPDATE presence SET updated=? WHERE client_id=?',((datetime.now(timezone.utc)-timedelta(seconds=80)).isoformat(),'admin-tab'))
-    assert editor.post('/api/collaboration/presence?workspace=demo',json=dict(clientId='editor-tab')).json()['peers']==[]
-    create(client,'student')
-    assert signed('student').post('/api/collaboration/presence?workspace=demo',json=dict(clientId='student-tab')).status_code==403
-    assert editor.post('/api/collaboration/presence?workspace=school',json=dict(clientId='editor-tab')).status_code==403
+def presence(c,client_id,page=None,workspace='demo'):
+    return c.post(f'/api/collaboration/presence?workspace={workspace}',json=dict(clientId=client_id)|({'page':page} if page else {}))
 
+def test_presence_shows_other_editors(client):
+    enable(client);create(client);editor=signed('editor')
+    assert presence(editor,'editor-tab','planner').json()['revision']==api.read('demo').revision
+    p=presence(client,'admin-tab','access').json()
+    assert p['peers'][0]['name']=='Сотрудник' and p['peers'][0]['page']=='planner'
+
+def test_presence_is_closed_to_pupils_and_foreign_workspaces(client):
+    enable(client);create(client);create(client,'student')
+    assert presence(signed('student'),'student-tab').status_code==403
+    assert presence(signed('editor'),'editor-tab',workspace='school').status_code==403
+
+def test_presence_reports_the_revision_after_another_save(client):
+    enable(client);create(client);editor=signed('editor');before=api.read('demo')
+    changed=before.model_copy(deep=True);changed.settings.name='Новая версия';api.save('demo',changed)
+    assert presence(editor,'editor-tab').json()['revision']==before.revision+1
+
+def test_a_peer_disappears_after_it_stops_reporting(client,monkeypatch):
+    enable(client);create(client);editor=signed('editor')
+    presence(client,'admin-tab','access');assert presence(editor,'editor-tab').json()['peers']
+    monkeypatch.setattr(access_module,'now',lambda:datetime.now(timezone.utc)+timedelta(hours=1))
+    assert presence(editor,'editor-tab').json()['peers']==[]
 
 def test_local_recovery_preserves_school_and_revokes_sessions(client,monkeypatch,capsys):
     import sys

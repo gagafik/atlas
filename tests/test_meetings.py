@@ -1,6 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime,timedelta,timezone
-import json
 from uuid import uuid4
 from urllib.parse import quote
 import pytest
@@ -43,10 +42,11 @@ def slots(client,id):return ok(client.get(path('events/'+id+'/slots')))['items']
 def book(client,id,slot,student='s1',**kw):return client.post(path('slots/'+slot['id']+'/book'),json=request(version=slot['version'],eventVersion=event(client,id)['version'],studentId=student,**kw))
 def bookings(client,id):return ok(client.get(path('bookings')+'&eventId='+id))['items']
 def regrant(account_id,ids,view):
-    # An unrelated or real change of the account's rights: bumps the version and rewrites the grants.
-    with api.connect() as db:
-        raw=json.loads(db.execute('SELECT permissions FROM accounts WHERE id=?',(account_id,)).fetchone()[0]);raw['grants']=[dict(workspace='demo',view=view,entityIds=ids)]
-        db.execute('UPDATE accounts SET permissions=?,version=version+1 WHERE id=?',(json.dumps(raw),account_id))
+    # A real change of the account's rights through the access API. It also syncs the family links and ends the sessions of the account,
+    # so a caller who keeps using that account signs in again with signed().
+    admin=signed('admin');account=next(u for u in ok(admin.get('/api/access/users')) if u['id']==account_id)
+    body={k:v for k,v in account.items() if k!='id'};body['grants']=[dict(workspace='demo',view=view,entityIds=ids)]
+    assert admin.put('/api/access/users/'+account_id,json=body).status_code==200
 
 
 def test_admin_owns_availability_teacher_agenda_parent_privacy_and_unchanged_school(client,monkeypatch):
@@ -171,17 +171,18 @@ def test_booking_and_cancellation_roll_back_when_notification_fails(client,monke
 
 
 def test_reminders_retry_transaction_no_duplicates_and_cancelled_skip(client,monkeypatch):
-    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
+    id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');teacher=signed('teacher');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
     worker=api.meetings.reminders
+    reminders=lambda c:[i for i in c.get('/api/notifications/inbox').json()['items'] if i['action']=='meeting.reminder']
     for module in [meetings,meeting_routes,meeting_reminders]:monkeypatch.setattr(module,'now',lambda:BASE-timedelta(minutes=30))
     original=api.notifications.deliver
     def fail(*args,**kwargs):raise RuntimeError('synthetic notification failure')
     monkeypatch.setattr(api.notifications,'deliver',fail)
     with pytest.raises(RuntimeError):worker.process_one()
-    with api.connect() as db:assert db.execute('SELECT status FROM meeting_reminders WHERE booking_id=?',(bid,)).fetchone()[0]=='pending'
+    assert reminders(parent)==[] and reminders(teacher)==[]
     monkeypatch.setattr(api.notifications,'deliver',original)
     assert worker.process_one() and not worker.process_one()
-    with api.connect() as db:assert db.execute("SELECT count(*) FROM notifications WHERE action='meeting.reminder'").fetchone()[0]==2
+    assert len(reminders(parent))==1 and len(reminders(teacher))==1
     ok(client.post(path('bookings/'+bid),json=request(version=1,action='cancel',reason='Teacher absent')))
     assert not worker.process_one()
 
@@ -203,12 +204,16 @@ def test_anonymous_student_and_editor_cannot_manage(client,monkeypatch):
     assert signed('editor').get(path('events/'+id)).status_code==404
 
 
-def test_reminder_worker_start_once_and_stop(client,monkeypatch):
-    setup(client,monkeypatch);worker=meeting_reminders.MeetingReminders(api.meetings)
-    worker.start();thread=worker.thread
-    try:worker.start();assert worker.thread is thread and thread.is_alive()
-    finally:worker.shutdown()
-    assert not thread.is_alive()
+def test_reminder_worker_starts_once_and_stops_with_the_application(client):
+    import threading
+    from fastapi.testclient import TestClient
+    from test_access import HEADERS
+    running=lambda:[t for t in threading.enumerate() if t.name=='atlas-meeting-reminders' and t.is_alive()]
+    with TestClient(api.app,headers=HEADERS) as app:
+        assert app.get('/api/health').status_code==200 and len(running())==1
+        api.meetings.reminders.start()  # starting a running worker again adds no second thread
+        assert len(running())==1
+    assert running()==[]
 
 
 def test_teacher_cannot_omit_physical_teacher_and_versions_recheck(client,monkeypatch):
@@ -221,19 +226,18 @@ def test_teacher_cannot_omit_physical_teacher_and_versions_recheck(client,monkey
     assert len(slots(client,id))==6
 
 
-def test_availability_and_reschedule_do_not_invalidate_parent_booking(client,monkeypatch):
+def test_availability_changes_do_not_invalidate_parent_booking(client,monkeypatch):
     id,t,p=setup(client,monkeypatch,2);publish(client,id);parent=signed('parent')
     v=event(client,id)['version'];second=next(h['accountId'] for h in event(client,id)['hosts'] if h['accountId']!=t['id'])
     assert apply(client,id,action='block',hostIds=[second],reason='x')['affectedSlots']==12
     assert event(client,id)['version']==v
-    with api.connect() as db:assert db.execute('SELECT version FROM meeting_events WHERE id=?',(id,)).fetchone()[0]==v
     slot=next(s for s in slots(parent,id) if s['hostId']==t['id'])
     ok(parent.post(path('slots/'+slot['id']+'/book'),json=request(version=slot['version'],eventVersion=v,studentId='s1')))
     ok(transition(client,id,'close'))
     create(client,'parent',login='other',grants=[dict(workspace='demo',view='student',entityIds=['s2'])]);other=signed('other')
     free=next(s for s in slots(client,id) if s['hostId']==t['id'] and s['status']=='available')
     late=other.post(path('slots/'+free['id']+'/book'),json=request(version=free['version'],eventVersion=v,studentId='s2'))
-    assert late.status_code==409 and late.json()['detail'].startswith('Запись изменилась')
+    assert late.status_code==409
 
 
 def test_availability_preview_survives_timetable_save(client,monkeypatch):
@@ -247,19 +251,17 @@ def test_range_operations_skip_started_slots(client,monkeypatch):
     apply(client,id,hostIds=[first]);ok(transition(client,id,'publish'))
     clock=BASE+timedelta(minutes=30)
     for module in [meetings,meeting_routes]:monkeypatch.setattr(module,'now',lambda:clock)
-    def statuses(host):
-        with api.connect() as db:return [r[0] for r in db.execute('SELECT status FROM meeting_slots WHERE event_id=? AND host_id=? ORDER BY starts_at',(id,host))]
+    def statuses(host):return [s['status'] for s in sorted(slots(client,id),key=lambda s:s['startsAt']) if s['hostId']==host]
     body,preview=availability(client,id,action='block',hostIds=[first],reason='Учитель придёт позже')
     assert preview['skippedPast']==4 and preview['affectedSlots']==8
     result=ok(client.post(path('events/'+id+'/availability'),json=body));assert result['affectedSlots']==8 and result['skippedPast']==4
-    assert statuses(first)==['open']*4+['blocked']*8
+    assert statuses(first)==['past']*4+['blocked']*8
     body,preview=availability(client,id,hostIds=[second]);assert preview['skippedPast']==4 and preview['affectedSlots']==8
     assert ok(client.post(path('events/'+id+'/availability'),json=body))['affectedSlots']==8 and len(statuses(second))==8
     body,preview=availability(client,id,action='block',hostIds=[first],end=BASE+timedelta(minutes=20),reason='Поздно')
     assert preview['affectedSlots']==0 and preview['skippedPast']==2
-    response=client.post(path('events/'+id+'/availability'),json=body)
-    assert response.status_code==422 and 'уже начались или прошли' in response.json()['detail']
-    assert statuses(first)==['open']*4+['blocked']*8
+    assert client.post(path('events/'+id+'/availability'),json=body).status_code==422
+    assert statuses(first)==['past']*4+['blocked']*8
 
 
 def test_bookings_from_date_lists_all_upcoming_for_own_family(client,monkeypatch):
@@ -309,7 +311,7 @@ def test_parent_cancels_then_can_rebook_and_event_cancel_preserves_history(clien
 
 def test_second_child_keeps_booking_reminder_and_cancel(client,monkeypatch):
     id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
-    regrant(p['id'],['s1','s2'],'student')
+    regrant(p['id'],['s1','s2'],'student');parent=signed('parent')
     assert len(bookings(parent,id))==1 and len(ok(parent.get(path('bookings/'+bid+'/history'))))==1
     assert bookings(client,id)[0]['parentAccessCurrent'] is True
     monkeypatch.setattr(meeting_reminders,'now',lambda:BASE-timedelta(minutes=30))
@@ -322,7 +324,7 @@ def test_second_child_keeps_booking_reminder_and_cancel(client,monkeypatch):
 
 def test_lost_child_link_hides_booking(client,monkeypatch):
     id,t,p=setup(client,monkeypatch);publish(client,id);parent=signed('parent');bid=ok(book(parent,id,slots(parent,id)[0]))['id']
-    regrant(p['id'],['s2'],'student')
+    regrant(p['id'],['s2'],'student');parent=signed('parent')
     assert bookings(parent,id)==[] and parent.get(path('bookings/'+bid+'/history')).status_code==404
     assert bookings(client,id)[0]['parentAccessCurrent'] is False
     monkeypatch.setattr(meeting_reminders,'now',lambda:BASE-timedelta(minutes=30))

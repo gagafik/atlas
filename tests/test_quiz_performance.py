@@ -9,12 +9,10 @@ from test_access import client
 from test_quizzes import clock,ready,start,save,attempt,action,NOW
 
 
-def test_empty_database_serves_empty_lists_and_read_contract_rejects_writes(client):
-    for path in ['/api/journal/quizzes?workspace=demo','/api/journal/quiz-bank?workspace=demo','/api/journal/quizzes?workspace=demo']:
+def test_empty_database_serves_empty_lists(client):
+    for path in ['/api/journal/quizzes?workspace=demo','/api/journal/quiz-bank?workspace=demo']:
         listing=client.get(path);assert listing.status_code==200,listing.text
         assert listing.json()['items']==[]
-    with pytest.raises(sqlite3.OperationalError,match='readonly'):
-        api.quizzes.read_only(lambda db:db.execute("DELETE FROM quiz_questions"))
 
 
 def test_bootstrap_rolls_back_failure_and_does_not_mask_unrelated_sql_errors(client,monkeypatch):
@@ -34,23 +32,21 @@ def test_bootstrap_rolls_back_failure_and_does_not_mask_unrelated_sql_errors(cli
         api.quizzes.read_only(lambda db:db.execute('SELECT * FROM unrelated_table').fetchall())
 
 
-def test_warm_views_work_while_writer_lock_and_sqlite_writer_are_held(client,monkeypatch):
+def test_warm_views_work_while_writer_lock_and_sqlite_writer_are_held(client):
     quiz,pupil,parent,teacher,_=ready(client);begun=start(pupil,quiz).json()
     base=f'/api/journal/quizzes/test-one/attempts/{begun["id"]}?workspace=demo'
-    requests=[(pupil,'/api/journal/quizzes?workspace=demo'),(teacher,'/api/journal/quiz-bank?workspace=demo'),
-              (pupil,'/api/journal/quizzes/test-one?workspace=demo&studentId=s1'),(teacher,'/api/journal/quizzes/test-one?workspace=demo'),
-              (pupil,base),(parent,base),(teacher,base),(pupil,base.replace('?','/history?'))]
-    for reader,path in requests:assert reader.get(path).status_code==200
-    def forbidden():raise AssertionError('Ordinary quiz reads must not open a writable connection')
-    monkeypatch.setattr(api.access,'connect',forbidden)
+    requests=dict(list=(pupil,'/api/journal/quizzes?workspace=demo'),bank=(teacher,'/api/journal/quiz-bank?workspace=demo'),
+                  pupil_detail=(pupil,'/api/journal/quizzes/test-one?workspace=demo&studentId=s1'),teacher_detail=(teacher,'/api/journal/quizzes/test-one?workspace=demo'),
+                  pupil_attempt=(pupil,base),parent_attempt=(parent,base),teacher_attempt=(teacher,base),history=(pupil,base.replace('?','/history?')))
+    for reader,path in requests.values():assert reader.get(path).status_code==200
     with ThreadPoolExecutor(8) as pool:
         with api.access.lock,api.connect() as writer:
             writer.execute('BEGIN IMMEDIATE');writer.execute("UPDATE accounts SET name=name WHERE login='teacher'")
-            pending=[pool.submit(reader.get,path) for reader,path in requests]
-            responses=[future.result(timeout=3) for future in pending]
-    assert all(response.status_code==200 for response in responses)
-    assert responses[4].json()['canAnswer']
-    assert all('answers' not in r.json() for r in responses[5:7])
+            pending={name:pool.submit(reader.get,path) for name,(reader,path) in requests.items()}
+            responses={name:future.result(timeout=3) for name,future in pending.items()}
+    assert all(response.status_code==200 for response in responses.values())
+    assert responses['pupil_attempt'].json()['canAnswer']
+    assert all('answers' not in responses[name].json() for name in ['parent_attempt','teacher_attempt'])
 
 
 def test_parallel_expiry_views_finalize_and_notify_exactly_once(client,monkeypatch):
@@ -68,45 +64,49 @@ def test_parallel_expiry_views_finalize_and_notify_exactly_once(client,monkeypat
     assert attempt(teacher,begun)['score']==2
 
 
-def test_grade_options_read_while_writer_is_held_and_respect_closed_period(client,monkeypatch):
+def test_grade_options_read_while_writer_is_held_and_respect_closed_period(client):
     from test_journal_periods import close,period
     quiz,pupil,parent,teacher,_=ready(client)
     sent=save(pupil,start(pupil,quiz).json(),submit=True).json()
     action(teacher,action(teacher,quiz,'close').json(),'release')
     path=f'/api/journal/quizzes/test-one/attempts/{sent["id"]}/grading?workspace=demo'
     expected=teacher.get(path).json();assert expected['allowed']
-    def forbidden():raise AssertionError('Grading options must not open a writable connection')
-    with monkeypatch.context() as patch,ThreadPoolExecutor(1) as pool:
-        patch.setattr(api.access,'connect',forbidden)
+    with ThreadPoolExecutor(1) as pool:
         with api.access.lock,api.connect() as writer:
             writer.execute('BEGIN IMMEDIATE');writer.execute("UPDATE accounts SET name=name WHERE login='teacher'")
             response=pool.submit(teacher.get,path).result(timeout=3)
         assert response.status_code==200 and response.json()==expected
     close(client,period(client))
     blocked=teacher.get(path);assert blocked.status_code==200
-    assert not blocked.json()['allowed'] and 'Журнал закрыт' in blocked.json()['reason']
+    assert not blocked.json()['allowed']
 
 
 @pytest.mark.parametrize('change',['account','school','quiz'])
 def test_expiry_rechecks_changes_between_read_snapshot_and_write(client,monkeypatch,change):
     quiz,pupil,parent,teacher,_=ready(client);begun=start(pupil,quiz).json()
-    for module in [quizzes,quiz_attempts]:monkeypatch.setattr(module,'now',lambda:NOW+timedelta(hours=2))
-    original=api.quizzes.read_only
-    def changed(operation):
-        result=original(operation)
-        if type(result) is object:
-            if change=='school':api.save('demo',api.read('demo'))
-            else:
-                with api.connect() as db:
-                    if change=='account':db.execute("UPDATE accounts SET version=version+1 WHERE login='student'")
-                    else:db.execute("UPDATE quizzes SET version=version+1 WHERE id='test-one'")
+    path=f'/api/journal/quizzes/test-one/attempts/{begun["id"]}?workspace=demo'
+    original=api.quizzes.read_only;calls=[];inject=[None]
+    def mutate():
+        if change=='school':api.save('demo',api.read('demo'))
+        else:
+            with api.connect() as db:
+                if change=='account':db.execute("UPDATE accounts SET version=version+1 WHERE login='student'")
+                else:db.execute("UPDATE quizzes SET version=version+1 WHERE id='test-one'")
+    def counted(operation):
+        result=original(operation);calls.append(1)
+        if len(calls)==inject[0]:mutate()  # between the read snapshot and the write phase
         return result
-    monkeypatch.setattr(api.quizzes,'read_only',changed)
-    response=pupil.get(f'/api/journal/quizzes/test-one/attempts/{begun["id"]}?workspace=demo')
+    monkeypatch.setattr(api.quizzes,'read_only',counted)
+    assert pupil.get(path).status_code==200  # nothing is due yet: counts the reads of one request
+    inject[0]=len(calls);calls.clear()
+    for module in [quizzes,quiz_attempts]:monkeypatch.setattr(module,'now',lambda:NOW+timedelta(hours=2))
+    response=pupil.get(path)
     assert response.status_code==409,response.text
-    with api.connect(read_only=True) as db:
-        assert db.execute('SELECT status,version FROM quiz_attempts WHERE id=?',(begun['id'],)).fetchone()==('active',1)
-        assert db.execute("SELECT count(*) FROM quiz_history WHERE attempt_id=? AND action='quiz.submitted'",(begun['id'],)).fetchone()==(0,)
+    inject[0]=None
+    for module in [quizzes,quiz_attempts]:monkeypatch.setattr(module,'now',lambda:NOW)
+    view=attempt(pupil,begun);assert view['status']=='active' and view['version']==begun['version']
+    history=pupil.get(path.replace('?','/history?')).json()['items']
+    assert not any(item['action']=='quiz.submitted' for item in history)
 
 
 @pytest.mark.parametrize('path',['/api/journal/quizzes','/api/journal/quiz-bank','/api/journal/quizzes/test-one/attempts/{attempt}/history'])

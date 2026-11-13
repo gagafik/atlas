@@ -1,13 +1,11 @@
 import { expect, it } from "vitest";
 import {
   codeBreakdown,
-  codeName,
   codeSetError,
   defaultChild,
   formLocks,
   lessonEdge,
   noticeQuery,
-  schoolSubmitLabel,
   sharedDecision,
   staleSchoolPreview,
 } from "./absenceForm";
@@ -55,6 +53,7 @@ const lesson = { date: "2026-08-17", start: "08:30", end: "09:10" };
 const codes = [
   { id: "illness", name: "Болезнь" },
   { id: "school", name: "Представляет школу" },
+  { id: "family", name: "Семейные обстоятельства" },
 ];
 
 it("sets the first lesson from its start and the last lesson to its end", () => {
@@ -68,20 +67,18 @@ it("sets the first lesson from its start and the last lesson to its end", () => 
   });
 });
 
-it("names a type by its id and falls back to no type", () => {
-  expect(codeName(codes, "illness")).toBe("Болезнь");
-  expect(codeName(codes, null)).toBe("Без типа");
-  expect(codeName(codes, "")).toBe("Без типа");
-  expect(codeName(codes, undefined)).toBe("Без типа");
-});
-
 it("builds the list query without empty values", () => {
-  expect(noticeQuery({ status: "all", classId: "c a" })).toBe(
-    "status=all&classId=c+a",
-  );
+  const pairs = (query: string) =>
+    Object.fromEntries(new URLSearchParams(query));
+  expect(pairs(noticeQuery({ status: "all", classId: "c a" }))).toEqual({
+    status: "all",
+    classId: "c a",
+  });
   expect(
-    noticeQuery({ status: "pending", classId: "", start: "", before: 7 }),
-  ).toBe("status=pending&before=7");
+    pairs(
+      noticeQuery({ status: "pending", classId: "", start: "", before: 7 }),
+    ),
+  ).toEqual({ status: "pending", before: "7" });
 });
 
 it("refuses a type list the server would refuse", () => {
@@ -90,11 +87,6 @@ it("refuses a type list the server would refuse", () => {
   expect(codeSetError([ok, { name: " болезнь ", active: true }])).not.toBe("");
   expect(codeSetError([ok, { name: "  ", active: true }])).not.toBe("");
   expect(codeSetError([{ ...ok, active: false }])).not.toBe("");
-});
-
-it("labels the school note button by the number of pupils", () => {
-  expect(schoolSubmitLabel(1)).toBe("Внести записку");
-  expect(schoolSubmitLabel(3)).toBe("Внести записки (3)");
 });
 
 it("drops a school preview only when the server reports it as stale", () => {
@@ -118,10 +110,17 @@ it("calls only joint approvals and rejections a shared decision", () => {
 });
 
 it("lists the excused lessons per type and skips zeros", () => {
-  expect(codeBreakdown({ illness: 2, school: 1 }, codes)).toBe(
-    "Болезнь 2, Представляет школу 1",
-  );
-  expect(codeBreakdown({ illness: 0, "": 3 }, codes)).toBe("Без типа 3");
+  const text = codeBreakdown({ illness: 2, school: 4, family: 0 }, codes);
+  for (const part of ["Болезнь", "Представляет школу", "2", "4"])
+    expect(text).toContain(part);
+  expect(text).not.toContain("Семейные обстоятельства");
+  expect(text).not.toContain("0");
+});
+
+it("counts the lessons without a type apart from the typed ones", () => {
+  const text = codeBreakdown({ illness: 0, "": 3 }, codes);
+  expect(text).toContain("3");
+  expect(text).not.toContain("Болезнь");
   expect(codeBreakdown({}, codes)).toBe("");
   expect(codeBreakdown(undefined, codes)).toBe("");
 });

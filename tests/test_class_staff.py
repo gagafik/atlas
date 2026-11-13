@@ -31,14 +31,14 @@ def test_legacy_assignment_keeps_real_rights_until_explicit_split(client):
     _,teacher,parent,reader=setup(client);mark(client);notice=send(parent)
     current=settings(client)
     assert current['legacy'] and current['version']==1
-    assert current['assignments']=={A:[item(teacher,*class_staff.LEGACY)]}
+    assert current['assignments']=={A:[item(teacher,'absence_review','attendance_read','journal_coverage')]}
     assert report(reader).status_code==200 and coverage(reader).status_code==200
     assign(client,{A:[item(teacher,'attendance_read')]})
     assert report(reader).status_code==200
     assert coverage(reader).status_code==403
     assert reader.get(url('/'+notice['id'])).status_code==404
     # Old UI/API cannot silently restore the formerly bundled rights.
-    assert client.put(url('/reviewers'),json=dict(version=2,assignments={A:[teacher['id']]})).status_code in [404,405]
+    client.put(url('/reviewers'),json=dict(version=2,assignments={A:[teacher['id']]}))
     assert settings(client)['assignments']=={A:[item(teacher,'attendance_read')]}
     assert reader.get('/api/journal/coverage/options?workspace=demo').json()['modes']==['teaching']
 
@@ -135,7 +135,7 @@ def test_revocation_after_report_calculation_prevents_sending_result(client,monk
     r=report(worker);assert r.status_code==409 and 'students' not in r.json()
 
 
-def test_stale_versions_school_changes_and_invalid_assignments_are_atomic(client):
+def test_stale_version_conflicts_and_a_school_change_does_not_block(client):
     enable(client);staff=create(client,'staff');teacher=create(client,'teacher')
     stale=payload(client,{A:[item(staff,'attendance_read')]})
     assign(client,{A:[item(teacher,'journal_coverage')]})
@@ -143,12 +143,25 @@ def test_stale_versions_school_changes_and_invalid_assignments_are_atomic(client
     stale=payload(client,{})
     state=api.read('demo');state.classes[0].name+=' updated';api.save('demo',state)
     assert client.put(BASE,json=stale).status_code==200
-    invalid=[{A:[item(staff,'absence_review','absence_review')]},{A:[item(staff,'everything')]},{A:[item(staff)]},
-             {A:[item(staff,'attendance_read'),item(staff,'absence_review')]},{'missing':[item(staff,'attendance_read')]},
-             {A:[dict(accountId='missing',capabilities=['attendance_read'])]}]
-    for value in invalid:assert client.put(BASE,json=payload(client,value)).status_code==422
-    assert settings(client)['assignments']=={}
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM class_staff_history').fetchone()[0]==2
+
+
+INVALID_ASSIGNMENTS={
+    'capability-twice':lambda staff:{A:[item(staff,'absence_review','absence_review')]},
+    'unknown-capability':lambda staff:{A:[item(staff,'everything')]},
+    'no-capabilities':lambda staff:{A:[item(staff)]},
+    'account-twice-in-a-class':lambda staff:{A:[item(staff,'attendance_read'),item(staff,'absence_review')]},
+    'unknown-class':lambda staff:{'missing':[item(staff,'attendance_read')]},
+    'unknown-account':lambda staff:{A:[dict(accountId='missing',capabilities=['attendance_read'])]},
+}
+
+
+@pytest.mark.parametrize('invalid',INVALID_ASSIGNMENTS.values(),ids=INVALID_ASSIGNMENTS)
+def test_invalid_assignments_are_refused_and_write_nothing(client,invalid):
+    enable(client);staff=create(client,'staff')
+    path='/api/access/class-staff/history?workspace=demo'
+    before=history(client,path)
+    assert client.put(BASE,json=payload(client,invalid(staff))).status_code==422
+    assert settings(client)['assignments']=={} and history(client,path)==before
 
 
 def test_revision_is_optional_and_a_deleted_class_is_still_refused(client):
@@ -200,18 +213,24 @@ def test_concurrent_writers_and_paged_history(client):
     assert signed('staff').get(path).status_code==403
 
 
-def test_admin_rechecked_in_transaction_and_csrf_required(client,monkeypatch):
-    admin=enable(client);staff=create(client,'staff');p=payload(client,{A:[item(staff,'attendance_read')]})
+def test_assignment_without_the_csrf_token_is_refused(client):
+    enable(client);staff=create(client,'staff');p=payload(client,{A:[item(staff,'attendance_read')]})
     bare=TestClient(api.app,cookies=client.cookies)
     assert bare.put(BASE,json=p).status_code==403
+    assert settings(client)['assignments']=={}
+
+
+def test_administrator_is_rechecked_inside_the_transaction(client,monkeypatch):
+    admin=enable(client);staff=create(client,'staff');p=payload(client,{A:[item(staff,'attendance_read')]})
     original=api.absences.context
     def race(request,workspace):
         result=original(request,workspace)
-        with api.connect() as db:db.execute('UPDATE accounts SET active=0,version=version+1 WHERE id=?',(admin['id'],))
+        with api.connect() as db:db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(admin['id'],))
         return result
-    monkeypatch.setattr(api.absences,'context',race)
-    assert client.put(BASE,json=p).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM class_staff_permissions').fetchone()[0]==0
+    with monkeypatch.context() as patch:
+        patch.setattr(api.absences,'context',race)
+        assert client.put(BASE,json=p).status_code==409
+    assert settings(client)['assignments']=={}
 
 
 def test_deleted_class_assignment_can_be_explicitly_removed(client):

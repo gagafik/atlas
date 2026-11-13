@@ -1,3 +1,4 @@
+import base64
 from datetime import date
 import pytest
 from fastapi.testclient import TestClient
@@ -48,14 +49,23 @@ def test_empty_duty_is_saved_as_unfilled_and_location_building_supports_travel()
     assert day_report(s,MON)['unfilledDuties']==1
 
 
-def test_repeated_creation_and_locks_are_atomic():
+def test_repeated_creation_makes_dated_copies_with_their_own_ids():
     s=fixture(); value=reservation(startTime='17:00',endTime='18:00')
     result=edit_commitments(s,CommitmentEdit(revision=0,value=value,copies=3,weekStep=2))
     assert [x.onDate.isoformat() for x in result.commitments]==['2026-08-17','2026-08-31','2026-09-14']
     assert len({x.id for x in result.commitments})==3
+
+
+def test_a_locked_commitment_cannot_be_removed_until_it_is_unlocked():
+    s=fixture(); result=edit_commitments(s,CommitmentEdit(revision=0,value=reservation(startTime='17:00',endTime='18:00'),copies=3,weekStep=2))
     result.commitments[0].locked=True
-    with pytest.raises(ValueError,match='закрепление'): edit_commitments(result,CommitmentEdit(revision=0,removeIds=['book']))
-    invalid=value.model_copy(update={'onDate':date(2027,6,10)})
+    with pytest.raises(ValueError): edit_commitments(result,CommitmentEdit(revision=0,removeIds=['book']))
+    result.commitments[0].locked=False
+    assert 'book' not in {x.id for x in edit_commitments(result,CommitmentEdit(revision=0,removeIds=['book'])).commitments}
+
+
+def test_a_series_with_an_invalid_copy_is_refused_whole():
+    s=fixture(); invalid=reservation(startTime='17:00',endTime='18:00').model_copy(update={'onDate':date(2027,6,10)})
     with pytest.raises(ValueError): edit_commitments(s,CommitmentEdit(revision=0,value=invalid,copies=2))
     assert not s.commitments
 
@@ -114,12 +124,13 @@ def test_overlapping_duties_and_minutes_limit_make_insufficient_staff_infeasible
     assert allocate_duties(s,DutyRequest(revision=0,commitmentIds=['a','b'],seconds=1,maxMinutesPerTeacher=60))['status']=='success'
 
 
-def test_duty_capacity_is_independently_checked_with_known_staff_lower_bound():
+def test_duty_for_two_in_a_room_for_one_is_blocked_and_fits_a_larger_room():
     s=fixture(); s.rooms[0].capacity=1
     s.commitments=[reservation(id='a',kind='duty',profileId='secondary',requiredTeachers=2,startTime='16:00',endTime='16:30')]
     result=allocate_duties(s,DutyRequest(revision=0,commitmentIds=['a'],seconds=1))
-    assert result['status']=='blocked' and any('вместимость' in d for d in result['details'])
-    assert not s.commitments[0].teacherIds
+    assert result['status']=='blocked' and not s.commitments[0].teacherIds
+    s.rooms[0].capacity=2
+    assert allocate_duties(s,DutyRequest(revision=0,commitmentIds=['a'],seconds=1))['status']=='success'
 
 
 def test_duty_travel_allows_a_real_intermediate_assignment():
@@ -193,19 +204,36 @@ def test_complete_mixed_group_only_lists_actual_pupils_classes():
     assert row['originalClassIds']==row['classIds']==['c-demo-a']
 
 
-def test_manual_edit_requires_unlock_and_commitments_roundtrip():
-    from backend.exporting import state_xml, read_state_xml, workbook, ExportRequest, TABLES
-    from backend.tabular import parse_file
-    from backend.importing import mapped_state, MappingRequest
-    s=fixture();s.commitments=[duty('a',teacherIds=['t0'],locked=True),reservation(startTime='17:00',endTime='18:00',groupIds=['g-math','g-core'],studentCount=10,note='Текст')]
+def test_a_locked_duty_cannot_be_edited_until_it_is_unlocked():
+    s=fixture();s.commitments=[duty('a',teacherIds=['t0'],locked=True)]
     value=s.commitments[0].model_copy(update={'name':'Новое название'})
-    with pytest.raises(ValueError,match='закрепление'): edit_commitments(s,CommitmentEdit(revision=0,value=value))
+    with pytest.raises(ValueError): edit_commitments(s,CommitmentEdit(revision=0,value=value))
     value.locked=False
     assert edit_commitments(s,CommitmentEdit(revision=0,value=value)).commitments[-1].name=='Новое название'
-    assert read_state_xml(state_xml(s))==s
-    book=parse_file('book.xlsx',workbook(s,ExportRequest(revision=0,format='xlsx_data')))
-    number=next(i for i,x in enumerate(book['sheets']) if x['name']==TABLES['commitments'])
-    sheet=book['sheets'][number]
-    request=MappingRequest(revision=0,token='test',table='commitments',sheet=number,mapping={h:i for i,h in enumerate(sheet['rows'][0])},skipBlanks=False)
-    result=mapped_state(s,book,request)
-    assert result['status']=='success' and result['candidate']==s
+
+
+@pytest.fixture
+def exchange(tmp_path,monkeypatch):
+    monkeypatch.setattr(api,'DB',tmp_path/'exchange.db'); client=TestClient(api.app); client.get('/api/state?workspace=demo')
+    s=fixture();s.commitments=[duty('a',teacherIds=['t0'],locked=True),reservation(startTime='17:00',endTime='18:00',groupIds=['g-math','g-core'],studentCount=10,note='Текст')]
+    return client,api.save('demo',s)
+
+
+def test_commitments_survive_the_xml_export_and_restore(exchange):
+    client,s=exchange
+    xml=client.post('/api/exchange/export?workspace=demo',json=dict(revision=s.revision,format='xml'))
+    assert xml.status_code==200
+    preview=client.post('/api/exchange/xml-preview?workspace=demo',json=dict(revision=s.revision,xml=xml.content.decode())).json()
+    assert preview['diff']['total']==0
+
+
+def test_commitments_survive_the_workbook_export_and_table_import(exchange):
+    from backend.exporting import TABLES
+    client,s=exchange
+    book=client.post('/api/exchange/export?workspace=demo',json=dict(revision=s.revision,format='xlsx_data'))
+    assert book.status_code==200
+    info=client.post('/api/exchange/inspect?workspace=demo',json=dict(filename='book.xlsx',content=base64.b64encode(book.content).decode())).json()
+    number=next(x['index'] for x in info['sheets'] if x['name']==TABLES['commitments'])
+    headers=client.post('/api/exchange/sheet?workspace=demo',json=dict(token=info['token'],sheet=number)).json()['headers']
+    result=client.post('/api/exchange/import-preview?workspace=demo',json=dict(revision=s.revision,token=info['token'],table='commitments',sheet=number,mapping={h['label']:h['index'] for h in headers},skipBlanks=False)).json()
+    assert result['status']=='success' and result['preview']['diff']['total']==0

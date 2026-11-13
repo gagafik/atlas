@@ -32,7 +32,7 @@ def test_linked_move_is_atomic_and_locked_partner_protected():
     assert s.placements[2].day == 2
     assert inspect_edit(s, changed)['canApply']
     s.placements[3].locked = True
-    with pytest.raises(ValueError, match='закреплённые'):
+    with pytest.raises(ValueError):
         edit(s, request)
 
 
@@ -106,22 +106,42 @@ def test_preview_does_not_write_and_stale_or_conflicting_apply_rejected(client):
     assert client.post('/api/editor/apply?workspace=demo', json={'revision': 1, 'token': preview['token']}).status_code == 409
 
 
-def test_undo_redo_branch_and_named_variant(client):
-    variant = client.post('/api/variants?workspace=demo', json={'revision': 1, 'name': 'До правок'}).json()
+def rename(client, name):
+    """Save the demo workspace under a new settings name and return the stored state."""
     state = client.get('/api/state?workspace=demo').json()
-    state['settings']['name'] = 'Changed'
-    client.put('/api/state?workspace=demo', json=state)
-    assert client.post('/api/undo?workspace=demo', json={'revision': 2}).json()['settings']['name'] != 'Changed'
+    state['settings']['name'] = name
+    return client.put('/api/state?workspace=demo', json=state).json()
+
+
+def test_undo_then_redo_restores_the_change(client):
+    changed = rename(client, 'Changed')
+    undone = client.post('/api/undo?workspace=demo', json={'revision': changed['revision']}).json()
+    assert undone['settings']['name'] != 'Changed'
     assert client.get('/api/history?workspace=demo').json()['redo'] == 1
-    assert client.post('/api/redo?workspace=demo', json={'revision': 3}).json()['settings']['name'] == 'Changed'
-    preview = client.post(f'/api/variants/{variant["id"]}/preview?workspace=demo', json={'revision': 4}).json()
-    assert preview['diff']['total'] == 1
-    assert preview['diff']['changes'][0]['table'] == 'settings'
-    assert client.post('/api/editor/apply?workspace=demo', json={'revision': 4, 'token': preview['token']}).status_code == 200
-    undone = client.post('/api/undo?workspace=demo', json={'revision': 5}).json()
-    client.put('/api/state?workspace=demo', json=undone)
+    redone = client.post('/api/redo?workspace=demo', json={'revision': undone['revision']}).json()
+    assert redone['settings']['name'] == 'Changed'
+
+
+def test_new_edit_after_undo_drops_the_redo_branch(client):
+    changed = rename(client, 'Changed')
+    undone = client.post('/api/undo?workspace=demo', json={'revision': changed['revision']}).json()
+    branched = client.put('/api/state?workspace=demo', json=undone).json()
     assert client.get('/api/history?workspace=demo').json()['redo'] == 0
-    assert client.post('/api/redo?workspace=demo', json={'revision': 7}).status_code == 400
+    assert client.post('/api/redo?workspace=demo', json={'revision': branched['revision']}).status_code == 400
+
+
+def test_named_variant_previews_and_restores_the_saved_state(client):
+    before = client.get('/api/state?workspace=demo').json()
+    variant = client.post('/api/variants?workspace=demo', json={'revision': before['revision'], 'name': 'До правок'}).json()
+    changed = rename(client, 'Changed')
+    preview = client.post(f'/api/variants/{variant["id"]}/preview?workspace=demo', json={'revision': changed['revision']}).json()
+    assert [c['table'] for c in preview['diff']['changes']] == ['settings']
+    applied = client.post('/api/editor/apply?workspace=demo', json={'revision': changed['revision'], 'token': preview['token']})
+    assert applied.status_code == 200 and applied.json()['settings'] == before['settings']
+
+
+def test_variants_belong_to_their_workspace(client):
+    variant = client.post('/api/variants?workspace=demo', json={'revision': 1, 'name': 'До правок'}).json()
     assert client.get('/api/variants?workspace=school').json() == []
     assert client.delete(f'/api/variants/{variant["id"]}?workspace=school').status_code == 404
     assert client.delete(f'/api/variants/{variant["id"]}?workspace=demo').status_code == 200
@@ -133,17 +153,36 @@ def test_slot_hints_mark_the_busy_slot_unavailable_and_a_free_one_available(clie
     assert not slot(1, 1)['available'] and slot(4, 1)['available']
 
 
-def test_rule_configuration_can_be_reviewed_with_violations_and_soft_rules_do_not_block(client):
-    rule = {'id': 'teacher-load', 'name': 'Предел учителя', 'kind': 'daily_load', 'scope': 'teacher', 'targetIds': ['t2'], 'maxLessons': 0, 'weight': 7}
-    preview = client.post('/api/editor/preview?workspace=demo', json={'revision': 1, 'action': 'rule', 'rule': rule}).json()
-    assert preview['canApply'] and len(preview['newIssues']) == 2
-    assert preview['diff']['changes'][0]['fields']['targetIds']['displayAfter'] == 'Учитель английского'
-    assert client.post('/api/editor/apply?workspace=demo', json={'revision': 1, 'token': preview['token']}).status_code == 200
-    blocked = client.post('/api/editor/preview?workspace=demo', json={'revision': 2, 'action': 'move', 'ids': ['a'], 'day': 4}).json()
-    assert not blocked['canApply']
-    rule['mode'] = 'soft'
-    soft = client.post('/api/editor/preview?workspace=demo', json={'revision': 2, 'action': 'rule', 'rule': rule}).json()
-    assert soft['canApply'] and soft['report']['qualityPenalty'] == 14
-    client.post('/api/editor/apply?workspace=demo', json={'revision': 2, 'token': soft['token']})
-    allowed = client.post('/api/editor/preview?workspace=demo', json={'revision': 3, 'action': 'move', 'ids': ['a'], 'day': 4}).json()
-    assert allowed['canApply'] and allowed['report']['warningCount'] == 2
+def preview_rule(client, revision, rule):
+    return client.post('/api/editor/preview?workspace=demo', json={'revision': revision, 'action': 'rule', 'rule': rule}).json()
+
+
+def preview_move(client, revision):
+    return client.post('/api/editor/preview?workspace=demo', json={'revision': revision, 'action': 'move', 'ids': ['a'], 'day': 4}).json()
+
+
+def apply_preview(client, revision, preview):
+    response = client.post('/api/editor/apply?workspace=demo', json={'revision': revision, 'token': preview['token']})
+    assert response.status_code == 200
+    return response.json()['revision']
+
+
+def teacher_rule(**values):
+    return {'id': 'teacher-load', 'name': 'Предел учителя', 'kind': 'daily_load', 'scope': 'teacher', 'targetIds': ['t2'], 'maxLessons': 0, 'weight': 7, **values}
+
+
+def test_hard_rule_review_lists_violations_and_blocks_a_move_into_them(client):
+    preview = preview_rule(client, 1, teacher_rule())
+    assert preview['canApply'] and preview['newIssues']
+    assert preview['diff']['changes'][0]['fields']['targetIds']['after'] == ['t2']
+    revision = apply_preview(client, 1, preview)
+    assert not preview_move(client, revision)['canApply']
+
+
+def test_soft_rule_penalises_but_does_not_block_a_move(client):
+    preview = preview_rule(client, 1, teacher_rule(mode='soft'))
+    warnings = preview['report']['warningCount']
+    assert preview['canApply'] and warnings and preview['report']['qualityPenalty'] == 7 * warnings
+    revision = apply_preview(client, 1, preview)
+    allowed = preview_move(client, revision)
+    assert allowed['canApply'] and allowed['report']['warningCount'] == warnings

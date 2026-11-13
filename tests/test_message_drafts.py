@@ -3,7 +3,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from backend import api, message_files
+from backend import api, homework_files
 from backend.access import now
 from test_access import client, signed
 from test_messages import setup, url, payload, detail
@@ -86,28 +86,20 @@ def test_send_racing_save_never_discards_newer_text(client):
     else:assert get(parent,id).status_code==404
 
 
-def test_saved_files_survive_cleanup_restore_and_publication(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_saved_draft_file_survives_cleanup_run_by_the_next_upload_and_publishes(client,monkeypatch):
     people=setup(client);parent=signed('parent');id=str(uuid4())
     file=upload(parent,id).json();orphan=upload(parent,str(uuid4())).json()
     body=payload(people['teacher']['id'])|dict(draftId=id,fileIds=[file['id']],draftVersion=1)
     assert save(parent,id,body).status_code==200
-    with api.connect() as db:
-        db.execute('UPDATE message_files SET created=?',((now()-timedelta(days=3)).isoformat(),))
-        message_files.collect_unused(db)
+    later=now()+timedelta(days=3);monkeypatch.setattr(homework_files,'now',lambda:later)
+    assert upload(parent,str(uuid4())).status_code==200
     assert download(parent,file['id']).status_code==200
     assert download(parent,orphan['id']).status_code==404
     assert parent.delete(url('files/'+file['id'])).status_code==409
     assert len(get(parent,id).json()['files'])==1
-    source=api.DB;target=tmp_path/'draft-backup'
-    create_backup(source,target)
-    monkeypatch.setattr(api,'DB',target/source.name)
-    assert get(parent,id).json()['content']['fileIds']==[file['id']]
-    assert download(parent,file['id']).content==b'Private attachment'
     assert download(signed('teacher'),file['id']).status_code==404
     sent=parent.post(url(),json=body);assert sent.status_code==200,sent.text
-    with api.connect() as db:message_files.collect_unused(db)
-    assert download(signed('teacher'),file['id']).status_code==200
+    assert download(signed('teacher'),file['id']).content==b'Private attachment'
 
 
 def test_draft_files_cannot_cross_account_form_or_reply_target(client):
@@ -126,23 +118,27 @@ def test_draft_files_cannot_cross_account_form_or_reply_target(client):
 def test_reply_drafts_closed_group_revocation_and_send(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
     id=str(uuid4());body=dict(requestId=str(uuid4()),title='Reply',text='Ответ',draftId=id)
+    version=lambda user=teacher:detail(user,thread)['version']
+    saved=lambda draft:get(parent,draft).json()['version']
+    manage=lambda action:teacher.post(url('threads/'+thread+'/change'),json=dict(version=version(),action=action))
+    reply=lambda draft,**extra:parent.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=version(),text='Продолжение',draftId=draft,draftVersion=saved(draft))|extra)
     assert save(parent,id,body,thread=thread).status_code==200
-    assert teacher.post(url('threads/'+thread+'/change'),json=dict(version=1,action='close')).status_code==200
-    assert save(parent,id,body|dict(text='Продолжение'),1,thread).status_code==200
-    reply=dict(requestId=str(uuid4()),version=2,text='Продолжение',draftId=id,draftVersion=2)
-    assert parent.post(url('threads/'+thread+'/reply'),json=reply).status_code==409
-    assert get(parent,id).json()['version']==2
-    teacher.post(url('threads/'+thread+'/change'),json=dict(version=2,action='reopen'))
-    assert parent.post(url('threads/'+thread+'/reply'),json=reply|dict(version=3)).status_code==200
+    assert manage('close').status_code==200 and not detail(parent,thread)['canReply']
+    assert save(parent,id,body|dict(text='Продолжение'),saved(id),thread).status_code==200
+    before=saved(id)
+    assert reply(id).status_code==409
+    assert saved(id)==before
+    assert manage('reopen').status_code==200
+    assert reply(id).status_code==200
     assert get(parent,id).status_code==404
-    second=str(uuid4());save(parent,second,body,thread=thread)
-    # A reply does not change the conversation version: the reopened thread is still at version 3.
-    teacher.post(url('threads/'+thread+'/participants'),json=dict(version=3,userId=people['parent']['id'],action='remove'))
-    assert save(parent,second,body,1,thread).status_code==404
-    assert parent.post(url('threads/'+thread+'/reply'),json=reply|dict(requestId=str(uuid4()),version=4,draftId=second,draftVersion=1)).status_code==404
+    second=str(uuid4());assert save(parent,second,body|dict(draftId=second),thread=thread).status_code==200
+    draft_version=saved(second)
+    removed=teacher.post(url('threads/'+thread+'/participants'),json=dict(version=version(),userId=people['parent']['id'],action='remove'));assert removed.status_code==200,removed.text
+    assert save(parent,second,body|dict(draftId=second),draft_version,thread).status_code==404
+    assert parent.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=version(),text='Продолжение',draftId=second,draftVersion=draft_version)).status_code==404
     # Private unsent words remain the author's; no thread content is returned.
     assert get(parent,second).json()['content']['text']=='Ответ'
-    assert parent.delete(url('drafts/'+second,version=1)).status_code==200
+    assert parent.delete(url('drafts/'+second,version=draft_version)).status_code==200
 
 
 def test_quota_and_current_recipient_relationship_checked_on_send(client,monkeypatch):

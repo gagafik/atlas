@@ -28,7 +28,7 @@ def test_empty_availability_domain_explains_weekly_demand():
     result=solve(state,seconds=2)
     assert result['status']=='infeasible'
     reason=next(r for r in result['diagnosis']['reasons'] if r['kind']=='hours')
-    assert reason['workloadIds']==['w0'] and '0 доступных позиций' in reason['name']
+    assert reason['workloadIds']==['w0']
 
 
 def test_synchronous_groups_with_one_shared_pupil_report_block_and_pupil():

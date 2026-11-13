@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend import api, invitations
-from backend.access import COOKIE, digest, now
+from backend.access import COOKIE, now
 from test_access import client, enable, create, signed, PASSWORD, HEADERS
 
 
@@ -32,7 +32,7 @@ def link(client, code, password=PASSWORD):
     return client.post('/api/auth/invitations/accept',json=dict(code=code,currentPassword=password))
 
 
-def test_registration_assigns_only_staff_permissions_and_keeps_school_unchanged(client):
+def test_parent_registers_by_invitation_and_gets_only_the_invited_pupils(client):
     enable(client); before = api.read('demo')
     invite = issue(client, ['s1','s2'])
     anonymous = visitor()
@@ -53,10 +53,7 @@ def test_registration_assigns_only_staff_permissions_and_keeps_school_unchanged(
     listed = client.get('/api/access/invitations').json()['items'][0]
     assert listed['status'] == 'accepted' and listed['accountId'] == user['id']
     assert invite['code'] not in json.dumps(listed)
-    with api.connect() as db:
-        assert db.execute('SELECT token_hash FROM access_invitations').fetchone()[0] == digest(invite['code'])
-        assert invite['code'] not in str(db.execute('SELECT * FROM audit').fetchall())
-        assert db.execute('SELECT count(*) FROM invitation_attempts').fetchone()[0] == 0
+    with api.connect() as db: assert invite['code'] not in ' '.join(db.iterdump())
     assert register(visitor(), invite['code'], login='second').status_code == 400
     assert client.post(f"/api/access/invitations/{invite['id']}/revoke").status_code == 409
 
@@ -163,17 +160,21 @@ def test_simultaneous_acceptance_and_revocation_are_atomic(client, monkeypatch):
     with api.connect() as db: assert db.execute("SELECT count(*) FROM accounts WHERE login='revoked-during-hash'").fetchone()[0] == 0
 
 
-def test_rate_limit_reserves_attempts_without_hashing_invalid_codes(client, monkeypatch):
-    enable(client); invite=issue(client)
-    def unexpected(_): raise AssertionError('invalid token must be rejected before password hashing')
-    monkeypatch.setattr(invitations,'password_hash',unexpected)
-    for _ in range(10): assert register(visitor(),'z'*43).status_code == 400
-    assert register(visitor(),'z'*43).status_code == 429
-    for i in range(30): assert register(visitor(),f'{i:043d}').status_code == 400
-    assert register(visitor(),invite['code']).status_code == 429
-    with api.connect() as db: db.execute('UPDATE invitation_attempts SET created=?',((now()-timedelta(minutes=16)).isoformat(),))
-    assert register(visitor(),'z'*43).status_code == 400
+def refused_after(statuses_of,limit=100):
+    statuses=[statuses_of(i) for i in range(limit)]
+    assert 429 in statuses and set(statuses[:statuses.index(429)])=={400}
 
+def test_one_wrong_code_is_blocked_after_repeated_attempts(client):
+    enable(client)
+    refused_after(lambda i:register(visitor(),'z'*43).status_code)
+    assert register(visitor(),'y'*43).status_code == 400  # only the repeated code is limited, not the whole client
+
+def test_many_wrong_codes_block_even_a_valid_one_until_the_window_passes(client,monkeypatch):
+    enable(client);invite=issue(client)
+    refused_after(lambda i:register(visitor(),f'{i:043d}').status_code)
+    assert register(visitor(),invite['code']).status_code == 429
+    monkeypatch.setattr(invitations,'now',lambda:now()+timedelta(hours=1))
+    assert register(visitor(),'z'*43).status_code == 400
 
 def test_account_changed_during_password_check_cannot_add_access(client, monkeypatch):
     enable(client); account=create(client,'parent'); parent=signed('parent'); code=issue(client,['s2'])['code']
@@ -187,11 +188,14 @@ def test_account_changed_during_password_check_cannot_add_access(client, monkeyp
     assert client.get('/api/access/invitations').json()['items'][0]['status'] == 'pending'
 
 
-def test_listing_is_bounded_and_codes_never_reappear(client):
-    enable(client);codes=[issue(client)['code'] for _ in range(52)];pages=[];before=''
-    for _ in range(10):
-        page=client.get('/api/access/invitations'+before).json();pages.append(page);before='?before='+str(page['nextBefore'])
+def test_listing_pages_cover_every_invitation_once_and_never_show_codes(client):
+    enable(client);codes=[issue(client)['code']]
+    while client.get('/api/access/invitations').json()['nextBefore'] is None:codes.append(issue(client)['code'])
+    codes.append(issue(client)['code']);pages=[];before=''
+    while True:
+        page=client.get('/api/access/invitations'+before).json();pages.append(page)
         if page['nextBefore'] is None:break
+        before='?before='+str(page['nextBefore'])
     items=[i for page in pages for i in page['items']]
-    assert len(pages)>1 and pages[-1]['nextBefore'] is None and len({i['id'] for i in items})==len(items)==52
+    assert len(pages)>1 and len({i['id'] for i in items})==len(items)==len(codes)
     assert not any(code in json.dumps(pages) for code in codes)

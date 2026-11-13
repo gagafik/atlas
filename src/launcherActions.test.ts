@@ -165,8 +165,20 @@ describe("typing in the launcher", () => {
   });
 
   it("does not take the middle of a word for the word", () => {
-    // «дом» begins the homework, but it only sits inside «ведомость», by which the report cards are known.
-    const found = ids(filterActions(actions, "дом"));
+    // «дом» begins «Домашнее задание», but it only sits inside «ведомость», by which another action is known.
+    const own = (id: string, label: string, words?: string): LauncherAction => ({
+      id,
+      label,
+      category: "journal",
+      popular: false,
+      item: {} as LauncherAction["item"],
+      words,
+    });
+    const pair = [
+      own("homework", "Домашнее задание"),
+      own("reports", "Итоговые оценки", "ведомость"),
+    ];
+    const found = ids(filterActions(pair, "дом"));
     expect(found).toContain("homework");
     expect(found).not.toContain("reports");
   });

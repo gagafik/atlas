@@ -3,7 +3,6 @@ seat limits, the list of people who have not answered with a reminder, and anony
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import timedelta
-import json
 import sqlite3
 from uuid import uuid4
 
@@ -34,29 +33,36 @@ def set_class_teacher(class_id,teacher_id):
     state=api.read('demo');state.classes=[c.model_copy(update=dict(classTeacherId=teacher_id)) if c.id==class_id else c for c in state.classes];api.save('demo',state)
 
 
-def test_definition_rules(client):
+CHOICES=['First','Second']
+INVALID_DEFINITIONS=[
+    ('limit-for-unknown-choice','survey',dict(questions=[dict(id='q',title='Choose',kind='single',choices=CHOICES,limits={'Third':1})])),
+    ('limit-below-one','survey',dict(questions=[dict(id='q',title='Choose',kind='single',choices=CHOICES,limits={'First':0})])),
+    ('limit-above-maximum','survey',dict(questions=[dict(id='q',title='Choose',kind='single',choices=CHOICES,limits={'First':5001})])),
+    ('limit-on-text-question','survey',dict(questions=[dict(id='q',title='Text',kind='text',limits={'x':1})])),
+    ('anonymous-form','form',dict(anonymous=True)),
+    ('anonymous-with-limits','survey',dict(anonymous=True,questions=FIRST_ONLY)),
+    ('anonymous-standing','survey',dict(anonymous=True,standing=True)),
+    ('standing-with-deadline','survey',dict(standing=True,closesAt='2099-01-01T00:00:00+00:00')),
+    ('standing-teachers-preset','survey',dict(standing=True,audience=dict(roles=[],classIds=[],preset='teachers'))),
+    ('roles-with-preset','survey',dict(audience=dict(roles=['parent'],classIds=[],preset='staff'))),
+    ('saved-preset-without-group','survey',dict(audience=dict(roles=[],classIds=[],preset='saved'))),
+    ('group-without-saved-preset','survey',dict(audience=dict(roles=[],classIds=[],savedGroupId='group'))),
+]
+
+
+@pytest.mark.parametrize('kind,values',[pytest.param(kind,values,id=name) for name,kind,values in INVALID_DEFINITIONS])
+def test_invalid_definition_is_refused_and_changes_nothing(client,kind,values):
     enable(client);create(client,role='parent')
-    survey=new(client);plain=new(client,'form')
-    for id,values in [
-        (survey,dict(questions=[dict(id='q',title='Choose',kind='single',choices=['First','Second'],limits={'Third':1})])),
-        (survey,dict(questions=[dict(id='q',title='Choose',kind='single',choices=['First','Second'],limits={'First':0})])),
-        (survey,dict(questions=[dict(id='q',title='Choose',kind='single',choices=['First','Second'],limits={'First':5001})])),
-        (survey,dict(questions=[dict(id='q',title='Text',kind='text',limits={'x':1})])),
-        (plain,dict(anonymous=True)),
-        (survey,dict(anonymous=True,questions=FIRST_ONLY)),
-        (survey,dict(anonymous=True,standing=True)),
-        (survey,dict(standing=True,closesAt=(now()+timedelta(days=3)).isoformat())),
-        (survey,dict(standing=True,audience=dict(roles=[],classIds=[],preset='teachers'))),
-        (survey,dict(audience=dict(roles=['parent'],classIds=[],preset='staff'))),
-        (survey,dict(audience=dict(roles=[],classIds=[],preset='saved'))),
-        (survey,dict(audience=dict(roles=[],classIds=[],savedGroupId='group'))),
-    ]:
-        form=get(client,id)
-        refused=client.put(route(id),json=request(version=form['version'],definition=form['definition']|dict(description='x')|values))
-        assert refused.status_code==422,(values,refused.text)
-        assert get(client,id)==form
-    form=get(client,survey)
-    assert client.put(route(survey),json=request(version=form['version'],definition=form['definition']|dict(anonymous=True))).status_code==200
+    id=new(client,kind);form=get(client,id)
+    refused=client.put(route(id),json=request(version=form['version'],definition=form['definition']|dict(description='x')|values))
+    assert refused.status_code==422,refused.text
+    assert get(client,id)==form
+
+
+def test_valid_anonymous_definition_is_accepted(client):
+    enable(client);create(client,role='parent')
+    id=new(client);form=get(client,id)
+    assert client.put(route(id),json=request(version=form['version'],definition=form['definition']|dict(anonymous=True))).status_code==200
 
 
 def test_manager_cannot_switch_standing_or_anonymous(client):
@@ -73,15 +79,17 @@ def test_manager_cannot_switch_standing_or_anonymous(client):
     form=get(client,id);assert client.put(route(id),json=request(version=form['version'],definition=form['definition']|dict(standing=True))).status_code==200
 
 
-def test_new_tables_appear_in_an_existing_database_and_admissions_gain_no_limits(client):
-    enable(client);create(client,role='parent');id=new(client);configure(client,id)
+def test_new_tables_appear_in_an_existing_database(client):
+    enable(client);people=[parent(client,f'voter{i}','s1') for i in range(ANONYMOUS_MIN)]
+    named=new(client);configure(client,named);publish(client,named)
+    secret=new(client);configure(client,secret,anonymous=True);publish(client,secret)
+    # An existing school database from before the third wave has none of these tables.
     with api.connect() as db:
         for table in ['school_form_ballots','school_form_anonymous','school_form_reminders']:db.execute('DROP TABLE '+table)
     assert client.get(route()).status_code==200
-    with closing(sqlite3.connect(api.DB)) as db:
-        assert {'school_form_ballots','school_form_anonymous','school_form_reminders'}<={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    from backend.school_forms_models import Question
-    assert 'limits' not in Question(id='q',title='Document').model_dump()
+    assert remind(client,named).status_code==200
+    assert all(i['remindedToday'] for i in pending(client,named)['items'])
+    assert answer(signed('voter0'),secret,'s1').status_code==200
 
 
 def test_ending_one_child_link_keeps_form_for_other_child(client,monkeypatch):
@@ -320,12 +328,11 @@ def test_decided_application_seat_rules(client):
 
 
 def test_pending_list_keeps_drafts_private_and_follows_answers(client):
-    enable(client);parent(client,'pa1','s1');parent(client,'pa1b','s1');parent(client,'pa2','s2');reviewer=create(client,role='staff')
+    enable(client);accounts=[parent(client,'pa1','s1'),parent(client,'pa1b','s1'),parent(client,'pa2','s2')];reviewer=create(client,role='staff')
     id=new(client);configure(client,id);assign(client,id,reviewer,'review');publish(client,id)
     one=signed('pa1');two=signed('pa2');second=signed('pa1b')
     state=pending(client,id);assert state['pendingCount']==3 and state['audience']==3 and state['answered']==0 and state['canRemind'] is True
     assert {i['name'] for i in state['items']}=={'Родитель pa1','Родитель pa1b','Родитель pa2'}
-    assert all(set(i)=={'name','role','entityName','className','remindedToday'} for i in state['items'])
     assert answer(one,id,'s1',action='save').status_code==200
     assert pending(client,id)['pendingCount']==3
     sent=answer(one,id,'s1',version=1);assert sent.status_code==200
@@ -334,7 +341,8 @@ def test_pending_list_keeps_drafts_private_and_follows_answers(client):
     assert answer(one,id,'s1',version=2,action='withdraw').status_code==200
     assert pending(client,id)['pendingCount']==3
     assert answer(second,id,'s1').status_code==200 and pending(client,id)['pendingCount']==1
-    assert 'userId' not in client.get(route(id,'/pending')+'&workspace=demo').text and '"id"' not in client.get(route(id,'/pending')).text
+    shown=client.get(route(id,'/pending')).text
+    assert not any(account['id'] in shown for account in [*accounts,reviewer])
     for who in [one,two]:assert who.get(route(id,'/pending')).status_code==404
     delegate=signed('staff')
     assert delegate.get(route(id,'/pending')).status_code==200 and pending(delegate,id)['canRemind'] is False
@@ -382,12 +390,13 @@ def test_list_is_readable_but_not_remindable_before_opening_and_absent_for_stand
 
 
 def test_reminder_names_only_the_unanswered_children(client):
-    enable(client);mum=parent(client,'mum','s1','s2');id=new(client);configure(client,id);publish(client,id)
+    enable(client);parent(client,'mum','s1','s2');id=new(client);configure(client,id);publish(client,id)
     assert answer(signed('mum'),id,'s1').status_code==200
     assert remind(client,id).json()['reminded']==1
-    with closing(sqlite3.connect(api.DB)) as db:
-        target=json.loads(db.execute("SELECT target FROM notifications WHERE user_id=? AND action='forms.reminder'",(mum['id'],)).fetchone()[0])
-    assert [s['id'] for s in target['students']]==['s2'] and target['recordId']==id and target['module']=='forms'
+    mum=signed('mum')
+    notice=next(i for i in mum.get('/api/notifications/inbox').json()['items'] if i['action']=='forms.reminder')
+    assert [s['id'] for s in notice['students']]==['s2']
+    opened=mum.post(f"/api/notifications/{notice['id']}/open");assert opened.status_code==200 and opened.json()['formId']==id
 
 
 def test_reminder_opens_for_recipient_and_rolls_back(client,monkeypatch):

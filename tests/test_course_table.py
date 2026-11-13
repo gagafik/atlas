@@ -1,15 +1,14 @@
 """Course table: pupils against the works of one course, dated rows, roles, and the per-lesson atomic save and publication."""
-from datetime import date, datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import date, datetime, timezone
 from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from backend import api, course_table, journal, journal_periods, journal_reads, timetable_history
+from backend.course_table import CourseSave
 from backend.models import DatedLesson, Student
-from backend.timetable_history import History
 from test_access import client, enable, create, signed
 from test_journal import DAY, entry, write, report
-from test_journal_history import clock, resave, card, lessons, ENGLISH, NEXT, TODAY  # noqa: F401
+from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
 from test_journal_periods import period, close
 from test_assessment_categories import put_config, shares
 from test_final_grades import seeded, scale, propose, publish, stop_gradebook_jobs  # noqa: F401
@@ -253,17 +252,22 @@ def test_moved_lesson_is_read_by_its_published_date(client, clock):
 
 def test_course_rows_of_a_snapshot_stay_bounded(client, clock):
     snap = api.journal.snapshots.get('demo')
-    for i in range(40): snap.course_rows(f'g{i}', 's')(date.fromisoformat(DAY))
-    assert len(snap.course_days) <= 32 and ('g39', 's') in snap.course_days and ('g0', 's') not in snap.course_days
+    day = date.fromisoformat(DAY)
+    expected = snap.course_rows(G, S)(day)
+    courses = 40
+    for i in range(courses): snap.course_rows(f'g{i}', 's')(day)
+    assert len(snap.course_days) < courses
+    # A course that was dropped from the cache is simply worked out again.
+    assert snap.course_rows(G, S)(day) == expected
 
 
-def test_rosters_of_a_database_before_dated_rosters_follow_the_group_of_the_day(client, clock):
-    snap = api.journal.snapshots.get('demo')
-    start, end = date.fromisoformat(DAY), date.fromisoformat(END)
-    # Without dated rosters nobody has a start or an end, and whoever is in the group when the period ends has a row.
-    before = SimpleNamespace(entities=snap.entities, history=History(snap.state))
-    assert course_table.spans(before, 'g-a', start, end) == {'s1': (None, None), 's2': (None, None)}
-    assert set(course_table.spans(snap, 'g-a', start, end)) == {'s1', 's2'}
+def test_pupils_of_a_database_before_dated_rosters_follow_the_group_of_the_day(client, clock):
+    teacher, _ = staffed(client)
+    # An old database: no dated rosters and no saved lessons; whoever is in the group when the period ends has a row, with no start or end.
+    with api.connect() as db:
+        db.execute('DELETE FROM timetable_current')
+        db.execute('DELETE FROM pupil_enrollments')
+    assert [(p['id'], p['from'], p['to']) for p in ok(table(teacher))['pupils']] == [('s1', None, None), ('s2', None, None)]
 
 
 @pytest.mark.parametrize('login', ['unrelated', 'parent', 'student'])
@@ -342,14 +346,11 @@ def test_block_rule_gives_no_average(client, clock):
 def test_table_opens_after_schema_marker_is_lower(client, clock):
     teacher, _ = staffed(client)
     course(teacher, DAY, [work('a')], dict(a=dict(s1=8)))
+    # An old database: the schema marker is lower than the code's.
     with api.connect() as db:
-        db.execute("DROP INDEX journal_entry_course")
         db.execute("UPDATE journal_projection_versions SET version=? WHERE name='journal_schema'", (journal_reads.SCHEMA - 1,))
         db.commit()
     assert mark(ok(table(teacher)), 's1', DAY, 'a')['score'] == 8
-    with api.connect() as db:
-        assert db.execute("SELECT version FROM journal_projection_versions WHERE name='journal_schema'").fetchone() == (journal_reads.SCHEMA,)
-        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='journal_entry_course'").fetchone()
 
 
 def test_draft_save_is_hidden_then_publish_keeps_other_drafts(client, clock):
@@ -738,16 +739,20 @@ def test_course_table_rechecks_the_account(client, clock, monkeypatch):
     assert ok(save(signed('teacher'), [edit(t, DAY, ('s1', 'a', 9))]))['saved']
 
 
-def test_request_limits(client, clock):
+def course_limit():
+    return next(m.max_length for m in CourseSave.model_fields['lessons'].metadata if hasattr(m, 'max_length'))
+
+
+@pytest.mark.parametrize('case', ['too many lessons', 'lesson twice', 'cell twice', 'absurd mark', 'no lessons'])
+def test_invalid_save_requests_are_refused(client, clock, case):
     teacher, _ = staffed(client)
     course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
     t = ok(table(teacher))
     one = edit(t, DAY, ('s1', 'a', 9))
-    assert save(teacher, [dict(one, lessonKey=f'{i:064x}') for i in range(11)]).status_code == 422
-    assert save(teacher, [one, one]).status_code == 422
-    assert save(teacher, [edit(t, DAY, ('s1', 'a', 9), ('s1', 'a', 8))]).status_code == 422
-    assert save(teacher, [edit(t, DAY, ('s1', 'a', 11 ** 6))]).status_code == 422
-    assert save(teacher, []).status_code == 422
+    lessons = {'too many lessons': [dict(one, lessonKey=f'{i:064x}') for i in range(course_limit() + 1)], 'lesson twice': [one, one],
+               'cell twice': [edit(t, DAY, ('s1', 'a', 9), ('s1', 'a', 8))], 'absurd mark': [edit(t, DAY, ('s1', 'a', 11 ** 6))], 'no lessons': []}[case]
+    assert save(teacher, lessons).status_code == 422
+    assert mark(ok(table(teacher)), 's1', DAY, 'a')['score'] == 5
 
 
 def test_retry_returns_the_first_result(client, clock):
@@ -798,18 +803,6 @@ def test_clearing_a_mark_keeps_its_comment(client, clock):
     assert mark(ok(table(teacher)), 's1', DAY, 'b')['score'] == 0
 
 
-def test_table_marks_reach_lesson_report_and_history(client, clock):
-    teacher, parent = staffed(client)
-    first = course(teacher, DAY, [work('a')], {}, publish=True)
-    t = ok(table(teacher))
-    ok(save(teacher, [edit(t, DAY, ('s1', 'a', 4))], publish=True))
-    assert entry(teacher, first['lessonKey'])['document']['content']['records'][0]['grades'][0]['score'] == 4
-    rows = parent.get('/api/journal/report', params=dict(workspace='demo', studentId='s1', start=DAY, end=END)).json()['rows']
-    assert rows[0]['record']['grades'][0]['score'] == 4
-    actions = [h['action'] for h in teacher.get('/api/journal/history', params=dict(workspace='demo', lessonKey=first['lessonKey'])).json()]
-    assert 'journal.published' in actions[:2]
-
-
 def test_computed_grade_is_what_the_final_grade_rule_gives_on_the_chosen_scale(client, clock):
     teacher, _ = staffed(client)
     course(teacher, DAY, [work('a')], dict(a=dict(s1=8, s2=7)))
@@ -848,9 +841,7 @@ def test_new_work_goes_to_the_latest_lesson_of_the_course_even_without_any_work(
     create(client, 'teacher', login='second', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
     def latest(c):
         return c.get(URL + '/latest', params=dict(workspace='demo', groupId=G, subjectId=S))
-    found = ok(latest(teacher))
-    # The latest day up to today on which the group has its lesson, found through the day list.
-    held = next(day for day in (TODAY - timedelta(days=n) for n in range(30)) if any(r['lesson']['group'] == '10A' and r['lesson']['subject'] == ENGLISH for r in lessons(teacher, day.isoformat())))
-    assert found == dict(lessonKey=card(teacher, held.isoformat())['lessonKey'], day=held.isoformat())
+    # Today is Tuesday 1 September, and 10A has English on Mondays: the latest lesson is the one of 31 August.
+    assert ok(latest(teacher)) == dict(lessonKey=card(teacher, '2026-08-31')['lessonKey'], day='2026-08-31')
     # Only a teacher of the course adds works: the administrator and a colleague of another course do not.
     assert latest(client).status_code == 403 and latest(signed('second')).status_code == 403

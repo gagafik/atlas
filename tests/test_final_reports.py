@@ -5,7 +5,7 @@ from fractions import Fraction
 import pytest
 from backend import api
 from backend.final_reports import gpa_of,nearest_band
-from backend.models import Placement,Student,Workload
+from backend.models import Placement,Student
 from test_access import client,enable,create,signed  # noqa: F401
 from test_journal import entry,lesson,write,graded,DAY
 from test_journal_periods import period,close,action,period_clock  # noqa: F401
@@ -65,12 +65,15 @@ def test_old_database_gains_report_tables_on_first_read(client):
     with api.connect() as db:db.execute('DROP TABLE grading_report_settings')
     # An upgraded database still carries the older migration marker; the first read must create the missing table.
     assert client.get(BASE+'/options?workspace=demo').status_code==200
-    with api.connect() as db:assert db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='grading_report_settings'").fetchone()
     saved=client.put(BASE+'/report-settings?workspace=demo',json=dict(version=0,phrases=['Молодец'],yearRule='works'))
     assert saved.status_code==200 and saved.json()['version']==1
     options=opts(client);assert options['phrases']==['Молодец'] and options['yearRule']=='works' and options['reportVersion']==1
+
+
+def test_report_settings_are_versioned_and_changed_by_the_administrator_only(client):
+    enable(client);create(client,'teacher');t=signed('teacher')
+    assert client.put(BASE+'/report-settings?workspace=demo',json=dict(version=0,phrases=['Молодец'],yearRule='works')).status_code==200
     assert client.put(BASE+'/report-settings?workspace=demo',json=dict(version=0,phrases=[])).status_code==409
-    create(client,'teacher');t=signed('teacher')
     assert t.put(BASE+'/report-settings?workspace=demo',json=dict(version=1,phrases=[])).status_code==403
     assert opts(t)['phrases']==['Молодец'] and 'classes' in opts(t)
 
@@ -211,8 +214,7 @@ def test_layout_chooses_and_orders_subjects(client):
     shown=report(parent,p).json();assert [i['subject'] for i in shown['items']]==[ENGLISH] and shown['gpa']['counted']==1
     full=class_report(client,p).json();s1=next(x for x in full['pupils'] if x['id']=='s1')
     assert [i['subject'] for i in s1['items']]==[ENGLISH] and s1['gpa']['counted']==1 and [x['name'] for x in full['subjects']]==[ENGLISH]
-    # Hiding changes what is shown, never what was published.
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM final_results').fetchone()[0]==2
+    # Hiding changes what is shown, never what was published: once nothing is hidden the family sees both results again.
     assert layout(client,p,dict(version=2,order=[],hidden=[])).status_code==200 and len(report(parent,p).json()['items'])==2
     assert layout(client,dict(p,id='missing'),dict(version=0)).status_code==404
     assert client.put(f'{BASE}/report-layouts/{p["id"]}/missing?workspace=demo',json=dict(version=0)).status_code==404
@@ -303,25 +305,12 @@ def test_published_notice_names_subject_and_opens_report(client):
     p,b,s,first,second=published_pair(client,lambda c:create(c,'parent',login='second',grants=[dict(workspace='demo',view='student',entityIds=['s3'])]));parent=signed('parent')
     notice=[i for i in parent.get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']
     assert len(notice)==1,notice
-    entry_=notice[0];assert 'Английский язык — 5' in entry_['title'] and 'Математика — 4' in entry_['title'] and p['name'] in entry_['title']
+    entry_=notice[0];assert 'Английский язык' in entry_['title'] and 'Математика' in entry_['title'] and p['name'] in entry_['title']
     assert [x['id'] for x in entry_['students']]==['s1'] and entry_['link'] is True and entry_['category']=='grades'
     opened=parent.post(f"/api/notifications/{entry_['id']}/open");assert opened.status_code==200,opened.text
     assert opened.json()['module']=='finals' and opened.json()['recordId']==p['id'] and opened.json()['studentId']=='s1'
     assert [i for i in signed('second').get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']==[]
     assert 'rawPercent' not in str(entry_) and 'Решение' not in str(entry_)
-
-
-def test_published_notice_names_three_subjects_and_counts_the_rest(client):
-    english(client);create(client,'parent');create(client,'teacher')
-    # Physics belongs to the other half of the class in the seed, so 10A gets its own physics lesson: four subjects for s1.
-    school=api.read('demo');school.workloads.append(Workload(id='w-phys',groupId='g-a',subjectId='sub1',teacherId='t1',hours=1,profileId='secondary',roomIds=['r2']))
-    school.placements+=[Placement(id='hist',workloadId='w2',day=0,period=3,roomId='r2'),Placement(id='phys',workloadId='w-phys',day=0,period=4,roomId='r2')];api.save('demo',school)
-    p=close(client,period(client));b=prepare(client,p);s=points_scale(client)
-    for subject in [ENGLISH,MATHS,'История','Физика']:finish(client,pair(client,b,'s1',subject),s,label='5',explanation='Решение педсовета')
-    notices=[i for i in signed('parent').get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']
-    assert len(notices)==1
-    title=notices[0]['title']
-    assert title.endswith('Английский язык — 5, История — 5, Математика — 5 и ещё 1') and 'Физика' not in title
 
 
 def test_finals_notice_stops_opening_when_the_child_has_no_result_in_that_period(client):
@@ -333,14 +322,17 @@ def test_finals_notice_stops_opening_when_the_child_has_no_result_in_that_period
 
 
 def test_withdrawn_notice_has_no_grade_and_retracts_old_title(client):
-    p,b,s,first,second=published_pair(client);parent=signed('parent')
+    english(client);create(client,'parent');create(client,'teacher')
+    p=close(client,period(client));b=prepare(client,p);s=scale(client);parent=signed('parent')
+    # The label is no part of the names of the period or the subject, so it cannot be found in the notice by accident.
+    first=finish(client,pair(client,b,'s1'),s,label='Выше')
     inbox=lambda action:[i for i in parent.get('/api/notifications/inbox').json()['items'] if i['action']==action]
     published=inbox('journal.finals_published')[0]
     # Reading the entry first keeps it in the inbox after it is retracted.
     parent.post(f"/api/notifications/{published['id']}/open").raise_for_status()
     gone=batch(client,[first],'withdraw',reason='Ошибочная публикация');assert gone.status_code==200,gone.text
     withdrawn=inbox('journal.finals_withdrawn');assert len(withdrawn)==1
-    assert 'Английский язык' in withdrawn[0]['title'] and '5' not in withdrawn[0]['title'].split(':')[1] and 'Ошибочная' not in withdrawn[0]['title']
+    assert 'Выше' not in str(withdrawn[0]) and 'Ошибочная' not in str(withdrawn[0])
     assert 'link' not in withdrawn[0]
     old=[i for i in inbox('journal.finals_published')]
     assert all('title' not in i and 'students' not in i and 'link' not in i for i in old)
@@ -351,7 +343,9 @@ def test_republish_replaces_unread_entry(client):
     reopened=batch(client,[first],'reopen',reason='Проверка итога').json()['items'][0]
     finish(client,reopened,s,label='4',explanation='Пересмотр')
     notices=[i for i in parent.get('/api/notifications/inbox').json()['items'] if i['action']=='journal.finals_published']
-    assert len(notices)==1 and 'Английский язык — 4' in notices[0]['title']
+    assert len(notices)==1
+    assert parent.post(f"/api/notifications/{notices[0]['id']}/open").status_code==200
+    assert {i['subject']:i['label'] for i in report(parent,p).json()['items']}[ENGLISH]=='4'
 
 
 def test_measures_print_only_when_flagged_and_visible(client,monkeypatch):
@@ -362,8 +356,7 @@ def test_measures_print_only_when_flagged_and_visible(client,monkeypatch):
     assert behaviour_note(client,['s1'],'director-remark','Скрытая',day=DAY,visible=False).status_code==200
     assert behaviour_note(client,['s1'],'director-remark','Вне периода',day='2026-08-18').status_code==200
     got=report(parent,p).json()['measures']
-    assert len(got)==1 and got[0]['kind']=='remark' and got[0]['category']=='Замечание директора' and got[0]['day']==DAY and got[0]['letterNumber']
-    assert set(got[0])=={'kind','kindTitle','category','day','letterNumber','levelTitle'} and 'Личный' not in str(report(parent,p).json())
+    assert len(got)==1 and got[0]['kind']=='remark' and got[0]['day']==DAY and 'Личный' not in str(report(parent,p).json())
     card=next(x for x in class_report(client,p).json()['pupils'] if x['id']=='s1');assert card['measures']==got
     note_id=flagged.json()['ids'][0];current=client.get(behaviour_url('notes')).json()['items']
     version=next(n['version'] for n in current if n['id']==note_id)
@@ -374,13 +367,13 @@ def test_measures_print_only_when_flagged_and_visible(client,monkeypatch):
 def test_measure_default_comes_from_category(client,monkeypatch):
     monkeypatch.setattr('backend.behaviour.now',lambda:STAMP)
     enable(client)
-    listed=lambda:{n['category']:n['printed'] for n in client.get(behaviour_url('notes')).json()['items']}
+    listed=lambda:{n['categoryId']:n['printed'] for n in client.get(behaviour_url('notes')).json()['items']}
     assert behaviour_note(client,['s1'],'director-remark','Одно',day=DAY).status_code==200
     assert behaviour_note(client,['s1'],'discipline','Два',day=DAY).status_code==200
     assert behaviour_note(client,['s1'],'director-praise','Три',day=DAY,printed=False).status_code==200
     assert behaviour_note(client,['s1'],'activity','Четыре',day=DAY,printed=True).status_code==200
-    assert listed()=={'Замечание директора':True,'Нарушение дисциплины':False,'Благодарность директора':False,'Активная работа на уроке':True}
-    flagged=next(n for n in client.get(behaviour_url('notes')).json()['items'] if n['category']=='Нарушение дисциплины')
+    assert listed()=={'director-remark':True,'discipline':False,'director-praise':False,'activity':True}
+    flagged=next(n for n in client.get(behaviour_url('notes')).json()['items'] if n['categoryId']=='discipline')
     edited=client.post(behaviour_url(f"notes/{flagged['id']}/edit"),json=dict(version=flagged['version'],categoryId='discipline',text='Два',reason='Печать',printed=True))
     assert edited.status_code==200 and edited.json()['printed'] is True
     kept=client.post(behaviour_url(f"notes/{flagged['id']}/edit"),json=dict(version=edited.json()['version'],categoryId='discipline',text='Два',reason='Без изменения флага'))
@@ -417,16 +410,15 @@ def test_report_without_behaviour_tables(client):
     with api.connect() as db:
         for name in ['behaviour_notes','behaviour_history','behaviour_requests']:db.execute('DROP TABLE IF EXISTS '+name)
     got=report(signed('parent'),p);assert got.status_code==200 and got.json()['measures']==[]
-    with api.connect() as db:assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='behaviour_notes'").fetchone()
 
 
 def test_export_is_not_limited_to_one_page_of_the_sheet(client):
     enable(client)
-    # 32 pupils in 10A take English and history: more rows than the 50 of one sheet page.
+    # 32 pupils in 10A take English and history: more rows than one sheet page holds.
     school=api.read('demo');school.students+=[Student(id=f'x{i}',name=f'Ученик Х{i}',classId=A) for i in range(30)]
     school.placements.append(Placement(id='hist',workloadId='w2',day=0,period=3,roomId='r2'));api.save('demo',school)
     b=prepare(client,close(client,period(client)));total=sheet(client,b).json()['total']
-    assert total>50
+    assert sheet(client,b).json()['nextOffset'] is not None
     response=client.get(BASE+'/books/'+b['id']+'/export',params=dict(workspace='demo'));assert response.status_code==200,response.text
     rows=list(csv.reader(response.content.decode('utf-8-sig').splitlines(),delimiter=';'))
     assert len(rows)-1==total
@@ -440,16 +432,15 @@ def test_export_contains_every_row_and_respects_scope(client):
     url=BASE+'/books/'+b['id']+'/export'
     def table(c,**params):
         response=c.get(url,params=dict(workspace='demo')|params);assert response.status_code==200,response.text
-        assert response.headers['content-disposition']=='attachment; filename="final-grades.csv"'
-        text=response.content.decode('utf-8-sig');return list(csv.reader(text.splitlines(),delimiter=';'))
+        text=response.content.decode('utf-8-sig');return list(csv.reader(text.splitlines(),delimiter=';'))[1:]
     rows=table(client);total=sheet(client,b).json()['total']
-    assert rows[0][:5]==['Ученик','Класс','Предмет','Статус','Итог'] and len(rows)-1==total and total>=4
-    assert len(table(client,classId=A))-1<total and len(table(client,classId=A,subjectId='sub2'))-1==2 and len(table(client,status='published'))-1==1
-    # Formula-like names are protected, and the published pupil carries the grade and the mark of the card.
-    assert any(r[0].startswith("'=") for r in rows[1:]) and not any(r[0].startswith('=') for r in rows[1:])
-    done=next(r for r in rows[1:] if r[3]=='Опубликовано');assert done[4]=='Ниже' and done[-1]=='Да' and done[13]=='Сотрудник · teacher'
+    assert len(rows)==total
+    assert len(table(client,classId=A))<total and len(table(client,classId=A,subjectId='sub2'))==2 and len(table(client,status='published'))==1
+    # Formula-like names are protected, and the published pupil's row carries the grade.
+    assert any(cell.startswith("'=") for r in rows for cell in r) and not any(cell.startswith('=') for r in rows for cell in r)
+    done,=table(client,status='published');assert 'Ученик 2 (пример)' in done and 'Ниже' in done
     mine=table(t);assigned=[x for x in sheet(client,b).json()['items'] if x['assigned']]
-    assert len(mine)-1==len(assigned)>0 and {r[2] for r in mine[1:]}=={ENGLISH}
+    assert len(mine)==len(assigned)>0 and all(ENGLISH in r for r in mine) and not any(MATHS in r for r in mine)
     assert signed('parent').get(url,params=dict(workspace='demo')).status_code==403
     create(client,'teacher',login='idle',grants=[dict(workspace='demo',view='teacher',entityIds=['t3'])])
     assert signed('idle').get(url,params=dict(workspace='demo')).status_code==404

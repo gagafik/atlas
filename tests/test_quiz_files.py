@@ -1,8 +1,10 @@
 """Private quiz files follow immutable publications and per-attempt disclosure."""
 from datetime import timedelta
 import json
+import threading
 import pytest
 from backend import api, quiz_files, teaching_media, homework_files
+from backend.quiz_models import Question
 from test_access import client, signed
 from test_homework import setup
 from test_quizzes import clock, question, body, start, save, action, attempt
@@ -36,6 +38,15 @@ def prepared(client):
 def update_question(reader,bank,**changes):
     q=bank['question']|changes
     return reader.put('/api/journal/quiz-bank/'+bank['id']+'?workspace=demo',json=dict(version=bank['version'],question=q))
+
+
+def test_a_question_file_comes_back_from_the_full_backup(client,tmp_path,monkeypatch):
+    # The bytes of a question's attachment must be where the backup looks for them: the copy serves the file.
+    from tools.backup_school import create_backup
+    quiz,pupil,parent,teacher,bank,public,secret,_=prepared(client);work=ok(start(pupil,quiz))
+    target=tmp_path/'backup';create_backup(api.DB,target)
+    monkeypatch.setattr(api,'DB',target/api.DB.name)
+    assert file_get(pupil,public,quiz,work).content==b'Question material'
 
 
 def test_private_files_only_assigned_attempt_and_released_solutions(client):
@@ -150,10 +161,11 @@ def test_image_inline_range_download_and_workspace_isolation(client):
     assert upload(pupil).status_code==403
 
 
-@pytest.mark.parametrize('data,name',[(b'','x.txt'),(b'<html/>','x.png'),(b'<svg/>','x.svg'),(b'\0bad','x.txt'),(b'x'*(10*1024*1024+1),'huge.txt')],ids=['empty','wrong-magic','svg','binary-text','oversize'])
-def test_bad_uploads_clean_reservations(client,data,name):
+@pytest.mark.parametrize('data,name,status',[(b'','x.txt',422),(b'<html/>','x.png',422),(b'<svg/>','x.svg',422),(b'\0bad','x.txt',422),
+                                             (b'x'*(homework_files.MAX_FILE+1),'huge.txt',413)],ids=['empty','wrong-magic','svg','binary-text','oversize'])
+def test_bad_uploads_clean_reservations(client,data,name,status):
     _,_,_,teacher=setup(client)
-    assert upload(teacher,data,name).status_code in {413,422}
+    assert upload(teacher,data,name).status_code==status
     with api.connect() as db:
         assert db.execute('SELECT count(*) FROM quiz_files').fetchone()==(0,)
         assert not list(quiz_files.root_for(db).glob('*.bin'))
@@ -161,43 +173,38 @@ def test_bad_uploads_clean_reservations(client,data,name):
 
 def test_revoked_upload_cleans_bytes_and_semaphore(client,monkeypatch):
     _,_,_,teacher=setup(client);original=teaching_media.validate_file
+    monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',threading.BoundedSemaphore(1))
     def revoked(path,name):
         digest=original(path,name)
         with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
         return digest
-    monkeypatch.setattr(teaching_media,'validate_file',revoked)
-    assert upload(teacher).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM quiz_files').fetchone()==(0,)
+    with monkeypatch.context() as patch:
+        patch.setattr(teaching_media,'validate_file',revoked)
+        assert upload(teacher).status_code==409
+    with api.connect() as db:
+        assert db.execute('SELECT count(*) FROM quiz_files').fetchone()==(0,)
+        assert not list(quiz_files.root_for(db).glob('*.bin'))
+    ok(upload(teacher))  # the only slot came back
 
 
 def test_global_quota_and_abandoned_cleanup(client,monkeypatch):
     _,_,_,teacher=setup(client);f=ok(upload(teacher))
-    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB','10')
-    assert upload(teacher).status_code==413
-    with api.connect() as db:
-        assert homework_files.total_stored(db)==f['size']
-        db.execute('UPDATE quiz_files SET created=?',((quiz_files.now()-timedelta(days=2)).isoformat(),))
+    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB',str(homework_files.MAX_FILE//(1024*1024)))
+    stored=f['size']
+    while stored+homework_files.MAX_FILE<=homework_files.total_limit():stored+=ok(upload(teacher,b'x'*homework_files.MAX_FILE,'filler.txt'))['size']
+    assert upload(teacher).status_code==413  # no room left for one more reservation
+    with api.connect() as db:db.execute('UPDATE quiz_files SET created=?',((quiz_files.now()-timedelta(days=2)).isoformat(),))
     assert upload(teacher).status_code==200
     assert file_get(teacher,f).status_code==404
 
 
-def test_question_rejects_duplicates_overlap_missing_and_too_many_files(client):
+FILES_PER_QUESTION=next(m.max_length for m in Question.model_fields['fileIds'].metadata if hasattr(m,'max_length'))
+
+
+@pytest.mark.parametrize('case',['duplicate','overlap','missing','too-many'])
+def test_question_rejects_bad_file_lists(client,case):
     _,_,_,teacher=setup(client);f=ok(upload(teacher))
-    base=dict(kind='essay',text='Task')
-    for extra in [dict(fileIds=[f['id']]*2),dict(fileIds=[f['id']],solutionFileIds=[f['id']]),dict(fileIds=['0'*32]),dict(fileIds=[f'{i:032x}' for i in range(7)])]:
-        r=teacher.put('/api/journal/quiz-bank/bad?workspace=demo',json=dict(version=0,question=base|extra));assert r.status_code==422
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM quiz_file_links').fetchone()==(0,)
-
-
-def test_backup_restores_old_published_bytes_and_solution_acl(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup
-    quiz,pupil,parent,teacher,bank,public,secret,_=prepared(client);work=ok(start(pupil,quiz))
-    ok(update_question(teacher,bank,fileIds=[],solutionFileIds=[]))
-    target=tmp_path/'backup';report=create_backup(api.DB,target);verify_backup(target)
-    assert len(report['files'])==2
-    monkeypatch.setattr(api,'DB',target/api.DB.name)
-    assert file_get(pupil,public,quiz,work).content==b'Question material'
-    assert file_get(parent,secret,quiz,work,part='solutionAttachments').status_code==404
-    work=ok(save(pupil,work,submit=True));ok(action(teacher,ok(action(teacher,quiz,'close')),'release'))
-    assert file_get(parent,secret,quiz,work,part='solutionAttachments').content==b'Secret solution'
+    extra=dict(duplicate=dict(fileIds=[f['id']]*2),overlap=dict(fileIds=[f['id']],solutionFileIds=[f['id']]),missing=dict(fileIds=['0'*32]),
+               **{'too-many':dict(fileIds=[f'{i:032x}' for i in range(FILES_PER_QUESTION+1)])})[case]
+    r=teacher.put('/api/journal/quiz-bank/bad?workspace=demo',json=dict(version=0,question=dict(kind='essay',text='Task')|extra));assert r.status_code==422
+    assert 'bad' not in [i['id'] for i in ok(teacher.get('/api/journal/quiz-bank?workspace=demo'))['items']]

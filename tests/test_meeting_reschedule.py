@@ -25,15 +25,24 @@ def records():
         return {table:sorted(db.execute('SELECT * FROM '+table).fetchall(),key=repr) for table in ['meeting_events','meeting_slots','meeting_bookings','meeting_history','meeting_reminders','meeting_requests','notifications','web_push_jobs'] if db.execute("SELECT 1 FROM sqlite_master WHERE name=?",(table,)).fetchone()}
 
 
+def reminder_clock(monkeypatch,when):
+    for module in [meetings,meeting_routes,meeting_reminders]:monkeypatch.setattr(module,'now',lambda:when)
+
+
+def between_reminders(source,target):
+    # A reminder is due one hour before its slot: this moment is after the old reminder time and before the new one.
+    from datetime import datetime
+    old,new=datetime.fromisoformat(source['startsAt']),datetime.fromisoformat(target['startsAt'])
+    assert new>old
+    return old-timedelta(hours=1)+(new-old)/2,new-timedelta(hours=1)
+
+
 @pytest.mark.parametrize('block',[False,True])
-def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypatch,block):
+def test_transfer_retains_identity_history_and_moves_slots(client,monkeypatch,block):
     eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
     before=api.read('demo').model_dump(mode='json');body['blockSource']=block
-    moved=ok(transfer(client,bid,body));after=records()
-    assert moved['eventVersion']==body['eventVersion']
-    with api.connect() as db:assert db.execute('SELECT version FROM meeting_events WHERE id=?',(eid,)).fetchone()[0]==body['eventVersion']
-    assert ok(transfer(client,bid,body))==moved and records()==after
-    assert transfer(client,bid,body|dict(reason='Different')).status_code==409
+    moved=ok(transfer(client,bid,body))
+    assert moved['eventVersion']==body['eventVersion']==event(client,eid)['version']
     item=bookings(parent,eid)[0]
     assert item['id']==bid and item['version']>body['version'] and item['status']=='scheduled'
     assert item['startsAt']==target['startsAt'] and item['note']=='Private appointment'
@@ -46,14 +55,29 @@ def test_transfer_retains_identity_history_notifies_and_replays(client,monkeypat
     history=ok(parent.get(path('bookings/'+bid+'/history')))[0]
     assert history['action']=='rescheduled' and history['source']['startsAt']==source['startsAt']
     assert history['target']['startsAt']==target['startsAt'] and history['sourceBlocked']==block
-    with api.connect() as db:
-        due,status=db.execute('SELECT due,status FROM meeting_reminders WHERE booking_id=?',(bid,)).fetchone()
-        from datetime import datetime
-        assert due==(datetime.fromisoformat(target['startsAt'])-timedelta(hours=1)).isoformat() and status=='pending'
-        assert {r[0] for r in db.execute("SELECT user_id FROM notifications WHERE action='meeting.rescheduled'")}=={p['id'],t['id']}
-    exported=client.get(path('events/'+eid+'/export'))
-    assert body['reason'] in exported.text
+    assert body['reason'] in client.get(path('events/'+eid+'/export')).text
     assert api.read('demo').model_dump(mode='json')==before
+
+
+def test_transfer_replay_is_idempotent(client,monkeypatch):
+    eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
+    moved=ok(transfer(client,bid,body));after=records()
+    assert ok(transfer(client,bid,body))==moved and records()==after
+    assert transfer(client,bid,body|dict(reason='Different')).status_code==409
+
+
+def test_transfer_notifies_both_sides_and_rearms_the_reminder_for_the_new_slot(client,monkeypatch):
+    eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch);teacher=signed('teacher')
+    clock,new_due=between_reminders(source,target);reminder_clock(monkeypatch,clock)
+    ok(transfer(client,bid,body))
+    for account in [parent,teacher]:
+        assert [i['action'] for i in account.get('/api/notifications/inbox').json()['items']].count('meeting.rescheduled')==1
+    reminders=lambda c:[i for i in c.get('/api/notifications/inbox').json()['items'] if i['action']=='meeting.reminder']
+    # The reminder follows the new slot: nothing is due yet at the old reminder time, one arrives at the new one.
+    assert not api.meetings.reminders.process_one() and reminders(parent)==[]
+    reminder_clock(monkeypatch,new_due)
+    assert api.meetings.reminders.process_one() and not api.meetings.reminders.process_one()
+    assert len(reminders(parent))==1 and len(reminders(teacher))==1
 
 
 def test_transfer_does_not_invalidate_other_families_booking(client,monkeypatch):
@@ -146,13 +170,15 @@ def test_notification_failure_rolls_back_booking_slots_event_history_and_reminde
 
 def test_sent_reminder_is_rearmed_for_new_time_and_new_version(client,monkeypatch):
     eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
-    for module in [meetings,meeting_routes,meeting_reminders]:monkeypatch.setattr(module,'now',lambda:BASE-timedelta(minutes=30))
-    assert api.meetings.reminders.process_one()
-    ok(transfer(client,bid,body));assert api.meetings.reminders.process_one()
-    assert not api.meetings.reminders.process_one()
-    with api.connect() as db:
-        # The unread reminder for the old time is replaced by the one for the new time (same topic).
-        assert sorted(r[0] for r in db.execute("SELECT revision FROM notifications WHERE action='meeting.reminder' AND user_id=?",(p['id'],)))==[2]
+    clock,new_due=between_reminders(source,target);reminder_clock(monkeypatch,clock)
+    reminders=lambda:[i for i in parent.get('/api/notifications/inbox').json()['items'] if i['action']=='meeting.reminder']
+    assert api.meetings.reminders.process_one() and len(reminders())==1
+    ok(transfer(client,bid,body))
+    assert not api.meetings.reminders.process_one()  # the new time has not come yet
+    reminder_clock(monkeypatch,new_due)
+    assert api.meetings.reminders.process_one() and not api.meetings.reminders.process_one()
+    # The unread reminder for the old time is replaced by the one for the new time (same topic).
+    assert len(reminders())==1
 
 
 def test_blocked_target_and_started_or_cancelled_source_are_rejected(client,monkeypatch):
@@ -172,7 +198,9 @@ def test_candidate_pagination_uses_school_day_and_exposes_no_other_family_detail
     second=ok(options(client,bid,limit=2,after=first['nextAfter'],onDate='2027-04-05'))
     assert len(first['items'])==len(second['items'])==2
     assert not {x['id'] for x in first['items']} & {x['id'] for x in second['items']}
-    assert all(set(x)=={'id','version','startsAt','endsAt','available','reason'} for x in first['items'])
+    shown=json.dumps([first['items'],second['items']],ensure_ascii=False)
+    private=['Private appointment',p['id'],*[s.name for s in api.read('demo').students]]
+    assert not any(value in shown for value in private)
     assert ok(options(client,bid,onDate='2027-04-06'))['items']==[]
     assert options(client,bid,after='bad').status_code==422
 
@@ -192,6 +220,6 @@ def test_access_or_cancellation_change_invalidates_a_previously_loaded_candidate
 
 def test_second_child_does_not_block_admin_transfer(client,monkeypatch):
     eid,t,p,parent,source,bid,target,body=prepared(client,monkeypatch)
-    regrant(p['id'],['s1','s2'],'student')
+    regrant(p['id'],['s1','s2'],'student');parent=signed('parent')
     assert options(client,bid).status_code==200
     ok(transfer(client,bid,body));assert bookings(parent,eid)[0]['startsAt']==target['startsAt']

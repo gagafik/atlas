@@ -6,7 +6,7 @@ from backend.models import State, Placement, TimetableRule
 from backend.scheduling import solve, validate_schedule
 
 
-def fixture():
+def fixture(transfers=()):
     return State.model_validate(dict(
         settings=dict(days=['Понедельник', 'Вторник']),
         profiles=[dict(id='p', name='Звонки', periods=[dict(label=str(i), start=a, end=b) for i, (a, b) in enumerate([
@@ -16,7 +16,7 @@ def fixture():
         teachers=[dict(id=f't{i}', name=f'Учитель {i}') for i in [1, 2, 3]],
         groups=[dict(id=f'g{i}', name=f'Класс {i}', classIds=[f'c{i}']) for i in [1, 2]] + [dict(id='staff', name='Совещание', kind='staff')],
         subjects=[dict(id='s', name='Предмет')],
-        campus=dict(buildings=[dict(id='a', name='А'), dict(id='b', name='Б')], defaultTravelMinutes=20),
+        campus=dict(buildings=[dict(id='a', name='А'), dict(id='b', name='Б')], defaultTravelMinutes=20, transfers=list(transfers)),
         rooms=[dict(id='a1', name='А1', capacity=10, buildingId='a'), dict(id='a2', name='А2', capacity=10, buildingId='a'), dict(id='b1', name='Б1', capacity=20, buildingId='b')],
         workloads=[dict(id=f'w{i}', groupId=f'g{i}', subjectId='s', teacherId=f't{i}', hours=1, profileId='p', roomIds=[room]) for i, room in [(1, 'a1'), (2, 'b1')]],
     ))
@@ -100,27 +100,55 @@ def test_permanent_room_availability_and_daily_rules_apply_to_every_room():
     assert solve(s, seconds=3)['status'] == 'infeasible'
 
 
-def test_capacity_sum_room_choice_unknown_counts_and_cannot_shrink_known_roster():
+def one_class_of_fifteen():
     s = fixture()
     s.workloads = s.workloads[:1]
     s.classes[0].studentCount = 15
+    return s
+
+
+def test_a_class_larger_than_its_room_is_reported():
+    s = one_class_of_fifteen()
     s.workloads[0].roomIds = ['a1', 'b1']
     s.placements = [placement('w1', 0, 'a1')]
     assert any(i['type'] == 'room_capacity' for i in validate_schedule(s)['issues'])
+
+
+def test_generation_picks_the_room_that_fits_the_class():
+    s = one_class_of_fifteen()
+    s.workloads[0].roomIds = ['a1', 'b1']
     assert generated(s).placements[0].roomId == 'b1'
+
+
+def test_required_rooms_add_up_their_capacity():
+    s = one_class_of_fifteen()
     s.workloads[0].roomIds = []
     s.workloads[0].requiredRoomIds = ['a1', 'a2']
     assert generated(s).placements[0].roomId is None
+
+
+def test_an_unknown_class_size_is_counted_not_guessed():
+    s = one_class_of_fifteen()
     s.classes[0].studentCount = None
+    s.workloads[0].roomIds = []
+    s.workloads[0].requiredRoomIds = ['a1', 'a2']
     s.placements = [placement('w1', 0, None)]
     assert validate_schedule(s)['unknownCapacity'] == 1
+
+
+def test_a_known_roster_cannot_be_shrunk_below_its_room():
+    s = fixture()
+    s.workloads = s.workloads[:1]
+    s.classes[0].studentCount = None
     s.workloads[0].studentCount = 1
     s.workloads[0].groupId = 'g2'
+    s.workloads[0].roomIds = []
     s.groups[1].kind = 'core'
     s.groups[1].classIds = ['c1', 'c2']
     s.groups[1].studentIds = ['s1', 's2']
     s.rooms[0].capacity = 1
     s.workloads[0].requiredRoomIds = ['a1']
+    s.placements = [placement('w1', 0, None)]
     assert any(i['type'] == 'room_capacity' for i in validate_schedule(s)['issues'])
 
 
@@ -132,26 +160,53 @@ def test_simultaneous_rooms_cannot_span_buildings():
     assert solve(s)['status'] == 'blocked'
 
 
-@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
-def test_transfers_actual_time_direction_and_partial_generation(shared):
-    s = fixture()
+def sharing(s, shared):
     if shared == 'teacher':
         s.workloads[1].additionalTeacherIds = ['t1']
     else:
         s.workloads[1].groupId = 'g1'
+
+
+@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
+def test_lessons_in_distant_buildings_with_a_shared_person_report_travel(shared):
+    s = fixture()
+    sharing(s, shared)
     s.placements = [placement('w1', 0, 'a1', True), placement('w2', 1, 'b1')]
     report = validate_schedule(s)
     travel = next(i for i in report['issues'] if i['type'] == 'travel')
     assert {i['type'] for i in report['issues']} == {'travel'}
     assert travel['affectedStudentIds'] == (['s1'] if shared == 'pupil' else [])
-    candidate = generated(s, ['w2'])
-    assert candidate.placements[0] == s.placements[0]
-    # Both bell boundaries matter; there is only a five-minute transfer.
-    s.campus.transfers = State.model_validate({**s.model_dump(), 'campus': {**s.campus.model_dump(), 'transfers': [dict(fromId='a', toId='b', minutes=5)]}}).campus.transfers
+
+
+@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
+def test_partial_generation_keeps_the_locked_lesson(shared):
+    s = fixture()
+    sharing(s, shared)
+    s.placements = [placement('w1', 0, 'a1', True), placement('w2', 1, 'b1')]
+    assert generated(s, ['w2']).placements[0] == s.placements[0]
+
+
+@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
+def test_a_transfer_that_fits_the_break_between_bells_is_no_travel_problem(shared):
+    s = fixture([dict(fromId='a', toId='b', minutes=5)])
+    sharing(s, shared)
+    s.placements = [placement('w1', 0, 'a1', True), placement('w2', 1, 'b1')]
     assert validate_schedule(s)['issueCount'] == 0
+
+
+@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
+def test_a_transfer_is_directional(shared):
+    s = fixture([dict(fromId='a', toId='b', minutes=5)])
+    sharing(s, shared)
     s.placements = [placement('w1', 1, 'a1'), placement('w2', 0, 'b1')]
     assert any(i['type'] == 'travel' for i in validate_schedule(s)['issues'])
-    s.placements[1].day = 1
+
+
+@pytest.mark.parametrize('shared', ['teacher', 'pupil'])
+def test_lessons_on_different_days_need_no_travel(shared):
+    s = fixture()
+    sharing(s, shared)
+    s.placements = [placement('w1', 0, 'a1'), placement('w2', 1, 'b1', day=1)]
     assert validate_schedule(s)['issueCount'] == 0
 
 
@@ -180,20 +235,24 @@ def test_transfers_follow_consecutive_lessons_not_a_journey_replaced_by_another_
     generated(s)
 
 
-def test_reference_validation_prevents_duplicate_teachers_rooms_and_invalid_classless_groups():
-    for field, value in [('additionalTeacherIds', ['t1']), ('additionalTeacherIds', ['absent']), ('requiredRoomIds', ['a1']), ('teacherRequired', False)]:
-        raw = fixture().model_dump()
-        raw['workloads'][0][field] = value
-        with pytest.raises(ValidationError):
-            State.model_validate(raw)
+def invalid(change):
     raw = fixture().model_dump()
-    raw['groups'][0]['kind'] = 'staff'
-    with pytest.raises(ValidationError):
-        State.model_validate(raw)
-    raw = fixture().model_dump()
-    raw['campus']['buildings'] = []
-    with pytest.raises(ValidationError):
-        State.model_validate(raw)
+    change(raw)
+    return raw
+
+
+@pytest.mark.parametrize('change,loc', [
+    (lambda raw: raw['workloads'][0].update(additionalTeacherIds=['t1']), ('workloads', 0)),
+    (lambda raw: raw['workloads'][0].update(additionalTeacherIds=['absent']), ()),
+    (lambda raw: raw['workloads'][0].update(requiredRoomIds=['a1']), ('workloads', 0)),
+    (lambda raw: raw['workloads'][0].update(teacherRequired=False), ('workloads', 0)),
+    (lambda raw: raw['groups'][0].update(kind='staff'), ('groups', 0)),
+    (lambda raw: raw['campus'].update(buildings=[]), ()),
+], ids=['teacher-twice', 'unknown-co-teacher', 'room-twice', 'teacher-optional-with-teacher', 'staff-group-with-classes', 'rooms-without-buildings'])
+def test_inconsistent_references_are_refused_at_the_right_place(change, loc):
+    with pytest.raises(ValidationError) as error:
+        State.model_validate(invalid(change))
+    assert {e['loc'] for e in error.value.errors()} == {loc}
 
 
 def saved_school(tmp_path, monkeypatch, s):

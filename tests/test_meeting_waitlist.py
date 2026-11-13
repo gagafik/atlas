@@ -203,7 +203,7 @@ def test_old_expired_offer_withdrawal_does_not_invalidate_new_family_hold(client
 
 def test_second_child_keeps_queue_entry_offer_and_accept(client,monkeypatch):
     eid,t,p,parent,wid=prepared(client,monkeypatch)
-    regrant(p['id'],['s1','s2'],'student')
+    regrant(p['id'],['s1','s2'],'student');parent=signed('parent')
     assert queue(parent,eid)['items'][0]['current'] is True
     offered(client,parent,eid,wid)
     response,_=change(parent,eid,wid,'accept');assert response.status_code==200,response.text

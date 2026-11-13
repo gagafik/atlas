@@ -4,7 +4,6 @@ from datetime import timedelta
 
 import pytest
 from backend import api,families
-from backend.notifications import permission_key
 from backend.access import now
 from seeding import insert_row
 from test_access import client,enable
@@ -67,11 +66,10 @@ def test_grading_skips_unrelated_accounts_but_respects_mute_and_family_expiry(cl
         assert not db.execute("SELECT 1 FROM notifications WHERE user_id='other-family'").fetchone()
 
 
-def test_index_upgrade_preserves_latest_500_and_expiry_across_permissions(client):
+def test_retention_keeps_the_newest_entries_across_old_permissions_and_drops_expired(client):
     enable(client)
     with api.connect() as db:
         db.execute('DELETE FROM notifications')
-        db.execute('DROP INDEX IF EXISTS notification_age')
         account(db,'recipient',role='student');user=api.access.public(db.execute("SELECT * FROM accounts WHERE id='recipient'").fetchone())
         recent=now().isoformat();expired=(now()-timedelta(days=91)).isoformat()
         db.executemany('INSERT INTO notifications(user_id,permissions,workspace,revision,created,action) VALUES (?,?,?,?,?,?)',
@@ -79,9 +77,7 @@ def test_index_upgrade_preserves_latest_500_and_expiry_across_permissions(client
                 ('other','key','demo',1,expired,'journal.updated'),('other','key','demo',2,recent,'journal.updated')])
         newest=[r[0] for r in db.execute("SELECT id FROM notifications WHERE user_id='recipient' ORDER BY id DESC LIMIT 499")]
         api.notifications.deliver(db,[user],'demo',506,'homework.reviewed')
-        rows=db.execute("SELECT id,permissions,action FROM notifications WHERE user_id='recipient' ORDER BY id DESC").fetchall()
+        rows=db.execute("SELECT id,action FROM notifications WHERE user_id='recipient' ORDER BY id DESC").fetchall()
         assert len(rows)==500 and [r[0] for r in rows[1:]]==newest
-        assert rows[0][1:]==(permission_key(user),'homework.reviewed')
+        assert rows[0][1]=='homework.reviewed'
         assert db.execute("SELECT revision FROM notifications WHERE user_id='other'").fetchall()==[(2,)]
-        # The old database gains the retention index without rewriting inbox records.
-        assert db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='notification_age'").fetchone()

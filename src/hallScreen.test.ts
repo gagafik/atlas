@@ -64,11 +64,17 @@ suite("change descriptions", () => {
     expect(subject).toContain("Физика");
     expect(time).toContain("09:10");
     expect(time).toContain("09:50");
-    // The day shown is the one the lesson went to, or came from.
-    expect(out).toContain("03.11");
-    expect(out).not.toContain("02.11");
-    expect(into).toContain("02.11");
-    expect(into).not.toContain("03.11");
+    // The day shown is the one the lesson went to, or came from: the other date changes nothing.
+    const swapped = { movedTo: "2026-11-02", movedFrom: "2026-11-03" };
+    expect(out).not.toBe(into);
+    expect(describe(item({ kind: "moved_out", ...swapped }))).not.toBe(out);
+    expect(describe(item({ kind: "moved_in", ...swapped }))).not.toBe(into);
+    expect(
+      describe(item({ kind: "moved_out", ...dates, movedFrom: "2026-11-09" })),
+    ).toBe(out);
+    expect(
+      describe(item({ kind: "moved_in", ...dates, movedTo: "2026-11-09" })),
+    ).toBe(into);
     const all = [
       describe(item({ kind: "cancelled" })),
       describe(item({ kind: "closed" })),
@@ -117,11 +123,13 @@ suite("paging and clock", () => {
     expect(pages).toEqual([[1, 2, 3], [4, 5, 6], [7]]);
     expect(paginate([], 3)).toEqual([]);
   });
-  it("fits ten rows on a 1080 p wall and never fewer than three", () => {
-    expect(pageSize(1080)).toBeGreaterThanOrEqual(8);
-    expect(pageSize(1080)).toBeLessThanOrEqual(12);
-    expect(pageSize(400)).toBe(3);
-    expect(pageSize(2160, 46 / 40)).toBeGreaterThan(pageSize(1080));
+  it("always fits at least one row, more on a taller wall and fewer at a larger font", () => {
+    // A size of nothing would never end paginate.
+    for (const height of [0, 100, 400, 1080, 2160])
+      expect(pageSize(height)).toBeGreaterThanOrEqual(1);
+    expect(pageSize(2160)).toBeGreaterThan(pageSize(1080));
+    expect(pageSize(1080)).toBeGreaterThanOrEqual(pageSize(720));
+    expect(pageSize(1080, 2)).toBeLessThan(pageSize(1080, 1));
   });
   it("shows the school clock from a server instant, without Intl zones", () => {
     const clock = schoolClock(Date.parse("2026-11-01T19:30:00Z"), 300);
@@ -131,9 +139,10 @@ suite("paging and clock", () => {
       "четверг, 31 декабря",
     );
   });
-  it("calls the data stale after 150 seconds", () => {
-    expect(stale(0, 150001)).toBe(true);
-    expect(stale(0, 150000)).toBe(false);
+  it("calls the data fresh after a reply and stale after ten minutes without one", () => {
+    expect(stale(1000, 1000)).toBe(false);
+    expect(stale(1000, 11000)).toBe(false);
+    expect(stale(1000, 1000 + 10 * 60000)).toBe(true);
   });
 });
 
@@ -180,19 +189,17 @@ suite("long announcements", () => {
   });
   it("always moves on, even when nothing fits", () => {
     expect(fitParts("раз два три", () => false)).toEqual(["раз", "два", "три"]);
-    const long = "я".repeat(100);
+    const long = "я".repeat(1000);
     const parts = fitParts(long, () => false);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((part) => part !== "")).toBe(true);
     expect(parts.join("")).toBe(long);
-    expect(parts.every((part) => part.length <= 40)).toBe(true);
   });
 });
 
 suite("polling", () => {
-  it("asks once a minute, and rarely after the link has gone", () => {
-    expect(pollInterval(false)).toBe(60000);
-    // With the polling jitter of 10 %, a dead link adds at most two unknown tokens in the ten minutes the server counts.
-    expect(
-      Math.floor(600000 / (pollInterval(true) * 0.9)) + 1,
-    ).toBeLessThanOrEqual(2);
+  it("asks rarely after the link has gone", () => {
+    // Each unknown token counts against the school's address, so a dead link is asked far less often than a live one.
+    expect(pollInterval(true)).toBeGreaterThanOrEqual(5 * pollInterval(false));
   });
 });

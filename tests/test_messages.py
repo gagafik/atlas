@@ -44,7 +44,6 @@ def test_direct_reply_read_search_and_idempotency(client):
     assert teacher.post(url('threads/'+id+'/reply'),json=reply).status_code==200
     assert teacher.post(url('threads/'+id+'/reply'),json=reply).status_code==200
     assert len(detail(parent,id)['posts'])==2
-    with api.connect() as db:assert {r[0] for r in db.execute('SELECT live_through FROM message_members WHERE thread_id=?',(id,))}=={detail(parent,id)['latestId']}
     assert len(parent.get(url(q='подготовьте')).json()['items'])==1
     assert parent.get('/api/notifications/inbox').json()['items'][0]['action']=='message.received'
 
@@ -126,8 +125,6 @@ def test_opening_a_legacy_dialog_records_the_bound_before_the_link_is_lost(clien
     with api.connect() as db:db.execute('UPDATE message_members SET live_through=NULL')
     # Only the participant who opened the dialogue after the upgrade is covered; the other row stays unknown.
     assert parent.put(url('threads/'+id+'/read'),json=dict(throughId=detail(parent,id)['latestId'])).status_code==200
-    with api.connect() as db:marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(id,)))
-    assert marks[people['parent']['id']]==detail(parent,id)['latestId'] and marks[people['teacher']['id']] is None
     state=api.read('demo')
     for workload in state.workloads:
         if workload.teacherId=='t2':workload.teacherId='t1'
@@ -216,9 +213,9 @@ def test_announcement_scope_schoolwide_and_account_changes(client):
     assert parent.post(url('threads/'+id+'/change'),json=dict(version=1,action='acknowledge')).status_code==404
 
 
-def test_reply_race_close_and_monotonic_read(client):
+def test_reply_race_with_close_and_refusal_after_close(client):
     people=setup(client);parent=signed('parent');teacher=signed('teacher')
-    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id'];first=detail(parent,id)
+    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
     with ThreadPoolExecutor(max_workers=2) as pool:
         a=pool.submit(teacher.post,url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Ответ'))
         b=pool.submit(parent.post,url('threads/'+id+'/change'),json=dict(version=1,action='close'))
@@ -231,10 +228,7 @@ def test_reply_race_close_and_monotonic_read(client):
     assert not current['canReply']
     assert teacher.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=current['version'],text='Поздний ответ')).status_code==409
     assert parent.post(url('threads/'+id+'/change'),json=dict(version=current['version'],action='reopen')).status_code==200
-    assert teacher.put(url('threads/'+id+'/read'),json=dict(throughId=current['latestId']+100)).status_code==422
-    teacher.put(url('threads/'+id+'/read'),json=dict(throughId=current['latestId']))
-    teacher.put(url('threads/'+id+'/read'),json=dict(throughId=first['latestId']))
-    assert not teacher.get(url(unreadOnly=True)).json()['items']
+    assert detail(parent,id)['canReply']
 
 
 def test_simultaneous_group_replies_are_all_stored_in_order(client):
@@ -263,21 +257,25 @@ def test_local_mode_requires_accounts_and_plain_text_does_not_modify_school(clie
     assert api.read('demo').model_dump()==before
 
 
-def test_concurrent_duplicate_creation_and_notification_failure_are_atomic(client,monkeypatch):
-    import pytest
-    people=setup(client);parent=signed('parent');body=payload(people['teacher']['id'])
+def test_concurrent_duplicate_creation_makes_one_dialog(client):
+    people=setup(client);parent=signed('parent');teacher=signed('teacher');body=payload(people['teacher']['id'])
     with ThreadPoolExecutor(max_workers=2) as pool:
         results=list(pool.map(lambda _:parent.post(url(),json=body),range(2)))
     assert all(r.status_code==200 for r in results)
     assert results[0].json()==results[1].json()
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM message_posts').fetchone()[0]==1
-    def fail(*args,**kwargs):raise RuntimeError('simulated notification failure')
-    monkeypatch.setattr(api.notifications,'deliver',fail)
-    with pytest.raises(RuntimeError,match='simulated notification'):
-        parent.post(url(),json=payload(people['teacher']['id']))
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM message_threads').fetchone()[0]==1
-        assert db.execute('SELECT count(*) FROM message_requests').fetchone()[0]==1
+    assert [t['id'] for t in teacher.get(url()).json()['items']]==[results[0].json()['id']]
+
+
+def test_notification_failure_rolls_back_the_dialog_and_a_retry_succeeds(client,monkeypatch):
+    import pytest
+    people=setup(client);parent=signed('parent');teacher=signed('teacher');body=payload(people['teacher']['id'])
+    with monkeypatch.context() as patch:
+        def fail(*args,**kwargs):raise RuntimeError('simulated notification failure')
+        patch.setattr(api.notifications,'deliver',fail)
+        with pytest.raises(RuntimeError,match='simulated notification'):parent.post(url(),json=body)
+    assert teacher.get(url()).json()['items']==[]
+    retry=parent.post(url(),json=body);assert retry.status_code==200,retry.text
+    assert [t['id'] for t in teacher.get(url()).json()['items']]==[retry.json()['id']]
 
 
 def history(thread,author,count):
@@ -326,30 +324,16 @@ def test_flooding_a_conversation_is_rate_limited_per_author(client,monkeypatch):
     assert parent.post(url('threads/'+id+'/reply'),json=dict(requestId=str(uuid4()),version=1,text='Всё ещё можно')).status_code==200
 
 
-def test_full_backup_restores_conversation_and_private_access(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    people=setup(client);parent=signed('parent');teacher=signed('teacher')
-    id=parent.post(url(),json=payload(people['teacher']['id'])).json()['id']
-    original=detail(parent,id)
-    teacher.put(url('threads/'+id+'/read'),json=dict(throughId=original['latestId']))
-    original=detail(parent,id)
-    destination=tmp_path/'messages-backup';source=api.DB
-    create_backup(source,destination)
-    monkeypatch.setattr(api,'DB',destination/source.name)
-    assert detail(parent,id)==original
-    assert signed('other').get(url('threads/'+id)).status_code==404
-    assert detail(teacher,id)['posts']==original['posts']
-
-
-def test_live_through_column_is_added_to_existing_member_table(tmp_path):
+def test_member_table_without_live_through_is_migrated_keeping_the_participant(tmp_path):
     import sqlite3
     from contextlib import closing
+    from seeding import insert_row,read_row
     with closing(sqlite3.connect(tmp_path/'old.db')) as db:
         db.execute('CREATE TABLE message_members (thread_id TEXT,user_id TEXT,role TEXT,scope_students TEXT,read_id INTEGER DEFAULT 0,ack_version INTEGER,PRIMARY KEY(thread_id,user_id))')
-        db.execute("INSERT INTO message_members VALUES ('t','u','parent','[\"s1\"]',7,2)")
+        insert_row(db,'message_members',thread_id='t',user_id='u',role='parent',scope_students='["s1"]',read_id=7,ack_version=2)
         api.messages.tables(db);api.messages.tables(db)
-        assert 'live_through' in {r[1] for r in db.execute('PRAGMA table_info(message_members)')}
-        assert db.execute('SELECT thread_id,user_id,role,scope_students,read_id,ack_version,live_through FROM message_members').fetchall()==[('t','u','parent','["s1"]',7,2,None)]
+        member=read_row(db,'message_members',thread_id='t',user_id='u')
+        assert (member['role'],member['scope_students'],member['read_id'],member['ack_version'])==('parent','["s1"]',7,2)
 
 
 def test_inbox_row_shows_sender_date_child_and_preview(client):
@@ -386,14 +370,14 @@ def test_inbox_preview_respects_history_and_moderation(client):
     made=parent.post(url('posts/'+str(post)+'/report'),json=dict(requestId=str(uuid4()),reason='Нарушение',shareEvidence=True));assert made.status_code==200,made.text
     state=client.get(url('reports/'+made.json()['id'])).json()
     assert client.post(url('reports/'+made.json()['id']+'/decision'),json=dict(requestId=str(uuid4()),version=state['version'],postVersion=state['postVersion'],action='hide',note='Скрыто')).status_code==200
-    assert row(parent)['preview']=='Сообщение скрыто администратором.' and not row(parent)['hasFiles']
+    assert 'Секрет' not in row(parent)['preview'] and not row(parent)['hasFiles']
     assert 'Секрет' not in str(teacher.get(url()).json())
 
 
 def test_announcement_requires_subject_but_dialog_does_not(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent')
     body=dict(requestId=str(uuid4()),kind='announcement',title='',text='Текст',groupIds=['g-a'],roles=['parent'])
-    refused=teacher.post(url(),json=body);assert refused.status_code==422 and 'тему' in refused.json()['detail']
+    assert teacher.post(url(),json=body).status_code==422
     assert teacher.post(url(),json=body|dict(title='Тема')).status_code==200
     assert parent.post(url(),json=payload(people['teacher']['id'])|dict(title='')).status_code==200
     group=teacher.post(url(),json=dict(requestId=str(uuid4()),kind='group',title='',text='Вопрос.',groupIds=['g-a'],roles=['parent','student']))

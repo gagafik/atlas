@@ -187,29 +187,46 @@ def test_upload_rechecks_current_role_and_school_assignment(client,monkeypatch,c
         assert not list(files.root_for(db).glob('*.bin'))
 
 
-def test_file_limits_cleanup_backup_and_restore_all_versions(client,tmp_path,monkeypatch):
+@pytest.mark.parametrize('body,name,status',[(b'','empty.txt',422),(b'bad','bad.pdf',422),(b'bad','x.exe',422),(b'x'*(homework_files.MAX_FILE+1),'big.txt',413)],ids=['empty','content-mismatch','executable','oversize'])
+def test_upload_refusals(client,body,name,status):
+    teacher,_,_,_=setup(client)
+    assert upload(teacher,body,name).status_code==status
+    assert teacher.get(BASE+'?workspace=demo').json()['items']==[]
+
+
+def test_unused_upload_expires_but_files_of_every_version_stay(client,monkeypatch):
+    teacher,_,_,_=setup(client)
+    file=upload(teacher).json()['id']
+    material=save(teacher,visibility='staff',fileIds=[file]).json()
+    newer=save(teacher,material,fileIds=[]).json()
+    unused=upload(teacher).json()['id']
+    assert download(teacher,unused).status_code==200
+    monkeypatch.setattr(homework_files,'now',lambda:now()+timedelta(days=2))
+    assert upload(teacher).status_code==200
+    assert download(teacher,unused).status_code==404
+    assert download(teacher,file,material).content==b'Lesson material'
+    assert download(teacher,file,newer).status_code==404
+
+
+def test_backup_restores_files_of_all_versions(client,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
     teacher,other,_,_=setup(client)
-    for body,name in [(b'','empty.txt'),(b'bad','bad.pdf'),(b'bad','x.exe')]:
-        assert upload(teacher,body,name).status_code==422
-    assert upload(teacher,b'x'*(homework_files.MAX_FILE+1)).status_code==413
     file=upload(teacher).json()['id']
     material=save(teacher,visibility='staff',fileIds=[file]).json()
     copy=other.post(BASE+f"/{material['id']}/copy?workspace=demo",json=dict(version=1)).json()
     newer=save(teacher,material,fileIds=[]).json()
-    unused=upload(teacher).json()['id']
-    with api.connect() as db:
-        db.execute('UPDATE teaching_material_files SET created=?',((now()-timedelta(days=2)).isoformat(),))
-        files.collect_unused(db)
-        assert not (files.root_for(db)/(unused+'.bin')).exists()
-        assert homework_files.total_stored(db)==len(b'Lesson material')
     backup=tmp_path/'restore';source=api.DB
-    manifest=create_backup(source,backup);assert len(manifest['files'])==1
+    create_backup(source,backup)
     monkeypatch.setattr(api,'DB',backup/source.name)
     assert download(teacher,file,material).content==b'Lesson material'
     assert download(teacher,file,newer).status_code==404
     assert download(other,file,copy).content==b'Lesson material'
-    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB','10')
+
+
+def test_total_storage_quota_refuses_the_next_upload(client,monkeypatch):
+    teacher,_,_,_=setup(client)
+    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB',str(homework_files.MAX_FILE//2**20))
+    assert upload(teacher).status_code==200
     assert upload(teacher).status_code==413
 
 
@@ -253,16 +270,26 @@ def test_closed_period_prevents_binding_material_and_preserves_archive(client,mo
         assert db.execute('SELECT version FROM teaching_material_lessons').fetchall()==[(material['version'],)]
 
 
-def test_validation_and_global_reservation_during_upload(client,monkeypatch):
+@pytest.mark.parametrize('changes',[dict(title=' '),dict(text=''),dict(topics=['Тема','тема'])])
+def test_invalid_material_content_is_refused(client,changes):
     teacher,_,_,_=setup(client)
-    for changes in [dict(title=' '),dict(text=''),dict(topics=['Тема','тема']),dict(topics=['x'*101]),dict(topics=['']*21)]:
-        assert save(teacher,**changes).status_code==422
-    original=homework_files.validate_file
-    def reserved(path,name):
-        with api.connect() as db:
-            assert homework_files.total_stored(db)==homework_files.MAX_FILE
-        return original(path,name)
-    monkeypatch.setattr(homework_files,'validate_file',reserved)
+    assert save(teacher,**changes).status_code==422
+
+
+def test_material_with_files_may_have_no_text_but_not_the_same_file_twice(client):
+    teacher,_,_,_=setup(client)
     file=upload(teacher).json()['id']
     assert save(teacher,text='',fileIds=[file]).status_code==200
     assert save(teacher,fileIds=[file]*2).status_code==422
+
+
+def test_upload_in_progress_holds_its_space_against_a_parallel_upload(client,monkeypatch):
+    teacher,_,_,_=setup(client)
+    monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB',str(homework_files.MAX_FILE//2**20))
+    original=homework_files.validate_file;parallel=[]
+    def during(path,name):
+        parallel.append(upload(teacher).status_code)
+        return original(path,name)
+    monkeypatch.setattr(homework_files,'validate_file',during)
+    assert upload(teacher).status_code==200
+    assert parallel==[413]

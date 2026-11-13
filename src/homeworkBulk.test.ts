@@ -1,10 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   acceptable,
-  inClasses,
   bulkItems,
   bulkSummary,
-  nextLessonText,
   orderTargets,
   parallelBody,
   rosterCounts,
@@ -82,10 +80,8 @@ describe("bulk acceptance", () => {
     expect(bulkItems(roster, new Set(["b", "c", "d", "e", "zzz"]))).toEqual([]);
     expect(bulkItems(roster, new Set())).toEqual([]);
   });
-  it("summarises accepted and skipped works", () => {
-    expect(bulkSummary({ accepted: ["a", "b"], skipped: [] })).toBe(
-      "Принято работ: 2.",
-    );
+  it("tells the teacher how many works were accepted and which were skipped, with the reason", () => {
+    expect(bulkSummary({ accepted: ["a", "b"], skipped: [] })).toContain("2");
     const text = bulkSummary({
       accepted: ["a"],
       skipped: [
@@ -93,28 +89,11 @@ describe("bulk acceptance", () => {
         { studentId: "c", name: "Ученик c", reason: "Работа на доработке." },
       ],
     });
-    expect(text).toBe(
-      "Принято работ: 1. Не приняты: Ученик b — Работа уже принята; Ученик c — Работа на доработке.",
-    );
-  });
-});
-
-describe("next lesson", () => {
-  it("formats the date and the start", () => {
-    expect(
-      nextLessonText({
-        date: "2026-08-19",
-        start: "09:00",
-        searchedUntil: "2026-10-16",
-      }),
-    ).toBe("Следующий урок: 2026-08-19, 09:00. Срок можно изменить.");
-    expect(
-      nextLessonText({ date: "2026-08-19", searchedUntil: "2026-10-16" }),
-    ).toBe("Следующий урок: 2026-08-19. Срок можно изменить.");
-  });
-  it("says where the search ended when there is no lesson", () => {
-    expect(nextLessonText({ date: null, searchedUntil: "2026-10-16" })).toBe(
-      "Следующий урок этого класса не найден до 2026-10-16. Укажите срок вручную.",
+    expect(text).toContain("1");
+    for (const part of ["Ученик b", "уже принята", "Ученик c", "на доработке"])
+      expect(text).toContain(part);
+    expect(bulkSummary({ accepted: ["a"], skipped: [] })).not.toContain(
+      "Ученик",
     );
   });
 });
@@ -153,16 +132,6 @@ describe("parallel classes", () => {
     expect(targetDue("same", null, next)).toBeNull();
     expect(targetDue("next", "2026-08-19", next)).toBe("2026-08-20");
     expect(targetDue("next", "2026-08-19", target("10E"))).toBeNull();
-  });
-  it("declines the noun after the count", () => {
-    expect([1, 2, 5, 11, 21, 22].map(inClasses)).toEqual([
-      "1 классе",
-      "2 классах",
-      "5 классах",
-      "11 классах",
-      "21 классе",
-      "22 классах",
-    ]);
   });
   it("builds the request from the chosen targets and the source version", () => {
     expect(

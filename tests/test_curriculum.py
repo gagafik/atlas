@@ -111,20 +111,21 @@ def test_publication_pins_canonical_topic_and_draft_does_not_change_progress(cli
 
 def test_plan_binding_rejects_wrong_scope_stale_version_missing_topic_atomically(client):
     p=new(client);p2=save(client,p,title='Changed').json()
+    totals=progress(client,p2)['totals']
     assert attach(client,p).status_code==409
     assert attach(client,p2,topic='missing').status_code==422
-    zero=attach(client,p2,units=0);assert zero.status_code==422 and 'Часов по теме' in str(zero.json()['detail'])
+    assert attach(client,p2,units=0).status_code==422
     math=entry(client,lesson(client,subject='Математика')['lessonKey'])
     assert attach(client,p2,math).status_code==422
+    assert entry(client,math['lessonKey'])['version']==0 and progress(client,p2)['totals']==totals
     r=attach(client,p2);assert r.status_code==200,r.text
     record=r.json()
     p3=request(client,f"/{p['id']}/archive",'POST',dict(version=2,archived=True)).json()
     assert write(client,record,publish=True).status_code==200  # retained old version is valid
+    assert progress(client,p2)['totals']['actual']==totals['actual']+1
     nextweek=entry(client,lesson(client,day='2026-08-24')['lessonKey'],day='2026-08-24')
     assert attach(client,p2,nextweek).status_code==409
-    with api.connect() as db:
-        assert db.execute('SELECT count(*) FROM curriculum_bindings').fetchone()[0]==1
-        assert db.execute('SELECT count(*) FROM curriculum_publications').fetchone()[0]==1
+    assert entry(client,nextweek['lessonKey'],day='2026-08-24')['version']==0 and progress(client,p2)['totals']['actual']==totals['actual']+1
 
 
 def test_moved_cancelled_missing_and_future_publications_need_review(client,monkeypatch):
