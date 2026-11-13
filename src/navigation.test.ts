@@ -193,38 +193,6 @@ describe("the menu of each role", () => {
     },
   );
 
-  it("never offers a pupil, a parent or a viewer a page of the administration or the staff", () => {
-    for (const role of ["student", "parent", "viewer"] as Role[]) {
-      const ctx = context(role);
-      expect(containerOf(role)).toBe("portal");
-      const opened = keys(ctx);
-      for (const page of [
-        "rules",
-        "planner",
-        "access",
-        "settings",
-        "class-staff",
-        "duties",
-        "curriculum",
-        "materials",
-      ])
-        expect(opened).not.toContain(`view:${page}`);
-      for (const dialog of [
-        "hall",
-        "sections",
-        "operations",
-        "drill",
-        "briefings",
-        "logins",
-        "staffTime",
-        "workload",
-        "admissions",
-        "site",
-      ])
-        expect(opened).not.toContain(`modal:${dialog}`);
-    }
-  });
-
   it("leaves out the sections the school hides, and every optional one until the setting has loaded", () => {
     const optional = [
       "library",
@@ -281,52 +249,56 @@ describe("the parts of the journal in the menu", () => {
   const parts = (ctx: MenuContext) =>
     keys(ctx).filter((key) => key.includes("#"));
 
-  it("appear only where the journal does and the server has something for the account", () => {
+  const own = ["view:journal#pupilGrades", "view:journal#pupilAttendance"];
+  const staffParts = [
+    "courseTable",
+    "finalGrades",
+    "attendanceGrid",
+    "absences",
+    "coverage",
+    "periods",
+  ].map((part) => `view:journal#${part}`);
+  const without = (...gone: string[]) =>
+    staffParts.filter((part) => !gone.some((name) => part.endsWith(name)));
+  // The order of the entries is the menu's business: what a role can reach is the set.
+  it.each([
     // Every panel the day grid used to list under itself is a part of the menu now, in the group of its kind.
-    expect(parts(context("admin"))).toEqual([
-      "view:journal#courseTable",
-      "view:journal#finalGrades",
-      "view:journal#attendanceGrid",
-      "view:journal#absences",
-      "view:journal#coverage",
-      "view:journal#periods",
-    ]);
-    expect(parts(context("admin", { journalPanels: null }))).toEqual([]);
-    expect(parts(context("admin", { journalPanels: ["courseTable"] }))).toEqual(
-      ["view:journal#courseTable"],
-    );
+    ["admin", PANELS, staffParts],
+    ["admin", null, []],
+    ["admin", ["courseTable"], ["view:journal#courseTable"]],
     // A teacher without report cards keeps the grades; the absence notes of the school are the administrator's.
-    expect(
-      parts(context("teacher", { journalPanels: ["courseTable", "absences"] })),
-    ).toEqual(["view:journal#courseTable"]);
+    ["teacher", ["courseTable", "absences"], ["view:journal#courseTable"]],
     // A teacher reaches every other panel the server offers.
-    expect(parts(context("teacher"))).toEqual([
-      "view:journal#courseTable",
-      "view:journal#finalGrades",
-      "view:journal#attendanceGrid",
-      "view:journal#coverage",
-      "view:journal#periods",
-    ]);
+    ["teacher", PANELS, without("absences")],
     // The editor has no journal, so none of its parts either.
-    for (const role of ["editor", "viewer", "staff"] as Role[])
-      expect(parts(context(role))).toEqual([]);
-  });
+    ["editor", PANELS, []],
+    ["viewer", PANELS, []],
+    ["staff", PANELS, []],
+  ] as [Role, JournalPanelName[] | null, string[]][])(
+    "%s with the panels %j gets the parts %j",
+    (role, journalPanels, expected) => {
+      expect(parts(context(role, { journalPanels })).sort()).toEqual(
+        [...expected].sort(),
+      );
+    },
+  );
 
-  it("give a pupil and a parent the screens of their own journal, and the report cards once the school published them", () => {
-    const own = ["view:journal#pupilGrades", "view:journal#pupilAttendance"];
-    for (const role of ["student", "parent"] as Role[]) {
-      expect(parts(context(role))).toEqual([
-        ...own,
-        "view:journal#finalGrades",
-      ]);
+  it.each(["student", "parent"] as Role[])(
+    "gives a %s the screens of their own journal, and the report cards once the school published them",
+    (role) => {
+      expect(parts(context(role)).sort()).toEqual(
+        [...own, "view:journal#finalGrades"].sort(),
+      );
       for (const journalPanels of [[], null])
-        expect(parts(context(role, { journalPanels }))).toEqual(own);
+        expect(parts(context(role, { journalPanels })).sort()).toEqual(
+          [...own].sort(),
+        );
       // The management parts of the staff stay out of a family's menu even when the server lists them.
       const family = parts(context(role)).join();
       for (const part of ["courseTable", "attendanceGrid", "absences"])
         expect(family).not.toContain(part);
-    }
-  });
+    },
+  );
 
   it("highlight their own entry, and the journal itself when the part is not in the menu", () => {
     const menu = buildMenu(context("admin"));

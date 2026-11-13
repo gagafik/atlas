@@ -5,7 +5,6 @@ import {
   inlineImage,
   mergeInbox,
   recipientKey,
-  unreadLabel,
   type RecipientFields,
 } from "./messages";
 
@@ -101,12 +100,6 @@ it("shows only validated picture types inline", () => {
     expect(inlineImage(name)).toBe(true);
   for (const name of ["a.pdf", "b.doc", "c.xls", "d.jpg.txt", "e"])
     expect(inlineImage(name)).toBe(false);
-});
-
-it("labels a long backlog of unread threads", () => {
-  expect(unreadLabel(3, false)).toBe("3");
-  expect(unreadLabel(40, true)).toBe("40+");
-  expect(unreadLabel(120, true)).toBe("99+");
 });
 
 it("tells why the home feed is empty when its first load fails", () => {

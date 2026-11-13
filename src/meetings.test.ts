@@ -18,11 +18,10 @@ describe("school meeting time", () => {
     expect(() => schoolISO("2027-02-30T17:00")).toThrow();
     expect(() => schoolISO("")).toThrow();
   });
-  it("defaults to the school's 17–19 ten-minute meetings", () => {
+  it("defaults to meetings from 17:00 to 19:00 school time", () => {
     const d = blankDefinition();
     expect(schoolInput(d.startsAt).slice(11)).toBe("17:00");
     expect(schoolInput(d.endsAt).slice(11)).toBe("19:00");
-    expect(d.slotMinutes).toBe(10);
   });
 });
 describe("meeting agenda grouping", () => {

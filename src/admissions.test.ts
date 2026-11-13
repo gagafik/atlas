@@ -20,9 +20,12 @@ describe("admissions client boundaries", () => {
     expect(editableApplication(sample("accepted"))).toBe(false);
     expect(editableApplication(sample("returned", "archived"))).toBe(false);
   });
-  it("creates separate high entropy recovery codes", () => {
+  it("creates separate recovery codes of a length the server accepts", () => {
     const first = recoveryCode();
-    expect(first).toMatch(/^[a-f0-9]{48}$/);
+    // The server takes 32 to 128 characters (admission_models.py).
+    expect(first).toMatch(/^[a-f0-9]+$/);
+    expect(first.length).toBeGreaterThanOrEqual(32);
+    expect(first.length).toBeLessThanOrEqual(128);
     expect(recoveryCode()).not.toBe(first);
   });
 });
