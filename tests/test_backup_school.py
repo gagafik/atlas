@@ -127,3 +127,19 @@ def test_inconsistent_shared_blob_never_marks_backup_complete(tmp_path):
     with pytest.raises(RuntimeError, match='Invalid attachment metadata'):
         backup_school.create_backup(source, tmp_path / 'snapshot')
     assert not (tmp_path / 'snapshot' / 'manifest.json').exists()
+
+
+def test_backup_restores_every_table_with_its_rows(tmp_path):
+    source, _, _ = fixture_database(tmp_path, attachment=False)
+    with closing(sqlite3.connect(source)) as db:
+        db.execute('CREATE TABLE absence_batches(id TEXT, status TEXT)')
+        db.executemany('INSERT INTO absence_batches VALUES (?,?)', [('a', 'preview'), ('b', 'applied'), ('c', 'applied')])
+        db.execute('CREATE TABLE empty_log(id TEXT)')
+        db.commit()
+    def snapshot(path):
+        with closing(sqlite3.connect(path)) as db:
+            names = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: db.execute(f'SELECT * FROM "{name}" ORDER BY 1').fetchall() for name in names}
+    target = tmp_path / 'snapshot'
+    backup_school.create_backup(source, target)
+    assert snapshot(target / 'school.db') == snapshot(source)

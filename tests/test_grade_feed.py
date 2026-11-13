@@ -27,10 +27,6 @@ def items(c,student='s1',**params):
     return response.json()
 
 
-def events():
-    with api.connect() as db:return db.execute('SELECT count(*) FROM grade_events').fetchone()[0]
-
-
 def family(client):
     """Admin client plus s1's parent and pupil, s2's parent, s1's English teacher and a physics teacher (s2/s4 only)."""
     enable(client)
@@ -59,11 +55,10 @@ def test_draft_saves_are_silent_and_publication_creates_private_newest_first_eve
     family(client);parent,pupil,other=signed('parent'),signed('student'),signed('other-parent')
     row=lesson(client);record=graded(entry(client,row['lessonKey']))
     draft=write(client,record);assert draft.status_code==200,draft.text
-    assert events()==0
+    assert items(other,'s2')['items']==[]
     empty=items(parent)
     assert empty['items']==[] and empty['unsigned']==0 and empty['latest'] is None and empty['nextBefore'] is None and empty['signedAt'] is None
     saved=republish(client,draft.json())
-    assert events()==2
     body=items(parent)
     assert len(body['items'])==1 and body['unsigned']==1 and body['canSign'] and body['role']=='parent' and body['signedAt'] is None
     item=body['items'][0]
@@ -89,16 +84,17 @@ def test_draft_saves_are_silent_and_publication_creates_private_newest_first_eve
 
 def test_only_the_newest_state_of_each_grade_stays_visible_and_withdrawal_hides_it(client):
     family(client);parent,other=signed('parent'),signed('other-parent')
-    saved=published(client);count=events()
+    feeds=lambda:(items(parent),items(other,'s2'))
+    saved=published(client);before=feeds()
     saved['document']['content']['records'][0]['grades'][0]['score']=6
     draft=write(client,saved);assert draft.status_code==200,draft.text
-    assert events()==count
+    assert feeds()==before
     current=republish(client,draft.json())
     body=items(parent)
-    assert [(i['change'],i['score']) for i in body['items']]==[('changed',6)] and body['items'][0]['previous']==previous(8) and events()==count+1
+    assert [(i['change'],i['score']) for i in body['items']]==[('changed',6)] and body['items'][0]['previous']==previous(8)
     current['document']['content']['topic']='Другая тема';current['document']['content']['records'][0]['attendance']='late';current['document']['content']['records'][0]['lateMinutes']=3
     current=republish(client,current)
-    assert events()==count+1
+    assert items(parent)==body
     current['document']['content']['records'][0]['grades'][0]['comment']='Новый отзыв'
     current=republish(client,current)
     body=items(parent);newest=body['items'][0]
@@ -113,11 +109,10 @@ def test_only_the_newest_state_of_each_grade_stays_visible_and_withdrawal_hides_
     current['document']['content']['records'][0]['grades']=[dict(assessmentId='work',score=9)]
     current=republish(client,current)
     assert [(i['change'],i['score'],i['previous']) for i in items(parent)['items']]==[('new',9,None)]
-    count=events()
     response=client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=current['lessonKey'],version=current['version']))
     assert response.status_code==200,response.text
     # Withdrawn from pupils and parents: nothing of that lesson stays in the feed.
-    assert events()==count and report(parent).json()['rows']==[]
+    assert report(parent).json()['rows']==[]
     for account,student in [(parent,'s1'),(other,'s2')]:
         hidden=items(account,student)
         assert hidden['items']==[] and hidden['unsigned']==0 and hidden['latest'] is None
@@ -161,9 +156,9 @@ def test_feed_carries_category_and_category_change(client):
     current=republish(client,current)
     newest=items(parent)['items'][0]
     assert (newest['change'],newest['category'],newest['previous']['category'],newest['score'])==('changed','soch','sor',8)
-    count=events();current['document']['content']['topic']='Другая тема'
+    before=items(parent);current['document']['content']['topic']='Другая тема'
     republish(client,current)
-    assert events()==count
+    assert items(parent)==before
 
 
 def test_each_family_account_signs_through_what_it_has_seen(client):
@@ -250,29 +245,31 @@ def test_feed_sign_and_signature_access(client):
 
 def test_feed_pages_newest_first_without_gaps(client):
     family(client);parent=signed('parent')
-    days=['2026-08-17','2026-08-24','2026-08-31','2026-09-07','2026-09-14','2026-09-21']
+    days=['2026-08-17','2026-08-24','2026-08-31','2026-09-07','2026-09-14','2026-09-21'];works=10
     for day in days:
         record=graded(entry(client,lesson(client,day=day)['lessonKey'],day=day));content=record['document']['content']
-        content['assessments']=[dict(id=f'a{i}',name=f'Работа {i}',kind='points',maxScore=10,weight=1) for i in range(10)]
+        content['assessments']=[dict(id=f'a{i}',name=f'Работа {i}',kind='points',maxScore=10,weight=1) for i in range(works)]
         for pupil in content['records']:pupil['grades']=[]
-        content['records'][0]['grades']=[dict(assessmentId=f'a{i}',score=i) for i in range(10)]
+        content['records'][0]['grades']=[dict(assessmentId=f'a{i}',score=i) for i in range(works)]
         republish(client,record)
-    first=items(parent)
-    assert len(first['items'])==50 and first['unsigned']==60 and first['latest']==first['items'][0]['seq']
-    assert first['nextBefore']==first['items'][-1]['seq']
-    second=items(parent,before=first['nextBefore'])
-    assert len(second['items'])==10 and second['nextBefore'] is None and second['unsigned']==60
-    assert {i['date'] for i in second['items']}=={days[0]} and first['items'][0]['date']==days[-1]
-    seqs=[i['seq'] for i in first['items']+second['items']]
-    assert seqs==sorted(seqs,reverse=True) and len(set(seqs))==60
+    total=len(days)*works
+    first=items(parent);pages=[first]
+    assert first['unsigned']==total and first['latest']==first['items'][0]['seq'] and first['nextBefore']
+    while pages[-1]['nextBefore'] is not None:
+        pages.append(items(parent,before=pages[-1]['nextBefore']))
+        assert pages[-1]['unsigned']==total
+    seen=[i for page in pages for i in page['items']]
+    seqs=[i['seq'] for i in seen]
+    assert len(pages)>1 and len(seqs)==len(set(seqs))==total and seqs==sorted(seqs,reverse=True)
+    assert seen[0]['date']==days[-1] and seen[-1]['date']==days[0]
     assert sign(parent,first['latest']).json()['unsigned']==0
 
 
 @pytest.mark.parametrize('stage',['store_revision','deliver','withdraw'])
 def test_failure_after_journal_write_leaves_grade_events_unchanged(client,monkeypatch,stage):
-    family(client);parent=signed('parent')
-    saved=published(client);before=items(parent);count=events()
-    with api.connect() as db:hidden=db.execute('SELECT count(*) FROM grade_events WHERE hidden=1').fetchone()[0]
+    family(client);parent,other=signed('parent'),signed('other-parent')
+    feeds=lambda:(items(parent),items(other,'s2'))
+    saved=published(client);before=feeds()
     def fail(*args,**kwargs):raise HTTPException(409,'Synthetic failure after journal write')
     if stage=='store_revision':
         original=api.journal.store_revision
@@ -288,8 +285,7 @@ def test_failure_after_journal_write_leaves_grade_events_unchanged(client,monkey
         saved['document']['content']['records'][0]['grades'][0]['score']=3
         response=write(client,saved,publish=True)
     assert response.status_code==409,response.text
-    assert events()==count and items(parent)==before
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM grade_events WHERE hidden=1').fetchone()[0]==hidden
+    assert feeds()==before
     current=entry(client,saved['lessonKey'])
     assert current['version']==saved['version'] and current['publishedVersion']==saved['publishedVersion']
 
@@ -311,8 +307,8 @@ def test_homework_grade_published_into_journal_creates_feed_event(client):
 
 def test_failed_homework_review_leaves_no_grade_event(client,monkeypatch):
     record,sent,_,parent,teacher=ready(client);key=record['lessonKey']
-    before=items(parent);count=events()
+    before=items(parent)
     def fail(*args,**kwargs):raise HTTPException(409,'Synthetic review failure')
     monkeypatch.setattr(api.homework,'persist',fail)
     assert grade(teacher,key,sent,payload(options(teacher,key))).status_code==409
-    assert events()==count and items(parent)==before
+    assert items(parent)==before

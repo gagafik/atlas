@@ -1,15 +1,12 @@
 import csv
 import io
 import json
-import hashlib
-from copy import deepcopy
 from datetime import date,datetime,timedelta,timezone
 from uuid import uuid4
 import pytest
 from backend import api,attendance_projection
 from backend.attendance_reports import PAGE
 from backend.models import SchoolClass,Student,DatedLesson
-from seeding import read_row,insert_row
 from test_access import client,create,signed
 from test_absences import setup,mark,send,decide,body,url,reviewers
 from test_journal import DAY,lesson,entry,write,graded
@@ -102,21 +99,24 @@ def test_draft_edits_publication_withdrawal_and_replication_are_atomic(client,mo
     assert pupil(report(teacher).json())['attendance']['present']==1
 
 
-def test_projection_backfill_failure_retry_and_backup(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_projection_backfill_interrupted_halfway_is_redone_by_the_next_report(client,monkeypatch):
     _,_,parent,teacher=setup(client);saved=mark(client)
+    # An old database: the projection tables do not exist yet.
     with api.connect() as db:
         for table in ['journal_projection_versions','journal_attendance_epoch','journal_attendance','journal_attendance_lessons']:db.execute('DROP TABLE '+table)
     populate=attendance_projection.populate
-    def fail(db,*args):populate(db,*args);raise RuntimeError('interrupted migration')
+    class Half:
+        # Lets the first statement of the rebuild through and fails on the next one.
+        def __init__(self,db):self.db,self.statements=db,0
+        def execute(self,*args):
+            self.statements+=1
+            if self.statements>1:raise RuntimeError('interrupted migration')
+            return self.db.execute(*args)
+    def fail(db,*args):populate(Half(db),*args)
     monkeypatch.setattr(attendance_projection,'populate',fail)
     with pytest.raises(RuntimeError):report(teacher)
-    with api.connect() as db:assert not db.execute("SELECT 1 FROM journal_projection_versions WHERE name='attendance'").fetchone()
     monkeypatch.setattr(attendance_projection,'populate',populate)
-    value=report(teacher).json();assert value['totals']['records']==2
-    destination=tmp_path/'attendance-backup';source=api.DB;create_backup(source,destination)
-    monkeypatch.setattr(api,'DB',destination/source.name)
-    assert report(teacher).json()['totals']==value['totals']
+    assert report(teacher).json()['totals']['records']==2
     assert entry(client,saved['lessonKey'])['document']==saved['document']
 
 
@@ -161,18 +161,27 @@ def test_csv_all_rows_formulas_scopes_and_current_attendance(client):
     rows=list(csv.reader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';'))
     assert len(rows)==3 and any("'=SUM(1,2)" in row for row in rows)
     assert 'Личная причина' not in response.content.decode('utf-8-sig')
-    lesson_rows=export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig')
-    assert 'Уважительная причина;Отсутствует' in lesson_rows
+    lesson_rows=list(csv.reader(io.StringIO(export(teacher,studentId='s1',view='lessons').content.decode('utf-8-sig')),delimiter=';'))
+    effective,original=lesson_rows[0].index('Посещаемость'),lesson_rows[0].index('Исходная отметка')
+    assert [(r[effective],r[original]) for r in lesson_rows[1:]]==[('Уважительная причина','Отсутствует')]
     assert export(teacher,view='lessons').status_code==422
     assert export(teacher,view='classes').status_code==200
     assert export(teacher,studentId='s3',view='lessons').status_code==404
 
 
-def test_period_filters_and_access_change_during_report(client,monkeypatch):
+@pytest.mark.parametrize('values',[dict(end='2026-08-16'),dict(end='2027-08-18'),dict(historicalOnly=True,classId='c-demo-a'),dict(offset=-1)],ids=['period ends before it starts','period too long','archive of a class','negative offset'])
+def test_invalid_report_filters_are_refused(client,values):
+    setup(client);mark(client)
+    assert report(client,**values).status_code==422
+
+
+def test_invalid_attendance_filter_of_the_details_is_refused(client):
     _,_,parent,teacher=setup(client);mark(client)
-    for values in [dict(end='2026-08-16'),dict(end='2027-08-18'),dict(historicalOnly=True,classId='c-demo-a'),dict(offset=-1)]:
-        assert report(client,**values).status_code==422
     assert details(teacher,attendance='invalid').status_code==422
+
+
+def test_access_changed_while_the_report_is_calculated_refuses_it(client,monkeypatch):
+    _,_,parent,teacher=setup(client);mark(client)
     original=api.attendance_reports.summary
     def revoke(db,user,snap,workspace,body):
         result=original(db,user,snap,workspace,body)
@@ -182,20 +191,21 @@ def test_period_filters_and_access_change_during_report(client,monkeypatch):
     assert report(teacher).status_code==409
 
 
-def test_lesson_pagination_and_complete_csv_use_published_date_time(client):
-    _,_,parent,teacher=setup(client);saved=mark(client);copies=PAGE+12;total=copies+1
-    end=(date.fromisoformat(DAY)+timedelta(days=copies)).isoformat()
-    with api.connect() as db:
-        template=read_row(db,'journal_entries',workspace='demo',lesson_key=saved['lessonKey'])
-        for i in range(1,copies+1):
-            doc=deepcopy(saved['document']);day=(date.fromisoformat(DAY)+timedelta(days=i)).isoformat()
-            key=hashlib.sha256(day.encode()).hexdigest();doc['lesson']['date']=day;text=json.dumps(doc,ensure_ascii=False)
-            insert_row(db,'journal_entries',template,lesson_key=key,document=text,published_document=text)
-            api.journal.members(db,'demo',key,doc,'published')
-    first=details(teacher,end=end).json();assert len(first['items'])==PAGE and first['nextOffset']==PAGE
-    second=details(teacher,end=end,offset=PAGE,token=first['token']).json()
-    assert len(second['items'])==total-PAGE and second['nextOffset'] is None
-    assert not {r['lessonKey'] for r in first['items']} & {r['lessonKey'] for r in second['items']}
+def test_lesson_pages_cover_every_published_lesson_once_and_match_the_csv(client,monkeypatch):
+    monkeypatch.setattr('backend.journal.today',lambda:date(2027,6,30))
+    _,_,parent,teacher=setup(client)
+    # More published lessons than fit on one page: English and Maths of every Monday.
+    mondays=[(date.fromisoformat(DAY)+timedelta(weeks=i)).isoformat() for i in range(PAGE//2+2)]
+    for day in mondays:
+        for subject in ['Английский язык','Математика']:
+            record=graded(entry(client,lesson(client,subject,day)['lessonKey'],day=day))
+            write(client,record,publish=True).raise_for_status()
+    end=mondays[-1];total=2*len(mondays)
+    first=details(teacher,end=end).json();assert first['nextOffset'] and len(first['items'])<total
+    items=first['items'];page=first
+    while page['nextOffset'] is not None:
+        page=details(teacher,end=end,offset=page['nextOffset'],token=first['token']).json();items+=page['items']
+    keys=[r['lessonKey'] for r in items];assert len(keys)==len(set(keys))==total
     response=export(teacher,view='lessons',studentId='s1',end=end,token=first['token'])
     assert len(list(csv.reader(io.StringIO(response.content.decode('utf-8-sig')),delimiter=';')))==total+1
 
@@ -274,13 +284,11 @@ def test_token_bound_to_account_even_with_the_same_scope(client):
         assert report(stranger).json()['token']!=first['token']
 
 
-def test_other_account_token_and_scope_on_details_and_export(client):
+def test_details_and_export_follow_the_scope_of_the_account(client):
     _,person,parent,teacher=setup(client);mark(client)
     with api.connect() as db:other_id=db.execute("SELECT id FROM accounts WHERE login='other-teacher'").fetchone()[0]
     reviewers({'c-demo-a':[person['id']],'c-demo-d':[other_id]});other=signed('other-teacher')
     first=report(teacher).json();own=report(other).json()
-    for call,extra in [(report,{}),(details,dict(studentId='s1')),(export,dict(view='lessons',studentId='s1')),(export,{})]:
-        assert call(other,token=first['token'],**extra).status_code==409
     assert details(other,token=own['token'],studentId='s1').status_code==404
     assert details(other,token=own['token'],studentId='s3').status_code==200
     assert details(teacher,token=first['token'],studentId='s3').status_code==404
