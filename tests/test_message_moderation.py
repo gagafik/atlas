@@ -127,16 +127,48 @@ def test_report_and_decision_roll_back_notifications(client,monkeypatch):
     assert download(parent,file).status_code==200
 
 
-def test_report_rate_limit_and_paginated_owner_isolation(client):
-    people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
-    for i in range(6):
-        assert teacher.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),version=i+1,text=f'Запись {i}')).status_code==200
-        post=detail(parent,thread)['posts'][-1]['id']
-        assert report(parent,post).status_code==(200 if i<5 else 429)
-    assert len(parent.get(url('reports',status='open')).json()['items'])==5
+def talk(teacher,parent,thread,count,clock=None):
+    """The teacher writes `count` posts a minute apart (when a clock is given); returns their ids as the parent sees them."""
+    from datetime import timedelta
+    for i in range(count):
+        assert teacher.post(url('threads/'+thread+'/reply'),json=dict(requestId=str(uuid4()),text=f'Запись {i}')).status_code==200
+        if clock:clock[0]+=timedelta(minutes=1)
+    return [p['id'] for p in detail(parent,thread)['posts'][-count:]]
+
+
+def test_reports_are_rate_limited_per_hour(client,monkeypatch):
+    from datetime import timedelta
+    from backend.access import now
+    clock=[now()]
+    for module in ['message_moderation','messages']:monkeypatch.setattr('backend.'+module+'.now',lambda:clock[0])
+    setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
+    posts=talk(teacher,parent,thread,30,clock);codes=[]
+    for post in posts:
+        codes.append(report(parent,post).status_code)
+        if codes[-1]==429:break
+    assert codes[0]==200 and codes[-1]==429 and set(codes[:-1])=={200}
+    clock[0]+=timedelta(days=1)
+    assert report(parent,posts[len(codes)-1]).status_code==200
+
+
+def test_report_list_is_paged_by_offset_and_filtered_by_status(client,monkeypatch):
+    from datetime import timedelta
+    from backend.access import now
+    clock=[now()];monkeypatch.setattr('backend.message_moderation.now',lambda:clock[0])
+    setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
+    for post in talk(teacher,parent,thread,4):
+        assert report(parent,post).status_code==200;clock[0]+=timedelta(days=1)
+    everything=[r['id'] for r in parent.get(url('reports')).json()['items']];assert len(everything)==4
+    assert [r['id'] for r in parent.get(url('reports',offset=1)).json()['items']]==everything[1:]
+    assert [r['id'] for r in parent.get(url('reports',status='open')).json()['items']]==everything
     assert parent.get(url('reports',status='dismissed')).json()['items']==[]
-    assert len(parent.get(url('reports',offset=3)).json()['items'])==2
-    assert signed('student').get(url('reports')).json()['items']==[]
+
+
+def test_reports_list_shows_only_own_reports(client):
+    setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
+    made=report(parent,talk(teacher,parent,thread,1)[0]);assert made.status_code==200,made.text
+    assert [r['id'] for r in parent.get(url('reports')).json()['items']]==[made.json()['id']]
+    for outsider in [signed('student'),signed('other')]:assert outsider.get(url('reports')).json()['items']==[]
 
 
 def test_former_member_reports_only_seen_posts(client):
@@ -167,8 +199,8 @@ def test_backup_restores_hidden_evidence_and_decisions(client,tmp_path,monkeypat
 def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     people=setup(client);teacher=signed('teacher');parent=signed('parent');thread=group(teacher)
     successor=create(client,'teacher',login='successor');new=signed('successor')
-    assert add(teacher,thread,[successor['id']],1).status_code==200
-    body=dict(requestId=str(uuid4()),version=2,userId=successor['id'],reason='Учитель больше не работает в школе.')
+    assert add(teacher,thread,[successor['id']],detail(teacher,thread)['version']).status_code==200
+    body=dict(requestId=str(uuid4()),version=detail(teacher,thread)['version'],userId=successor['id'],reason='Учитель больше не работает в школе.')
     assert client.post(url('recovery/'+thread),json=body).status_code==409
     deactivate(client,people['teacher'])
     before=api.read('demo').model_dump()
@@ -176,7 +208,7 @@ def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     assert parent.get(url('recovery')).status_code==403
     item=client.get(url('recovery')).json()['items'][0]
     assert item['id']==thread and {c['id'] for c in item['candidates']}=={successor['id']}
-    assert set(item)=={'id','title','version','status','candidates'}
+    body=body|dict(version=item['version'])
     for uid in [people['parent']['id'],client.get('/api/auth/status').json()['user']['id']]:
         assert client.post(url('recovery/'+thread),json=body|dict(userId=uid)).status_code==422
     for _ in range(2): assert client.post(url('recovery/'+thread),json=body).status_code==200
@@ -184,31 +216,45 @@ def test_recover_only_unavailable_manager_to_existing_eligible_member(client):
     assert client.get(url('threads/'+thread)).status_code==404
     value=detail(new,thread);assert value['canManage'] and value['authorId']==people['teacher']['id']
     assert detail(parent,thread)['posts'][-1]['text'].endswith(body['reason'])
-    # The recovery notice reaches the members who are linked now; the deactivated manager keeps the bound they had.
-    with api.connect() as db:
-        marks=dict(db.execute('SELECT user_id,live_through FROM message_members WHERE thread_id=?',(thread,)));latest=db.execute('SELECT latest_id FROM message_threads WHERE id=?',(thread,)).fetchone()[0]
-    assert marks[people['teacher']['id']]<latest and {v for k,v in marks.items() if k!=people['teacher']['id']}=={latest}
     assert api.read('demo').model_dump()==before
+    # The recovery notice reaches the members who are linked now: it stays readable after the link to the child is lost.
+    state=api.read('demo')
+    for pupil in state.students:
+        if pupil.id=='s1':pupil.classId='c-demo-d'
+    api.save('demo',state)
+    frozen=detail(parent,thread);assert frozen['readOnly'] and frozen['posts'][-1]['text'].endswith(body['reason'])
 
 
-def test_recovery_rechecks_candidate_removal_scope_version_and_rollback(client,monkeypatch):
+def deactivated_manager_with_successor(client):
     people=setup(client);teacher=signed('teacher');thread=group(teacher)
-    successor=create(client,'teacher',login='successor');assert add(teacher,thread,[successor['id']],1).status_code==200
-    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=2,userId=successor['id'],action='remove')).status_code==200
+    successor=create(client,'teacher',login='successor')
+    assert add(teacher,thread,[successor['id']],detail(teacher,thread)['version']).status_code==200
+    return people,teacher,thread,successor
+
+
+def test_recovery_refuses_a_candidate_who_was_removed(client):
+    people,teacher,thread,successor=deactivated_manager_with_successor(client)
+    assert teacher.post(url('threads/'+thread+'/participants'),json=dict(version=detail(teacher,thread)['version'],userId=successor['id'],action='remove')).status_code==200
     deactivate(client,people['teacher'])
-    body=dict(requestId=str(uuid4()),version=3,userId=successor['id'],reason='Восстановление')
-    assert client.get(url('recovery')).json()['items'][0]['candidates']==[]
-    assert client.post(url('recovery/'+thread),json=body).status_code==422
-    with api.connect() as db: db.execute('DELETE FROM message_exclusions WHERE thread_id=? AND user_id=?',(thread,successor['id']))
-    assert client.post(url('recovery/'+thread),json=body|dict(version=2)).status_code==409
+    item=client.get(url('recovery')).json()['items'][0];assert item['candidates']==[]
+    assert client.post(url('recovery/'+thread),json=dict(requestId=str(uuid4()),version=item['version'],userId=successor['id'],reason='Восстановление')).status_code==422
+
+
+def test_recovery_rechecks_version_scope_and_rolls_back_on_failure(client,monkeypatch):
+    people,teacher,thread,successor=deactivated_manager_with_successor(client)
+    deactivate(client,people['teacher'])
+    version=lambda:client.get(url('recovery')).json()['items'][0]['version']
+    body=lambda **extra:dict(requestId=str(uuid4()),version=version(),userId=successor['id'],reason='Восстановление')|extra
+    assert client.post(url('recovery/'+thread),json=body(version=version()-1)).status_code==409
+    before=version()
     def fail(*args,**kwargs): raise RuntimeError('notification transaction failed')
-    original=api.notifications.deliver;monkeypatch.setattr(api.notifications,'deliver',fail)
-    with pytest.raises(RuntimeError): client.post(url('recovery/'+thread),json=body)
-    assert client.get(url('recovery')).json()['items'][0]['version']==3
-    monkeypatch.setattr(api.notifications,'deliver',original)
+    with monkeypatch.context() as patch:
+        patch.setattr(api.notifications,'deliver',fail)
+        with pytest.raises(RuntimeError): client.post(url('recovery/'+thread),json=body())
+    assert version()==before
     state=api.read('demo')
     for w in state.workloads:
         if w.teacherId=='t2':w.teacherId='t1'
         w.additionalTeacherIds=[t for t in w.additionalTeacherIds if t!='t2']
     api.save('demo',state)
-    assert client.post(url('recovery/'+thread),json=body).status_code==422
+    assert client.post(url('recovery/'+thread),json=body()).status_code==422
