@@ -58,38 +58,44 @@ def tables(db):
     db.execute('''CREATE TABLE IF NOT EXISTS invitation_batches (
         id INTEGER PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,creator_id TEXT NOT NULL,
         workspace TEXT NOT NULL,request_hash TEXT NOT NULL,created TEXT NOT NULL)''')
+    # A register of parents is one batch with kind 'register'; older databases gain the columns here.
+    have={column[1] for column in db.execute('PRAGMA table_info(invitation_batches)')}
+    for column,definition in [('kind',"TEXT NOT NULL DEFAULT 'manual'"),('source','TEXT'),('summary','TEXT')]:
+        if column not in have: db.execute(f'ALTER TABLE invitation_batches ADD COLUMN {column} {definition}')
     db.execute('CREATE INDEX IF NOT EXISTS invitation_batch_workspace ON invitation_batches(workspace,id)')
     db.execute('''CREATE TABLE IF NOT EXISTS invitation_batch_items (
         batch_id INTEGER NOT NULL,row_key TEXT NOT NULL,invitation_id INTEGER NOT NULL UNIQUE,
         targets TEXT NOT NULL,PRIMARY KEY(batch_id,row_key))''')
 
 
-def preview(db,access,body):
-    current=db.execute('SELECT revision,document FROM workspaces WHERE id=?',(body.workspace,)).fetchone()
-    if not current: raise HTTPException(422,'Рабочее пространство не найдено. Обновите страницу.')
-    document=json.loads(current[1]);classes={c['id']:c['name'] for c in document['classes']}
+def review(db,access,workspace,rows,document):
+    """Review rows (key, recipient, role, entityIds) against accounts and pending codes.
+
+    Shared by the hand-made batch and the parent register so both give the same warnings.
+    """
+    classes={c['id']:c['name'] for c in document['classes']}
     students={s['id']:s for s in document['students']};teachers={t['id']:t for t in document['teachers']}
-    all_ids={id for row in body.rows for id in row.entityIds}
+    all_ids={id for row in rows for id in row.entityIds}
     accounts=[]
     for view,roles in [('student',['student','parent']),('teacher',['teacher'])]:
-        ids={id for row in body.rows if ('teacher' if row.role=='teacher' else 'student')==view for id in row.entityIds}
+        ids={id for row in rows if ('teacher' if row.role=='teacher' else 'student')==view for id in row.entityIds}
         if not ids: continue
-        for account in candidates(db,body.workspace,view,ids,roles):
+        for account in candidates(db,workspace,view,ids,roles):
             effective=access.public(account)
-            assigned={id for g in effective['grants'] if g['workspace']==body.workspace and g['view']==view for id in g['entityIds']}
+            assigned={id for g in effective['grants'] if g['workspace']==workspace and g['view']==view for id in g['entityIds']}
             if assigned & ids: accounts.append((effective,assigned))
     pending=[]
     for row in db.execute('''SELECT i.* FROM access_invitations i WHERE revoked IS NULL AND accepted IS NULL AND expires>?
         AND EXISTS(SELECT 1 FROM json_each(i.permissions,'$.grants') g,json_each(g.value,'$.entityIds') e
             WHERE json_extract(g.value,'$.workspace')=? AND e.value IN (SELECT value FROM json_each(?)))''',
-        (now().isoformat(),body.workspace,encoded(sorted(all_ids)))):
+        (now().isoformat(),workspace,encoded(sorted(all_ids)))):
         item=public(row)
-        assigned={id for g in item['grants'] if g['workspace']==body.workspace for id in g['entityIds']}
+        assigned={id for g in item['grants'] if g['workspace']==workspace for id in g['entityIds']}
         pending.append((item,assigned))
     result=[];sources=[]
-    for ordinal,row in enumerate(body.rows,1):
-        permissions=[grant(body.workspace,row)]
-        try: validate_targets(db,permissions,documents={body.workspace:document})
+    for ordinal,row in enumerate(rows,1):
+        permissions=[grant(workspace,row)]
+        try: validate_targets(db,permissions,documents={workspace:document})
         except HTTPException as exc: raise HTTPException(exc.status_code,f'Строка {ordinal}: {exc.detail}') from None
         records=teachers if row.role=='teacher' else students
         targets=[dict(id=id,name=records[id]['name'],className=classes.get(records[id].get('classId'),'')) for id in row.entityIds]
@@ -101,19 +107,27 @@ def preview(db,access,body):
         if waiting: warnings.append(dict(kind='invitations',count=len(waiting),names=[i['recipient'] for i in waiting[:3]]))
         result.append(dict(key=row.key,recipient=row.recipient,role=row.role,targets=targets,warnings=warnings))
         sources.append(dict(key=row.key,accounts=sorted((u['id'],u['version']) for u in matches),invitations=sorted(i['id'] for i in waiting)))
+    return result,sources
+
+
+def preview(db,access,body):
+    current=db.execute('SELECT revision,document FROM workspaces WHERE id=?',(body.workspace,)).fetchone()
+    if not current: raise HTTPException(422,'Рабочее пространство не найдено. Обновите страницу.')
+    result,sources=review(db,access,body.workspace,body.rows,json.loads(current[1]))
     token=digest(encoded(dict(draft=Draft.model_validate(body.model_dump(include={'workspace','days','rows'})).model_dump(),
                               revision=current[0],items=result,sources=sources)))
     return dict(previewToken=token,items=result)
 
 
 def receipt(db,id):
-    batch=db.execute('SELECT id,workspace,created FROM invitation_batches WHERE id=?',(id,)).fetchone()
+    batch=db.execute('SELECT id,workspace,created,kind,source,summary FROM invitation_batches WHERE id=?',(id,)).fetchone()
     if not batch: raise HTTPException(404,'Пакет приглашений не найден.')
-    items=[]
-    for key,invitation_id,targets in db.execute('SELECT row_key,invitation_id,targets FROM invitation_batch_items WHERE batch_id=? ORDER BY invitation_id',(id,)):
-        row=db.execute('SELECT * FROM access_invitations WHERE id=?',(invitation_id,)).fetchone()
-        items.append(public(row)|dict(key=key,targets=json.loads(targets)))
-    return dict(id=batch[0],workspace=batch[1],created=batch[2],items=items)
+    # One joined query: a register may hold thousands of items.
+    items=[public(row[2:])|dict(key=row[0],targets=json.loads(row[1])) for row in db.execute('''SELECT x.row_key,x.targets,i.*
+        FROM invitation_batch_items x JOIN access_invitations i ON i.id=x.invitation_id
+        WHERE x.batch_id=? ORDER BY x.invitation_id''',(id,))]
+    return dict(id=batch[0],workspace=batch[1],created=batch[2],kind=batch[3],source=batch[4],
+                summary=json.loads(batch[5]) if batch[5] else None,items=items)
 
 
 def register(app,access,transaction,admin):
@@ -161,10 +175,11 @@ def register(app,access,transaction,admin):
     def listing(request:Request,workspace:Literal['school','demo']='school',before:int|None=Query(default=None,ge=1)):
         with transaction() as db:
             admin(db,request);tables(db)
-            rows=db.execute('''SELECT b.id,b.created,count(i.invitation_id) FROM invitation_batches b
+            rows=db.execute('''SELECT b.id,b.created,count(i.invitation_id),b.kind,b.source FROM invitation_batches b
                 JOIN invitation_batch_items i ON i.batch_id=b.id WHERE b.workspace=? AND (? IS NULL OR b.id<?)
                 GROUP BY b.id ORDER BY b.id DESC LIMIT 21''',(workspace,before,before)).fetchall()
-            return dict(items=[dict(id=id,created=created,count=count) for id,created,count in rows[:20]],nextBefore=rows[19][0] if len(rows)>20 else None)
+            return dict(items=[dict(id=id,created=created,count=count,kind=kind,source=source) for id,created,count,kind,source in rows[:20]],
+                        nextBefore=rows[19][0] if len(rows)>20 else None)
 
     @app.get('/api/access/invitations/batches/{id}')
     def get(id:int,request:Request):

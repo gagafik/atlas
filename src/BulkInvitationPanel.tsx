@@ -5,6 +5,7 @@ import { roleNames } from "./auth";
 import { download } from "./utils";
 import {
   invitationBatchCsv,
+  registerInvitationsCsv,
   targetLabel,
   type BatchRow,
   type BatchPreview,
@@ -12,6 +13,7 @@ import {
   type BatchIssue,
   type InviteRole,
 } from "./bulkInvitations";
+import RegisterImport, { registerBase } from "./RegisterImport";
 import "./bulkInvitations.css";
 
 const base = "access/invitations/batches";
@@ -41,10 +43,23 @@ export default function BulkInvitationPanel({
     [parentName, setParentName] = useState("");
   const [preview, setPreview] = useState<BatchPreview | null>(null),
     [acknowledged, setAcknowledged] = useState<string[]>([]);
-  const [pending, setPending] = useState<BatchIssue | null>(null),
+  const [pending, setPending] = useState<{
+      path: string;
+      payload: unknown;
+    } | null>(null),
     [receipt, setReceipt] = useState<BatchReceipt | null>(null);
+  const [registerDirty, setRegisterDirty] = useState(false),
+    [registerKey, setRegisterKey] = useState(0),
+    [registerStale, setRegisterStale] = useState(0),
+    [receiptShown, setReceiptShown] = useState(50);
   const [batches, setBatches] = useState<
-      { id: number; created: string; count: number }[]
+      {
+        id: number;
+        created: string;
+        count: number;
+        kind?: string;
+        source?: string | null;
+      }[]
     >([]),
     [next, setNext] = useState<number | null>(null);
   const [busy, setBusy] = useState(false),
@@ -54,7 +69,10 @@ export default function BulkInvitationPanel({
     alive = useRef(true),
     guarded = useRef(false);
   guarded.current =
-    rows.length > 0 || !!pending || !!receipt?.items.some((i) => i.code);
+    rows.length > 0 ||
+    registerDirty ||
+    !!pending ||
+    !!receipt?.items.some((i) => i.code);
   useEffect(() => {
     alive.current = true;
     const leave = (e: Event) => {
@@ -164,17 +182,23 @@ export default function BulkInvitationPanel({
     setParentName("");
     setError("");
   }
-  async function send(payload: BatchIssue) {
+  async function send(path: string, payload: unknown) {
     // Keep the identical request after an uncertain network result. The receipt
     // prevents reissuing codes, including after another account accepted one.
+    // A register request must leave the hand-made batch draft untouched.
+    const isRegister = path === registerBase;
     try {
-      const result: BatchReceipt = await api(base, workspace, "POST", payload);
+      const result: BatchReceipt = await api(path, workspace, "POST", payload);
       if (!alive.current) return;
       setReceipt(result);
+      setReceiptShown(50);
       setPending(null);
-      setRows([]);
-      setPreview(null);
-      setAcknowledged([]);
+      if (isRegister) setRegisterKey((n) => n + 1);
+      else {
+        setRows([]);
+        setPreview(null);
+        setAcknowledged([]);
+      }
       setNotice(
         result.replayed
           ? "Пакет уже создан. Повторный запрос не создал новых приглашений. Коды восстановить нельзя; при потере отзовите непринятые приглашения и создайте новый пакет."
@@ -186,8 +210,11 @@ export default function BulkInvitationPanel({
       const status = (e as { status?: number }).status;
       if (alive.current && status && status < 500) {
         setPending(null);
-        setPreview(null);
-        setAcknowledged([]);
+        if (isRegister) setRegisterStale((n) => n + 1);
+        else {
+          setPreview(null);
+          setAcknowledged([]);
+        }
       }
       throw e;
     }
@@ -214,9 +241,9 @@ export default function BulkInvitationPanel({
     <section className="bulk-invitations" aria-label="Массовые приглашения">
       <h3>Массовые приглашения</h3>
       <p>
-        До 50 получателей за одну выдачу. Для каждого — отдельный код. Сначала
-        проверьте имена и доступ; передавайте код только проверенному
-        получателю.
+        Вручную — до 50 получателей за одну выдачу, из файла реестра — до 3000
+        родителей. Для каждого — отдельный код. Сначала проверьте имена и
+        доступ; передавайте код только проверенному получателю.
       </p>
       {error && (
         <p role="alert" className="error-banner">
@@ -231,14 +258,21 @@ export default function BulkInvitationPanel({
             проверит, был ли создан пакет. Список заблокирован до получения
             результата.
           </p>
-          <button disabled={busy} onClick={() => void run(() => send(pending))}>
+          <button
+            disabled={busy}
+            onClick={() => void run(() => send(pending.path, pending.payload))}
+          >
             Проверить результат выдачи
           </button>
         </div>
       )}
       {receipt && (
         <section aria-label="Выданный пакет">
-          <h4>Пакет №{receipt.id}</h4>
+          <h4>
+            {receipt.kind === "register"
+              ? `Реестр родителей №${receipt.id}${receipt.source ? ` · ${receipt.source}` : ""}`
+              : `Пакет №${receipt.id}`}
+          </h4>
           <p>
             Получателю: откройте сайт школы и выберите «Создать аккаунт по
             приглашению». Если аккаунт уже есть, войдите и нажмите «Принять
@@ -254,8 +288,12 @@ export default function BulkInvitationPanel({
               disabled={busy}
               onClick={() =>
                 download(
-                  `atlas-invitations-${receipt.id}.csv`,
-                  invitationBatchCsv(receipt),
+                  receipt.kind === "register"
+                    ? `atlas-register-${receipt.id}.csv`
+                    : `atlas-invitations-${receipt.id}.csv`,
+                  receipt.kind === "register"
+                    ? registerInvitationsCsv(receipt)
+                    : invitationBatchCsv(receipt),
                   "text/csv;charset=utf-8",
                 )
               }
@@ -293,7 +331,13 @@ export default function BulkInvitationPanel({
           >
             Отозвать непринятые приглашения пакета
           </button>
-          {receipt.items.map((item) => (
+          {receipt.kind === "register" && (
+            <p>
+              Приглашений в реестре: {receipt.items.length}. В CSV строки идут
+              по классу первого ребёнка: так удобнее раздавать коды.
+            </p>
+          )}
+          {receipt.items.slice(0, receiptShown).map((item) => (
             <article className="export-card" key={item.id}>
               <h4>
                 {item.recipient} · {roleNames[item.role]}
@@ -326,8 +370,27 @@ export default function BulkInvitationPanel({
               )}
             </article>
           ))}
+          {receipt.items.length > receiptShown && (
+            <button onClick={() => setReceiptShown((n) => n + 50)}>
+              Показать ещё ({receipt.items.length - receiptShown})
+            </button>
+          )}
         </section>
       )}
+      <RegisterImport
+        key={registerKey}
+        workspace={workspace}
+        locked={busy || !!pending || codesVisible}
+        run={run}
+        onDirty={setRegisterDirty}
+        staleKey={registerStale}
+        onIssue={(payload) => {
+          if (lock.current) return;
+          setPending({ path: registerBase, payload });
+          void run(() => send(registerBase, payload));
+        }}
+      />
+      <h4>Пакет вручную</h4>
       <fieldset disabled={busy || !!pending || codesVisible}>
         <div className="dated-fields">
           <label className="field">
@@ -586,8 +649,8 @@ export default function BulkInvitationPanel({
                   acknowledgedRows: acknowledged,
                   requestId: crypto.randomUUID(),
                 };
-                setPending(payload);
-                void run(() => send(payload));
+                setPending({ path: base, payload });
+                void run(() => send(base, payload));
               }}
             >
               Выдать коды: {rows.length}
@@ -610,11 +673,17 @@ export default function BulkInvitationPanel({
               onClick={() =>
                 void run(async () => {
                   const result = await api(`${base}/${batch.id}`, workspace);
-                  if (alive.current) setReceipt(result);
+                  if (alive.current) {
+                    setReceipt(result);
+                    setReceiptShown(50);
+                  }
                 })
               }
             >
-              Пакет №{batch.id} · Получателей: {batch.count} ·{" "}
+              {batch.kind === "register"
+                ? `Реестр №${batch.id}${batch.source ? ` · ${batch.source}` : ""}`
+                : `Пакет №${batch.id}`}{" "}
+              · Получателей: {batch.count} ·{" "}
               {new Date(batch.created).toLocaleString("ru-RU")}
             </button>
           </p>

@@ -92,6 +92,8 @@ def register_invitations(app, access):
 
     from .invitation_batches import register as register_batches
     register_batches(app,access,transaction,admin)
+    from .invitation_registers import register as register_registers
+    register_registers(app,access,transaction,admin)
 
     def reserve(request, code):
         client = request.client.host if request.client else 'unknown'
