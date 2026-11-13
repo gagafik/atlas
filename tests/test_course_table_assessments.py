@@ -111,13 +111,25 @@ def test_a_lesson_fills_up_and_then_takes_no_more_works(client, clock):
     assert lesson_of(teacher)['works'] == full['works']
 
 
-def test_listing_is_for_the_teacher_of_the_course(client, clock):
+def test_listing_is_for_the_teacher_of_the_course_and_the_administrator(client, clock):
     staffed(client)
     create(client, 'teacher', login='unrelated', grants=[dict(workspace='demo', view='teacher', entityIds=['t3'])])
-    assert offered(client).status_code == 403 and offered(signed('unrelated')).status_code == 403 and offered(signed('parent')).status_code == 403
+    assert offered(signed('unrelated')).status_code == 403 and offered(signed('parent')).status_code == 403
+    assert ok(offered(client))['lessons']
 
 
-CASES = [('administrator', 403), ('foreign teacher', 403), ('parent', 403), ('unknown category', 422), ('disabled category', 422),
+def test_a_substitute_day_without_a_journal_is_offered_to_neither_the_teacher_nor_the_administrator(client, clock):
+    teacher, _ = staffed(client)
+    day = next(d for d in sorted({l['day'] for l in ok(offered(teacher))['lessons']}) if d not in (DAY, NEXT))
+    assert day in {l['day'] for l in ok(offered(client))['lessons']}
+    state = api.read('demo')
+    state.datedLessons = [DatedLesson(id='sub', name='Замена', kind='change', placementId='eng', sourceDate=date.fromisoformat(day),
+                                      onDate=date.fromisoformat(day), teacherIds=['t1'])]
+    api.save('demo', state)
+    assert all(day not in {l['day'] for l in ok(offered(who))['lessons']} for who in (teacher, client))
+
+
+CASES = [('foreign teacher', 403), ('parent', 403), ('unknown category', 422), ('disabled category', 422),
          ('lesson of another course with a journal', 403), ('lesson of another course without a journal', 403), ('day not of the lesson', 409),
          ('day outside the year', 422), ('closed period', 403), ('bad maximum', 422), ('blank title', 422),
          ('future lesson', 422), ('cancelled lesson', 403), ('lesson of a substitute', 403), ('moved lesson', 409)]
@@ -141,7 +153,6 @@ def test_refusals_leave_the_table_as_it_was(client, clock, monkeypatch, case, st
     create(client, 'teacher', login='both', grants=[dict(workspace='demo', view='teacher', entityIds=['t2', 't0'])])
     course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
     found, who, changes = lesson_of(teacher), teacher, {}
-    if case == 'administrator': who = client
     if case == 'foreign teacher': who = signed('unrelated')
     if case == 'parent': who = signed('parent')
     if case == 'unknown category': changes = dict(category='nothing')

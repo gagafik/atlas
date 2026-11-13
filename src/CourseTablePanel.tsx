@@ -44,7 +44,8 @@ const HIDDEN =
 const scopeNotes = {
   course:
     "Вы видите черновики своих уроков. Точка в ячейке — оценка пока не опубликована для учеников и родителей.",
-  admin: "Администратор видит только опубликованные оценки.",
+  admin:
+    "Администратор видит и правит черновики уроков любого курса. Точка в ячейке — оценка пока не опубликована для учеников и родителей.",
   class:
     "Классный руководитель видит опубликованные оценки учеников своего класса.",
 };
@@ -694,7 +695,9 @@ export default function CourseTablePanel({
               уч.
             </span>
           </header>
-          <p className="info-line ct-noprint">{scopeNotes[table.scope]}</p>
+          <p className="info-line ct-noprint">{table.scope === "admin" && !table.canEdit
+              ? "Администратор видит только опубликованные оценки."
+              : scopeNotes[table.scope]}</p>
           <div className="ct-actions ct-noprint">
             {table.canEdit && (
               <>

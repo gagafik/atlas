@@ -272,8 +272,9 @@ async function launcherBehaviour(page, activity, kit, problems, role) {
     ["Записки об отсутствии", ".absence-panel[open]"],
   ];
   for (const [label, editor, next] of editors) {
-    // The administrator keeps no lessons or courses of their own: the day alone opens for the lesson actions, and the
-    // grades open without «Новое назначение», which only the teacher of the course may add.
+    // The administrator keeps no lessons or courses of their own: the day alone opens for the lesson actions. The grades
+    // open without «Новое назначение»: the administrator's snapshot (admin.json) was captured while the table was read-only,
+    // so the demo shows it without the button, though the live table lets the administrator add works.
     if (!all.includes(label) || (role === "admin" && (editor === ".journal-editor" || next === pickCourse))) continue;
     await kit.home();
     await button.click({ timeout: 3000 });
