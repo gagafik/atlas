@@ -519,5 +519,15 @@ from .school_years import SchoolYears
 school_years = SchoolYears(access, journal)
 school_years.register(app, Workspace)
 
+class Frontend(StaticFiles):
+    """The built interface. Files under assets/ carry a hash in their name and never change; the page, the worker and
+    the manifest are re-checked on every load. Without that a browser keeps showing the old interface after an update."""
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        hashed = Path(path).parts[:1] == ('assets',) and response.status_code == 200
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable' if hashed else 'no-cache'
+        return response
+
+
 if (ROOT / 'dist').exists():
-    app.mount('/', StaticFiles(directory=ROOT / 'dist', html=True), name='frontend')
+    app.mount('/', Frontend(directory=ROOT / 'dist', html=True), name='frontend')
