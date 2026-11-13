@@ -255,6 +255,17 @@ def test_parent_grant_change_revokes_file_download(client):
     assert download(parent,key,file).status_code==403
 
 
+def test_a_submitted_file_comes_back_from_the_full_backup(client,tmp_path,monkeypatch):
+    # The bytes of a pupil's answer must be where the backup looks for them: the copy serves the file.
+    from tools.backup_school import create_backup
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey'];current=get(pupil,key)
+    file=upload(pupil,key,current['assignment'],body=b'Answer to restore').json()['id']
+    assert answer(pupil,key,current,files=[file]).status_code==200
+    source=api.DB;destination=tmp_path/'full-backup';create_backup(source,destination)
+    monkeypatch.setattr(api,'DB',destination/source.name)
+    assert download(pupil,key,file).content==b'Answer to restore'
+
+
 def grading_url(key): return f'/api/journal/homework/{key}/grading?workspace=demo&studentId=s1'
 
 

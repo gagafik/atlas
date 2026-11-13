@@ -40,6 +40,15 @@ def update_question(reader,bank,**changes):
     return reader.put('/api/journal/quiz-bank/'+bank['id']+'?workspace=demo',json=dict(version=bank['version'],question=q))
 
 
+def test_a_question_file_comes_back_from_the_full_backup(client,tmp_path,monkeypatch):
+    # The bytes of a question's attachment must be where the backup looks for them: the copy serves the file.
+    from tools.backup_school import create_backup
+    quiz,pupil,parent,teacher,bank,public,secret,_=prepared(client);work=ok(start(pupil,quiz))
+    target=tmp_path/'backup';create_backup(api.DB,target)
+    monkeypatch.setattr(api,'DB',target/api.DB.name)
+    assert file_get(pupil,public,quiz,work).content==b'Question material'
+
+
 def test_private_files_only_assigned_attempt_and_released_solutions(client):
     quiz,pupil,parent,teacher,bank,public,secret,_=prepared(client)
     for reader in (pupil,parent):
