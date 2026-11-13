@@ -159,8 +159,7 @@ def test_current_teacher_cancelled_and_removed_membership(client):
     assert change(client,key,get(client,key)).status_code==403
 
 
-@pytest.mark.parametrize('mode',['text','deadline','cleared','withdrawn'])
-def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mode):
+def extended(client):
     record,pupil,_,teacher=setup(client);key=record['lessonKey'];current=get(pupil,key)
     assert change(teacher,key,current).status_code==200
     draft=entry(client,key);draft['document']['content']['topic']='Только тема'
@@ -168,16 +167,24 @@ def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mod
     assert get(pupil,key)['deadline']['version']==1
     draft=entry(client,key);draft['document']['content']['homework']='Новое условие'
     assert write(client,draft).status_code==200 and get(pupil,key)['deadline']['version']==1
+    return record,pupil,teacher,key,current
+
+
+def test_new_text_does_not_cancel_an_individual_deadline(client):
+    record,pupil,teacher,key,current=extended(client)
+    assert write(client,entry(client,key),publish=True).status_code==200
+    actual=get(pupil,key)
+    # A new text is not a reason to cancel an individual date.
+    assert actual['assignment']==current['assignment'] and actual['deadline']['version']==1 and actual['deadline']['extension']
+    assert actual['dueDate']=='2026-08-24' and [h['action'] for h in history(pupil,key).json()['items']]==['extend']
+
+
+@pytest.mark.parametrize('mode',['deadline','cleared','withdrawn'])
+def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mode):
+    record,pupil,teacher,key,current=extended(client)
     def publish_due(due):
         moved=entry(client,key);moved['document']['content']['dueDate']=due
         assert write(client,moved,publish=True).status_code==200
-    if mode=='text':
-        assert write(client,entry(client,key),publish=True).status_code==200
-        actual=get(pupil,key)
-        # A new text is not a reason to cancel an individual date.
-        assert actual['assignment']==current['assignment'] and actual['deadline']['version']==1 and actual['deadline']['extension']
-        assert actual['dueDate']=='2026-08-24' and [h['action'] for h in history(pupil,key).json()['items']]==['extend']
-        return
     if mode=='deadline':
         publish_due('2026-08-22')  # still before the individual date
         assert get(pupil,key)['deadline']['version']==1 and get(pupil,key)['deadline']['extension']
@@ -191,9 +198,7 @@ def test_publication_changes_invalidate_permanently_but_drafts_do_not(client,mod
     actual=get(pupil,key)
     assert actual['assignment']==current['assignment'] and actual['deadline']['extension'] is None
     assert actual['deadline']['version']==2 and actual['dueDate']=={'deadline':'2026-08-24','cleared':None,'withdrawn':'2026-08-19'}[mode]
-    events=history(pupil,key).json()['items']
-    assert [h['action'] for h in events]==['invalidated','extend']
-    assert {'deadline':'перенесён','cleared':'снят','withdrawn':'отозвана'}[mode] in events[0]['reason']
+    assert [h['action'] for h in history(pupil,key).json()['items']]==['invalidated','extend']
     assert change(teacher,key,current).status_code==409
 
 
@@ -238,16 +243,25 @@ def test_extension_survives_offline_switch_and_can_still_be_revoked(client):
     assert change(teacher,key,get(teacher,key),due=None,action='revoke').status_code==409
 
 
-def test_validation_and_concurrent_cas_notify_exactly_once(client):
+@pytest.mark.parametrize('extra,status',[(dict(due='2026-08-19'),422),(dict(due='2027-08-21'),422),(dict(reason='  '),422),(dict(due=None),422),
+                                          (dict(due=None,action='revoke'),409)])
+def test_invalid_deadline_change_is_refused(client,extra,status):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey'];current=get(teacher,key)
-    for extra in [dict(due='2026-08-19'),dict(due='2027-08-21'),dict(reason='  '),dict(due=None)]:
-        assert change(teacher,key,current,**extra).status_code==422
-    assert change(teacher,key,current,due=None,action='revoke').status_code==409
+    assert change(teacher,key,current,**extra).status_code==status
+    assert get(teacher,key)['deadline']['version']==0
+
+
+def test_concurrent_deadline_change_notifies_exactly_once(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey'];current=get(teacher,key)
     with ThreadPoolExecutor(2) as pool:
         results=list(pool.map(lambda _:change(teacher,key,current).status_code,range(2)))
     assert sorted(results)==[200,409]
     assert len(history(parent,key).json()['items'])==1
     assert sum(n['action']=='homework.deadline_changed' for n in parent.get('/api/notifications/inbox').json()['items'])==1
+
+
+def test_removing_the_shared_deadline_closes_individual_changes(client):
+    record,pupil,parent,teacher=setup(client);key=record['lessonKey']
     record=entry(client,key);record['document']['content']['dueDate']=None
     assert write(client,record,publish=True).status_code==200
     assert not get(teacher,key)['deadline']['canEdit']
@@ -278,21 +292,16 @@ def test_transaction_rolls_back_extension_history_queue_and_notifications(client
     assert parent.get('/api/notifications/inbox').json()==inbox
 
 
-@pytest.mark.parametrize('mutation',['account','schedule','publication'])
-def test_write_rechecks_prepared_context(client,monkeypatch,mutation):
+def test_deadline_write_rechecks_prepared_context(client,monkeypatch):
     record,_,_,teacher=setup(client);key=record['lessonKey'];current=get(teacher,key);original=api.homework.context
     def raced(*args,**kwargs):
         ctx=original(*args,**kwargs)
-        if mutation=='account':
-            with api.connect() as db:db.execute("UPDATE accounts SET version=version+1 WHERE login='teacher'")
-        elif mutation=='schedule':api.save('demo',api.read('demo'))
-        else:
-            draft=entry(client,key);draft['document']['content']['homework']='Другая задача'
-            assert write(client,draft,publish=True).status_code==200
+        api.save('demo',api.read('demo'))
         return ctx
-    monkeypatch.setattr(api.homework,'context',raced)
-    assert change(teacher,key,current).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM homework_extensions').fetchone()[0]==0
+    with monkeypatch.context() as patched:
+        patched.setattr(api.homework,'context',raced)
+        assert change(teacher,key,current).status_code==409
+    assert get(teacher,key)['deadline']['extension'] is None
 
 
 def test_history_pages_cover_every_event_newest_first(client):

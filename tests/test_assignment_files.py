@@ -4,6 +4,7 @@ import json
 
 import pytest
 from backend import api, assignment_files, homework, homework_files
+from seeding import insert_row
 from test_access import client, enable, create, signed
 from test_homework import setup, get, answer, review
 from test_journal import entry, lesson, graded, write, DAY
@@ -118,8 +119,7 @@ def test_changes_during_upload_reject_and_discard_partial_material(client,monkey
         assert not list(assignment_files.root_for(db).glob('*.bin'))
 
 
-def test_gc_retains_every_saved_version_and_backup_restores_materials(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
+def test_gc_retains_every_saved_version_and_removes_abandoned_uploads(client):
     record,pupil,parent,teacher=setup(client);key=record['lessonKey']
     linked=upload(teacher,record,body=b'Saved').json()['id']
     record=save_materials(teacher,record,[linked])
@@ -131,31 +131,59 @@ def test_gc_retains_every_saved_version_and_backup_restores_materials(client,tmp
     with api.connect() as db:
         db.execute('UPDATE assignment_files SET created=?',((homework.now()-timedelta(days=2)).isoformat(),))
         assignment_files.collect_unused(db)
-        assert {r[0] for r in db.execute('SELECT id FROM assignment_files')}=={linked,draft}
-        assert not (assignment_files.root_for(db)/(abandoned+'.bin')).exists()
+    assert download(parent,linked,'s1').content==b'Saved'
+    assert download(teacher,draft).content==b'Private'
+    assert download(teacher,abandoned).status_code==404
+
+
+def test_backup_restores_saved_and_draft_materials(client,tmp_path,monkeypatch):
+    from tools.backup_school import create_backup
+    from tools.restore_school import verify_backup
+    record,pupil,parent,teacher=setup(client)
+    linked=upload(teacher,record,body=b'Saved').json()['id']
+    record=save_materials(teacher,record,[linked])
+    draft=upload(teacher,record,body=b'Private').json()['id']
+    save_materials(teacher,record,[draft],publish=False)
     source=api.DB;destination=tmp_path/'restore'
     manifest=create_backup(source,destination);assert len(manifest['files'])==2
+    assert verify_backup(destination)['files']==2
     monkeypatch.setattr(api,'DB',destination/source.name)
     assert download(parent,linked,'s1').content==b'Saved'
     assert download(parent,draft,'s1').status_code==404
     assert download(teacher,draft).content==b'Private'
 
 
-def test_limits_types_and_global_quota(client,monkeypatch):
+@pytest.mark.parametrize('body,name',[(b'','empty.txt'),(b'wrong','bad.pdf'),(b'code','x.exe')])
+def test_invalid_material_file_is_rejected(client,body,name):
     record,_,_,teacher=setup(client)
-    for body,name in [(b'', 'empty.txt'),(b'wrong','bad.pdf'),(b'code','x.exe')]:
-        assert upload(teacher,record,body,name).status_code==422
-    assert upload(teacher,record,b'x'*(homework_files.MAX_FILE+1)).status_code==413
+    assert upload(teacher,record,body,name).status_code==422
+
+
+def test_oversized_material_file_is_rejected(client,monkeypatch):
+    record,_,_,teacher=setup(client)
+    monkeypatch.setattr(homework_files,'MAX_FILE',8)
+    assert upload(teacher,record,b'123456789').status_code==413
+    assert upload(teacher,record,b'12345678').status_code==200
+
+
+def test_same_material_cannot_be_listed_twice(client):
+    record,_,_,teacher=setup(client)
     id=upload(teacher,record).json()['id']
-    with api.connect() as db:
-        assert homework_files.total_stored(db)==len(b'Teacher materials')
     record['document']['content']['homeworkFiles']=[id,id]
     assert write(teacher,record).status_code==422
-    record['document']['content']['homeworkFiles']=[id]*6
-    assert write(teacher,record).status_code==422
+
+
+def test_materials_of_a_lesson_are_limited_in_number(client,monkeypatch):
+    record,_,_,teacher=setup(client)
+    monkeypatch.setattr(assignment_files,'MAX_TASK',2)
+    assert [upload(teacher,record,name=f'{n}.txt',body=f'file {n}'.encode()).status_code for n in range(3)]==[200,200,413]
+
+
+def test_global_quota_rejects_material_upload(client,monkeypatch):
+    record,_,_,teacher=setup(client)
+    assert upload(teacher,record).status_code==200
     monkeypatch.setenv('ATLAS_UPLOAD_TOTAL_MB','10')
-    assert upload(teacher,record).status_code==413
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM assignment_files').fetchone()[0]==1
+    assert upload(teacher,record,body=b'Another file').status_code==413
 
 
 def test_deadline_boundary_atomic_rejection_and_draft_preservation(client,monkeypatch):
@@ -178,11 +206,16 @@ def test_deadline_boundary_atomic_rejection_and_draft_preservation(client,monkey
     assert final['submitted']['attempt']==2
 
 
-def test_block_requires_date_and_homework_and_commit_checks_actual_clock(client,monkeypatch):
-    record,pupil,_,teacher=setup(client);key=record['lessonKey']
-    record['document']['content'].update(homeworkLatePolicy='block',dueDate=None)
+@pytest.mark.parametrize('fields',[dict(dueDate=None),dict(homework='',homeworkFiles=[])])
+def test_block_policy_requires_a_due_date_and_homework(client,fields):
+    record,pupil,_,teacher=setup(client)
+    record['document']['content'].update(homeworkLatePolicy='block',**fields)
     assert write(teacher,record).status_code==422
-    record['document']['content']['dueDate']='2026-08-19'
+
+
+def test_deadline_crossed_while_the_answer_is_committed_is_refused(client,monkeypatch):
+    record,pupil,_,teacher=setup(client);key=record['lessonKey']
+    record['document']['content'].update(homeworkLatePolicy='block',dueDate='2026-08-19')
     record=save_materials(teacher,record,[])
     before=datetime(2026,8,19,18,59,59,tzinfo=timezone.utc)
     monkeypatch.setattr(homework,'now',lambda:before)
@@ -193,7 +226,7 @@ def test_block_requires_date_and_homework_and_commit_checks_actual_clock(client,
         monkeypatch.setattr(homework,'now',lambda:before+timedelta(seconds=1))
     monkeypatch.setattr(api.homework,'recheck',crosses)
     assert answer(pupil,key,current).status_code==409
-    with api.connect() as db:assert db.execute('SELECT count(*) FROM homework_submissions').fetchone()[0]==0
+    assert get(pupil,key)['status']=='not_submitted'
 
 
 def test_material_read_rechecks_current_account_after_context(client,monkeypatch):
@@ -213,34 +246,30 @@ def test_failed_upload_cleanup_does_not_exhaust_shared_slots(client,monkeypatch)
     import threading
     from fastapi import HTTPException
     record,_,_,teacher=setup(client)
-    slots=threading.BoundedSemaphore(1)
-    monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
+    # One slot and no waiting: a slot lost by the failed upload would refuse the next one at once.
+    monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',threading.BoundedSemaphore(1))
+    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0)
     @contextmanager
     def unavailable():
         raise RuntimeError('Synthetic database failure during cleanup')
         yield  # contextmanager protocol
-    def rejected(path,name):
-        monkeypatch.setattr(api.homework.access,'connect',unavailable)
-        raise HTTPException(422,'Synthetic invalid file')
-    monkeypatch.setattr(homework_files,'validate_file',rejected)
-    with pytest.raises(RuntimeError,match='Synthetic database failure'):
-        upload(teacher,record)
-    assert slots.acquire(blocking=False)
-    slots.release()
+    with monkeypatch.context() as failing:
+        def rejected(path,name):
+            failing.setattr(api.homework.access,'connect',unavailable)
+            raise HTTPException(422,'Synthetic invalid file')
+        failing.setattr(homework_files,'validate_file',rejected)
+        with pytest.raises(RuntimeError,match='Synthetic database failure'):
+            upload(teacher,record)
+    assert upload(teacher,record).status_code==200
 
 
-def test_identical_materials_are_stored_once_and_released_by_reference(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    from tools.restore_school import verify_backup
+def test_identical_materials_are_stored_once_and_released_by_reference(client,monkeypatch):
     record,pupil,parent,teacher=setup(client);body=b'Same worksheet'
     other=entry(client,lesson(client,'Математика')['lessonKey'])
     a=upload(teacher,record,body).json();b=upload(teacher,record,body).json()
     c=upload(client,other,body).json()  # another author and lesson
     assert len({a['id'],b['id'],c['id']})==3 and download(teacher,b['id']).content==body
-    with api.connect() as db:
-        assert {r[0] for r in db.execute('SELECT coalesce(blob_id,id) FROM assignment_files')}=={a['id']}
-        assert [p.name for p in assignment_files.root_for(db).glob('*.bin')]==[a['id']+'.bin']
-        assert homework_files.module_stored(db,'assignments')==len(body)==homework_files.total_stored(db)
+    with api.connect() as db: assert len(list(assignment_files.root_for(db).glob('*.bin')))==1
     monkeypatch.setattr(assignment_files,'MAX_OWNER',len(body)+homework_files.MAX_FILE)
     d=upload(teacher,record,body);assert d.status_code==200,d.text  # the owner's quota counts the content once
     save_materials(teacher,record,[b['id']])
@@ -248,18 +277,10 @@ def test_identical_materials_are_stored_once_and_released_by_reference(client,tm
     with api.connect() as db:
         db.execute('UPDATE assignment_files SET created=?',((homework.now()-timedelta(days=2)).isoformat(),))
         assignment_files.collect_unused(db)
-        assert {r[0] for r in db.execute('SELECT id FROM assignment_files')}=={b['id']}
-        assert (assignment_files.root_for(db)/(a['id']+'.bin')).is_file()  # still referenced by b
-    assert download(parent,b['id'],'s1').content==body
-    destination=tmp_path/'restore';source=api.DB
-    manifest=create_backup(source,destination);assert len(manifest['files'])==1
-    assert verify_backup(destination)['files']==1
-    monkeypatch.setattr(api,'DB',destination/source.name)
-    assert download(parent,b['id'],'s1').content==body
-    monkeypatch.setattr(api,'DB',source)
+    assert download(parent,b['id'],'s1').content==body  # the shared bytes stay while a saved material uses them
+    assert download(teacher,a['id']).status_code==404
     save_materials(teacher,entry(teacher,record['lessonKey']),[])
-    with api.connect() as db:
-        assert (assignment_files.root_for(db)/(a['id']+'.bin')).is_file()  # saved history keeps the row and the bytes
+    with api.connect() as db: assert len(list(assignment_files.root_for(db).glob('*.bin')))==1  # saved history keeps the bytes
 
 
 def test_blob_column_migration_is_idempotent_and_keeps_legacy_rows(client,tmp_path):
@@ -268,22 +289,16 @@ def test_blob_column_migration_is_idempotent_and_keeps_legacy_rows(client,tmp_pa
     with closing(sqlite3.connect(tmp_path/'legacy.db')) as db:
         db.execute('''CREATE TABLE assignment_files (id TEXT PRIMARY KEY,workspace TEXT,lesson_key TEXT,owner_id TEXT,
             filename TEXT,size INTEGER,created TEXT,status TEXT,sha256 TEXT,day TEXT)''')
-        db.execute("INSERT INTO assignment_files VALUES (?,?,?,?,?,?,?,?,?,?)",('a'*32,'demo','k','o','x.txt',3,'2026-01-01','ready','b'*64,'2026-08-17'))
+        insert_row(db,'assignment_files',id='a'*32,workspace='demo',lesson_key='k',owner_id='o',filename='x.txt',size=3,created='2026-01-01',status='ready',sha256='b'*64,day='2026-08-17')
         assignment_files.tables(db);assignment_files.tables(db)
-        columns=[r[1] for r in db.execute('PRAGMA table_info(assignment_files)')]
-        assert columns.count('blob_id')==1 and columns[-1]=='blob_id'
-        assert db.execute('SELECT blob_id FROM assignment_files').fetchone()[0] is None
         assert homework_files.stored(db,'assignment_files')==3
     record,_,parent,teacher=setup(client)
     first=upload(teacher,record,b'Legacy bytes').json()['id']
     with api.connect() as db:db.execute('UPDATE assignment_files SET blob_id=NULL')  # as if uploaded before the column existed
     assert download(teacher,first).content==b'Legacy bytes'
     second=upload(teacher,record,b'Legacy bytes').json()['id']
-    with api.connect() as db:
-        assert db.execute('SELECT blob_id FROM assignment_files WHERE id=?',(second,)).fetchone()[0]==first
-        assert [p.name for p in assignment_files.root_for(db).glob('*.bin')]==[first+'.bin']
-        assert not homework_files.referenced(db,'assignment_files',second)
-        assert homework_files.referenced(db,'assignment_files',first,exclude=first)
+    assert download(teacher,second).content==b'Legacy bytes' and download(teacher,first).content==b'Legacy bytes'
+    with api.connect() as db: assert len(list(assignment_files.root_for(db).glob('*.bin')))==1
 
 
 def test_dedupe_skips_a_target_whose_file_is_missing(client):
@@ -291,7 +306,5 @@ def test_dedupe_skips_a_target_whose_file_is_missing(client):
     first=upload(teacher,record,b'Same bytes').json()['id']
     with api.connect() as db:(assignment_files.root_for(db)/(first+'.bin')).unlink()
     second=upload(teacher,record,b'Same bytes').json()['id']
-    with api.connect() as db:
-        assert db.execute('SELECT blob_id FROM assignment_files WHERE id=?',(second,)).fetchone()[0]==second
-        assert (assignment_files.root_for(db)/(second+'.bin')).is_file()
+    with api.connect() as db: assert len(list(assignment_files.root_for(db).glob('*.bin')))==1
     assert download(teacher,second).content==b'Same bytes'

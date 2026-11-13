@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 from backend import admission_files, api, assignment_files, homework_files, message_files
 from backend.access import now
+from seeding import insert_row
 from test_access import client, create, enable
 from test_admissions import action as open_campaign, campaign as new_campaign, filled, new as new_application, ok as admissions_ok, save as save_application, signup, upload as admission_upload
 from test_assignment_files import upload as upload_material, download as download_material, save_materials
@@ -51,8 +52,8 @@ def scenario(client):
         from backend.message_drafts import tables as draft_tables
         draft_tables(db)
         owner = db.execute('SELECT owner_id FROM message_files WHERE id=?', (protected,)).fetchone()[0]
-        db.execute('INSERT INTO message_drafts VALUES (?,?,?,?,?,?,?,?)',
-                   ('demo', owner, draft, 1, 'active', None, json.dumps(dict(fileIds=[protected])), now().isoformat()))
+        insert_row(db, 'message_drafts', workspace='demo', owner_id=owner, id=draft, version=1, status='active',
+                   content=json.dumps(dict(fileIds=[protected])), updated=now().isoformat())
     # The same worksheet uploaded twice: one row stays linked, so the shared bytes stay.
     first = upload_material(teacher, record, b'Same worksheet').json()
     second = upload_material(teacher, record, b'Same worksheet').json()
@@ -65,7 +66,7 @@ def scenario(client):
     orphan = plant(root, uuid4().hex + '.bin', b'old orphan', age=7200)
     fresh = plant(root, uuid4().hex + '.bin', b'fresh orphan')
     notes = plant(root, 'notes.txt', b'not an upload', age=7200)
-    return dict(pupil=pupil, parent=parent, key=key, abandoned=abandoned, submitted=submitted, protected=protected, loose=loose,
+    return dict(pupil=pupil, parent=parent, teacher=teacher, key=key, abandoned=abandoned, submitted=submitted, protected=protected, loose=loose,
                 first=first['id'], second=second['id'], orphan=orphan, fresh=fresh, notes=notes)
 
 
@@ -74,7 +75,7 @@ def counts():
         return {t: db.execute(f'SELECT count(*) FROM {t}').fetchone()[0] for t in ['homework_files', 'message_files', 'assignment_files']}
 
 
-def test_dry_run_reports_and_changes_nothing_then_apply_deletes_only_unused(client):
+def test_dry_run_reports_and_changes_nothing(client):
     s = scenario(client)
     before = counts()
     files_before = sorted(p.name for p in s['orphan'].parent.iterdir())
@@ -90,20 +91,24 @@ def test_dry_run_reports_and_changes_nothing_then_apply_deletes_only_unused(clie
     assert report['modules']['assignments']['unused'] == dict(files=1, bytes=0)  # its bytes are still used by the linked copy
     assert report['modules']['quizzes']['initialized'] is False and report['totalBytes'] > 0
     assert counts() == before and sorted(p.name for p in s['orphan'].parent.iterdir()) == files_before
+
+
+def test_apply_deletes_only_unused_files(client):
+    s = scenario(client)
     applied = cleanup_files.run(api.DB, apply=True)
     assert applied['applied'] is True
     assert applied['freedBytes'] == len(b'Abandoned attempt') + len(b'old orphan') + len(b'Never sent')
     with api.connect() as db:
-        assert {r[0] for r in db.execute('SELECT id FROM homework_files')} == {s['submitted']}
-        assert {r[0] for r in db.execute('SELECT id FROM message_files')} == {s['protected']}
-        assert {r[0] for r in db.execute('SELECT id FROM assignment_files')} == {s['second']}
         root = homework_files.root_for(db)
         assert not (root / (s['abandoned'] + '.bin')).exists() and not s['orphan'].exists()
-        assert s['fresh'].exists() and s['notes'].exists() and (root / (s['submitted'] + '.bin')).is_file()
+        assert s['fresh'].exists() and s['notes'].exists()
+        assert not (message_files.root_for(db) / (s['loose'] + '.bin')).exists()
         assert (message_files.root_for(db) / (s['protected'] + '.bin')).is_file()
         assert (assignment_files.root_for(db) / (s['first'] + '.bin')).is_file()  # the shared bytes outlive the first row
     assert download(s['pupil'], s['key'], s['submitted']).content == b'Submitted answer'
+    assert download(s['pupil'], s['key'], s['abandoned']).status_code == 404
     assert download_material(s['parent'], s['second'], 's1').content == b'Same worksheet'
+    assert download_material(s['teacher'], s['first']).status_code == 404
     again = cleanup_files.run(api.DB)
     for module in again['modules'].values():
         assert module['unused']['files'] == 0 and module['orphans']['files'] == 0
@@ -192,17 +197,30 @@ def test_referenced_blobs_older_than_an_hour_are_never_orphans(client):
     assert download_material(s['parent'], s['second'], 's1').content == b'Same worksheet'
 
 
-def test_apply_rechecks_leftovers_that_became_referenced_since_the_survey(client):
+def test_apply_rechecks_leftovers_that_became_referenced_since_the_survey(client, monkeypatch):
     s = scenario(client)
     age_blobs()
     with api.connect() as db:
         root = homework_files.root_for(db)
-    report = dict(freedBytes=0, failed=0)
-    with closing(sqlite3.connect(api.DB)) as db:
-        db.row_factory = sqlite3.Row
-        # The leftover list is stale: this blob is now used by a submitted answer.
-        cleanup_files.apply_module(db, 'homework_files', root, homework_files, 30, [(s['submitted'], 16)], report)
-    assert (root / (s['submitted'] + '.bin')).is_file() and report == dict(freedBytes=0, failed=0)
+    late = plant(root, uuid4().hex + '.bin', b'claimed meanwhile', age=7200)
+    real = cleanup_files.orphans
+
+    def survey_then_claim(db, table, root_path):
+        found = real(db, table, root_path)
+        if table == 'homework_files' and not getattr(survey_then_claim, 'done', False):
+            survey_then_claim.done = True
+            # After the survey listed it as a leftover, a new answer file starts using this blob.
+            with closing(sqlite3.connect(api.DB)) as other:
+                insert_row(other, 'homework_files', id=late.stem, workspace='demo', lesson_key=s['key'], student_id='s1', owner_id='someone',
+                           filename='late.txt', size=late.stat().st_size, created=now().isoformat(), status='ready')
+                other.commit()
+        return found
+
+    monkeypatch.setattr(cleanup_files, 'orphans', survey_then_claim)
+    applied = cleanup_files.run(api.DB, apply=True)['modules']['homework']
+    assert late.is_file()
+    assert not s['orphan'].exists() and not s['fresh'].exists()  # the leftovers that stayed unused are removed
+    assert applied['freedBytes'] == len(b'Abandoned attempt') + len(b'old orphan') + len(b'fresh orphan')
 
 
 def test_apply_skips_rows_whose_file_cannot_be_removed(client, monkeypatch):
