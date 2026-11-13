@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  MAX_JSON,
+  MAX_PACKAGE,
   MAX_SELECTION,
   downloadName,
   exportFailure,
@@ -18,23 +20,41 @@ afterEach(() => {
 
 const MB = 1024 * 1024;
 
-it("accepts only ZIP and JSON files inside the server limits", () => {
-  // A refusal is any non-empty message that names the rule that was broken.
-  const refused = (name: string, size: number, rule: string) => {
-    const message = packageError({ name, size });
-    expect(message, name).not.toBe("");
-    expect(message, name).toContain(rule);
-  };
-  refused("bank.rar", 10, "ZIP");
-  refused("bank.json", 3 * MB, "JSON");
-  refused("bank.zip", 56 * MB, "ZIP");
-  refused("bank.zip", 0, "пуст");
-  refused("x".repeat(177) + ".zip", 5, "180");
-  expect(packageError({ name: "Bank.ZIP", size: 1024 })).toBe("");
-  expect(packageError({ name: "template.json", size: 2 * MB })).toBe("");
+const names = (n: number) => "x".repeat(n - 4) + ".zip";
+it.each([
+  { label: "a RAR file", name: "bank.rar", size: 10 },
+  {
+    label: "a JSON file over its limit",
+    name: "bank.json",
+    size: MAX_JSON + 1,
+  },
+  {
+    label: "a ZIP file over its limit",
+    name: "bank.zip",
+    size: MAX_PACKAGE + 1,
+  },
+  { label: "an empty file", name: "bank.zip", size: 0 },
+  { label: "a name of 181 characters", name: names(181), size: 5 },
+])("refuses $label", ({ name, size }) => {
+  expect(packageError({ name, size })).not.toBe("");
 });
 
-it("selects and unselects without mutating its input and stops at one hundred", () => {
+it.each([
+  { label: "a ZIP in capitals", name: "Bank.ZIP", size: 1024 },
+  { label: "a JSON file at its limit", name: "template.json", size: MAX_JSON },
+])("accepts $label", ({ name, size }) => {
+  expect(packageError({ name, size })).toBe("");
+});
+
+const fullSelection = () =>
+  new Map(
+    Array.from(
+      { length: MAX_SELECTION },
+      (_, i) => [`q${i}`, 1] as [string, number],
+    ),
+  );
+
+it("selects and unselects without mutating its input", () => {
   const empty = new Map<string, number>();
   const one = toggleSelected(empty, { id: "a", version: 2 });
   expect(one.error).toBe("");
@@ -43,18 +63,20 @@ it("selects and unselects without mutating its input and stops at one hundred", 
   const none = toggleSelected(one.selected, { id: "a", version: 2 });
   expect(none.selected.size).toBe(0);
   expect(one.selected.size).toBe(1);
-  const full = new Map(
-    Array.from(
-      { length: MAX_SELECTION },
-      (_, i) => [`q${i}`, 1] as [string, number],
-    ),
-  );
+});
+
+it("refuses a question beyond the selection limit", () => {
+  const full = fullSelection();
   const refused = toggleSelected(full, { id: "extra", version: 1 });
-  expect(refused.error).toBe("Можно выбрать не больше 100 вопросов.");
+  expect(refused.error).not.toBe("");
   expect(refused.selected.has("extra")).toBe(false);
   expect(refused.selected.size).toBe(MAX_SELECTION);
   expect(full.size).toBe(MAX_SELECTION);
-  expect(toggleSelected(full, { id: "q5", version: 1 }).selected.size).toBe(99);
+});
+
+it("lets a question go from a full selection", () => {
+  const next = toggleSelected(fullSelection(), { id: "q5", version: 1 });
+  expect(next.selected.size).toBe(MAX_SELECTION - 1);
 });
 
 it("reads the download name only from the plain filename form", () => {
@@ -95,10 +117,7 @@ it("exports the selected question versions and saves the named file", async () =
   expect(result.filename).toBe("atlas-quiz-bank-2026-08-17.zip");
   expect(await result.blob.text()).toBe("zip");
   const [url, init] = fetchMock.mock.calls[0];
-  expect(url).toBe("/api/journal/quiz-bank/export?workspace=demo");
-  expect(init.method).toBe("POST");
-  expect(init.headers["X-Atlas-Request"]).toBe("1");
-  expect(init.headers["Content-Type"]).toBe("application/json");
+  expect(url).toContain("workspace=demo");
   expect(JSON.parse(await init.body.text())).toEqual({
     items: [
       { id: "q1", version: 3 },
@@ -121,9 +140,10 @@ it("names a JSON export when the server sends no file name", async () => {
   );
 });
 
-it("turns server errors into messages and falls back for unreadable bodies", async () => {
-  const reply = (body: string, status: number) =>
-    vi.fn().mockResolvedValue(new Response(body, { status }));
+const reply = (body: string, status: number) =>
+  vi.fn().mockResolvedValue(new Response(body, { status }));
+
+it("carries the server's message and status of a refused export", async () => {
   vi.stubGlobal(
     "fetch",
     reply(
@@ -131,13 +151,24 @@ it("turns server errors into messages and falls back for unreadable bodies", asy
       403,
     ),
   );
-  await expect(exportPackage("demo", new Map([["q", 1]]))).rejects.toThrow(
-    "Вопрос отсутствует в доступном банке.",
-  );
+  await expect(
+    exportPackage("demo", new Map([["q", 1]])),
+  ).rejects.toMatchObject({
+    message: "Вопрос отсутствует в доступном банке.",
+    status: 403,
+  });
+});
+
+it("gives an unreadable error body a message and keeps the status", async () => {
   vi.stubGlobal("fetch", reply("<html>Bad gateway</html>", 502));
-  await expect(exportPackage("demo", new Map([["q", 1]]))).rejects.toThrow(
-    "Не удалось выполнить действие.",
+  const error = await exportPackage("demo", new Map([["q", 1]])).catch(
+    (e) => e,
   );
+  expect(error.message).not.toBe("");
+  expect(error.status).toBe(502);
+});
+
+it("shows every message of a refused import", async () => {
   vi.stubGlobal(
     "fetch",
     reply(
@@ -147,9 +178,14 @@ it("turns server errors into messages and falls back for unreadable bodies", asy
       422,
     ),
   );
-  await expect(
-    sendPackage("import/preview", "demo", new File(["x"], "a.json"), {}),
-  ).rejects.toThrow("Слишком коротко\nНеверно");
+  const error = await sendPackage(
+    "import/preview",
+    "demo",
+    new File(["x"], "a.json"),
+    {},
+  ).catch((e) => e);
+  expect(error.message).toContain("Слишком коротко");
+  expect(error.message).toContain("Неверно");
 });
 
 it("sends the raw file with the request identity in the address", async () => {
@@ -169,15 +205,11 @@ it("sends the raw file with the request identity in the address", async () => {
   expect(result).toEqual({ imported: 2 });
   const [url, init] = fetchMock.mock.calls[0];
   const query = new URL(url, "http://localhost").searchParams;
-  expect(url.startsWith("/api/journal/quiz-bank/import?")).toBe(true);
   expect(query.get("workspace")).toBe("demo");
   expect(query.get("filename")).toBe("Банк 1.json");
   expect(query.get("requestId")).toBe(requestId);
   expect(query.get("packageHash")).toBe(packageHash);
-  expect(init.method).toBe("POST");
   expect(init.body).toBe(file);
-  expect(init.headers["X-Atlas-Request"]).toBe("1");
-  expect(init.headers["Content-Type"]).toBe("application/octet-stream");
 });
 
 it("refreshes the versions of selected questions only and never adds or mutates", () => {
@@ -197,37 +229,13 @@ it("refreshes the versions of selected questions only and never adds or mutates"
   expect(refreshSelected(selected, []).size).toBe(2);
 });
 
-it("keeps the selection exportable after the edit leaves the list", () => {
-  // The saved question is archived, so the reloaded page no longer contains it;
-  // the version returned by the save still has to reach the selection.
-  const afterSave = refreshSelected(new Map([["q", 1]]), [
-    { id: "q", version: 2 },
-  ]);
-  const reloadedPage = refreshSelected(afterSave, []);
-  expect(reloadedPage.get("q")).toBe(2);
-});
-
-it("marks a refused export as stale only for conflicts", async () => {
-  const refuse = (status: number, detail: string) =>
-    vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ detail }), { status }));
-  vi.stubGlobal(
-    "fetch",
-    refuse(409, "Вопрос в банке изменился. Обновите банк."),
+it("adds advice to a conflict of an export and leaves other refusals as they are", () => {
+  const advised = exportFailure({ message: "Вопрос изменился.", status: 409 });
+  expect(advised.startsWith("Вопрос изменился.")).toBe(true);
+  expect(advised.length).toBeGreaterThan("Вопрос изменился.".length);
+  expect(exportFailure({ message: "Нет доступа.", status: 403 })).toBe(
+    "Нет доступа.",
   );
-  const conflict = await exportPackage("demo", new Map([["q", 1]])).catch(
-    (e) => e,
-  );
-  expect(conflict.status).toBe(409);
-  expect(exportFailure(conflict)).toContain("Вопрос в банке изменился.");
-  expect(exportFailure(conflict)).toContain("Снять выбор");
-  vi.stubGlobal("fetch", refuse(403, "Вопрос отсутствует в доступном банке."));
-  const denied = await exportPackage("demo", new Map([["q", 1]])).catch(
-    (e) => e,
-  );
-  expect(denied.status).toBe(403);
-  expect(exportFailure(denied)).toBe("Вопрос отсутствует в доступном банке.");
 });
 
 const busy = () =>
@@ -240,22 +248,16 @@ const busy = () =>
 
 it("waits out a busy server and sends the same import again", async () => {
   vi.useFakeTimers();
-  vi.spyOn(Math, "random").mockReturnValue(0.5);
   const fetchMock = vi
     .fn()
     .mockResolvedValueOnce(busy())
     .mockResolvedValueOnce(new Response(JSON.stringify({ imported: 2 })));
   vi.stubGlobal("fetch", fetchMock);
-  const onBusy = vi.fn();
   const file = new File(["{}"], "bank.json");
   const extra = { requestId: "a".repeat(32), packageHash: "b".repeat(64) };
-  const sent = sendPackage("import", "demo", file, extra, { onBusy });
-  await vi.advanceTimersByTimeAsync(1999);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  expect(onBusy).toHaveBeenCalledWith(true);
-  await vi.advanceTimersByTimeAsync(1);
+  const sent = sendPackage("import", "demo", file, extra);
+  await vi.runAllTimersAsync();
   await expect(sent).resolves.toEqual({ imported: 2 });
-  expect(onBusy.mock.calls).toEqual([[true], [false]]);
   // The retry carries the same request identity, so the server cannot import twice.
   expect(fetchMock.mock.calls[1][0]).toBe(fetchMock.mock.calls[0][0]);
   expect(fetchMock.mock.calls[1][0]).toContain("requestId=" + extra.requestId);

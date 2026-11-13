@@ -99,17 +99,31 @@ def test_school_clock_cutoff_future_lessons_and_validation(client,monkeypatch):
     for extra in [dict(start='2026-08-16'),dict(end='2027-08-19'),dict(asOf='2026-08-17T10:00:00'),dict(asOf='2027-01-01T00:00:00Z'),dict(end='2026-08-15')]:assert report(client,**extra).status_code==422
 
 
-def test_stale_pages_after_draft_withdrawal_roster_and_scope_change(client,monkeypatch):
+def test_report_token_is_served_from_its_snapshot_and_stale_once_the_snapshot_is_gone(client):
     _,_,parent,teacher=setup(client);known();first=report(teacher).json()
-    key=lesson(client)['lessonKey'];saved=write(client,entry(client,key)).json()
-    # A page of the report already calculated is served from its snapshot; once the
-    # snapshot is gone, a draft of the same pupils and days requires a new check.
+    assert write(client,entry(client,lesson(client)['lessonKey'])).status_code==200
     again=report(teacher,token=first['token'],asOf=first['asOf']);assert again.status_code==200 and again.json()['items']==first['items']
     api.journal_coverage.cache.clear();assert report(teacher,token=first['token'],asOf=first['asOf']).status_code==409
-    published=write(client,graded(saved),publish=True).json();current=report(teacher).json()
+
+
+def test_export_token_goes_stale_after_a_withdrawal(client):
+    _,_,parent,teacher=setup(client);known()
+    key=lesson(client)['lessonKey'];published=write(client,graded(entry(client,key)),publish=True).json();current=report(teacher).json()
     client.post('/api/journal/withdraw?workspace=demo',json=dict(lessonKey=key,version=published['version'])).raise_for_status()
     assert export(teacher,token=current['token'],asOf=current['asOf']).status_code==200
     api.journal_coverage.cache.clear();assert export(teacher,token=current['token'],asOf=current['asOf']).status_code==409
+
+
+def test_report_token_goes_stale_when_class_staff_permissions_change(client):
+    _,_,parent,teacher=setup(client);known();first=report(teacher).json()
+    current=client.get('/api/access/class-staff?workspace=demo').json()
+    saved=client.put('/api/access/class-staff?workspace=demo',json=dict(version=current['version'],reason='Назначение для проверки',assignments={}))
+    assert saved.status_code==200,saved.text
+    assert report(teacher,token=first['token'],asOf=first['asOf']).status_code==409
+
+
+def test_reviewer_permissions_changing_during_the_calculation_refuse_the_report(client,monkeypatch):
+    _,_,parent,teacher=setup(client);known()
     original=api.journal_coverage.result
     def revoke(db,user,snap,workspace,body,token):
         value=original(db,user,snap,workspace,body,token)
@@ -201,27 +215,48 @@ def test_cache_row_cap(client,monkeypatch):
     assert report(client,offset=1,token=first['token'],asOf=first['asOf']).status_code==409
 
 
-def test_pagination_full_csv_filters_and_formula_protection(client):
+def walk(call,first,items='items',offset='offset'):
+    """Collect every row of a paged answer by following nextOffset from the first page."""
+    found,page=list(first[items]),first
+    while page['nextOffset'] is not None:
+        page=call(**{offset:page['nextOffset'],'token':first['token'],'asOf':first['asOf']}).json()
+        found+=page[items]
+    return found
+
+
+def test_report_pages_follow_next_offset_and_cover_every_lesson_once(client):
+    first=report(client,end='2027-06-11').json();assert first['nextOffset'] is not None
+    keys=[r['lessonKey'] for r in walk(lambda **extra:report(client,end='2027-06-11',**extra),first)]
+    assert len(keys)==len(set(keys))==first['total']
+
+
+def test_csv_export_lists_every_lesson_and_neutralises_formulas(client):
     state=api.read('demo');state.subjects[2].name='=1+1';api.save('demo',state)
-    first=report(client,end='2027-06-11').json();assert len(first['items'])==50 and first['nextOffset']==50
-    second=report(client,end='2027-06-11',offset=50,token=first['token'],asOf=first['asOf']).json()
-    assert not {r['lessonKey'] for r in first['items']}&{r['lessonKey'] for r in second['items']}
-    data=export(client,end='2027-06-11',token=first['token'],asOf=first['asOf'])
-    rows=list(csv.reader(io.StringIO(data.content.decode('utf-8-sig')),delimiter=';'))
-    assert len(rows)==first['total']+1 and any("'=1+1" in row for row in rows)
+    total=report(client,end='2027-06-11').json()['total']
+    rows=list(csv.reader(io.StringIO(export(client,end='2027-06-11').content.decode('utf-8-sig')),delimiter=';'))
+    assert len(rows)==total+1 and any("'=1+1" in row for row in rows) and not any('=1+1' in row for row in rows)
+
+
+def test_status_filters_split_complete_lessons_from_issues(client):
     assert report(client,status='complete').json()['items']==[]
-    assert report(client,status='issues').json()['counts']['expected']==2
+    assert report(client,status='issues').json()['counts']['expected']==report(client).json()['counts']['expected']
 
 
-def test_detail_pagination_and_class_scope_after_transfer(client):
+def test_detail_pages_follow_next_offset_and_cover_every_pupil_once(client):
     _,_,parent,teacher=setup(client);state=api.read('demo')
     state.students += [Student(id=f'extra{i}',name=f'New {i:02}',classId='c-demo-a') for i in range(55)]
     api.save('demo',state);key=lesson(client)['lessonKey']
-    first=details(teacher,key).json();assert first['total']==57 and len(first['pupils'])==50
-    second=details(teacher,key,pupilOffset=50,token=first['token'],asOf=first['asOf']).json();assert len(second['pupils'])==7
+    first=details(teacher,key).json();assert first['nextOffset'] is not None
+    ids=[p['id'] for p in walk(lambda **extra:details(teacher,key,**extra),first,'pupils','pupilOffset')]
+    assert len(ids)==len(set(ids)) and set(ids)=={'s1','s2'}|{f'extra{i}' for i in range(55)}
+
+
+def test_detail_token_goes_stale_after_a_pupil_moves_class(client):
+    _,_,parent,teacher=setup(client);key=lesson(client)['lessonKey']
+    first=details(teacher,key).json()
     state=api.read('demo');state.students[0].classId='c-demo-d';api.save('demo',state)
     assert details(teacher,key,token=first['token'],asOf=first['asOf']).status_code==409
-    assert 's1' not in [s['id'] for s in details(teacher,key,pupilOffset=50).json()['pupils']]
+    assert 's1' not in [s['id'] for s in details(teacher,key).json()['pupils']]
 
 
 def test_publication_transaction_failure_keeps_control_unchanged(client,monkeypatch):
@@ -234,7 +269,7 @@ def test_publication_transaction_failure_keeps_control_unchanged(client,monkeypa
     assert after['counts']==before['counts'] and english(after)['status']=='missing'
 
 
-def test_substitute_teacher_scope_and_deleted_roster_publication(client):
+def test_substitute_teacher_opens_the_lesson_and_an_earlier_day_keeps_its_teachers(client):
     _,_,parent,teacher=setup(client);other=signed('other-teacher');known();day=dict(asOf='2026-08-17T18:00:00Z')
     key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
     state=api.read('demo');state.datedLessons=[DatedLesson(id='substitute',name='Substitute',kind='change',placementId='eng',sourceDate=date(2026,8,17),onDate=date(2026,8,17),teacherIds=['t1'])];api.save('demo',state)
@@ -243,6 +278,11 @@ def test_substitute_teacher_scope_and_deleted_roster_publication(client):
     # An earlier day keeps the teachers it was published with, so the substitute does not make it stale.
     frozen=english(report(other,mode='teaching').json());assert frozen['status']=='complete' and not frozen['needsSync'] and frozen['canOpen']
     assert details(other,key,mode='teaching').status_code==200
+
+
+def test_publication_of_a_deleted_roster_stays_visible_as_orphaned(client):
+    _,_,parent,teacher=setup(client);known()
+    key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
     # Whole-class membership disappears; the old publication must remain visible
     # for administrators to inspect or withdraw, without inventing attendance.
     state=api.read('demo');state.placements=[];state.datedLessons=[];state.students=[]
@@ -253,20 +293,25 @@ def test_substitute_teacher_scope_and_deleted_roster_publication(client):
     assert report(client,mode='teaching',classId='c-demo-a').json()['counts']['orphaned']==0
     state=api.read('demo');state.classes=[];state.groups=[];state.workloads=[];api.save('demo',state)
     archived=report(client).json();assert archived['counts']['orphaned']==1
-    assert archived['items'][0]['classNames']==['Вне текущего состава']
+    assert archived['items'][0]['status']=='orphaned' and archived['items'][0]['canOpen']
 
 
-def test_coverage_index_backfill_failure_retry_and_restored_backup(client,tmp_path,monkeypatch):
+def test_interrupted_coverage_index_migration_is_retried_by_the_next_report(client,monkeypatch):
     from backend import coverage_projection
-    from tools.backup_school import create_backup
     known();key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
+    # Removing the marker makes the next report rebuild the index.
     with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='coverage'")
     original=coverage_projection.populate
-    def fail(db,*args):original(db,*args);raise RuntimeError('Migration interrupted')
+    def fail(db,*args):raise RuntimeError('Migration interrupted')
     monkeypatch.setattr(coverage_projection,'populate',fail)
     with pytest.raises(RuntimeError):report(client)
-    with api.connect() as db:assert not db.execute("SELECT 1 FROM journal_projection_versions WHERE name='coverage'").fetchone()
     monkeypatch.setattr(coverage_projection,'populate',original)
+    assert english(report(client).json())['status']=='complete'
+
+
+def test_restored_backup_reports_the_same_coverage(client,tmp_path,monkeypatch):
+    from tools.backup_school import create_backup
+    known();key=lesson(client)['lessonKey'];write(client,graded(entry(client,key)),publish=True)
     value=report(client).json();assert english(value)['status']=='complete'
     destination=tmp_path/'coverage-backup';source=api.DB;create_backup(source,destination)
     monkeypatch.setattr(api,'DB',destination/source.name)

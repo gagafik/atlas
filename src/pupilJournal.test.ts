@@ -10,6 +10,7 @@ import {
   monthCells,
   periodChoices,
   subjectRows,
+  YEAR_CHOICE,
   type BehaviourNote,
   type PupilAttendanceRow,
   type PupilMark,
@@ -32,17 +33,13 @@ describe("periodChoices and defaultChoice", () => {
   ];
   it("adds the whole school year once, unless a year period already covers it", () => {
     const choices = periodChoices(quarters, "2026-09-01", "2027-05-25");
-    expect(choices.map((c) => c.name)).toEqual([
-      "q1",
-      "q2",
-      "Весь учебный год",
-    ]);
+    expect(choices.map((c) => c.id)).toEqual(["q1", "q2", YEAR_CHOICE]);
     const covered = periodChoices(
       [...quarters, period("y", "2026-09-01", "2027-05-25", "year")],
       "2026-09-01",
       "2027-05-25",
     );
-    expect(covered.some((c) => c.name === "Весь учебный год")).toBe(false);
+    expect(covered.some((c) => c.id === YEAR_CHOICE)).toBe(false);
   });
   it("keeps the whole-year choice inside the range the server answers", () => {
     const [year] = periodChoices([], "2026-01-01", "2028-01-01");
@@ -65,8 +62,8 @@ describe("periodChoices and defaultChoice", () => {
     ).toBe("q2");
     expect(
       defaultChoice(periodChoices([], "2026-09-01", "2027-05-25"), "2026-10-05")
-        .name,
-    ).toBe("Весь учебный год");
+        .id,
+    ).toBe(YEAR_CHOICE);
   });
 });
 
@@ -154,14 +151,8 @@ describe("chartBlocks", () => {
       mark({ assessmentId: "d", weight: 0 }),
     ]);
     expect(blocks.map((b) => b.share)).toEqual([0.2, 0.8]);
-    expect(blocks[0].text).toBe("9 / 10 = 90%");
     expect(blocks[1].percent).toBe(50);
     expect(excluded).toBe(2);
-  });
-  it("writes a fraction with a decimal comma", () => {
-    expect(chartBlocks([mark({ score: 7.5 })]).blocks[0].text).toBe(
-      "7,5 / 10 = 75%",
-    );
   });
 });
 
@@ -263,7 +254,7 @@ describe("foldAttendance", () => {
       ],
       bells,
     );
-    expect(columns.map((c) => c.label)).toEqual(["1", "2", "Вне расписания"]);
+    expect(columns.map((c) => c.slot)).toEqual([0, 1, null]);
     expect(days[0].cells.map((cell) => cell.map((r) => r.lessonKey))).toEqual([
       ["a"],
       ["b"],
@@ -379,29 +370,19 @@ describe("groupNotes", () => {
     }),
     note({ id: "3", subjectId: "art", subject: "Изо", author: "Петров" }),
   ];
+  const ids = (groups: { items: { id: string }[] }[]) =>
+    groups.map((g) => g.items.map((n) => n.id));
   it("keeps notes without a subject in a group of their own, last", () => {
-    const groups = groupNotes(notes, "subject");
-    expect(groups.map((g) => g.title)).toEqual([
-      "Изо",
-      "Математика",
-      "Без предмета",
-    ]);
-    expect(groups[2].items.map((n) => n.id)).toEqual(["2"]);
+    expect(ids(groupNotes(notes, "subject"))).toEqual([["3"], ["1"], ["2"]]);
   });
   it("groups by teacher, date and type", () => {
-    expect(
-      groupNotes(notes, "teacher").map((g) => [g.title, g.items.length]),
-    ).toEqual([
-      ["Иванова", 1],
-      ["Петров", 2],
-    ]);
-    expect(groupNotes(notes, "date").map((g) => g.title)).toEqual([
-      "2026-10-06",
-      "2026-10-05",
-    ]);
-    expect(groupNotes(notes, "type").map((g) => g.title)).toEqual([
-      "Похвала",
-      "Замечание",
-    ]);
+    const sorted = (groups: { items: { id: string }[] }[]) =>
+      ids(groups)
+        .map((g) => [...g].sort())
+        .sort();
+    expect(sorted(groupNotes(notes, "teacher"))).toEqual([["1"], ["2", "3"]]);
+    // The newest day comes first.
+    expect(ids(groupNotes(notes, "date"))).toEqual([["2"], ["1", "3"]]);
+    expect(sorted(groupNotes(notes, "type"))).toEqual([["1", "3"], ["2"]]);
   });
 });

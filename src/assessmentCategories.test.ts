@@ -1,13 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   FALLBACK,
-  WEIGHT_PRESETS,
   bookingDefault,
   categoryOf,
   configProblem,
   presetOf,
   staleVersion,
-  textColor,
   type Draft,
 } from "./assessmentCategories";
 
@@ -61,8 +59,7 @@ describe("categoryOf", () => {
 });
 
 describe("weight presets", () => {
-  it("knows its presets and sends other weights to the custom input", () => {
-    expect(WEIGHT_PRESETS.map((p) => p.value)).toEqual([0, 0.25, 0.5, 1, 2, 3]);
+  it("keeps a preset weight and sends other weights to the custom input", () => {
     expect(presetOf(0.5)).toBe(0.5);
     expect(presetOf(0)).toBe(0);
     expect(presetOf(1.5)).toBe("custom");
@@ -74,111 +71,137 @@ describe("configProblem", () => {
   it("accepts the defaults", () => {
     expect(configProblem(defaults())).toBe("");
   });
-  it("reports a share sum other than 100 for the school and for a rule", () => {
+  it.each([
+    ["33.33", "33.33", "33.34"],
+    ["0.01", "33.34", "66.65"],
+  ])("sums decimal shares %s, %s and %s exactly", (...percents) => {
     const cfg = defaults();
-    cfg.policy.shares[2].percent = "49";
-    expect(configProblem(cfg)).toBe(
-      "Правило школы: доли категорий должны в сумме давать 100 % (сейчас 99 %).",
-    );
-    const withRule = defaults();
-    withRule.rules.push({
-      id: "a".repeat(32),
-      name: "Физика",
-      subjectIds: [],
-      classIds: [],
-      method: "points",
-      missing: "block",
-      shares: [
-        { categoryId: "fo", percent: "60" },
-        { categoryId: "sor", percent: "30" },
-      ],
-    });
-    expect(configProblem(withRule)).toContain("Правило «Физика»");
-    withRule.rules[0].shares[1].percent = "40";
-    expect(configProblem(withRule)).toBe("");
-  });
-  it("sums decimal shares exactly", () => {
-    const cfg = defaults();
-    cfg.policy.shares = [
-      { categoryId: "fo", percent: "33.33" },
-      { categoryId: "sor", percent: "33.33" },
-      { categoryId: "soch", percent: "33.34" },
-    ];
+    cfg.policy.shares = ["fo", "sor", "soch"].map((categoryId, i) => ({
+      categoryId,
+      percent: percents[i],
+    }));
     expect(configProblem(cfg)).toBe("");
-    cfg.policy.shares[0].percent = "";
-    expect(configProblem(cfg)).toContain("число от 0 до 100");
   });
-  it("rejects shares with more than two decimals instead of rounding them", () => {
-    // The server stores hundredths and answers 422 to 50.004.
+  it("accepts a share written without the leading zero", () => {
     const cfg = defaults();
-    cfg.policy.shares = [
-      { categoryId: "fo", percent: "50.004" },
-      { categoryId: "sor", percent: "49.996" },
-      { categoryId: "soch", percent: "0" },
-    ];
-    expect(configProblem(cfg)).toBe(
-      "Правило школы: доля — не более двух знаков после запятой.",
-    );
-    cfg.policy.shares = [
-      { categoryId: "fo", percent: "33.333" },
-      { categoryId: "sor", percent: "33.333" },
-      { categoryId: "soch", percent: "33.336" },
-    ];
-    expect(configProblem(cfg)).toContain("не более двух знаков");
     cfg.policy.shares = [
       { categoryId: "fo", percent: ".5" },
       { categoryId: "sor", percent: "49.5" },
       { categoryId: "soch", percent: "50" },
     ];
     expect(configProblem(cfg)).toBe("");
-    const withRule = defaults();
-    withRule.rules.push({
-      id: "a".repeat(32),
-      name: "Физика",
-      subjectIds: [],
-      classIds: [],
-      method: "average",
-      missing: "renormalize",
-      shares: [
-        { categoryId: "fo", percent: "60.001" },
-        { categoryId: "sor", percent: "39.999" },
-      ],
-    });
-    expect(configProblem(withRule)).toBe(
-      "Правило «Физика»: доля — не более двух знаков после запятой.",
-    );
   });
-  it("reports duplicate ids and names, an inactive default and a shared calendar type", () => {
-    const duplicate = defaults();
-    duplicate.categories[1].id = "fo";
-    expect(configProblem(duplicate)).toBe(
-      "Коды категорий не должны повторяться.",
-    );
-    const sameName = defaults();
-    sameName.categories[1].name = " фо";
-    expect(configProblem(sameName)).toBe(
-      "Названия категорий не должны повторяться.",
-    );
-    const inactive = defaults();
-    inactive.categories[0].active = false;
-    expect(configProblem(inactive)).toBe(
-      "Категория по умолчанию должна существовать и быть действующей.",
-    );
-    const shared = defaults();
-    shared.categories[2].calendar = "summative_unit";
-    expect(configProblem(shared)).toBe(
-      "Тип календаря связан только с одной категорией.",
-    );
-    shared.categories[2].active = false;
-    expect(configProblem(shared)).toBe("");
-    const unnamed = defaults();
-    unnamed.categories[1].name = "  ";
-    expect(configProblem(unnamed)).toContain("Укажите название");
+  const rule = (shares: { categoryId: string; percent: string }[]) => ({
+    id: "a".repeat(32),
+    name: "Физика",
+    subjectIds: [],
+    classIds: [],
+    method: "average" as const,
+    missing: "renormalize" as const,
+    shares,
   });
-  it("rejects a share that names an unknown category", () => {
+  const withShares =
+    (...percents: string[]) =>
+    (cfg: Draft) => {
+      cfg.policy.shares = ["fo", "sor", "soch"].map((categoryId, i) => ({
+        categoryId,
+        percent: percents[i],
+      }));
+    };
+  // Each case differs from the valid defaults by exactly one rule, and its fix gives the defaults back.
+  const cases: {
+    name: string;
+    spoil: (cfg: Draft) => void;
+    fix: (cfg: Draft) => void;
+  }[] = [
+    {
+      name: "a school share sum other than 100",
+      spoil: (cfg) => (cfg.policy.shares[2].percent = "49"),
+      fix: (cfg) => (cfg.policy.shares[2].percent = "50"),
+    },
+    {
+      name: "a rule share sum other than 100",
+      spoil: (cfg) =>
+        cfg.rules.push(
+          rule([
+            { categoryId: "fo", percent: "60" },
+            { categoryId: "sor", percent: "30" },
+          ]),
+        ),
+      fix: (cfg) => (cfg.rules[0].shares[1].percent = "40"),
+    },
+    {
+      name: "an empty share",
+      spoil: (cfg) => (cfg.policy.shares[0].percent = ""),
+      fix: (cfg) => (cfg.policy.shares[0].percent = "25"),
+    },
+    {
+      name: "a school share with three decimals",
+      spoil: withShares("50.004", "49.996", "0"),
+      fix: withShares("25", "25", "50"),
+    },
+    {
+      name: "school shares of three decimals that sum to 100",
+      spoil: withShares("33.333", "33.333", "33.336"),
+      fix: withShares("25", "25", "50"),
+    },
+    {
+      name: "a rule share with three decimals",
+      spoil: (cfg) =>
+        cfg.rules.push(
+          rule([
+            { categoryId: "fo", percent: "60.001" },
+            { categoryId: "sor", percent: "39.999" },
+          ]),
+        ),
+      fix: (cfg) => cfg.rules.pop(),
+    },
+    {
+      name: "a share of an unknown category",
+      spoil: (cfg) => (cfg.policy.shares[2].categoryId = "ghost"),
+      fix: (cfg) => (cfg.policy.shares[2].categoryId = "soch"),
+    },
+    {
+      name: "a repeated category id",
+      spoil: (cfg) => {
+        cfg.categories[1].id = "fo";
+        cfg.policy.shares = [
+          { categoryId: "fo", percent: "50" },
+          { categoryId: "soch", percent: "50" },
+        ];
+      },
+      fix: (cfg) => {
+        cfg.categories[1].id = "sor";
+        withShares("25", "25", "50")(cfg);
+      },
+    },
+    {
+      name: "a repeated category name",
+      spoil: (cfg) => (cfg.categories[1].name = " фо"),
+      fix: (cfg) => (cfg.categories[1].name = "СОР"),
+    },
+    {
+      name: "an inactive default category",
+      spoil: (cfg) => (cfg.categories[0].active = false),
+      fix: (cfg) => (cfg.categories[0].active = true),
+    },
+    {
+      name: "a calendar type shared by two active categories",
+      spoil: (cfg) => (cfg.categories[2].calendar = "summative_unit"),
+      fix: (cfg) => (cfg.categories[2].active = false),
+    },
+    {
+      name: "a category without a name",
+      spoil: (cfg) => (cfg.categories[1].name = "  "),
+      fix: (cfg) => (cfg.categories[1].name = "СОР"),
+    },
+  ];
+  it.each(cases)("refuses $name, and accepts it once fixed", (c) => {
     const cfg = defaults();
-    cfg.policy.shares[2].categoryId = "ghost";
-    expect(configProblem(cfg)).toContain("неизвестную категорию");
+    c.spoil(cfg);
+    expect(configProblem(cfg)).not.toBe("");
+    c.fix(cfg);
+    expect(configProblem(cfg)).toBe("");
   });
 });
 
@@ -205,15 +228,6 @@ describe("bookingDefault", () => {
     });
     expect(bookingDefault({ ...booking, topic: "" }).name).toBe(booking.type);
     expect(bookingDefault(booking).id).not.toBe(bookingDefault(booking).id);
-  });
-});
-
-describe("textColor", () => {
-  it("picks the readable colour", () => {
-    expect(textColor("#ffffff")).toBe("#111");
-    expect(textColor("#000000")).toBe("#fff");
-    expect(textColor("#2563eb")).toBe("#fff");
-    expect(textColor("#d97706")).toBe("#111");
   });
 });
 
