@@ -260,20 +260,21 @@ async function launcherBehaviour(page, activity, kit, problems, role) {
     await closeOverlays(page);
   }
   // The actions that start an editor: the editor is on screen when the action has run.
-  // «Новая оценка / работа» opens the grades of the courses; the editor of the work comes with the course chosen there.
+  // «Новая оценка / работа» opens the grades of the courses; «Новое назначение» opens with the course chosen there.
   const pickCourse = () => page.getByRole("button", { name: /7А · Математика/ }).first().click({ timeout: 3000 });
   const editors = [
     ["Новое сообщение", ".message-compose"],
     ["Создать тест", "text=Новый тест"],
     ["Тема урока и посещаемость", ".journal-editor"],
     ["Добавить домашнее задание", ".journal-editor"],
-    ["Новая оценка / работа", ".journal-editor", pickCourse],
+    ["Новая оценка / работа", "[role=dialog][aria-label=\"Новое назначение\"]", pickCourse],
     ["Воспитательная мера", "dialog[open] >> text=Новая запись"],
     ["Записки об отсутствии", ".absence-panel[open]"],
   ];
   for (const [label, editor, next] of editors) {
-    // The administrator keeps no lessons of their own, so the day alone opens for the lesson actions.
-    if (!all.includes(label) || (role === "admin" && editor === ".journal-editor")) continue;
+    // The administrator keeps no lessons or courses of their own: the day alone opens for the lesson actions, and the
+    // grades open without «Новое назначение», which only the teacher of the course may add.
+    if (!all.includes(label) || (role === "admin" && (editor === ".journal-editor" || next === pickCourse))) continue;
     await kit.home();
     await button.click({ timeout: 3000 });
     await page.keyboard.type(label);

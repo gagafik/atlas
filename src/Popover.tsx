@@ -13,17 +13,21 @@ const FOCUSABLE =
 export default function Popover({
   title,
   onClose,
+  focus,
   children,
 }: {
   title: string;
   onClose: () => void;
+  // The field to start in (a form); without it focus starts on the close button.
+  focus?: string;
   children: ReactNode;
 }) {
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const dialog = useRef<HTMLDivElement | null>(null);
   const closeButton = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
-    closeButton.current?.focus();
+    const start = focus && dialog.current?.querySelector<HTMLElement>(focus);
+    (start || closeButton.current)?.focus();
     return () => {
       if (opener?.isConnected) opener.focus();
     };

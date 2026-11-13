@@ -7,14 +7,19 @@ import {
   commitCell,
   courseCsv,
   defaultCoursePeriod,
+  defaultLesson,
   editable,
   lessonBodies,
+  lessonChoices,
+  newWorkBody,
   nextCell,
   openCell,
   parseCell,
   parsePaste,
   spread,
   type CoursePupil,
+  type NewWorkForm,
+  type OfferedLesson,
   type CourseTable,
   type Edit,
   type Edits,
@@ -536,5 +541,82 @@ describe("spread", () => {
     expect(
       spread(pupil("p1", [0], { marks: marks(8, "", null) }), table()),
     ).toBeNull();
+  });
+});
+
+describe("the new assignment dialog", () => {
+  const offered = (
+    key: string,
+    day: string,
+    start: string,
+    full = false,
+  ): OfferedLesson => ({
+    lessonKey: key,
+    day,
+    start,
+    end: "10:00",
+    version: 0,
+    works: full ? 10 : 0,
+    full,
+  });
+  const form = (change: Partial<NewWorkForm> = {}): NewWorkForm => ({
+    lessonKey: "k1",
+    title: " СОР 1 ",
+    category: "sor",
+    kind: "points",
+    maxScore: "20,5",
+    weight: "2",
+    customWeight: "",
+    ...change,
+  });
+
+  it("lists the newest day first and tells two lessons of one day by their time", () => {
+    const choices = lessonChoices([
+      offered("a", "2026-10-05", "09:00"),
+      offered("b", "2026-10-07", "09:00"),
+      offered("c", "2026-10-07", "11:00"),
+    ]);
+    expect(choices.map((c) => c.value)).toEqual(["c", "b", "a"]);
+    expect(choices[0].label).not.toBe(choices[1].label);
+    expect(choices[2].label).not.toContain("09:00");
+  });
+
+  it("starts on the latest lesson that can still take a work", () => {
+    expect(
+      defaultLesson([
+        offered("a", "2026-10-05", "09:00"),
+        offered("b", "2026-10-07", "09:00", true),
+      ]),
+    ).toBe("a");
+    expect(defaultLesson([])).toBe("");
+  });
+
+  it("builds the request from the form and refuses a form the server would refuse", () => {
+    const ok = newWorkBody(form());
+    expect(ok).toEqual({
+      body: {
+        lessonKey: "k1",
+        title: "СОР 1",
+        category: "sor",
+        kind: "points",
+        maxScore: 20.5,
+        weight: 2,
+      },
+    });
+    expect(
+      newWorkBody(form({ weight: "custom", customWeight: "0,25" })),
+    ).toMatchObject({ body: { weight: 0.25 } });
+    for (const bad of [
+      form({ title: "  " }),
+      form({ maxScore: "0" }),
+      form({ maxScore: "" }),
+      form({ weight: "custom", customWeight: "101" }),
+      form({ lessonKey: "" }),
+    ])
+      expect(newWorkBody(bad)).toHaveProperty("error");
+    // A text grade has no maximum to check.
+    expect(newWorkBody(form({ kind: "label", maxScore: "" }))).toHaveProperty(
+      "body",
+    );
   });
 });

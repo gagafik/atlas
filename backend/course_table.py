@@ -6,18 +6,20 @@ from collections import defaultdict
 import json
 from copy import deepcopy
 from datetime import date, timedelta
+from typing import Literal
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import Field, ValidationError, model_validator
 
 from . import class_staff
 from .access import now
-from .assessment_categories import GREY, breakdown, category_of, composite, config as category_config, dump, merge, policy_for, tally
+from .assessment_categories import GREY, breakdown, category_of, composite, config as category_config, dump, merge, policy_for, resolve_content, tally
 from .calendar_ops import plain
 from .homework import course_teachers
 from .homework_bulk import remember, replay
-from .journal import Content, Grade, PupilRecord, current_lesson, key_for, signature, staff_read, user_ids
-from .journal_periods import require_open
+from .journal import Assessment, Content, Grade, PupilRecord, current_lesson, key_for, signature, staff_read, user_ids
+from .journal_periods import locks, require_open
 from .models import Model
 from .natural import natural
 from .notifications import encoded
@@ -26,6 +28,8 @@ from .resources import teacher_ids
 GONE='Урока больше нет в расписании или он отменён.'
 FOREIGN='Урок вёл другой учитель: оценку ставит он или администратор.'
 DENIED='Таблица курса доступна учителю курса, классному руководителю и администратору.'
+NOT_OURS='Урок не относится к этому курсу.'
+MAX_WORKS=10
 STALE='Журнал урока уже изменён. Таблица обновлена: проверьте и сохраните снова.'
 ENTRIES=("SELECT * FROM journal_entries WHERE workspace=? AND json_extract(document,'$.lesson.groupId')=? AND json_extract(document,'$.lesson.subjectId')=? "
          "AND (json_extract(document,'$.lesson.date') BETWEEN ? AND ? OR json_extract(published_document,'$.lesson.date') BETWEEN ? AND ?)")
@@ -63,6 +67,23 @@ class CourseSave(Model):
     def distinct(self):
         if len({l.lessonKey for l in self.lessons})!=len(self.lessons): raise ValueError('Урок указан несколько раз.')
         return self
+
+
+class NewAssessment(Model):
+    requestId: str = Field(pattern=r'^[a-f0-9-]{36}$')
+    groupId: str = Field(min_length=1,max_length=100)
+    subjectId: str = Field(min_length=1,max_length=100)
+    revision: int = Field(ge=0)
+    day: date
+    lessonKey: str = Field(min_length=64,max_length=64)
+    # The lesson's version as the client read it; 0 for a lesson that has no journal yet.
+    version: int = Field(ge=0)
+    # The limits and the empty category are the journal's own: the work is built and checked by journal.Assessment and resolve_content.
+    title: str = Field(min_length=1,max_length=100)
+    category: str = Field(default='',max_length=40)
+    kind: Literal['points','label'] = 'points'
+    maxScore: float = 10
+    weight: float = 1
 
 
 def touches(group, students, led):
@@ -184,7 +205,7 @@ def finals_of(db, snap, user, workspace, period, subject, pupils):
 
 def last_lesson(snap, user, workspace, group, subject):
     """{lessonKey, day} of the latest lesson of the course up to today that is not cancelled and that this account opens, else None.
-    Works are added in a lesson, so «Новая работа» goes here whatever the period of the table holds."""
+    The latest lesson to add a work in the lesson editor, whatever the period of the table holds (the older path; the dialog «Новое назначение» lists lessons itself)."""
     from .journal import today
     state=snap.state;rows=snap.course_rows(group,subject)
     day=min(today(),state.settings.yearEnd)
@@ -301,7 +322,7 @@ class CourseTable:
         previous=self.journal.find(workspace,item.lessonKey,db)
         if previous is None: raise HTTPException(409,'Урок изменился: в нём ещё нет сохранённых работ.')
         stored=previous['document']['lesson']
-        if stored['groupId']!=group or stored['subjectId']!=subject: raise HTTPException(403,'Урок не относится к этому курсу.')
+        if stored['groupId']!=group or stored['subjectId']!=subject: raise HTTPException(403,NOT_OURS)
         if previous['version']!=item.version: raise HTTPException(409,STALE)
         # Publishing everything pending never brings back a lesson the teacher hid: it needs a mark typed in the table.
         if publish and not previous['published'] and not item.cells and self.withdrawn(db,workspace,item.lessonKey): return 'unchanged',item.lessonKey
@@ -340,6 +361,59 @@ class CourseTable:
         updated,published=store_marks(self.journal,db,workspace,item.lessonKey,user,state.revision,item.version+1,draft,previous,publish,created)
         if updated is None: return 'unchanged',item.lessonKey
         return 'saved',dict(lessonKey=item.lessonKey,version=updated['version'],publishedVersion=updated['publishedVersion'],cells=len(item.cells),published=published)
+
+    def offered(self, db, user, snap, workspace, group, subject, start, end):
+        """The lessons of the course in start..end where a work can be added now, oldest first: the days the table itself opens for marks.
+        A lesson with a journal answers by editing_problem, the same rule as the table and the save; one that has none yet by the rules that remain for it."""
+        from .journal import today
+        state=snap.state;rows=snap.course_rows(group,subject)
+        day=max(start,state.settings.yearStart);stop=min(end,today(),state.settings.yearEnd)
+        found=[]
+        while day<=stop:
+            for row in rows(day):
+                if row['status']=='cancelled' or not staff_read(user,workspace,row): continue
+                key=key_for(row);previous=self.journal.find(workspace,key,db)
+                if previous:
+                    current=current_lesson(state,previous['document']['lesson'],rows)
+                    record=self.journal.resolved_entry(state,workspace,user,key,previous,current,db=db)
+                    if editing_problem(record,True,current): continue
+                elif locks(db,workspace,dict(date=day.isoformat(),sourceKey=row['id'])): continue
+                count=len(previous['document']['content']['assessments']) if previous else 0
+                found.append(dict(lessonKey=key,day=day.isoformat(),start=row['start'],end=row['end'],version=previous['version'] if previous else 0,works=count,full=count>=MAX_WORKS))
+            day+=timedelta(days=1)
+        found.sort(key=lambda l:(l['day'],l['start'],l['lessonKey']))
+        return found
+
+    def add_assessment(self, db, user, snap, workspace, body, created):
+        """One new work in the draft of one lesson of the course, written as the lesson editor writes it: the same checks, one ordinary draft revision."""
+        state=snap.state
+        rows=snap.course_rows(body.groupId,body.subjectId)
+        previous=self.journal.find(workspace,body.lessonKey,db)
+        if previous:
+            stored=previous['document']['lesson']
+            if stored['groupId']!=body.groupId or stored['subjectId']!=body.subjectId: raise HTTPException(403,NOT_OURS)
+            current=current_lesson(state,stored,rows)
+        else:
+            current=next((r for r in rows(body.day) if key_for(r)==body.lessonKey),None)
+            if not current: raise HTTPException(403,NOT_OURS)
+        if (previous['version'] if previous else 0)!=body.version: raise HTTPException(409,STALE)
+        record=self.journal.resolved_entry(state,workspace,user,body.lessonKey,previous,current,db=db)
+        old=previous['published'] if previous else None
+        require_open(db,workspace,record['document']['lesson'],old['lesson'] if old else None,current)
+        problem=editing_problem(record,state.settings.yearStart<=body.day<=state.settings.yearEnd,current)
+        if problem: raise HTTPException(*problem)
+        if record['currentDate']!=body.day.isoformat(): raise HTTPException(409,'Урок перенесён на другую дату. Загрузите его заново.')
+        draft=deepcopy(previous['document'] if previous else record['document'])
+        works=draft['content']['assessments']
+        if len(works)>=MAX_WORKS: raise HTTPException(422,f'В уроке уже {MAX_WORKS} работ: это предел. Удалите лишнюю в редакторе урока.')
+        try:
+            works.append(Assessment(id=str(uuid4()),name=body.title,kind=body.kind,maxScore=body.maxScore,weight=body.weight,category=body.category).model_dump(mode='json'))
+            Content.model_validate(draft['content'])
+        except ValidationError as exc: raise HTTPException(422,plain(exc)) from None
+        draft['content']=resolve_content(db,workspace,body.lessonKey,draft['content'],previous,user)
+        updated=self.journal.store_revision(db,workspace,body.lessonKey,user,state.revision,body.version+1,draft,previous,created=created)
+        work=draft['content']['assessments'][-1]
+        return dict(lessonKey=body.lessonKey,day=body.day.isoformat(),version=updated['version'],publishedVersion=updated['publishedVersion'],assessmentId=work['id'],index=len(draft['content']['assessments'])-1,category=work['category'],published=False)
 
     def register(self, app, Workspace):
         journal,snapshots=self.journal,self.snapshots
@@ -397,6 +471,35 @@ class CourseTable:
             found=last_lesson(snap,user,workspace,groupId,subjectId)
             if not found: raise HTTPException(404,'В курсе нет прошедшего урока.')
             return found
+
+        @app.get('/api/journal/course-table/lessons')
+        def offered(request: Request,groupId: str,subjectId: str,start: date,end: date,workspace: Workspace='school'):
+            user=journal.scope(request,workspace,staff=True)
+            if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
+            snap=snapshots.get(workspace)
+            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса.')
+            def read(db):
+                journal.recheck_read(db,user,snap,workspace)
+                return dict(revision=snap.state.revision,lessons=self.offered(db,user,snap,workspace,groupId,subjectId,start,end))
+            return journal.reading(read)
+
+        @app.post('/api/journal/course-table/assessments')
+        def add(body: NewAssessment,request: Request,workspace: Workspace='school'):
+            user=journal.scope(request,workspace,staff=True)
+            snap=snapshots.get(workspace);state=snap.state
+            if not course_scope(user,snap,workspace,body.groupId,body.subjectId)['canEdit']: raise HTTPException(403,'Работы в таблице курса добавляет учитель курса.')
+            if not state.settings.yearStart<=body.day<=state.settings.yearEnd: raise HTTPException(422,'Дата вне учебного года.')
+            # Resolve the day before the writer lock, so the lock is held for writing only.
+            snap.course_rows(body.groupId,body.subjectId)(body.day)
+            with self.access.lock,self.access.connect() as db:
+                self.homework.tables(db)
+                if not db.in_transaction: db.execute('BEGIN IMMEDIATE')
+                journal.recheck_account(db,user)
+                request_key,stored=replay(db,user,'journal.course_assessment',[workspace,body.groupId,body.subjectId],body)
+                if stored is not None: return stored
+                revision=db.execute('SELECT revision FROM workspaces WHERE id=?',(workspace,)).fetchone()
+                if not revision or revision[0]!=body.revision or revision[0]!=state.revision: raise HTTPException(409,'Расписание изменилось. Обновите таблицу.')
+                return remember(db,user,body,request_key,self.add_assessment(db,user,snap,workspace,body,now().isoformat()))
 
         @app.post('/api/journal/course-table/save')
         def save(body: CourseSave,request: Request,workspace: Workspace='school'):

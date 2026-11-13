@@ -155,6 +155,13 @@ export function createKit({ page, base, activity, miss, log = () => {}, shots })
       await box.check({ timeout: 3000 }).catch(() => miss(`tick box: ${label}`));
       await settle();
     },
+    // A text field by its label.
+    async fill(label, text) {
+      const field = page.getByLabel(label).filter({ visible: true }).first();
+      if (!(await field.count())) return miss(`no field: ${label}`);
+      await field.fill(text, { timeout: 3000 }).catch(() => miss(`field: ${label}`));
+      await settle();
+    },
     // The text is on the page (a journey step that shows something).
     async see(text) {
       const target = page.getByText(text).filter({ visible: true }).first();
@@ -444,10 +451,13 @@ export const journeys = {
     // The head of a work column opens the lesson it was given in.
     await kit.click(WORK_LESSON);
     await kit.snap("work-lesson");
-    // A new work is added in the latest lesson of the course, which opens in the journal.
+    // «Новое назначение» opens its dialog; the write is refused by the demo and the dialog shows the refusal.
     await kit.path("Оценки", /7А · Математика/);
-    await kit.click("Новая работа");
+    await kit.click("Новое назначение");
     await kit.snap("new-work");
+    await kit.fill("Название", "Суммативная работа");
+    await kit.click("Добавить");
+    await kit.snap("new-work-refused");
     // The pupils ticked: the form of a note opens with them. It asks before it is closed with pupils in it, so the next path leaves it by reloading.
     await kit.path("Оценки", /7А · Математика/);
     await kit.check("Выбрать всех учеников");

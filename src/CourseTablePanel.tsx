@@ -3,6 +3,7 @@ import type { ClipboardEvent, KeyboardEvent } from "react";
 import { ExternalLink, EyeOff, Lock } from "lucide-react";
 import { api } from "./api";
 import CategoryBadge from "./CategoryBadge";
+import CourseAssignmentDialog, { type Created } from "./CourseAssignmentDialog";
 import {
   afterSave,
   applyPaste,
@@ -13,6 +14,7 @@ import {
   defaultCoursePeriod,
   editKey,
   editable,
+  firstOpenRow,
   lessonBodies,
   markText,
   nextCell,
@@ -134,14 +136,33 @@ export default function CourseTablePanel({
     };
   }, [dirty]);
 
-  // «Новая оценка / работа» of the launcher: once the table of the course is on screen, «Новая работа» is pressed for the teacher.
-  const [newWorkAsked, setNewWorkAsked] = useState(false);
+  // «Новая оценка / работа» of the launcher: once the table of the course is on screen, «Новое назначение» is pressed for the teacher.
+  const [newWorkAsked, setNewWorkAsked] = useState(false),
+    [assigning, setAssigning] = useState(false),
+    // The work just added: the cursor goes to the first cell of its column once the reloaded table holds it.
+    [added, setAdded] = useState<Created | null>(null);
   useLaunch(["newWork"], () => setNewWorkAsked(true));
   useEffect(() => {
     if (!newWorkAsked || !table) return;
     setNewWorkAsked(false);
-    if (table.canEdit) void newWork();
+    if (table.canEdit) assign();
   }, [newWorkAsked, table]);
+  useEffect(() => {
+    if (!added || !table || frozen) return;
+    const col = table.works.findIndex(
+      (w) =>
+        w.id === added.assessmentId &&
+        table.lessons[w.lesson].lessonKey === added.lessonKey,
+    );
+    // The table on screen may be the one from before the work was added: wait for the reload.
+    if (col < 0) return;
+    setAdded(null);
+    document
+      .querySelector(`th[data-col="${col}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "center" });
+    const row = firstOpenRow(table, col);
+    if (row >= 0) activate({ row, col });
+  }, [added, table, frozen]);
   useEffect(() => {
     if (!expanded || list) return;
     let live = true;
@@ -433,23 +454,24 @@ export default function CourseTablePanel({
     setBusy(false);
     setReload((n) => n + 1);
   }
-  // Works belong to lessons: the latest lesson of the course up to today opens in the journal, where «Добавить работу» is.
-  async function newWork() {
-    if (!table || busy || !leave()) return;
-    setBusy(true);
-    setError("");
-    const [groupId, subjectId] = course.split("|");
-    try {
-      const r = await api(
-        `journal/course-table/latest?${new URLSearchParams({ groupId, subjectId })}`,
-        workspace,
-      );
-      onOpen(r.lessonKey, r.day);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
+  // «Новое назначение»: the dialog adds a draft work to a lesson of the course. Typed marks stay: the table reloads under them.
+  function assign() {
+    if (!table || busy) return;
+    commit(text);
+    setActive(null);
+    setAssigning(true);
+  }
+  function assigned(made: Created) {
+    setAssigning(false);
+    setAdded(made);
+    setProblems([]);
+    setNote({
+      text: `Назначение «${made.title}» добавлено черновиком. Поставьте оценки и нажмите «Опубликовать»: до этого ученики и родители его не видят.`,
+    });
+    // A day the widened search found may lie outside the period of the table: the period grows to hold it.
+    if (made.day < start) setStart(made.day);
+    if (made.day > end) setEnd(made.day);
+    setReload((n) => n + 1);
   }
   function refresh() {
     setError("");
@@ -678,10 +700,10 @@ export default function CourseTablePanel({
               <>
                 <button
                   disabled={busy}
-                  title="Откроет последний прошедший урок курса: работы добавляются в нём"
-                  onClick={() => void newWork()}
+                  title="Добавить в таблицу работу для ФО, СОР или СОЧ"
+                  onClick={assign}
                 >
-                  Новая работа
+                  Новое назначение
                 </button>
                 <button
                   disabled={busy || !sendable}
@@ -727,6 +749,21 @@ export default function CourseTablePanel({
               Печать
             </button>
           </div>
+          {assigning && table.canEdit && (
+            <CourseAssignmentDialog
+              workspace={workspace}
+              groupId={table.groupId}
+              subjectId={table.subjectId}
+              start={table.start}
+              end={table.end}
+              year={{
+                start: list?.yearStart ?? start,
+                end: list?.yearEnd ?? end,
+              }}
+              onClose={() => setAssigning(false)}
+              onCreated={assigned}
+            />
+          )}
           {note && (
             <p
               role={note.alert ? "alert" : "status"}
@@ -754,8 +791,8 @@ export default function CourseTablePanel({
           )}
           {!table.works.length ? (
             <p className="empty-state">
-              В этом курсе за период нет работ. Работы добавляются в уроке в
-              журнале дня.
+              В этом курсе за период нет работ.
+              {table.canEdit && " Добавьте первую кнопкой «Новое назначение»."}
             </p>
           ) : (
             <div className="course-table-scroll">

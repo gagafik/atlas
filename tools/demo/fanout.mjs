@@ -147,11 +147,10 @@ async function courseTables(r) {
       const table = { groupId: course.groupId, subjectId: course.subjectId, start: period.start, end: period.end, periodId: period.id };
       await r.get(`/api/journal/course-table?${q(scale ? { ...table, scaleId: scale.id } : table)}`);
       await r.get(`/api/behaviour/summary?${q({ start: period.start, end: period.end, subjectId: course.subjectId })}`);
+      // «Новое назначение» of a course the account teaches: the lessons its dialog lists for the period.
+      if (course.canEdit) await r.get(`/api/journal/course-table/lessons?${q({ groupId: course.groupId, subjectId: course.subjectId, start: period.start, end: period.end })}`);
       count += 1;
     }
-  // «Новая работа» of the courses the account teaches: the latest lesson to open.
-  for (const course of picker.courses || [])
-    if (course.canEdit) await r.get(`/api/journal/course-table/latest?${q({ groupId: course.groupId, subjectId: course.subjectId })}`);
   r.log(`  course tables: ${count}`);
 }
 
