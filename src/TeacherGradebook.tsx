@@ -7,7 +7,7 @@ import "./CourseTable.css";
 const KIND: Record<CourseKind, string> = {
   course: "Мой курс",
   class: "Классный руководитель — только чтение",
-  admin: "Администратор — только чтение",
+  admin: "Администратор",
 };
 // A school has hundreds of courses; the page shows a screenful and the search narrows it.
 const SHOWN = 120;
@@ -129,7 +129,9 @@ export default function TeacherGradebook({
               <small className="pupil-muted">{c.teachers.join(", ")}</small>
             )}
             <span className={`badge gradebook-kind gradebook-kind-${c.kind}`}>
-              {KIND[c.kind]}
+              {c.kind === "admin" && !c.canEdit
+                ? "Администратор — только чтение"
+                : KIND[c.kind]}
             </span>
           </button>
         ))}

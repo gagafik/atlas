@@ -92,13 +92,17 @@ def touches(group, students, led):
     return any(students[id].classId in led for id in group.studentIds if id in students)
 
 
+# The scopes that read and write the drafts: the teacher of the course and the administrator, who edits every gradebook.
+DRAFTS=('course','admin')
+
+
 def course_scope(user, snap, workspace, group, subject):
-    """What this account may do in the course: teachers of the workload edit; the administrator and the class teacher only read."""
+    """What this account may do in the course: teachers of the workload and the administrator edit; the class teacher only reads."""
     state=snap.state
     if not any(w.groupId==group and w.subjectId==subject for w in state.workloads): raise HTTPException(404,'Курс не найден.')
     own=user_ids(user,workspace,'teacher') if user['role']=='teacher' else set()
     if own&course_teachers(state,dict(groupId=group,subjectId=subject)): return dict(kind='course',canEdit=True,classes=None)
-    if user['role']=='admin': return dict(kind='admin',canEdit=False,classes=None)
+    if user['role']=='admin': return dict(kind='admin',canEdit=True,classes=None)
     led=class_staff.led(user,snap,workspace)
     if led and touches(snap.entities['group'][group],snap.entities['student'],led): return dict(kind='class',canEdit=False,classes=led)
     raise HTTPException(403,DENIED)
@@ -266,7 +270,7 @@ def build_table(snap, cfg, scope, group, subject, start, end, shown, revision, s
                          blocked=total['blocked'],missing=total['missing'],excluded=total['excluded'],rule=policy['ruleName']))
         if scale is not None: rows[-1]['computed']=computed(sums,policy,scale)
     return dict(revision=revision,groupId=group,group=snap.entities['group'][group].name,subjectId=subject,subject=next(s.name for s in snap.state.subjects if s.id==subject),
-                scope=scope['kind'],canEdit=scope['canEdit'],source='draft' if scope['kind']=='course' else 'published',start=start.isoformat(),end=end.isoformat(),
+                scope=scope['kind'],canEdit=scope['canEdit'],source='draft' if scope['kind'] in DRAFTS else 'published',start=start.isoformat(),end=end.isoformat(),
                 categories=categories,lessons=lessons,works=works,pupils=rows)
 
 
@@ -284,7 +288,7 @@ class CourseTable:
     def shown(self, db, user, snap, scope, workspace, group, subject, start, end):
         """The document each lesson contributes, with what the table needs to know about it. Only a course teacher's read resolves schedule days."""
         state=snap.state
-        course=scope['kind']=='course'
+        course=scope['kind'] in DRAFTS
         rows=snap.course_rows(group,subject) if course else None
         year=state.settings.yearStart.isoformat(),state.settings.yearEnd.isoformat()
         first,last=start.isoformat(),end.isoformat()
@@ -306,8 +310,8 @@ class CourseTable:
                               withdrawn=not old and self.withdrawn(db,workspace,existing['lessonKey']),openable=True)
                 # The lesson editor opens what resolved_entry lets this account read; a lesson of a substitute alone is refused there.
                 elif old: item=dict(draft=False,document=old,editable=False,reason=FOREIGN,frozen=False,pending=False,withdrawn=False,openable=record is not None)
-            # Only a teacher of the lesson, or the administrator, opens it in the journal: the class teacher reads marks here and nowhere else.
-            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False,withdrawn=False,openable=scope['kind']=='admin')
+            # The class teacher reads marks here and nowhere else: the lesson is not opened for them in the journal.
+            elif old: item=dict(draft=False,document=old,editable=False,reason='',frozen=False,pending=False,withdrawn=False,openable=False)
             if item is None or not first<=item['document']['lesson']['date']<=last or not item['document']['content']['assessments']: continue
             # The published copy of a marked draft tells which marks the families do not see yet.
             grades={(r['studentId'],g['assessmentId']):g for r in old['content']['records'] for g in r['grades']} if item['draft'] and old else {}
@@ -434,7 +438,7 @@ class CourseTable:
             for w in state.workloads: found.setdefault((w.groupId,w.subjectId),[]).append(w)
             items=[]
             for (group,subject),loads in found.items():
-                if user['role']=='admin': kind,edit='admin',False
+                if user['role']=='admin': kind,edit='admin',True
                 elif own&course_teachers(state,dict(groupId=group,subjectId=subject)): kind,edit='course',True
                 elif led and touches(groups[group],students,led): kind,edit='class',False
                 else: continue
@@ -465,7 +469,7 @@ class CourseTable:
         def latest(request: Request,groupId: str,subjectId: str,workspace: Workspace='school'):
             user=journal.scope(request,workspace,staff=True)
             snap=snapshots.get(workspace)
-            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса.')
+            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса или администратор.')
             # The schedule snapshot answers; the read only confirms that the account and the revision it was authorized with still hold.
             journal.reading(lambda db: journal.recheck_read(db,user,snap,workspace))
             found=last_lesson(snap,user,workspace,groupId,subjectId)
@@ -477,7 +481,7 @@ class CourseTable:
             user=journal.scope(request,workspace,staff=True)
             if end<start or (end-start).days>366: raise HTTPException(422,'Выберите период до 367 дней.')
             snap=snapshots.get(workspace)
-            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса.')
+            if not course_scope(user,snap,workspace,groupId,subjectId)['canEdit']: raise HTTPException(403,'Работы добавляет учитель курса или администратор.')
             def read(db):
                 journal.recheck_read(db,user,snap,workspace)
                 return dict(revision=snap.state.revision,lessons=self.offered(db,user,snap,workspace,groupId,subjectId,start,end))
@@ -487,7 +491,7 @@ class CourseTable:
         def add(body: NewAssessment,request: Request,workspace: Workspace='school'):
             user=journal.scope(request,workspace,staff=True)
             snap=snapshots.get(workspace);state=snap.state
-            if not course_scope(user,snap,workspace,body.groupId,body.subjectId)['canEdit']: raise HTTPException(403,'Работы в таблице курса добавляет учитель курса.')
+            if not course_scope(user,snap,workspace,body.groupId,body.subjectId)['canEdit']: raise HTTPException(403,'Работы в таблице курса добавляет учитель курса или администратор.')
             if not state.settings.yearStart<=body.day<=state.settings.yearEnd: raise HTTPException(422,'Дата вне учебного года.')
             # Resolve the day before the writer lock, so the lock is held for writing only.
             snap.course_rows(body.groupId,body.subjectId)(body.day)
@@ -505,7 +509,7 @@ class CourseTable:
         def save(body: CourseSave,request: Request,workspace: Workspace='school'):
             user=journal.scope(request,workspace,staff=True)
             snap=snapshots.get(workspace);state=snap.state
-            if not course_scope(user,snap,workspace,body.groupId,body.subjectId)['canEdit']: raise HTTPException(403,'Оценки в таблице курса ставит учитель курса.')
+            if not course_scope(user,snap,workspace,body.groupId,body.subjectId)['canEdit']: raise HTTPException(403,'Оценки в таблице курса ставит учитель курса или администратор.')
             # Resolve the days before the writer lock, so the lock is held for writing only.
             rows=snap.course_rows(body.groupId,body.subjectId)
             for item in body.lessons: rows(item.day)

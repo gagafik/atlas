@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from uuid import uuid4
 import pytest
 from fastapi import HTTPException
-from backend import api, course_table, journal, journal_periods, journal_reads, timetable_history
+from backend import api, course_table, families, journal, journal_periods, journal_reads, school_years, timetable_history
 from backend.course_table import CourseSave
 from backend.models import DatedLesson, Student
 from test_access import client, enable, create, signed
@@ -11,6 +11,7 @@ from test_journal import DAY, entry, write, report
 from test_journal_history import clock, resave, card, ENGLISH, NEXT  # noqa: F401
 from test_journal_periods import period, close
 from test_assessment_categories import put_config, shares
+from test_school_years import rolled as rolled_year, SUMMER  # noqa: F401
 from test_final_grades import seeded, scale, propose, publish, stop_gradebook_jobs  # noqa: F401
 
 URL = '/api/journal/course-table'
@@ -188,7 +189,7 @@ def test_class_teacher_reads_only_published_marks_of_own_class(client, clock):
     assert ok(head.get(URL + '/courses?workspace=demo'))['courses'][0]['kind'] == 'class'
 
 
-def test_admin_and_class_teacher_read_the_publication_not_a_newer_draft(client, clock):
+def test_class_teacher_reads_the_publication_not_a_newer_draft_and_the_administrator_the_draft(client, clock):
     math, head = mathematics(client)
     course(math, DAY, [work('m')], dict(m=dict(s1=8, s3=9)), publish=True, subject=MATH, group=MATH_GROUP)
     t = ok(table(math, 'g-math', 'sub0'))
@@ -199,10 +200,11 @@ def test_admin_and_class_teacher_read_the_publication_not_a_newer_draft(client, 
     assert write(math, record).status_code == 200
     own = ok(table(math, 'g-math', 'sub0'))
     assert [w['id'] for w in own['works']] == ['m', 'draft'] and mark(own, 's1', DAY, 'm') == dict(score=3, label='', comment='', unpublished=True)
-    for reader in (client, head):
-        t = ok(table(reader, 'g-math', 'sub0'))
-        assert [w['id'] for w in t['works']] == ['m'] and mark(t, 's1', DAY, 'm') == dict(score=8, label='', comment='')
-        assert pupil(t, 's1')['sharePercentage'] == 80 and not column(t, DAY)['hasUnpublished']
+    t = ok(table(head, 'g-math', 'sub0'))
+    assert [w['id'] for w in t['works']] == ['m'] and mark(t, 's1', DAY, 'm') == dict(score=8, label='', comment='')
+    assert pupil(t, 's1')['sharePercentage'] == 80 and not column(t, DAY)['hasUnpublished']
+    # The administrator edits every gradebook: the table shows the draft exactly as it shows it to the course teacher.
+    assert ok(table(client, 'g-math', 'sub0')) | dict(scope='') == own | dict(scope='')
 
 
 def test_class_teacher_sees_marks_by_the_class_of_the_day(client, clock):
@@ -243,9 +245,13 @@ def test_moved_lesson_is_read_by_its_published_date(client, clock):
                                                           onDate=date(2026, 8, 18), startTime='14:00', endTime='14:40')]))
     assert write(teacher, entry(teacher, first['lessonKey'], syncRoster='true'), syncRoster=True).status_code == 200
     moved = '2026-08-18'
+    create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
+    lead('t1')
+    head = signed('lead')
     # The draft is dated after the move, the publication still on the old day: each reader finds the lesson by the copy it reads.
-    assert [l['day'] for l in ok(table(client, start=DAY, end=DAY))['lessons']] == [DAY]
-    assert ok(table(client, start=moved, end=moved))['lessons'] == []
+    assert [l['day'] for l in ok(table(head, start=DAY, end=DAY))['lessons']] == [DAY]
+    assert ok(table(head, start=moved, end=moved))['lessons'] == []
+    assert [l['day'] for l in ok(table(client, start=moved, end=moved))['lessons']] == [moved]
     assert [l['day'] for l in ok(table(teacher, start=moved, end=moved))['lessons']] == [moved]
     assert ok(table(teacher, start=DAY, end=DAY))['lessons'] == []
 
@@ -284,22 +290,23 @@ def test_admin_and_course_lists(client, clock):
     create(client, 'teacher', login='unrelated', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
     course(teacher, DAY, [work('a')], dict(a=dict(s1=8)))
     admin = ok(table(client))
-    # The administrator reads published marks only.
-    assert admin['canEdit'] is False and admin['source'] == 'published' and admin['scope'] == 'admin' and admin['lessons'] == []
+    # The administrator edits every gradebook and sees the drafts of the teacher.
+    assert admin['canEdit'] is True and admin['source'] == 'draft' and admin['scope'] == 'admin' and len(admin['lessons']) == 1 and admin['lessons'][0]['editable']
     own = ok(teacher.get(URL + '/courses?workspace=demo'))
     assert [(c['groupId'], c['subjectId'], c['kind'], c['canEdit']) for c in own['courses']] == [('g-a', 'sub2', 'course', True), ('g-d', 'sub2', 'course', True)]
     assert own['yearStart'] == '2026-08-17' and own['revision'] == api.read('demo').revision
     other = ok(signed('unrelated').get(URL + '/courses?workspace=demo'))
     assert [(c['groupId'], c['subjectId']) for c in other['courses']] == [('g-core', 'sub1')]
     everything = ok(client.get(URL + '/courses?workspace=demo'))['courses']
-    assert len(everything) == 6 and {c['kind'] for c in everything} == {'admin'}
+    assert len(everything) == 6 and {(c['kind'], c['canEdit']) for c in everything} == {('admin', True)}
     assert table(teacher, 'g-core', 'sub1').status_code == 403 and table(teacher, 'g-a', 'nope').status_code == 404
     assert table(client, end='2028-01-01').status_code == 422
 
 
-def test_local_mode_without_accounts_reads_as_administrator(client, clock):
+def test_local_mode_without_accounts_edits_as_administrator(client, clock):
     t = ok(table(client))
-    assert t['canEdit'] is False and t['scope'] == 'admin'
+    assert t['canEdit'] is True and t['scope'] == 'admin'
+    assert {(c['kind'], c['canEdit']) for c in ok(client.get(URL + '/courses?workspace=demo'))['courses']} == {('admin', True)}
 
 
 def published_course(teacher):
@@ -655,7 +662,7 @@ def test_lesson_link_is_offered_only_where_the_journal_opens_the_lesson(client, 
     assert own['openable'] and opens(teacher, own)
 
 
-@pytest.mark.parametrize('login', ['admin', 'lead', 'unrelated', 'parent'])
+@pytest.mark.parametrize('login', ['lead', 'unrelated', 'parent'])
 def test_save_permissions(client, clock, login):
     teacher, _ = staffed(client)
     create(client, 'teacher', login='lead', grants=[dict(workspace='demo', view='teacher', entityIds=['t1'])])
@@ -664,8 +671,7 @@ def test_save_permissions(client, clock, login):
     course(teacher, DAY, [work('a')], dict(a=dict(s1=5)), publish=True)
     t = ok(table(teacher))
     before = stored_versions()
-    who = client if login == 'admin' else signed(login)
-    assert save(who, [edit(t, DAY, ('s1', 'a', 9))]).status_code == 403
+    assert save(signed(login), [edit(t, DAY, ('s1', 'a', 9))]).status_code == 403
     assert stored_versions() == before
 
 
@@ -737,6 +743,74 @@ def test_course_table_rechecks_the_account(client, clock, monkeypatch):
     assert save(fresh, [edit(t, DAY, ('s1', 'a', 9))]).status_code == 409 and stored_versions() == before
     monkeypatch.setattr(api.journal.snapshots, 'get', snapshots)
     assert ok(save(signed('teacher'), [edit(t, DAY, ('s1', 'a', 9))]))['saved']
+
+
+def history_of(c, key):
+    return c.get('/api/journal/history', params=dict(workspace='demo', lessonKey=key)).json()
+
+
+def test_the_administrator_saves_marks_as_a_draft_and_publishes_them_for_the_family(client, clock):
+    teacher, parent = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(client))
+    assert column(t, DAY)['editable'] and mark(t, 's1', DAY, 'a')['score'] == 5
+    seen = report(parent).json()
+    saved = ok(save(client, [edit(t, DAY, ('s1', 'a', 8))]))
+    assert saved['conflicts'] == [] and saved['saved'][0]['published'] is False
+    assert report(parent).json() == seen
+    # The teacher of the course sees the administrator's draft.
+    assert mark(ok(table(teacher)), 's1', DAY, 'a')['score'] == 8
+    t = ok(table(client))
+    done = ok(save(client, [edit(t, DAY)], publish=True))
+    assert done['saved'][0]['published'] is True
+    assert report(parent).json()['rows'][0]['record']['grades'][0]['score'] == 8
+    key = column(t, DAY)['lessonKey']
+    # The history names the administrator as the author of the table's saves, and the teacher as the author of the first one.
+    versions = history_of(client, key)
+    names = [h['actor'] for h in versions]
+    assert len(set(names)) == 2 and names[0] != names[-1]
+
+
+def test_the_administrator_adds_a_work_and_marks_it(client, clock):
+    teacher, parent = staffed(client)
+    lessons = ok(client.get(URL + '/lessons', params=dict(workspace='demo', groupId=G, subjectId=S, start=DAY, end=END)))['lessons']
+    found = next(l for l in lessons if l['day'] == DAY)
+    body = dict(requestId=str(uuid4()), groupId=G, subjectId=S, revision=api.read('demo').revision, day=DAY, lessonKey=found['lessonKey'],
+                version=found['version'], title='СОР 1', category='sor', kind='points', maxScore=20, weight=2)
+    created = ok(client.post(URL + '/assessments?workspace=demo', json=body))
+    t = ok(table(client))
+    assert ok(save(client, [edit(t, DAY, ('s1', created['assessmentId'], 17))], publish=True))['saved'][0]['published'] is True
+    assert report(parent).json()['rows'][0]['record']['grades'][0]['score'] == 17
+
+
+def test_local_mode_without_accounts_saves_and_publishes_marks(client, clock):
+    course(client, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(client))
+    assert ok(save(client, [edit(t, DAY, ('s1', 'a', 9))], publish=True))['saved'][0]['published'] is True
+    assert mark(ok(table(client)), 's1', DAY, 'a')['score'] == 9
+
+
+def test_a_closed_period_still_refuses_the_administrator(client, clock, monkeypatch):
+    monkeypatch.setattr(journal_periods, 'now', lambda: datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
+    teacher, _ = staffed(client)
+    course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
+    t = ok(table(client))
+    close(client, period(client))
+    result = ok(save(client, [edit(t, DAY, ('s1', 'a', 9))]))
+    assert result['saved'] == [] and [c['status'] for c in result['conflicts']] == [403]
+    assert mark(ok(table(teacher)), 's1', DAY, 'a')['score'] == 5
+
+
+@pytest.fixture
+def after_the_year(monkeypatch):
+    monkeypatch.setattr(school_years, 'now', lambda: SUMMER)
+    monkeypatch.setattr(families, 'now', lambda: SUMMER)
+
+
+def test_an_archived_year_still_refuses_the_administrator(client, after_the_year, rolled_year):
+    record = rolled_year['record']
+    result = ok(save(client, [dict(lessonKey=record['lessonKey'], day=DAY, version=record['version'], cells=[cell('s1', 'a', 9)])]))
+    assert result['saved'] == [] and result['conflicts'][0]['message']['reason'] == 'archivedYear'
 
 
 def course_limit():
@@ -843,5 +917,5 @@ def test_new_work_goes_to_the_latest_lesson_of_the_course_even_without_any_work(
         return c.get(URL + '/latest', params=dict(workspace='demo', groupId=G, subjectId=S))
     # Today is Tuesday 1 September, and 10A has English on Mondays: the latest lesson is the one of 31 August.
     assert ok(latest(teacher)) == dict(lessonKey=card(teacher, '2026-08-31')['lessonKey'], day='2026-08-31')
-    # Only a teacher of the course adds works: the administrator and a colleague of another course do not.
-    assert latest(client).status_code == 403 and latest(signed('second')).status_code == 403
+    # Only a teacher of the course and the administrator add works: a colleague of another course does not.
+    assert ok(latest(client))['day'] == '2026-08-31' and latest(signed('second')).status_code == 403
