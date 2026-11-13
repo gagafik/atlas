@@ -238,14 +238,15 @@ def evaluate(db, access, source):
     # label, named after the first matched child and numbered in file order, so the numbering is the same
     # for the preview and for the issue.
     by_pupil = {s['id']: (s['name'], classes.get(s['classId'], '')) for s in document['students']}
-    taken, counted = set(), defaultdict(int)
+    # A label never repeats a named recipient either: a parent really named like a label keeps the name, the label moves on.
+    taken, counted = {name_key(e['recipient']) for e in entries if e['recipient'] and not e['nameless']}, defaultdict(int)
     for e in entries:
         if not (e['nameless'] and e['ids']): continue
         first, klass = by_pupil[e['ids'][0]]
         counted[frozenset(e['ids'])] += 1
         number = counted[frozenset(e['ids'])]
-        while (label := parent_label(number, first, klass, len(e['ids']) - 1)) in taken: number += 1
-        taken.add(label);e['recipient'] = label
+        while name_key(label := parent_label(number, first, klass, len(e['ids']) - 1)) in taken: number += 1
+        taken.add(name_key(label));e['recipient'] = label
     # One person must not get two codes: rows of the same named parent with a shared child are all held back.
     groups = defaultdict(list)
     for e in entries:

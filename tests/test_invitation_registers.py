@@ -489,6 +489,16 @@ def test_a_named_and_a_nameless_row_for_the_same_child_are_both_issued(school):
     assert recipients(issue(school, file)[0]) == ['Примерова Светлана', 'Родитель: Примеров Александр (7A)']
 
 
+def test_a_parent_really_named_like_a_label_keeps_the_name_and_the_label_moves_on(school):
+    # The surname column holds "Родитель:" and the name column the rest: the recipient text equals the generated label.
+    file = csv_file('Родитель:;Примеров Александр (7A);Примеров Александр (7A)', ';;Примеров Александр (7A)')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 2 and result['counts']['overlap'] == 0 and result['counts']['unnamed'] == 1
+    issued, _ = issue(school, file)
+    assert recipients(issued) == ['Родитель 2: Примеров Александр (7A)', 'Родитель: Примеров Александр (7A)']
+    assert all([t['id'] for t in item['targets']] == ['p1'] for item in issued['items'])
+
+
 def test_a_row_without_a_name_and_with_an_unknown_child_is_not_found_and_not_issued(school):
     file = csv_file(';;Неизвестный Ребёнок (7A)')
     result = preview(school, file)
