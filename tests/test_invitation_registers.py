@@ -1,5 +1,6 @@
 """Parent register import: matching, outcomes, opt-ins, limits, atomic issue and replays."""
 import base64
+import unicodedata
 from io import BytesIO
 from uuid import uuid4
 
@@ -88,7 +89,7 @@ def test_every_outcome_is_counted_and_the_attention_list_gives_reasons(school):
                     'Семь;Смешанный;Примеров Александр (7A), Эскизов Максим (5B)')  # one child found, one ambiguous
     result = preview(school, file)
     assert result['counts'] == dict(rows=10, ready=1, readyCovered=0, partial=1, partialCovered=0, notFound=2, ambiguous=2,
-                                    noChildren=2, noName=1, repeated=1)
+                                    noChildren=2, noName=1, repeated=1, formula=0, overlap=0)
     reasons = {row['recipient']: row for row in result['attention']}
     assert [t['name'] for t in reasons['Два Частично']['found']] == ['Образцова Анна'] and reasons['Два Частично']['missing']
     assert reasons['Три Никого']['missing'] and reasons['Четыре Двое']['ambiguous']
@@ -295,3 +296,135 @@ def test_a_register_of_hundreds_of_rows_opens_and_revokes_completely(school):
     revoked = school.post(BATCHES + f"/{issued['id']}/revoke").json()
     assert revoked['revokedCount'] == 299 and len(revoked['items']) == 300
     assert sorted({i['status'] for i in revoked['items']}) == ['accepted', 'revoked']
+
+
+def add_pupils(*items):
+    """Extra invented pupils for one test: (id, name, class name), all active; unknown classes are created."""
+    state = api.read('demo')
+    for id, name, class_name in items:
+        if not any(c.id == 'c' + class_name for c in state.classes):
+            state.classes.append(state.classes[0].model_copy(update=dict(id='c' + class_name, name=class_name)))
+        state.students.append(state.students[0].model_copy(update=dict(id=id, name=name, classId='c' + class_name, active=True, externalId=None)))
+    api.save('demo', state)
+
+
+def only_attention(result):
+    assert len(result['attention']) == 1, result['attention']
+    return result['attention'][0]
+
+
+def test_a_name_without_patronymic_is_not_ready_while_a_longer_namesake_sits_in_the_class(school):
+    add_pupils(('q10', 'Примеров Александр Сергеевич', '7A'))
+    short = csv_file('Р;17;Примеров Александр (7A)')
+    result = preview(school, short)
+    assert result['counts']['ready'] == 0 and result['counts']['ambiguous'] == 1
+    assert only_attention(result)['ambiguous']
+    issue(school, short, expect=422)
+    full, _ = issue(school, csv_file('Р;18;Примеров Александр Сергеевич (7A)'))
+    assert [t['id'] for t in full['items'][0]['targets']] == ['q10']
+    # The same short name is still ready in a class where no longer namesake exists.
+    add_pupils(('q11', 'Примеров Александр', '8A'), ('q12', 'Примеров Александр Иванович', '9A'))
+    assert preview(school, csv_file('Р;19;Примеров Александр (8A)'))['counts']['ready'] == 1
+
+
+@pytest.mark.parametrize('school_classes, written', [
+    (('7B', '7C'), '7В'),  # Cyrillic В after Latin classes: the third parallel is 7C, not 7B
+    (('7B', '7C'), '7С'),
+    (('8Б', '8В'), '8B'),  # Latin B after Cyrillic classes: 8B is the second parallel, 8Б
+])
+def test_a_class_that_matches_only_after_changing_alphabet_is_never_ready(school, school_classes, written):
+    add_pupils(('n1', 'Эскизов Тимур', school_classes[0]), ('n2', 'Эскизов Тимур', school_classes[1]))
+    file = csv_file(f'Эскизова;Диана;Эскизов Тимур ({written})')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 0
+    assert only_attention(result)['lookalike']
+    issue(school, file, expect=422)
+    same_letters = csv_file(f'Эскизова;Диана;Эскизов Тимур ({school_classes[0]})')
+    assert recipients(issue(school, same_letters)[0]) == ['Эскизова Диана']
+
+
+@pytest.mark.parametrize('label', ['Имя Отчество', 'Имя, отчество', 'Имя и отчество', 'Имя Отчество родителя'])
+def test_a_name_and_patronymic_header_is_the_name_column_and_parents_stay_separate(school, label):
+    file = csv_file('Ким;Анна Петровна;Макетова Мария (5B)', 'Ким;Сергей Иванович;Макетова Мария (5B)', header=f'Фамилия;{label};Дети')
+    result = preview(school, file)
+    assert result['columns']['name'] == 1 and result['counts']['ready'] == 2 and result['counts']['repeated'] == 0
+    assert recipients(issue(school, file)[0]) == ['Ким Анна Петровна', 'Ким Сергей Иванович']
+
+
+def test_a_surname_column_without_a_name_column_is_announced_to_the_administrator(school):
+    file = csv_file('Ким;Макетова Мария (5B)', 'Ким;Макетова Мария (5B)', header='Фамилия;Дети')
+    result = preview(school, file)
+    assert result['counts']['repeated'] == 1 and result['notes']
+
+
+def test_cells_with_formulas_are_held_back_and_the_warning_is_shown(school):
+    from openpyxl import Workbook
+    book = Workbook();sheet = book.active
+    for row in [('Фамилия', 'Имя', 'Родитель', 'Дети'),
+                ('Примерова', 'Светлана', '=A2&" "&B2', 'Примеров Александр (7A)'),
+                ('Макетов', 'Игорь', 'Макетов Игорь', 'Макетова Мария (5B)'),
+                ('Образцов', 'Пётр', 'Образцов Пётр', '=B4&" (3D)"')]:
+        sheet.append(row)
+    out = BytesIO();book.save(out)
+    file = ('parents.xlsx', out.getvalue())
+    columns = dict(surname=2, name=None, children=3)
+    result = preview(school, file, columns=columns)
+    assert result['counts']['formula'] == 2 and result['counts']['ready'] == 1 and result['notes']
+    assert {r['row'] for r in result['attention'] if r['outcome'] == 'formula'} == {2, 4}
+    assert recipients(issue(school, file, columns=columns)[0]) == ['Макетов Игорь']
+
+
+@pytest.mark.parametrize('separator', ['auto', ','])
+def test_a_comma_separated_file_with_quoted_children_is_read(school, separator):
+    file = csv_file('Р,1,"Примеров Александр (7A), Образцова Анна (3D)"', 'Р,2,Макетова Мария (5B)', header='Фамилия,Имя,Дети')
+    result = preview(school, file, delimiter=separator)
+    assert not result['needsColumns'] and result['counts']['ready'] == 2
+    issued, _ = issue(school, file, delimiter=separator)
+    assert sorted(len(i['targets']) for i in issued['items']) == [1, 2]
+
+
+def test_a_name_made_of_invisible_characters_is_no_name(school):
+    file = csv_file('​;​;Примеров Александр (7A)', '​;Один;Макетова Мария (5B)')
+    result = preview(school, file)
+    assert result['counts']['noName'] == 1 and result['counts']['ready'] == 1
+    assert recipients(issue(school, file)[0]) == ['Один']
+
+
+@pytest.mark.parametrize('pupil, written', [
+    (('v1', 'Примерова Алёна', '3D'), unicodedata.normalize('NFD', 'Примерова Алёна (3D)')),
+    (('v2', "О'Примеров Ильяс", '7A'), 'О’Примеров Ильяс (7A)'),
+    (('v3', 'Макетова-Образцова Алина', '7A'), 'Макетова - Образцова Алина (7A)'),
+    (('v3', 'Макетова-Образцова Алина', '7A'), 'Макетова Образцова Алина (7A)'),
+    (('v3', 'Макетова-Образцова Алина', '7A'), 'Макетова–Образцова Алина (7A)'),
+    (('p1', 'Примеров Александр', '7A'), 'Примеров Александр (7-A)'),
+])
+def test_harmless_spelling_variants_still_find_the_pupil(school, pupil, written):
+    if pupil[0] != 'p1': add_pupils(pupil)
+    file = csv_file(f'Родитель;Один;{written}')
+    assert preview(school, file)['counts']['ready'] == 1
+    assert [t['id'] for t in issue(school, file)[0]['items'][0]['targets']] == [pupil[0]]
+
+
+@pytest.mark.parametrize('pupil, written', [
+    (('p1', 'Примеров Александр', '7A'), 'Примеров Aлександр (7A)'),  # Latin A inside a Russian name
+    (('v4', 'Образцова Әйгерім', '3D'), 'Образцова Әйгерiм (3D)'),  # Latin i inside a Kazakh name
+])
+def test_letters_of_another_alphabet_inside_a_name_are_reported_not_folded(school, pupil, written):
+    if pupil[0] != 'p1': add_pupils(pupil)
+    file = csv_file(f'Родитель;Один;{written}')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 0 and only_attention(result)['lookalike']
+    issue(school, file, expect=422)
+
+
+def test_one_parent_on_two_rows_with_a_shared_child_gets_no_code_until_the_file_is_fixed(school):
+    file = csv_file('Примерова;Светлана;Примеров Александр (7A)',
+                    'Примерова;Светлана;"Примеров Александр (7A), Образцова Анна (3D)"',
+                    'Примерова;Светлана;Макетова Мария (5B)',  # same name, no shared child: not held back
+                    'Образцов;Пётр;Вымыслов Дмитрий (7A)')
+    result = preview(school, file)
+    assert result['counts']['overlap'] == 2 and result['counts']['ready'] == 2
+    assert {r['row'] for r in result['attention'] if r['outcome'] == 'overlap'} == {2, 3}
+    issued, _ = issue(school, file)
+    assert recipients(issued) == ['Образцов Пётр', 'Примерова Светлана']
+    assert [t['id'] for t in next(i for i in issued['items'] if i['recipient'] == 'Примерова Светлана')['targets']] == ['p4']

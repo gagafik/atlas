@@ -106,6 +106,8 @@ it("counts exactly the invitations the chosen opt-ins allow", () => {
     noChildren: 1,
     noName: 0,
     repeated: 0,
+    formula: 0,
+    overlap: 0,
   };
   expect(registerIssueCount(counts, false, false)).toBe(10);
   expect(registerIssueCount(counts, true, false)).toBe(13);

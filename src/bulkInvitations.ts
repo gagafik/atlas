@@ -92,15 +92,26 @@ export interface RegisterCounts {
   noChildren: number;
   noName: number;
   repeated: number;
+  formula: number;
+  overlap: number;
 }
 export interface RegisterAttention {
   row: number;
   recipient: string;
-  outcome: "ready" | "partial" | "notFound" | "ambiguous" | "noName";
+  outcome:
+    | "ready"
+    | "partial"
+    | "notFound"
+    | "ambiguous"
+    | "noName"
+    | "formula"
+    | "overlap";
   children: string;
   found: BatchTarget[];
   missing: string[];
   ambiguous: string[];
+  lookalike: string[];
+  overlaps: number[];
   warnings: BatchWarning[];
 }
 export interface RegisterPreview {
@@ -111,6 +122,7 @@ export interface RegisterPreview {
   columns: RegisterColumns;
   rowCount: number;
   needsColumns: boolean;
+  notes: string[];
   counts: RegisterCounts | null;
   attention: RegisterAttention[];
   attentionTotal: number;
@@ -124,6 +136,8 @@ export interface RegisterIssue {
   sheet: number;
   headerRow: number;
   columns: RegisterColumns;
+  delimiter: string;
+  encoding: string;
   days: number;
   previewToken: string;
   requestId: string;
@@ -151,6 +165,14 @@ export function registerReasons(row: RegisterAttention) {
   const reasons: string[] = [];
   if (row.outcome === "noName")
     reasons.push("В строке нет имени родителя или оно слишком длинное.");
+  if (row.outcome === "formula")
+    reasons.push(
+      "В выбранной ячейке формула. Сохраните файл со значениями вместо формул.",
+    );
+  if (row.outcome === "overlap")
+    reasons.push(
+      `Тот же родитель с теми же детьми есть в других строках (${row.overlaps.join(", ")}): один человек получил бы два кода. Объедините строки в файле.`,
+    );
   if (row.outcome === "notFound")
     reasons.push("Ни один ребёнок не найден среди действующих учеников.");
   if (row.outcome === "partial")
@@ -161,6 +183,10 @@ export function registerReasons(row: RegisterAttention) {
     );
   if (row.missing.length)
     reasons.push(`Не найдено: ${row.missing.join("; ")}.`);
+  if (row.lookalike.length)
+    reasons.push(
+      `Совпадение есть только если считать русские и латинские буквы-двойники одинаковыми (В и B, С и C, Н и H, Р и P, Х и X, і и i). Это могут быть разные классы или имена, поэтому строка не выдаётся: ${row.lookalike.join("; ")}. Исправьте написание в файле.`,
+    );
   for (const w of row.warnings)
     reasons.push(
       `${w.kind === "accounts" ? "Уже есть действующие аккаунты" : "Есть ожидающие приглашения"}: ${w.count}. ${w.names.join(", ")}`,

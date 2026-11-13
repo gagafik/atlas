@@ -24,6 +24,8 @@ const countLabels: [keyof RegisterCounts, string][] = [
   ["noChildren", "Нет действующих детей: пропущены"],
   ["noName", "Нет имени родителя: пропущены"],
   ["repeated", "Повторы: посчитаны один раз"],
+  ["formula", "Формулы в ячейках: пропущены"],
+  ["overlap", "Один родитель в нескольких строках: пропущены"],
 ];
 
 function readBase64(file: File) {
@@ -55,6 +57,8 @@ export default function RegisterImport({
     ),
     [preview, setPreview] = useState<RegisterPreview | null>(null),
     [more, setMore] = useState<RegisterAttention[]>([]),
+    [delimiter, setDelimiter] = useState("auto"),
+    [encoding, setEncoding] = useState("auto"),
     [days, setDays] = useState(7),
     [includePartial, setIncludePartial] = useState(false),
     [includeCovered, setIncludeCovered] = useState(false);
@@ -83,6 +87,8 @@ export default function RegisterImport({
       sheet: number;
       columns?: RegisterColumns;
       offset?: number;
+      delimiter?: string;
+      encoding?: string;
     },
   ) {
     const result: RegisterPreview = await api(
@@ -94,6 +100,8 @@ export default function RegisterImport({
         filename: chosen.name,
         content: chosen.content,
         sheet: options.sheet,
+        delimiter: options.delimiter ?? delimiter,
+        encoding: options.encoding ?? encoding,
         ...(options.columns ? { columns: options.columns } : {}),
         offset: options.offset || 0,
       },
@@ -125,7 +133,9 @@ export default function RegisterImport({
       setFile(chosen);
       setIncludePartial(false);
       setIncludeCovered(false);
-      await check(chosen, { sheet: 0 });
+      setDelimiter("auto");
+      setEncoding("auto");
+      await check(chosen, { sheet: 0, delimiter: "auto", encoding: "auto" });
     });
   }
   const counts = preview?.counts || null;
@@ -210,6 +220,39 @@ export default function RegisterImport({
               </label>
             )}
             <div className="dated-fields">
+              <label className="field">
+                <span>Разделитель CSV</span>
+                <select
+                  value={delimiter}
+                  onChange={(e) => {
+                    setDelimiter(e.target.value);
+                    run1(file, { sheet: 0, delimiter: e.target.value });
+                  }}
+                >
+                  <option value="auto">Определить автоматически</option>
+                  <option value=";">Точка с запятой</option>
+                  <option value=",">Запятая</option>
+                  <option value={"	"}>Табуляция</option>
+                  <option value="|">Вертикальная черта</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Кодировка текста</span>
+                <select
+                  value={encoding}
+                  onChange={(e) => {
+                    setEncoding(e.target.value);
+                    run1(file, { sheet: 0, encoding: e.target.value });
+                  }}
+                >
+                  <option value="auto">Автоматически</option>
+                  <option value="utf-8-sig">UTF-8</option>
+                  <option value="cp1251">Windows-1251</option>
+                  <option value="utf-16">UTF-16</option>
+                </select>
+              </label>
+            </div>
+            <div className="dated-fields">
               {columnSelect(
                 "surname",
                 "Колонка с фамилией (или полным именем)",
@@ -218,6 +261,11 @@ export default function RegisterImport({
               {columnSelect("name", "Колонка с именем", true)}
               {columnSelect("children", "Колонка с детьми", false)}
             </div>
+            {preview.notes.map((note, i) => (
+              <p key={i} role="status">
+                {note}
+              </p>
+            ))}
             {preview.needsColumns && (
               <p role="status">
                 Не удалось определить колонки по заголовкам «Фамилия», «Имя»,
@@ -323,6 +371,8 @@ export default function RegisterImport({
                   sheet: preview.sheet,
                   headerRow: preview.headerRow,
                   columns: preview.columns,
+                  delimiter,
+                  encoding,
                   days,
                   previewToken: preview.previewToken!,
                   requestId: crypto.randomUUID(),

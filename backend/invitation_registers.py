@@ -9,9 +9,11 @@ import binascii
 from collections import defaultdict
 from datetime import timedelta
 import json
+from pathlib import Path
 import re
 import secrets
 from types import SimpleNamespace
+import unicodedata
 from typing import Literal
 
 from fastapi import HTTPException, Request
@@ -26,12 +28,18 @@ MAX_ROWS = 3000
 MAX_CHILDREN = 50
 PAGE = 100
 EMPTY = {'', '-', '–', '—', '−'}
-LATIN = {ord(a): b for a, b in zip('авсенкмортх', 'abcehkmoptx')}
+# Letters that are the same letter in the Russian and the Latin alphabet, in the same place of the
+# alphabet. Only these are folded silently in a class name.
+SAME = {ord(a): b for a, b in zip('аекмот', 'aekmot')}
+# Letters that merely look alike (В/B, С/C, Н/H, Р/P, Х/X, Kazakh і/i). Class letters follow the
+# alphabet order, so 7В is not 7B: a match through these letters is reported, never accepted.
+LOOKALIKE = {ord(a): b for a, b in zip('авсенкмортхі', 'abcehkmoptxi')}
+PUNCTUATION = {ord(c): "'" for c in '’ʼ‘`´ʹ'} | {ord(c): '-' for c in '‐‑‒–—―−'}
 HEADERS = dict(
     surname={'фамилия', 'фамилия родителя'},
-    name={'имя', 'имя родителя'},
+    name={'имя', 'имя родителя', 'имя отчество', 'имя и отчество', 'имя отчество родителя', 'имя и отчество родителя'},
     full={'фио', 'ф.и.о.', 'фио родителя', 'родитель', 'законный представитель'},
-    children={'дети', 'ребенок', 'дети (класс)', 'ученики', 'ученик', 'дети родителя'},
+    children={'дети', 'ребенок', 'дети класс', 'ученики', 'ученик', 'дети родителя'},
 )
 
 
@@ -70,37 +78,69 @@ class Issue(Source):
     includeCovered: bool = False
 
 
+def clean(value):
+    """Composed Unicode without invisible format characters (zero-width spaces, soft hyphens, marks)."""
+    return ''.join(c for c in unicodedata.normalize('NFC', str(value)) if unicodedata.category(c) != 'Cf')
+
+
 def text_key(value):
-    return ' '.join(str(value).replace('ё', 'е').replace('Ё', 'Е').split()).casefold()
+    return ' '.join(clean(value).translate(PUNCTUATION).replace('ё', 'е').replace('Ё', 'Е').split()).casefold()
 
 
-def name_key(value): return tuple(sorted(text_key(value).split()))
+def label_key(value): return ' '.join(re.sub(r'[^\w.]+', ' ', text_key(value)).split())
 
 
-def class_key(value): return ''.join(str(value).split()).casefold().translate(LATIN)
+def words(value): return [w for w in re.split(r'[\s-]+', text_key(value)) if w]
+
+
+def name_key(value): return tuple(sorted(words(value)))
+
+
+def class_key(value):
+    """Class without spaces and a hyphen between number and letter ('7-A' is '7A'); А, Е, К, М, О, Т fold to Latin."""
+    return re.sub(r'(?<=\d)-+(?=[^\W\d_])', '', ''.join(text_key(value).split())).translate(SAME)
+
+
+def loose_key(klass, name):
+    return klass.translate(LOOKALIKE), tuple(sorted(w.translate(LOOKALIKE) for w in name))
 
 
 def header_columns(cells):
     """Default column choices from a header row: Фамилия, Имя (or ФИО), Дети."""
     found = {}
     for index, cell in enumerate(cells):
-        label = text_key(cell)
+        label = label_key(cell)
         for kind, names in HEADERS.items():
             if label in names and kind not in found: found[kind] = index
     surname = found.get('surname', found.get('full'))
     return dict(surname=surname, name=found.get('name') if 'surname' in found or 'full' not in found else None, children=found.get('children'))
 
 
+def load(source, raw, delimiter):
+    from openpyxl.utils.exceptions import InvalidFileException
+    from xlrd.biffh import XLRDError
+    try: return parse_file(source.filename, raw, delimiter, source.encoding)
+    except (ValueError, InvalidFileException, XLRDError) as exc: raise HTTPException(422, str(exc)) from None
+
+
+def columns_in(package, sheet):
+    rows = package['sheets'][sheet]['rows'] if sheet < len(package['sheets']) else []
+    return max((len(row) for row in rows[:10]), default=0)
+
+
 def read(source):
     try: raw = base64.b64decode(source.content, validate=True)
     except (binascii.Error, ValueError): raise HTTPException(422, 'Файл повреждён при передаче. Выберите его заново.') from None
-    from openpyxl.utils.exceptions import InvalidFileException
-    from xlrd.biffh import XLRDError
-    try: package = parse_file(source.filename, raw, source.delimiter, source.encoding)
-    except (ValueError, InvalidFileException, XLRDError) as exc: raise HTTPException(422, str(exc)) from None
+    package = load(source, raw, source.delimiter)
+    if source.delimiter == 'auto' and Path(source.filename).suffix.lower() in ('.csv', '.txt') and columns_in(package, source.sheet) == 1:
+        # The sniffer can take a quoted comma or a bracket for the separator: try the usual ones before giving up.
+        for separator in (',', ';', '\t', '|'):
+            try: retry = load(source, raw, separator)
+            except HTTPException: continue
+            if columns_in(retry, source.sheet) > 1: package = retry; break
     sheets = package['sheets']
     if source.sheet >= len(sheets): raise HTTPException(422, 'Лист не найден.')
-    rows = sheets[source.sheet]['rows']
+    rows = [[clean(c) for c in row] for row in sheets[source.sheet]['rows']]
     header = source.headerRow
     if header is None:
         header = next((i for i, row in enumerate(rows[:10], 1) if header_columns(row)['children'] is not None), 1)
@@ -110,7 +150,8 @@ def read(source):
     data = [(i, row + [''] * (width - len(row))) for i, row in enumerate(rows[header:], header + 1) if any(c.strip() for c in row)]
     if len(data) > MAX_ROWS:
         raise HTTPException(422, f'В реестре больше {MAX_ROWS} строк. Разделите файл на части не более чем по {MAX_ROWS} родителей.')
-    return dict(sheets=[s['name'] for s in sheets], header=header, width=width,
+    return dict(sheets=[s['name'] for s in sheets], header=header, width=width, notes=list(package['warnings']),
+                formulas={(r + 1, c) for r, c in sheets[source.sheet].get('formulas', [])},
                 headers=[dict(index=i, label=c or f'Колонка {i + 1}') for i, c in enumerate(cells)],
                 detected=header_columns(cells), data=data)
 
@@ -128,23 +169,33 @@ def evaluate(db, access, source):
     document = json.loads(current[1])
     sheet = read(source)
     chosen = source.columns.model_dump() if source.columns else sheet['detected']
+    notes = sheet['notes']
     base = dict(sheets=sheet['sheets'], sheet=source.sheet, headerRow=sheet['header'], headers=sheet['headers'],
-                columns=chosen, detected=source.columns is None, rowCount=len(sheet['data']))
+                columns=chosen, detected=source.columns is None, rowCount=len(sheet['data']), notes=notes)
     for key in ['surname', 'name', 'children']:
         if chosen[key] is not None and chosen[key] >= sheet['width']: raise HTTPException(422, 'Выбранной колонки нет в файле.')
     if chosen['children'] is None or (chosen['surname'] is None and chosen['name'] is None):
         return base | dict(complete=False)
+    if chosen['name'] is None and chosen['surname'] is not None and label_key(sheet['headers'][chosen['surname']]['label']) in HEADERS['surname']:
+        notes.append('Колонка с именем родителя не выбрана: получатели подписаны одной фамилией, а родители с одной фамилией и теми же '
+                     'детьми считаются повтором. Выберите колонку с именем, если она есть.')
     classes = {c['id']: c['name'] for c in document['classes']}
-    pupils = defaultdict(list)
+    pupils, loose, by_class = defaultdict(list), defaultdict(list), defaultdict(list)
     for student in document['students']:
-        if student.get('active', True): pupils[class_key(classes.get(student['classId'], '')), name_key(student['name'])].append(student)
+        if not student.get('active', True): continue
+        klass, name = class_key(classes.get(student['classId'], '')), name_key(student['name'])
+        pupils[klass, name].append(student)
+        loose[loose_key(klass, name)].append(student)
+        by_class[klass].append((set(name), name, student))
     entries, seen = [], set()
     for number, cells in sheet['data']:
         recipient = ' '.join(' '.join(cells[chosen[k]] for k in ['surname', 'name'] if chosen[k] is not None).split())
         raw = cells[chosen['children']]
         parts = [p.strip() for p in re.split(r'[,;\n]+', raw) if p.strip() not in EMPTY]
-        entry = dict(row=number, key=f'r{number}', recipient=recipient, children=raw[:300], ids=[], found=[], missing=[], ambiguous=[], warnings=[], sources=None)
+        entry = dict(row=number, key=f'r{number}', recipient=recipient, children=raw[:300], ids=[], found=[], missing=[], ambiguous=[],
+                     lookalike=[], overlaps=[], warnings=[], sources=None)
         entries.append(entry)
+        if any((number, c) in sheet['formulas'] for c in chosen.values() if c is not None): entry['outcome'] = 'formula'; continue
         if not parts: entry['outcome'] = 'noChildren'; continue
         if len(parts) > MAX_CHILDREN: raise HTTPException(422, f'Строка {number}: больше {MAX_CHILDREN} детей у одного родителя. Проверьте файл.')
         if not recipient or len(recipient) > 160: entry['outcome'] = 'noName'; continue
@@ -152,23 +203,36 @@ def evaluate(db, access, source):
         for part in parts:
             parsed = parse_child(part)
             if not parsed: identity.append(text_key(part)); entry['missing'].append(part[:120]); continue
-            key = class_key(parsed[1]), name_key(parsed[0])
-            identity.append(key)
-            options = pupils.get(key, [])
-            if not options: entry['missing'].append(part[:120])
-            elif len(options) > 1: entry['ambiguous'].append(part[:120])
+            klass, name = class_key(parsed[1]), name_key(parsed[0])
+            identity.append((klass, name))
+            options = pupils.get((klass, name), [])
+            # A shorter register name (no patronymic) also fits an active pupil whose name has more words.
+            wider = [s for known, other, s in by_class[klass] if other != name and set(name) <= known]
+            if not options:
+                entry['missing'].append(part[:120])
+                if loose.get(loose_key(klass, name)): entry['lookalike'].append(part[:120])
+            elif len(options) > 1 or wider: entry['ambiguous'].append(part[:120])
             elif options[0]['id'] not in ids: ids.append(options[0]['id'])
         signature = name_key(recipient), tuple(sorted(map(str, set(identity))))
         if signature in seen: entry['outcome'] = 'repeated'; continue
         seen.add(signature)
         entry['ids'] = ids
         entry['outcome'] = ('ambiguous' if entry['ambiguous'] else 'ready' if ids and not entry['missing'] else 'partial' if ids else 'notFound')
+    # One person must not get two codes: rows of the same parent with a shared child are all held back.
+    groups = defaultdict(list)
+    for e in entries:
+        if e['outcome'] in ('ready', 'partial'): groups[name_key(e['recipient'])].append(e)
+    for group in groups.values():
+        shared = {id(e): [o['row'] for o in group if o is not e and set(o['ids']) & set(e['ids'])] for e in group}
+        for e in group:
+            if shared[id(e)]: e['overlaps'] = shared[id(e)][:10]; e['outcome'] = 'overlap'
     matched = [e for e in entries if e['outcome'] in ('ready', 'partial')]
     result, sources = review(db, access, source.workspace,
                              [SimpleNamespace(key=e['key'], recipient=e['recipient'], role='parent', entityIds=e['ids']) for e in matched], document)
     for entry, item, origin in zip(matched, result, sources):
         entry['found'] = item['targets'];entry['warnings'] = item['warnings'];entry['sources'] = origin
-    counts = dict(rows=len(entries), ready=0, readyCovered=0, partial=0, partialCovered=0, notFound=0, ambiguous=0, noChildren=0, noName=0, repeated=0)
+    counts = dict(rows=len(entries), ready=0, readyCovered=0, partial=0, partialCovered=0, notFound=0, ambiguous=0, noChildren=0, noName=0,
+                  repeated=0, formula=0, overlap=0)
     for entry in entries:
         covered = entry['outcome'] in ('ready', 'partial') and bool(entry['warnings'])
         counts[entry['outcome'] + ('Covered' if covered else '')] += 1
@@ -180,9 +244,10 @@ def evaluate(db, access, source):
 def attention(entries):
     rows = []
     for e in entries:
-        if e['outcome'] in ('partial', 'notFound', 'ambiguous', 'noName') or (e['outcome'] == 'ready' and e['warnings']):
+        if e['outcome'] in ('partial', 'notFound', 'ambiguous', 'noName', 'formula', 'overlap') or (e['outcome'] == 'ready' and e['warnings']):
             rows.append(dict(row=e['row'], recipient=e['recipient'], outcome=e['outcome'], children=e['children'], found=e['found'],
-                             missing=e['missing'][:10], ambiguous=e['ambiguous'][:10], warnings=e['warnings']))
+                             missing=e['missing'][:10], ambiguous=e['ambiguous'][:10], lookalike=e['lookalike'][:10],
+                             overlaps=e['overlaps'], warnings=e['warnings']))
     return rows
 
 
