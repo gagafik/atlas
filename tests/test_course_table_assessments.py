@@ -91,11 +91,12 @@ def test_the_dialog_drops_moved_substituted_and_cancelled_lessons(client, clock)
     for day in (DAY, NEXT): course(teacher, day, [work('a')])
     def lesson(id, name, kind, day, **extra):
         return DatedLesson(id=id, name=name, kind=kind, placementId='eng', sourceDate=date.fromisoformat(day), **(dict(onDate=date.fromisoformat(day)) | extra))
-    state = api.read('demo')
-    state.datedLessons = [lesson('move', 'Перенос', 'change', DAY, onDate=date.fromisoformat('2026-08-18'), startTime='14:00', endTime='14:40'),
+    state = api.read('demo'); moved = '2026-08-18'
+    state.datedLessons = [lesson('move', 'Перенос', 'change', DAY, onDate=date.fromisoformat(moved), startTime='14:00', endTime='14:40'),
                           lesson('sub', 'Замена', 'change', NEXT, teacherIds=['t1']), lesson('off', 'Отмена', 'cancel', bare)]
     api.save('demo', state)
-    assert not {DAY, NEXT, bare} & {l['day'] for l in ok(offered(teacher))['lessons']}
+    # The moved lesson is offered on neither day: its journal waits to be synced with the new date.
+    assert not {DAY, NEXT, bare, moved} & {l['day'] for l in ok(offered(teacher))['lessons']}
 
 
 def test_a_lesson_fills_up_and_then_takes_no_more_works(client, clock):
