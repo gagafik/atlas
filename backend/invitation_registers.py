@@ -162,6 +162,18 @@ def parse_child(part):
     return match[1], match[2]
 
 
+def parent_label(number, name, klass, more):
+    """'Родитель: Имя (класс)' or '... и ещё N' for a parent whose own name the file does not give; at most 160 characters."""
+    prefix = 'Родитель: ' if number == 1 else f'Родитель {number}: '
+    rest = f' и ещё {more}' if more else ''
+    full = f'{prefix}{name} ({klass}){rest}'
+    if len(full) <= 160: return full
+    short = f'{prefix}{name}{rest}'
+    if len(short) <= 160: return short
+    room = 160 - len(prefix) - len(rest) - 1
+    return f'{prefix}{name[:max(room, 1)].rstrip()}…{rest}'
+
+
 def evaluate(db, access, source):
     """Match every register row against the current school document, inside the caller's transaction."""
     current = db.execute('SELECT revision,document FROM workspaces WHERE id=?', (source.workspace,)).fetchone()
@@ -187,18 +199,21 @@ def evaluate(db, access, source):
         pupils[klass, name].append(student)
         loose[loose_key(klass, name)].append(student)
         by_class[klass].append((set(name), name, student))
-    entries, seen = [], set()
+    entries, seen, unnamed = [], set(), 0
     for number, cells in sheet['data']:
         recipient = ' '.join(' '.join(cells[chosen[k]] for k in ['surname', 'name'] if chosen[k] is not None).split())
         raw = cells[chosen['children']]
         parts = [p.strip() for p in re.split(r'[,;\n]+', raw) if p.strip() not in EMPTY]
         entry = dict(row=number, key=f'r{number}', recipient=recipient, children=raw[:300], ids=[], found=[], missing=[], ambiguous=[],
-                     lookalike=[], overlaps=[], warnings=[], sources=None)
+                     lookalike=[], overlaps=[], warnings=[], sources=None, nameless=False)
         entries.append(entry)
         if any((number, c) in sheet['formulas'] for c in chosen.values() if c is not None): entry['outcome'] = 'formula'; continue
         if not parts: entry['outcome'] = 'noChildren'; continue
         if len(parts) > MAX_CHILDREN: raise HTTPException(422, f'Строка {number}: больше {MAX_CHILDREN} детей у одного родителя. Проверьте файл.')
-        if not recipient or len(recipient) > 160: entry['outcome'] = 'noName'; continue
+        if len(recipient) > 160: entry['outcome'] = 'noName'; continue
+        # A parent without a name types it when registering with the code: the row is matched like any other.
+        entry['nameless'] = not recipient
+        unnamed += not recipient
         identity, ids = [], []
         for part in parts:
             parsed = parse_child(part)
@@ -213,15 +228,28 @@ def evaluate(db, access, source):
                 if loose.get(loose_key(klass, name)): entry['lookalike'].append(part[:120])
             elif len(options) > 1 or wider: entry['ambiguous'].append(part[:120])
             elif options[0]['id'] not in ids: ids.append(options[0]['id'])
-        signature = name_key(recipient), tuple(sorted(map(str, set(identity))))
-        if signature in seen: entry['outcome'] = 'repeated'; continue
-        seen.add(signature)
+        if recipient:
+            signature = name_key(recipient), tuple(sorted(map(str, set(identity))))
+            if signature in seen: entry['outcome'] = 'repeated'; continue
+            seen.add(signature)
         entry['ids'] = ids
         entry['outcome'] = ('ambiguous' if entry['ambiguous'] else 'ready' if ids and not entry['missing'] else 'partial' if ids else 'notFound')
-    # One person must not get two codes: rows of the same parent with a shared child are all held back.
+    # Nameless rows are two different people even with the same children (mother and father): each gets its own
+    # label, named after the first matched child and numbered in file order, so the numbering is the same
+    # for the preview and for the issue.
+    by_pupil = {s['id']: (s['name'], classes.get(s['classId'], '')) for s in document['students']}
+    taken, counted = set(), defaultdict(int)
+    for e in entries:
+        if not (e['nameless'] and e['ids']): continue
+        first, klass = by_pupil[e['ids'][0]]
+        counted[frozenset(e['ids'])] += 1
+        number = counted[frozenset(e['ids'])]
+        while (label := parent_label(number, first, klass, len(e['ids']) - 1)) in taken: number += 1
+        taken.add(label);e['recipient'] = label
+    # One person must not get two codes: rows of the same named parent with a shared child are all held back.
     groups = defaultdict(list)
     for e in entries:
-        if e['outcome'] in ('ready', 'partial'): groups[name_key(e['recipient'])].append(e)
+        if e['outcome'] in ('ready', 'partial') and not e['nameless']: groups[name_key(e['recipient'])].append(e)
     for group in groups.values():
         shared = {id(e): [o['row'] for o in group if o is not e and set(o['ids']) & set(e['ids'])] for e in group}
         for e in group:
@@ -232,10 +260,14 @@ def evaluate(db, access, source):
     for entry, item, origin in zip(matched, result, sources):
         entry['found'] = item['targets'];entry['warnings'] = item['warnings'];entry['sources'] = origin
     counts = dict(rows=len(entries), ready=0, readyCovered=0, partial=0, partialCovered=0, notFound=0, ambiguous=0, noChildren=0, noName=0,
-                  repeated=0, formula=0, overlap=0)
+                  repeated=0, formula=0, overlap=0, unnamed=unnamed)
     for entry in entries:
         covered = entry['outcome'] in ('ready', 'partial') and bool(entry['warnings'])
         counts[entry['outcome'] + ('Covered' if covered else '')] += 1
+    if unnamed:
+        notes.append(f'Строк без имени родителя: {unnamed}. Коды таких родителей подписаны по детям («Родитель: Имя (класс)»), '
+                     'а своё имя родитель вводит при регистрации по коду. Строки с одними и теми же детьми считаются разными '
+                     'родителями и получают номера: «Родитель 2: …».')
     token = digest(encoded(dict(kind='register', file=digest(source.content), sheet=source.sheet, header=sheet['header'], columns=chosen,
                                 revision=current[0], rows=[[e['key'], e['recipient'], e['outcome'], e['ids'], e['warnings'], e['sources']] for e in entries])))
     return base | dict(complete=True, counts=counts, entries=entries, token=token)

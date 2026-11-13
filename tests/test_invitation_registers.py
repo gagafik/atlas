@@ -85,11 +85,12 @@ def test_every_outcome_is_counted_and_the_attention_list_gives_reasons(school):
                     'Шесть;Без детей;',
                     'Шесть;Прочерк;-',
                     'Один;Готов;Примеров Александр (7A)',
-                    ';;Макетова Мария (5B)',
+                    ';;Макетова Мария (5B)',  # no parent name: matched like any row, labelled by the child
+                    'Я' * 161 + ';Длинное;Образцова Анна (3D)',
                     'Семь;Смешанный;Примеров Александр (7A), Эскизов Максим (5B)')  # one child found, one ambiguous
     result = preview(school, file)
-    assert result['counts'] == dict(rows=10, ready=1, readyCovered=0, partial=1, partialCovered=0, notFound=2, ambiguous=2,
-                                    noChildren=2, noName=1, repeated=1, formula=0, overlap=0)
+    assert result['counts'] == dict(rows=11, ready=2, readyCovered=0, partial=1, partialCovered=0, notFound=2, ambiguous=2,
+                                    noChildren=2, noName=1, repeated=1, formula=0, overlap=0, unnamed=1)
     reasons = {row['recipient']: row for row in result['attention']}
     assert [t['name'] for t in reasons['Два Частично']['found']] == ['Образцова Анна'] and reasons['Два Частично']['missing']
     assert reasons['Три Никого']['missing'] and reasons['Четыре Двое']['ambiguous']
@@ -383,11 +384,18 @@ def test_a_comma_separated_file_with_quoted_children_is_read(school, separator):
     assert sorted(len(i['targets']) for i in issued['items']) == [1, 2]
 
 
-def test_a_name_made_of_invisible_characters_is_no_name(school):
+def test_a_name_made_of_invisible_characters_is_no_name_and_the_row_is_labelled_by_the_child(school):
     file = csv_file('​;​;Примеров Александр (7A)', '​;Один;Макетова Мария (5B)')
     result = preview(school, file)
-    assert result['counts']['noName'] == 1 and result['counts']['ready'] == 1
-    assert recipients(issue(school, file)[0]) == ['Один']
+    assert result['counts']['noName'] == 0 and result['counts']['ready'] == 2 and result['counts']['unnamed'] == 1
+    assert recipients(issue(school, file)[0]) == ['Один', 'Родитель: Примеров Александр (7A)']
+
+
+def test_a_parent_name_longer_than_the_limit_is_no_name_and_is_not_issued(school):
+    file = csv_file('Я' * 161 + ';Один;Примеров Александр (7A)')
+    result = preview(school, file)
+    assert result['counts']['noName'] == 1 and result['counts']['ready'] == 0 and result['counts']['unnamed'] == 0
+    issue(school, file, expect=422)
 
 
 @pytest.mark.parametrize('pupil, written', [
@@ -428,3 +436,80 @@ def test_one_parent_on_two_rows_with_a_shared_child_gets_no_code_until_the_file_
     issued, _ = issue(school, file)
     assert recipients(issued) == ['Образцов Пётр', 'Примерова Светлана']
     assert [t['id'] for t in next(i for i in issued['items'] if i['recipient'] == 'Примерова Светлана')['targets']] == ['p4']
+
+
+def test_a_row_without_a_parent_name_is_labelled_by_its_only_child(school):
+    file = csv_file(';;Примеров Александр (7A)')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 1 and result['counts']['unnamed'] == 1 and result['counts']['noName'] == 0
+    assert result['notes']
+    issued, _ = issue(school, file)
+    assert recipients(issued) == ['Родитель: Примеров Александр (7A)']
+    assert [t['id'] for t in issued['items'][0]['targets']] == ['p1']
+
+
+def test_a_label_names_the_first_matched_child_and_counts_the_rest(school):
+    file = csv_file(';;Неизвестный Ребёнок (7A), Макетова Мария (5B), Примеров Александр (7A), Образцова Анна (3D)')
+    issued, _ = issue(school, file, includePartial=True)
+    assert recipients(issued) == ['Родитель: Макетова Мария (5B) и ещё 2']
+    assert [t['id'] for t in issued['items'][0]['targets']] == ['p4', 'p1', 'p2']
+
+
+def test_two_rows_without_names_and_with_the_same_child_are_two_parents_who_each_see_that_child(school):
+    file = csv_file(';;Примеров Александр (7A)', ';;Примеров Александр (7A)', ';;Примеров Александр (7A)')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 3 and result['counts']['repeated'] == 0 and result['counts']['overlap'] == 0
+    issued, _ = issue(school, file)
+    assert recipients(issued) == ['Родитель 2: Примеров Александр (7A)', 'Родитель 3: Примеров Александр (7A)',
+                                  'Родитель: Примеров Александр (7A)']
+    for number, item in enumerate(issued['items']):
+        response = register(visitor(), item['code'], login=f'nameless-{number}')
+        assert response.status_code == 200, response.text
+        assert [g['entityIds'] for g in response.json()['user']['grants']] == [['p1']]
+
+
+def test_labels_stay_distinct_when_the_same_children_come_in_another_order_or_overlap(school):
+    file = csv_file(';;Примеров Александр (7A), Образцова Анна (3D)', ';;Образцова Анна (3D), Примеров Александр (7A)',
+                    ';;Примеров Александр (7A), Макетова Мария (5B)')
+    issued, _ = issue(school, file)
+    labels = recipients(issued)
+    assert len(set(labels)) == 3 and all(len(label) <= 160 for label in labels)
+    assert 'Родитель 2: Образцова Анна (3D) и ещё 1' in labels
+
+
+def test_a_named_and_a_nameless_row_for_the_same_child_are_both_issued(school):
+    file = csv_file('Примерова;Светлана;Примеров Александр (7A)', ';;Примеров Александр (7A)')
+    result = preview(school, file)
+    assert result['counts']['ready'] == 2 and result['counts']['overlap'] == 0 and result['counts']['repeated'] == 0
+    # The rule against one parent on two rows still holds between named rows only.
+    mixed = csv_file('Примерова;Светлана;Примеров Александр (7A)', ';;Примеров Александр (7A)',
+                     'Примерова;Светлана;Примеров Александр (7A), Образцова Анна (3D)')
+    counts = preview(school, mixed)['counts']
+    assert counts['overlap'] == 2 and counts['ready'] == 1 and counts['unnamed'] == 1
+    assert recipients(issue(school, file)[0]) == ['Примерова Светлана', 'Родитель: Примеров Александр (7A)']
+
+
+def test_a_row_without_a_name_and_with_an_unknown_child_is_not_found_and_not_issued(school):
+    file = csv_file(';;Неизвестный Ребёнок (7A)')
+    result = preview(school, file)
+    assert result['counts']['notFound'] == 1 and result['counts']['unnamed'] == 1 and result['counts']['ready'] == 0
+    assert only_attention(result)['recipient'] == '' and only_attention(result)['outcome'] == 'notFound'
+    issue(school, file, expect=422)
+
+
+def test_the_numbering_is_the_same_for_the_preview_and_the_issue(school):
+    file = csv_file(';;Примеров Александр (7A)', 'Образцов;Пётр;Вымыслов Дмитрий (7A)', ';;Примеров Александр (7A)')
+    first, second = preview(school, file), preview(school, file)
+    assert first['previewToken'] == second['previewToken']
+    issued, _ = issue(school, file)  # the issue evaluates again and must accept the preview token
+    assert {i['key']: i['recipient'] for i in issued['items']} == {
+        'r2': 'Родитель: Примеров Александр (7A)', 'r3': 'Образцов Пётр', 'r4': 'Родитель 2: Примеров Александр (7A)'}
+
+
+def test_a_generated_label_never_exceeds_the_limit(school):
+    long_name, longest = 'Длинов ' + 'А' * 140, 'Ж' * 160
+    add_pupils(('w1', long_name, '7A'), ('w2', longest, '7A'), ('w3', 'Короткова Ева', '7A'))
+    file = csv_file(f';;{long_name} (7A), Короткова Ева (7A)', f';;{longest} (7A)', f';;{longest} (7A)', f';;{longest} (7A), {long_name} (7A)')
+    issued, _ = issue(school, file)
+    labels = [i['recipient'] for i in issued['items']]
+    assert len(labels) == 4 and len(set(labels)) == 4 and all(0 < len(label) <= 160 for label in labels)

@@ -94,6 +94,7 @@ export interface RegisterCounts {
   repeated: number;
   formula: number;
   overlap: number;
+  unnamed: number;
 }
 export interface RegisterAttention {
   row: number;
@@ -164,7 +165,7 @@ export function registerIssueCount(
 export function registerReasons(row: RegisterAttention) {
   const reasons: string[] = [];
   if (row.outcome === "noName")
-    reasons.push("В строке нет имени родителя или оно слишком длинное.");
+    reasons.push("Имя родителя длиннее 160 знаков: проверьте ячейки.");
   if (row.outcome === "formula")
     reasons.push(
       "В выбранной ячейке формула. Сохраните файл со значениями вместо формул.",
