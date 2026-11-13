@@ -131,6 +131,9 @@ export default function RegisterImport({
       const content = await readBase64(input);
       const chosen = { name: input.name, content };
       setFile(chosen);
+      // An unreadable file must not keep the previous file's preview: the separator and encoding stay available to try again.
+      setPreview(null);
+      setMore([]);
       setIncludePartial(false);
       setIncludeCovered(false);
       setDelimiter("auto");
@@ -197,12 +200,13 @@ export default function RegisterImport({
             }}
           />
         </label>
-        {preview && file && (
+        {file && (
           <>
             <p>
-              Файл: {file.name}. Строка заголовков: {preview.headerRow}.
+              Файл: {file.name}.
+              {preview && ` Строка заголовков: ${preview.headerRow}.`}
             </p>
-            {preview.sheets.length > 1 && (
+            {preview && preview.sheets.length > 1 && (
               <label className="field">
                 <span>Лист файла</span>
                 <select
@@ -261,12 +265,12 @@ export default function RegisterImport({
               {columnSelect("name", "Колонка с именем", true)}
               {columnSelect("children", "Колонка с детьми", false)}
             </div>
-            {preview.notes.map((note, i) => (
+            {preview?.notes.map((note, i) => (
               <p key={i} role="status">
                 {note}
               </p>
             ))}
-            {preview.needsColumns && (
+            {preview?.needsColumns && (
               <p role="status">
                 Не удалось определить колонки по заголовкам «Фамилия», «Имя»,
                 «Дети». Выберите их вручную.
