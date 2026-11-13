@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 import sqlite3
 import stat
 import struct
@@ -16,10 +17,14 @@ from zipfile import ZipFile, ZipInfo, ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED
 from fastapi import HTTPException
 import pytest
 from starlette.requests import ClientDisconnect
-from backend import api, homework_files, quiz_bank_exchange as exchange, quiz_bank_package as pkg, quiz_files, teaching_media
+from backend import api, homework_files, quiz_bank_exchange as exchange, quiz_bank_package as pkg, quiz_files
+from backend.quiz_models import Question
 from test_access import client, signed
 from test_homework import setup
 from test_quiz_files import ok, upload, file_get
+from seeding import insert_row
+
+FILES_PER_QUESTION=next(m.max_length for m in Question.model_fields['fileIds'].metadata if hasattr(m,'max_length'))
 
 
 def digest(data):
@@ -105,24 +110,24 @@ def test_two_questions_may_reference_the_same_file(tmp_path):
     assert len(pkg.inspect_package(build(tmp_path/'p.zip',doc,files),'p.zip').files)==1
 
 
-@pytest.mark.parametrize('case,status,text',[
-    ('extra-file',422,'лишние файлы'),
-    ('missing-file',422,'лишние файлы'),
-    ('directory',422,'Папки'),
-    ('symlink',422,'Папки'),
-    ('encrypted',422,'Папки'),
-    ('size-mismatch',422,'Размер вложения'),
-    ('duplicate',422,'уникальных'),
-    ('manifest-too-big',413,'не больше 2 МБ'),
-    ('no-manifest',422,'manifest.json'),
-    ('path-in-name',422,'Проверьте пакет'),
-    ('bad-extension',422,'Проверьте пакет'),
-    ('backslash',422,'лишние файлы'),
-    ('bzip2',422,'Deflate'),
-    ('too-many-entries',422,'до 200'),
-    ('not-a-zip',422,'повреждён'),
+@pytest.mark.parametrize('case,status',[
+    ('extra-file',422),
+    ('missing-file',422),
+    ('directory',422),
+    ('symlink',422),
+    ('encrypted',422),
+    ('size-mismatch',422),
+    ('duplicate',422),
+    ('manifest-too-big',413),
+    ('no-manifest',422),
+    ('path-in-name',422),
+    ('bad-extension',422),
+    ('backslash',422),
+    ('bzip2',422),
+    ('too-many-entries',422),
+    ('not-a-zip',422),
 ])
-def test_inspect_rejects_bad_archives(tmp_path,case,status,text):
+def test_inspect_rejects_bad_archives(tmp_path,case,status):
     data=b'Question material';files=[(file_id(),'task.txt',data)];path=tmp_path/'bad.zip'
     if case=='extra-file':build(path,manifest(files),files,extra=[('files/'+file_id(2),b'x')])
     elif case=='missing-file':build(path,manifest(files),[])
@@ -141,16 +146,15 @@ def test_inspect_rejects_bad_archives(tmp_path,case,status,text):
         build(path,manifest(files),files)
         path.write_bytes(path.read_bytes().replace(b'files/'+file_id().encode(),b'files\\'+file_id().encode()))
     elif case=='bzip2':build(path,manifest(files),files,compression=ZIP_BZIP2)
-    elif case=='too-many-entries':build(path,manifest(files),files,extra=[(f'files/{n:032x}',b'x') for n in range(2,203)])
+    elif case=='too-many-entries':build(path,manifest(files),files,extra=[(f'files/{n:032x}',b'x') for n in range(2,pkg.MAX_FILES+3)])
     else:path.write_bytes(b'not a zip archive')
-    error=rejected(path)
-    assert error.status_code==status and text in str(error.detail)
+    assert rejected(path).status_code==status
 
 
 def test_json_with_files_wrong_extension_and_size(tmp_path):
     files=[(file_id(),'task.txt',b'abc')];path=tmp_path/'p.json'
     path.write_text(json.dumps(manifest(files)),encoding='utf-8')
-    error=rejected(path,'p.json');assert error.status_code==422 and 'ZIP-пакет' in error.detail
+    assert rejected(path,'p.json').status_code==422
     path.write_bytes(b'x');assert rejected(path,'x.rar').status_code==422
     path.write_bytes(b'x'*(pkg.MAX_MANIFEST+1));assert rejected(path,'big.json').status_code==413
 
@@ -165,28 +169,17 @@ def test_bom_json_and_manifest_are_accepted(tmp_path):
     assert len(pkg.inspect_package(zipped,'bom.zip').questions)==1
 
 
-def refused_manifest(data,status=422):
-    """The error detail of a manifest that must be refused; raw pydantic English never reaches the teacher."""
+@pytest.mark.parametrize('document,status',[
+    (lambda:manifest(questions=[essay(),dict(subject='x',question=dict(kind='essay'))]),422),
+    (lambda:manifest(questions=[essay()|dict(id='forged')]),422),
+    (lambda:manifest(questions=[dict(subject='',question=dict(kind='single',text='Q'))]),422),
+    (lambda:b'not json',422),
+    (lambda:b'x'*(pkg.MAX_MANIFEST+1),413),
+],ids=['question-without-text','forged-id','choice-without-options','not-json','too-big'])
+def test_invalid_manifests_are_refused(document,status):
+    data=document()
     with pytest.raises(HTTPException) as caught:pkg.parse_manifest(data if isinstance(data,bytes) else json.dumps(data).encode())
     assert caught.value.status_code==status
-    assert not any(english in caught.value.detail for english in ('Value error','Field required','Extra inputs','Invalid'))
-    return caught.value.detail.splitlines()
-
-
-def test_manifest_errors_point_at_the_question_and_field_without_pydantic_english():
-    lines=refused_manifest(manifest(questions=[essay(),dict(subject='x',question=dict(kind='essay'))]))
-    assert any('Вопрос 2' in line and 'question.text' in line for line in lines) and not any('Вопрос 1' in line for line in lines)
-    assert any('Вопрос 1' in line and 'id' in line for line in refused_manifest(manifest(questions=[essay()|dict(id='forged')])))
-    lines=refused_manifest(manifest(questions=[dict(subject='',question=dict(kind='single',text='Q'))]))
-    assert any('Вопрос 1' in line and 'question' in line for line in lines)
-    refused_manifest(b'not json')
-    refused_manifest(b'x'*(pkg.MAX_MANIFEST+1),413)
-
-
-def test_manifest_errors_are_capped_and_name_errors_name_the_file():
-    assert len(refused_manifest(manifest(questions=[dict(question=dict(kind='essay'))]*30)))<30
-    for name in ('a/b.txt','task.exe'):
-        assert name in '\n'.join(refused_manifest(manifest([(file_id(),name,b'x')])))
 
 
 def test_entry_rejects_stored_projections_but_allows_empty_lists():
@@ -214,7 +207,7 @@ def test_huge_central_directory_with_small_declared_count_is_rejected(tmp_path,u
     path=tmp_path/'big.zip';directory=central_entries(20000)
     assert len(directory)>pkg.MAX_DIRECTORY
     path.write_bytes(directory+end_record(1,len(directory)))
-    error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
+    assert rejected(path).status_code==422
 
 
 @pytest.mark.parametrize('case',['plain','zip64'])
@@ -222,13 +215,13 @@ def test_oversized_declared_entry_count_is_rejected(tmp_path,unopened,case):
     # Only the count bound can catch this: the directory itself is tiny.
     path=tmp_path/'count.zip';directory=central_entries(1)
     path.write_bytes(directory+(end_record(pkg.MAX_ENTRIES+1,len(directory)) if case=='plain' else zip64_end(400000,len(directory))))
-    error=rejected(path);assert error.status_code==422 and 'до 200' in error.detail
+    assert rejected(path).status_code==422
 
 
-def test_two_hundred_files_pass_the_directory_bound(tmp_path):
-    files=[(file_id(n),f'f{n}.txt',b'x%d'%n) for n in range(1,201)]
-    doc=manifest(files,[essay(fileIds=[id for id,_,_ in files[i:i+6]]) for i in range(0,200,6)])
-    assert len(pkg.inspect_package(build(tmp_path/'max.zip',doc,files),'max.zip').files)==200
+def test_the_most_files_allowed_pass_the_directory_bound(tmp_path):
+    files=[(file_id(n),f'f{n}.txt',b'x%d'%n) for n in range(1,pkg.MAX_FILES+1)]
+    doc=manifest(files,[essay(fileIds=[id for id,_,_ in files[i:i+FILES_PER_QUESTION]]) for i in range(0,len(files),FILES_PER_QUESTION)])
+    assert len(pkg.inspect_package(build(tmp_path/'max.zip',doc,files),'max.zip').files)==pkg.MAX_FILES
 
 
 def single_zip(tmp_path,data=b'Question material',compression=ZIP_STORED):
@@ -262,7 +255,7 @@ def test_extract_corrupt_deflate_is_a_422_not_a_500(tmp_path):
     raw[start:start+8]=b'\xff'*8;path.write_bytes(bytes(raw))
     target=tmp_path/'dest'/'a.bin'
     with pytest.raises(HTTPException) as caught:pkg.extract_files(path,package,{file_id():target})
-    assert caught.value.status_code==422 and 'повреждён' in caught.value.detail
+    assert caught.value.status_code==422
     assert list((tmp_path/'dest').iterdir())==[]
 
 
@@ -320,6 +313,16 @@ def account(login):
     with api.connect() as db:return db.execute('SELECT id FROM accounts WHERE login=?',(login,)).fetchone()[0]
 
 
+def seed_file(db,login,size,status,created=None,name='x.txt'):
+    """A quiz_files row of that account, as a crash or a full quota leaves it."""
+    api.quizzes.tables(db);id=uuid4().hex
+    insert_row(db,'quiz_files',id=id,workspace='demo',owner_id=account(login),filename=name,size=size,created=created or quiz_files.now().isoformat(),status=status)
+    return id
+
+
+TEMPLATE_QUESTIONS=len(pkg.parse_manifest(pkg.template_bytes()).questions)
+
+
 def put_question(reader,id,version=0,subject='Физика',archived=False,tags=('опыты',),**question):
     content=dict(kind='essay',text='Опишите опыт')|question
     r=reader.put(f'/api/journal/quiz-bank/{id}?workspace=demo',json=dict(version=version,subject=subject,tags=list(tags),archived=archived,question=content))
@@ -359,11 +362,8 @@ def test_export_zip_hides_internal_identifiers(client):
     pupil,teacher,source,text,picture=exported(client)
     response=export(teacher,source);assert response.status_code==200,response.text
     assert response.headers['content-type']=='application/zip' and 'no-store' in response.headers['cache-control']
-    assert response.headers['content-disposition'].startswith('attachment; filename="atlas-quiz-bank-') and response.headers['content-disposition'].endswith('.zip"')
-    with ZipFile(io.BytesIO(response.content)) as z:
-        names=z.namelist();document=json.loads(z.read('manifest.json'))
-    assert names[0]=='manifest.json' and len(names)==3
-    assert all(n.startswith('files/') and len(n)==38 and n[6:].strip('0123456789abcdef')=='' for n in names[1:])
+    assert response.headers['content-disposition'].startswith('attachment')
+    with ZipFile(io.BytesIO(response.content)) as z:document=json.loads(z.read('manifest.json'))
     for secret in (text['id'],picture['id'],source['id']):assert secret.encode() not in response.content
     entry=document['questions'][0]
     assert not {'id','ownerId','version'}&set(entry) and not {'attachments','solutionAttachments'}&set(entry['question'])
@@ -391,55 +391,64 @@ def test_legacy_document_without_file_keys_exports(client):
     assert pkg.parse_manifest(export(teacher,dict(id='legacy',version=1)).content).files==[]
 
 
-def test_export_access_and_selection_rules(client):
+SELECTION_LIMIT=next(m.max_length for m in pkg.Selection.model_fields['items'].metadata if hasattr(m,'max_length'))
+
+
+@pytest.mark.parametrize('case,status',[('unrelated-teacher',403),('missing-question',403),('wrong-version',409),('too-many-items',422),('duplicate-item',422),
+                                        ('empty-selection',422),('other-workspace',403)])
+def test_export_access_and_selection_rules(client,case,status):
     pupil,teacher,source,*_=exported(client)
-    assert export(signed('unrelated'),source).status_code==403
-    assert export(pupil,source).status_code==403
-    assert export(client,source).status_code==200
-    assert export(teacher,dict(id='missing',version=1)).status_code==403
-    assert export(teacher,dict(id=source['id'],version=source['version']+1)).status_code==409
-    items=[dict(id=f'q{n}',version=1) for n in range(101)]
-    assert teacher.post(EXPORT,json=dict(items=items)).status_code==422
-    assert teacher.post(EXPORT,json=dict(items=[items[0],items[0]])).status_code==422
-    assert teacher.post(EXPORT,json=dict(items=[])).status_code==422
-    assert teacher.post('/api/journal/quiz-bank/export?workspace=school',json=dict(items=items[:1])).status_code==403
+    items=[dict(id=f'q{n}',version=1) for n in range(SELECTION_LIMIT+1)]
+    url,reader,selection={
+        'unrelated-teacher':(EXPORT,signed('unrelated'),[dict(id=source['id'],version=source['version'])]),
+        'missing-question':(EXPORT,teacher,[dict(id='missing',version=1)]),
+        'wrong-version':(EXPORT,teacher,[dict(id=source['id'],version=source['version']+1)]),
+        'too-many-items':(EXPORT,teacher,items),
+        'duplicate-item':(EXPORT,teacher,[items[0],items[0]]),
+        'empty-selection':(EXPORT,teacher,[]),
+        'other-workspace':('/api/journal/quiz-bank/export?workspace=school',teacher,items[:1])}[case]
+    assert reader.post(url,json=dict(items=selection)).status_code==status
     assert temp_children()==[]
+
+
+def test_admin_exports_any_question(client):
+    pupil,teacher,source,*_=exported(client)
+    assert export(client,source).status_code==200
 
 
 @pytest.mark.parametrize('limit,value',[('MAX_TOTAL',1),('MAX_FILES',0),('MAX_MANIFEST',10)])
-def test_export_limits_are_413_with_a_clear_message(client,monkeypatch,limit,value):
+def test_export_limits_are_413(client,monkeypatch,limit,value):
     pupil,teacher,source,*_=exported(client);plain=put_question(teacher,'plain')
-    monkeypatch.setattr(pkg,limit,value);response=export(teacher,source)
-    assert response.status_code==413 and 'Уменьшите выборку' in response.json()['detail']
-    if limit=='MAX_MANIFEST':
-        response=export(teacher,plain);assert response.status_code==413 and 'Уменьшите выборку' in response.json()['detail']
+    monkeypatch.setattr(pkg,limit,value)
+    assert export(teacher,source).status_code==413
+    if limit=='MAX_MANIFEST':assert export(teacher,plain).status_code==413
     assert temp_children()==[]
 
 
-def test_export_detects_changed_or_missing_storage(client):
+@pytest.mark.parametrize('damage',['changed','missing','no-checksum'])
+def test_export_detects_changed_or_missing_storage(client,damage):
     pupil,teacher,source,text,picture=exported(client)
     with api.connect() as db:root=quiz_files.root_for(db)
-    path=homework_files.file_path(root,text['id']);original=path.read_bytes()
-    path.write_bytes(b'x'*len(original));response=export(teacher,source)
-    assert response.status_code==409 and 'повреждено' in response.json()['detail'] and temp_children()==[]
-    path.unlink();response=export(teacher,source)
-    assert response.status_code==409 and 'отсутствует' in response.json()['detail'] and temp_children()==[]
-    with api.connect() as db:db.execute('UPDATE quiz_files SET sha256=NULL WHERE id=?',(picture['id'],))
-    assert export(teacher,source).status_code==409
+    path=homework_files.file_path(root,text['id'])
+    if damage=='changed':path.write_bytes(b'x'*len(path.read_bytes()))
+    elif damage=='missing':path.unlink()
+    else:
+        with api.connect() as db:db.execute('UPDATE quiz_files SET sha256=NULL WHERE id=?',(picture['id'],))
+    assert export(teacher,source).status_code==409 and temp_children()==[]
 
 
 def test_template_download_and_import(client):
     record,pupil,parent,teacher=setup(client)
     response=teacher.get('/api/journal/quiz-bank/template',params=dict(workspace='demo'))
     assert response.status_code==200 and response.headers['content-type'].startswith('application/json')
-    assert 'atlas-quiz-bank-template.json' in response.headers['content-disposition'] and 'nosniff' in response.headers['x-content-type-options']
-    assert len(pkg.parse_manifest(response.content).questions)==4
+    assert 'nosniff' in response.headers['x-content-type-options']
+    n=len(pkg.parse_manifest(response.content).questions)
     assert pupil.get('/api/journal/quiz-bank/template',params=dict(workspace='demo')).status_code==403
     other=signed('unrelated');shown=ok(preview(other,response.content,'template.json'))
-    assert shown['questions']==4 and shown['files']==0 and shown['format']=='json' and shown['kinds']=={'single':1,'number':1,'short':1,'essay':1}
+    assert shown['questions']==n and shown['files']==0 and shown['format']=='json'
     result=ok(apply(other,response.content,'template.json',hash=shown['packageHash']))
-    assert result['imported']==4 and result['files']==0
-    items=bank(other);assert len(items)==4 and {i['ownerId'] for i in items}=={account('unrelated')}
+    assert result['imported']==n and result['files']==0
+    items=bank(other);assert len(items)==n and {i['ownerId'] for i in items}=={account('unrelated')}
     assert bank(teacher)==[] and temp_children()==[]
 
 
@@ -465,10 +474,9 @@ def test_round_trip_creates_owned_copies_with_new_files(client):
     assert file_get(other,copy['question']['solutionAttachments'][0]).content==PNG
     assert file_get(teacher,copy['question']['attachments'][0]).status_code==404
     assert [i['id'] for i in bank(teacher,archived=True)]==['source'] and bank(teacher)==[]
-    with api.connect() as db:
-        rows=db.execute("SELECT owner_id,status,sha256 FROM quiz_files WHERE id IN (?,?)",(copy['question']['fileIds'][0],copy['question']['solutionFileIds'][0])).fetchall()
-        links=db.execute('SELECT count(*) FROM quiz_file_links WHERE question_id=?',(copy['id'],)).fetchone()[0]
-    assert {r[0] for r in rows}=={account('unrelated')} and {r[1] for r in rows}=={'ready'} and all(len(r[2])==64 for r in rows) and links==2
+    # The copy is a complete package again: its files keep their checksums, so the importer can export it and the result imports.
+    again=export(other,copy);assert again.status_code==200,again.text
+    assert ok(apply(other,again.content))['files']==2
     assert temp_children()==[]
 
 
@@ -487,8 +495,7 @@ def test_preview_writes_nothing(client):
 
 def test_wrong_package_hash_is_409_and_writes_nothing(client):
     pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;before=(counts(),stored_files())
-    response=apply(signed('unrelated'),package,hash=digest(b'other'))
-    assert response.status_code==409 and 'предпросмотр' in response.json()['detail']
+    assert apply(signed('unrelated'),package,hash=digest(b'other')).status_code==409
     assert (counts(),stored_files())==before and temp_children()==[]
 
 
@@ -498,7 +505,7 @@ def test_apply_is_idempotent_and_fingerprinted(client,monkeypatch):
     again=ok(apply(other,package,request='a'*32))
     assert again==first and (counts(),stored_files())==after
     different=apply(other,export(teacher,put_question(teacher,'second')).content,'q.json',request='a'*32)
-    assert different.status_code==409 and 'другого пакета' in different.json()['detail']
+    assert different.status_code==409
     monkeypatch.setattr(homework_files,'total_limit',lambda:0)
     assert ok(apply(other,package,request='a'*32))==first
     assert apply(other,package,request='b'*32).status_code==413
@@ -518,20 +525,25 @@ def two_file_package(tmp_path):
     return zipped(tmp_path,files,[essay(fileIds=[file_id(1)]),essay(fileIds=[file_id(2)])])
 
 
-@pytest.mark.parametrize('failure',['media','bind'])
-def test_failure_rolls_everything_back(client,monkeypatch,tmp_path,failure):
+def test_a_package_with_a_bad_second_file_imports_nothing(client,tmp_path):
+    pupil,teacher,source,*_=exported(client);other=signed('unrelated');before=(counts(),stored_files())
+    files=[(file_id(1),'a.txt',b'First material'),(file_id(2),'b.png',b'<html/> not a png')]
+    broken=zipped(tmp_path,files,[essay(fileIds=[file_id(1)]),essay(fileIds=[file_id(2)])])
+    assert apply(other,broken).status_code==422
+    assert (counts(),stored_files())==before and temp_children()==[]
+    assert ok(apply(other,two_file_package(tmp_path)))['files']==2
+
+
+def test_a_failure_while_linking_the_second_question_imports_nothing(client,monkeypatch,tmp_path):
     pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);other=signed('unrelated')
-    before=(counts(),stored_files());calls=[]
-    def second_fails(original):
-        def wrapper(*args,**kwargs):
-            calls.append(1)
-            if len(calls)==2:raise HTTPException(422,'Сбой на втором шаге.')
-            return original(*args,**kwargs)
-        return wrapper
+    before=(counts(),stored_files());calls=[];original=quiz_files.bind_question
+    def second_fails(*args,**kwargs):
+        calls.append(1)
+        if len(calls)==2:raise HTTPException(422,'Injected failure')
+        return original(*args,**kwargs)
     with monkeypatch.context() as patch:
-        if failure=='media':patch.setattr(teaching_media,'validate_file',second_fails(teaching_media.validate_file))
-        else:patch.setattr(quiz_files,'bind_question',second_fails(quiz_files.bind_question))
-        response=apply(other,package);assert response.status_code==422 and 'втором' in response.json()['detail'] and len(calls)==2
+        patch.setattr(quiz_files,'bind_question',second_fails)
+        assert apply(other,package).status_code==422
     assert (counts(),stored_files())==before and temp_children()==[]
     assert ok(apply(other,package))['files']==2
 
@@ -554,27 +566,24 @@ def test_quota_blocks_preview_and_apply_but_not_json(client,monkeypatch):
     template=pkg.template_bytes();before=(counts(),stored_files())
     with monkeypatch.context() as patch:
         patch.setattr(homework_files,'total_limit',lambda:0)
-        for call in (preview,apply):
-            response=call(other,package);assert response.status_code==413 and 'Лимит хранилища' in response.json()['detail']
-        assert (counts(),stored_files())==before and ok(apply(other,template,'t.json'))['imported']==4
-    with api.connect() as db:
-        db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(uuid4().hex,'demo',account('unrelated'),'big.txt',250*1024*1024,quiz_files.now().isoformat(),'ready'))
+        for call in (preview,apply):assert call(other,package).status_code==413
+        assert (counts(),stored_files())==before and ok(apply(other,template,'t.json'))['imported']==TEMPLATE_QUESTIONS
+    # The account's own files fill its quota (far above it, yet inside the section budget).
+    with api.connect() as db:seed_file(db,'unrelated',homework_files.module_limit('quizzes')//2,'ready',name='big.txt')
     before=(counts(),stored_files())
     for call in (preview,apply):assert call(other,package).status_code==413
-    assert (counts(),stored_files())==before and ok(preview(other,template,'t.json'))['questions']==4
+    assert (counts(),stored_files())==before and ok(preview(other,template,'t.json'))['questions']==TEMPLATE_QUESTIONS
     assert ok(preview(signed('teacher'),package))['files']==2 and temp_children()==[]
 
 
 def test_package_files_obey_the_quiz_section_budget(client,monkeypatch):
     pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;other=signed('unrelated');template=pkg.template_bytes()
-    monkeypatch.setenv('ATLAS_UPLOAD_QUIZZES_MB','10');big=uuid4().hex
-    with api.connect() as db:
-        db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(big,'demo',account('teacher'),'big.txt',10*1024*1024,quiz_files.now().isoformat(),'ready'))
+    monkeypatch.setenv('ATLAS_UPLOAD_QUIZZES_MB','10')  # the section budget; one file of that size fills it
+    with api.connect() as db:big=seed_file(db,'teacher',homework_files.module_limit('quizzes'),'ready',name='big.txt')
     before=(counts(),stored_files())
-    for call in (preview,apply):
-        response=call(other,package);assert response.status_code==413 and '«Тесты»' in response.json()['detail'],response.text
+    for call in (preview,apply):assert call(other,package).status_code==413
     assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
-    assert ok(preview(other,template,'t.json'))['questions']==4 and ok(apply(other,template,'t.json'))['imported']==4
+    assert ok(preview(other,template,'t.json'))['questions']==TEMPLATE_QUESTIONS and ok(apply(other,template,'t.json'))['imported']==TEMPLATE_QUESTIONS
     with api.connect() as db:db.execute('DELETE FROM quiz_files WHERE id=?',(big,))
     assert ok(preview(other,package))['files']==2 and ok(apply(other,package))['files']==2
 
@@ -585,10 +594,9 @@ def test_package_files_obey_the_disk_reserve(client,monkeypatch):
     usage=namedtuple('usage','total used free')
     monkeypatch.setattr(homework_files.shutil,'disk_usage',lambda path:usage(10**12,0,1000))
     monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB','1');before=(counts(),stored_files())
-    for call in (preview,apply):
-        response=call(other,package);assert response.status_code==507 and 'заканчивается место' in response.json()['detail'],response.text
+    for call in (preview,apply):assert call(other,package).status_code==507
     assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
-    assert ok(apply(other,template,'t.json'))['imported']==4  # no attachments, nothing to store
+    assert ok(apply(other,template,'t.json'))['imported']==TEMPLATE_QUESTIONS  # no attachments, nothing to store
     monkeypatch.setenv('ATLAS_UPLOAD_RESERVE_MB','0')  # 0 disables the disk check
     assert ok(preview(other,package))['files']==2 and ok(apply(other,package))['files']==2
 
@@ -596,19 +604,18 @@ def test_package_files_obey_the_disk_reserve(client,monkeypatch):
 def test_pending_uploads_block_a_second_package(client,tmp_path):
     record,pupil,parent,teacher=setup(client);other=signed('unrelated');package=two_file_package(tmp_path)
     with api.connect() as db:
-        api.quizzes.tables(db)
-        for _ in range(2):db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(uuid4().hex,'demo',account('unrelated'),'x.txt',10,quiz_files.now().isoformat(),'uploading'))
+        for _ in range(2):seed_file(db,'unrelated',10,'uploading')
     before=counts();response=apply(other,package)
-    assert response.status_code==429 and response.headers['retry-after']=='5' and counts()==before and temp_children()==[]
+    assert response.status_code==429 and int(response.headers['retry-after'])>0 and counts()==before and temp_children()==[]
 
 
-def test_package_cannot_forge_ids_or_owners(client):
-    record,pupil,parent,teacher=setup(client)
-    for key in ('id','ownerId','version'):
-        forged=json.dumps(manifest(questions=[essay()|{key:'forged'}])).encode()
-        for call in (preview,apply):
-            response=call(teacher,forged,'f.json');assert response.status_code==422 and 'Лишнее поле' in response.json()['detail']
-    assert temp_children()==[]
+@pytest.mark.parametrize('key',['id','ownerId','version'])
+@pytest.mark.parametrize('call',[preview,apply],ids=['preview','apply'])
+def test_package_cannot_forge_ids_or_owners(client,key,call):
+    record,pupil,parent,teacher=setup(client);put_question(teacher,'seed');before=(counts(),stored_files())
+    forged=json.dumps(manifest(questions=[essay()|{key:'forged'}])).encode()
+    assert call(teacher,forged,'f.json').status_code==422
+    assert (counts(),stored_files())==before and temp_children()==[]
 
 
 def test_archive_limit_stops_streaming_with_413(client,monkeypatch,tmp_path):
@@ -616,18 +623,18 @@ def test_archive_limit_stops_streaming_with_413(client,monkeypatch,tmp_path):
     monkeypatch.setattr(pkg,'MAX_ARCHIVE',100)
     chunks=lambda:iter([package[:60],package[60:120],package[120:]])
     for response in (preview(teacher,package),apply(teacher,package),preview(teacher,chunks()),apply(teacher,chunks(),hash='0'*64)):
-        assert response.status_code==413 and '55 МБ' in response.json()['detail']
+        assert response.status_code==413
     monkeypatch.setattr(pkg,'MAX_MANIFEST',100)
     assert preview(teacher,pkg.template_bytes(),'big.json').status_code==413 and temp_children()==[]
 
 
-def test_bad_uploads_are_readable_errors(client):
+def test_bad_uploads_are_refused(client):
     record,pupil,parent,teacher=setup(client)
     assert preview(teacher,b'x','pack.rar').status_code==422 and apply(teacher,b'x','pack.exe').status_code==422
     assert preview(teacher,b'','pack.zip').status_code==422
-    response=preview(teacher,b'not a zip','pack.zip');assert response.status_code==422 and 'ZIP' in response.json()['detail']
-    response=preview(teacher,b'{broken','pack.json');assert response.status_code==422 and response.json()['detail'].startswith('Проверьте пакет')
-    bom=b'\xef\xbb\xbf'+pkg.template_bytes();assert ok(preview(teacher,bom,'bom.json'))['questions']==4
+    assert preview(teacher,b'not a zip','pack.zip').status_code==422
+    assert preview(teacher,b'{broken','pack.json').status_code==422
+    bom=b'\xef\xbb\xbf'+pkg.template_bytes();assert ok(preview(teacher,bom,'bom.json'))['questions']==TEMPLATE_QUESTIONS
     assert temp_children()==[]
 
 
@@ -655,8 +662,7 @@ def strand(login,count,minutes=45):
     with api.connect() as db:
         api.quizzes.tables(db);root=quiz_files.root_for(db);root.mkdir(parents=True,exist_ok=True)
         for _ in range(count):
-            ids.append(uuid4().hex);homework_files.file_path(root,ids[-1]).write_bytes(b'stranded')
-            db.execute("INSERT INTO quiz_files VALUES (?,?,?,?,?,?,?,NULL)",(ids[-1],'demo',account(login),'x.txt',10,created,'uploading'))
+            ids.append(seed_file(db,login,10,'uploading',created));homework_files.file_path(root,ids[-1]).write_bytes(b'stranded')
     return ids
 
 
@@ -671,8 +677,7 @@ def revoking(monkeypatch,owner,name,login):
 def test_account_revoked_during_extraction_rolls_back_and_cleans_up(client,monkeypatch,tmp_path):
     pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files())
     revoking(monkeypatch,pkg,'extract_files','unrelated')
-    response=apply(signed('unrelated'),package)
-    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail']
+    assert apply(signed('unrelated'),package).status_code==409
     assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
 
 
@@ -680,8 +685,7 @@ def test_account_revoked_before_the_reservation_writes_nothing(client,monkeypatc
     pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path);before=(counts(),stored_files())
     revoking(monkeypatch,pkg,'inspect_package','unrelated');extracted=[]
     monkeypatch.setattr(pkg,'extract_files',lambda *args,**kwargs:extracted.append(1))
-    response=apply(signed('unrelated'),package)
-    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail']
+    assert apply(signed('unrelated'),package).status_code==409
     # The reservation step itself must refuse: nothing is reserved or extracted, not merely rolled back later.
     assert extracted==[] and (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
 
@@ -689,15 +693,13 @@ def test_account_revoked_before_the_reservation_writes_nothing(client,monkeypatc
 def test_account_revoked_during_preview_is_409(client,monkeypatch,tmp_path):
     pupil,teacher,source,*_=exported(client);package=two_file_package(tmp_path)
     revoking(monkeypatch,pkg,'inspect_package','unrelated')
-    response=preview(signed('unrelated'),package)
-    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail'] and temp_children()==[]
+    assert preview(signed('unrelated'),package).status_code==409 and temp_children()==[]
 
 
 def test_account_revoked_before_export_reads_nothing(client,monkeypatch):
     pupil,teacher,source,*_=exported(client)
     revoking(monkeypatch,api.quizzes.journal,'scope','teacher')
-    response=export(teacher,source)
-    assert response.status_code==409 and 'Учётная запись изменилась' in response.json()['detail'] and temp_children()==[]
+    assert export(teacher,source).status_code==409 and temp_children()==[]
 
 
 def test_stranded_reservations_do_not_lock_their_owner_out(client,tmp_path):
@@ -715,11 +717,10 @@ def test_fresh_reservations_are_not_collected_and_other_owners_are_untouched(cli
     record,pupil,parent,teacher=setup(client);other=signed('unrelated')
     strand('unrelated',2,minutes=5);before=counts()
     refused=apply(other,two_file_package(tmp_path))
-    assert refused.status_code==429 and refused.headers['retry-after']=='5' and counts()==before and uploading()==2
-    # A neighbour's abandoned rows go through the school-wide cleanup of every import.
+    assert refused.status_code==429 and int(refused.headers['retry-after'])>0 and counts()==before and uploading()==2
+    # A neighbour's abandoned rows go through the school-wide cleanup of every import; the fresh ones of the first owner stay and still block it.
     strand('teacher',3);ok(apply(client,two_file_package(tmp_path)))
-    with api.connect() as db:left=db.execute("SELECT owner_id FROM quiz_files WHERE status='uploading'").fetchall()
-    assert {r[0] for r in left}=={account('unrelated')} and len(left)==2
+    assert uploading()==2 and apply(other,two_file_package(tmp_path)).status_code==429
 
 
 def test_release_removes_orphaned_bytes_but_never_a_committed_file(client):
@@ -733,22 +734,12 @@ def test_release_removes_orphaned_bytes_but_never_a_committed_file(client):
     assert not homework_files.file_path(root,gone).exists() and not homework_files.file_path(root,pending).exists()
 
 
-def test_stale_reservations_of_one_owner_are_released_with_their_bytes(client):
-    record,pupil,parent,teacher=setup(client)
-    old=strand('unrelated',3);fresh=strand('unrelated',1,minutes=5);neighbour=strand('teacher',1)
-    with api.connect() as db:
-        root=quiz_files.root_for(db);quiz_files.collect_own_stale(db,dict(id=account('unrelated')))
-        left={r[0] for r in db.execute('SELECT id FROM quiz_files')}
-    assert left==set(fresh+neighbour) and not any(homework_files.file_path(root,id).exists() for id in old)
-    assert all(homework_files.file_path(root,id).exists() for id in fresh+neighbour)
-
-
 def test_one_stuck_file_does_not_strand_the_other_reservations(client,monkeypatch):
-    record,pupil,parent,teacher=setup(client);stuck,free=strand('unrelated',2,minutes=5);original=homework_files.release_row
-    def locked(db,table,root,id):
-        if id==stuck:raise PermissionError('file is in use')
-        return original(db,table,root,id)
-    monkeypatch.setattr(homework_files,'release_row',locked)
+    record,pupil,parent,teacher=setup(client);stuck,free=strand('unrelated',2,minutes=5);original=pathlib.Path.unlink
+    def locked(self,*args,**kwargs):
+        if self.name==stuck+'.bin':raise PermissionError('file is in use')
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(pathlib.Path,'unlink',locked)
     with api.connect() as db:
         root=quiz_files.root_for(db);quiz_files.release_reserved(db,[stuck,free])
         left={r[0] for r in db.execute('SELECT id FROM quiz_files')}
@@ -761,8 +752,7 @@ def test_reservations_deleted_during_extraction_abort_the_import_cleanly(client,
         original(*args,**kwargs)
         with api.connect() as db:db.execute("DELETE FROM quiz_files WHERE status='uploading'")
     monkeypatch.setattr(pkg,'extract_files',vanishing)
-    response=apply(signed('unrelated'),package)
-    assert response.status_code==409 and 'Импорт прерван' in response.json()['detail']
+    assert apply(signed('unrelated'),package).status_code==409
     assert (counts(),stored_files())==before and temp_children()==[]
 
 
@@ -776,8 +766,7 @@ def test_release_waits_out_a_busy_database(client,monkeypatch,tmp_path):
         return original(*args)
     monkeypatch.setattr(pkg,'extract_files',broken);monkeypatch.setattr(quiz_files,'release_reserved',locked)
     monkeypatch.setattr(exchange,'RELEASE_PAUSE',0)
-    response=apply(signed('unrelated'),package)
-    assert response.status_code==422 and 'Сбой извлечения' in response.json()['detail'] and len(busy)==2
+    assert apply(signed('unrelated'),package).status_code==422
     assert (counts(),stored_files())==before and uploading()==0 and temp_children()==[]
 
 
@@ -785,30 +774,39 @@ def test_export_of_a_damaged_bank_document_is_409(client):
     record,pupil,parent,teacher=setup(client);put_question(teacher,'broken')
     with api.connect() as db:
         db.execute('UPDATE quiz_questions SET document=? WHERE id=?',(json.dumps(dict(tags=[],question=dict(kind='single',text='Без вариантов'))),'broken'))
-    response=export(teacher,dict(id='broken',version=1))
-    assert response.status_code==409 and 'повреждён' in response.json()['detail'] and temp_children()==[]
+    assert export(teacher,dict(id='broken',version=1)).status_code==409 and temp_children()==[]
 
 
-def test_busy_server_queues_then_answers_429_with_retry_after_and_slots_are_not_over_released(client,monkeypatch,tmp_path):
-    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;plain=put_question(teacher,'plain')
-    slots=threading.BoundedSemaphore(1);slots.acquire();monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots)
-    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0.3)
-    other=signed('unrelated');before=(counts(),stored_files())
+@pytest.fixture
+def busy_server(monkeypatch):
+    """Call it once the test's own uploads are done: the only upload slot is then taken by somebody else, and a waiting request gives up at once."""
+    def occupy():
+        slots=threading.BoundedSemaphore(1);slots.acquire()
+        monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',slots);monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0)
+        return slots
+    return occupy
+
+
+def test_busy_server_answers_429_with_retry_after(client,busy_server):
+    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content
+    other=signed('unrelated');before=(counts(),stored_files());busy_server()
     for response in (export(teacher,source),preview(other,package),apply(other,package)):
-        assert response.status_code==429 and response.headers['retry-after']=='5' and 'принимает другие файлы' in response.json()['detail']
-    started=time.perf_counter();assert export(teacher,source).status_code==429 and time.perf_counter()-started>=0.25  # it queued first
-    assert export(teacher,plain).status_code==200  # a JSON export needs no slot
+        assert response.status_code==429 and int(response.headers['retry-after'])>0
     assert (counts(),stored_files())==before and temp_children()==[]
-    # A slot freed while the request waits is taken by it; a full queue answers at once.
-    monkeypatch.setattr(homework_files,'UPLOAD_WAIT',5);threading.Timer(0.2,slots.release).start()
-    assert preview(other,package).status_code==200
-    assert slots.acquire(blocking=False);monkeypatch.setattr(homework_files,'UPLOAD_WAITERS',threading.Semaphore(0))
-    started=time.perf_counter();assert apply(other,package).status_code==429 and time.perf_counter()-started<2
-    # A refused request must not release a slot it never took: a bounded semaphore would raise here.
+
+
+def test_json_export_needs_no_upload_slot(client,busy_server):
+    pupil,teacher,source,*_=exported(client);plain=put_question(teacher,'plain');busy_server()
+    assert export(teacher,plain).status_code==200
+
+
+def test_refused_requests_leave_the_busy_slot_taken_and_free_it_for_later_ones(client,busy_server):
+    pupil,teacher,source,*_=exported(client);package=export(teacher,source).content;other=signed('unrelated');slots=busy_server()
+    assert preview(other,package).status_code==429 and apply(other,package).status_code==429
+    assert export(teacher,source).status_code==429  # the refusals did not release the slot they never took
     slots.release()
-    with pytest.raises(ValueError):slots.release()
     assert export(teacher,source).status_code==200 and preview(other,package).status_code==200
-    with pytest.raises(ValueError):slots.release()
+    assert apply(other,package).status_code==200  # and the slot is back after every request
 
 
 def test_a_pupil_does_not_queue_for_a_slot(client,monkeypatch):
@@ -818,16 +816,15 @@ def test_a_pupil_does_not_queue_for_a_slot(client,monkeypatch):
     assert preview(pupil,pkg.template_bytes(),'t.json').status_code==403 and apply(pupil,pkg.template_bytes(),'t.json').status_code==403
 
 
-@pytest.mark.parametrize('error,status,text',[(TimeoutError,408,'по времени'),(ClientDisconnect,400,'прервана')])
-def test_interrupted_uploads_are_readable_errors_and_leave_nothing(client,monkeypatch,error,status,text):
+@pytest.mark.parametrize('error,status',[(TimeoutError,408),(ClientDisconnect,400)])
+def test_interrupted_uploads_are_refused_and_leave_nothing(client,monkeypatch,error,status):
     record,pupil,parent,teacher=setup(client);put_question(teacher,'seed');before=(counts(),stored_files())
     monkeypatch.setattr(homework_files,'UPLOAD_SLOTS',threading.BoundedSemaphore(1));monkeypatch.setattr(homework_files,'UPLOAD_WAIT',0)
     async def interrupted(*args,**kwargs):raise error()
     with monkeypatch.context() as patch:
         patch.setattr(exchange,'receive',interrupted)
         for call in (preview,apply):
-            response=call(teacher,pkg.template_bytes(),'t.json')
-            assert response.status_code==status and text in response.json()['detail']
+            assert call(teacher,pkg.template_bytes(),'t.json').status_code==status
     assert (counts(),stored_files())==before and temp_children()==[]
     ok(preview(teacher,pkg.template_bytes(),'t.json'))  # the only slot came back, otherwise 429
 

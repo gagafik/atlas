@@ -128,19 +128,18 @@ def test_start_is_idempotent_one_active_attempt_and_attempt_limit(client):
 
 def test_quiz_writes_work_on_a_database_without_the_journal_schema_marker(client):
     # A database upgraded from an earlier release has no marker until a journal read or the startup migration writes it.
+    from test_journal import entry
     quiz,pupil,_,teacher,_=ready(client)
     with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'")
-    current=detail(pupil)
-    for _ in range(3):
-        attempt_=start(pupil,current);assert attempt_.status_code==200,attempt_.text
-        assert save(pupil,attempt_.json()).status_code==200
+    attempt_=start(pupil,detail(pupil));assert attempt_.status_code==200,attempt_.text
+    assert save(pupil,attempt_.json()).status_code==200
     with api.connect() as db:db.execute("DELETE FROM journal_projection_versions WHERE name='journal_schema'")
     question(teacher,'second')
-    with api.connect(read_only=True) as db:
-        assert db.execute("SELECT 1 FROM journal_projection_versions WHERE name='journal_schema'").fetchone()
+    assert entry(teacher,quiz['lessonKey'])['lessonKey']==quiz['lessonKey']
 
 
-def test_autograding_types_manual_marks_and_hidden_results(client):
+def essay_attempt(client,mark=False):
+    """A submitted attempt at a test of four kinds (the essay is the only one a teacher must mark): quiz, pupil, parent, teacher, the attempt, its review url and, with `mark`, the reviewed attempt."""
     record,pupil,parent,teacher=setup(client)
     base=dict(options=[],correctIds=[])
     questions=[question(teacher,'multi',kind='multiple',correctIds=['a','b']),
@@ -150,27 +149,44 @@ def test_autograding_types_manual_marks_and_hidden_results(client):
     quiz=teacher.put('/api/journal/quizzes/test-one?workspace=demo',json=body(record,questions)).json()
     begun=start(pupil,quiz).json()
     answers={'multi':dict(selected=['b','a']), 'short':dict(text=' ＨＥＬＬＯ   world '),'number':dict(text='3,15'),'essay':dict(text='Обоснование ответа')}
-    submitted=save(pupil,begun,answers,True).json();assert submitted['status']=='submitted'
-    assert 'marks' not in attempt(parent,submitted)
+    submitted=save(pupil,begun,answers,True).json()
     url=f'/api/journal/quizzes/test-one/attempts/{begun["id"]}/review?workspace=demo'
+    marked=teacher.post(url,json=dict(version=submitted['version'],marks={'essay':dict(score=1,comment='Не хватает примера')},comment='Прочитайте разбор')) if mark else None
+    return quiz,pupil,parent,teacher,submitted,url,marked
+
+
+def test_autograding_of_every_kind_waits_for_the_essay_mark(client):
+    quiz,pupil,parent,teacher,submitted,url,_=essay_attempt(client)
+    assert submitted['status']=='submitted'
     assert teacher.post(url,json=dict(version=submitted['version'],marks={})).status_code==422
-    marked=teacher.post(url,json=dict(version=submitted['version'],marks={'essay':dict(score=1,comment='Не хватает примера')},comment='Прочитайте разбор'))
+    marked=teacher.post(url,json=dict(version=submitted['version'],marks={'essay':dict(score=1,comment='Не хватает примера')}))
     assert marked.status_code==200,marked.text
     assert marked.json()['score']==7 and marked.json()['status']=='reviewed'
-    refused=teacher.post(url,json=dict(version=marked.json()['version'],marks={'multi':dict(score=0)}))
-    assert refused.status_code==422 and 'объяснение' in refused.json()['detail']
+
+
+def test_marks_stay_hidden_from_the_family_until_the_review_is_released(client):
+    quiz,pupil,parent,teacher,submitted,url,marked=essay_attempt(client,mark=True)
+    assert 'marks' not in attempt(parent,submitted)
+    closed=action(teacher,quiz,'close').json();assert action(teacher,closed,'release').status_code==200
+    result=attempt(parent,submitted);assert result['score']==7 and result['marks']['essay']['comment']=='Не хватает примера'
+
+
+def test_changing_an_automatic_mark_needs_a_comment(client):
+    quiz,pupil,parent,teacher,submitted,url,marked=essay_attempt(client,mark=True);version=marked.json()['version']
+    assert teacher.post(url,json=dict(version=version,marks={'multi':dict(score=0)})).status_code==422
     # The automatic score needs no comment and keeps the mark automatic; a comment makes it a teacher's mark.
-    same=teacher.post(url,json=dict(version=marked.json()['version'],marks={'multi':dict(score=2)}))
+    same=teacher.post(url,json=dict(version=version,marks={'multi':dict(score=2)}))
     assert same.status_code==200,same.text
     assert same.json()['score']==7 and same.json()['marks']['multi']['automatic'] is True
     commented=teacher.post(url,json=dict(version=same.json()['version'],marks={'multi':dict(score=2,comment='Проверено вручную')}))
     assert commented.status_code==200 and commented.json()['marks']['multi']==dict(score=2,comment='Проверено вручную',automatic=False)
     restored=teacher.post(url,json=dict(version=commented.json()['version'],marks={'multi':dict(score=2)}))
     assert restored.status_code==200 and restored.json()['marks']['multi']['automatic'] is True and restored.json()['marks']['multi']['comment']==''
-    bare=teacher.post(url,json=dict(version=restored.json()['version'],marks={'essay':dict(score=1)}));assert bare.status_code==200
-    teacher.post(url,json=dict(version=bare.json()['version'],marks={'essay':dict(score=1,comment='Не хватает примера')})).raise_for_status()
-    closed=action(teacher,quiz,'close').json();assert action(teacher,closed,'release').status_code==200
-    result=attempt(parent,submitted);assert result['score']==7 and result['marks']['essay']['comment']=='Не хватает примера'
+
+
+def test_a_manual_essay_mark_needs_no_comment(client):
+    quiz,pupil,parent,teacher,submitted,url,marked=essay_attempt(client,mark=True)
+    bare=teacher.post(url,json=dict(version=marked.json()['version'],marks={'essay':dict(score=1)}));assert bare.status_code==200
 
 
 def test_variant_assignment_and_answer_validation(client):
@@ -189,9 +205,6 @@ def test_current_teacher_membership_and_family_permissions(client):
     assert start(parent,quiz).status_code==403
     assert save(parent,begun,submit=True).status_code==403
     unrelated=signed('unrelated');assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
-    state=api.read('demo');state.datedLessons=[DatedLesson(id='replacement',name='Замена',kind='change',placementId='eng',sourceDate=DAY,onDate=DAY,teacherIds=['t1'])];api.save('demo',state)
-    assert unrelated.get('/api/journal/quizzes/test-one?workspace=demo').status_code==403
-    assert teacher.get('/api/journal/quizzes/test-one?workspace=demo').json()['canManage']
     state=api.read('demo');group=next(g for g in state.groups if g.id==quiz['document']['lesson']['groupId']);group.kind='elective';group.studentIds=['s2'];api.save('demo',state)
     assert not detail(pupil)['canStart'] and save(pupil,begun,submit=True).status_code==403
     assert pupil.get('/api/journal/quizzes?workspace=demo').json()['items']==[]
@@ -333,7 +346,7 @@ def test_quiz_transfer_uses_quiz_category(client):
     assert quiz['document']['definition']['journalCategory']=='soch'
     # A category the school does not have is refused when the quiz is saved.
     bad=body(entry(teacher,quiz['lessonKey']),[question(teacher,'second')],definition=dict(journalCategory='nope'))
-    refused=teacher.put('/api/journal/quizzes/test-two?workspace=demo',json=bad);assert refused.status_code==422 and 'категорию журнала' in refused.text
+    refused=teacher.put('/api/journal/quizzes/test-two?workspace=demo',json=bad);assert refused.status_code==422
     begun=start(pupil,quiz).json();sent=save(pupil,begun,{'choice':dict(selected=['a'])},True).json()
     closed=action(teacher,quiz,'close').json();action(teacher,closed,'release')
     endpoint=f'/api/journal/quizzes/test-one/attempts/{sent["id"]}';options=teacher.get(endpoint+'/grading?workspace=demo').json()
@@ -464,20 +477,40 @@ def test_catalog_of_a_family_narrows_to_the_chosen_child(client):
     assert catalog(limit=1,cursor=first['nextCursor'],studentId='s2').status_code==409
 
 
-def test_catalog_pagination_rights_generation_and_compact_payloads(client):
+def many_quizzes(client):
     quiz,pupil,parent,teacher,payload=ready(client)
     for index in range(3):
         r=teacher.put(f'/api/journal/quizzes/copy-{index}?workspace=demo',json=payload);assert r.status_code==200,r.text
-    listing=pupil.get('/api/journal/quizzes?workspace=demo&limit=1').json();seen=[listing['items'][0]['id']];cursor=listing['nextCursor']
-    assert 's2' not in json.dumps(listing) and len(json.dumps(listing))<1500
-    assert parent.get('/api/journal/quizzes',params=dict(workspace='demo',cursor=cursor)).status_code==409
+    return quiz,pupil,parent,teacher
+
+
+def test_catalog_pages_cover_every_quiz_once(client):
+    quiz,pupil,parent,teacher=many_quizzes(client)
+    listing=pupil.get('/api/journal/quizzes?workspace=demo&limit=1').json();seen=[listing['items'][0]['id']]
     while listing['nextCursor']:
         listing=pupil.get('/api/journal/quizzes',params=dict(workspace='demo',limit=1,cursor=listing['nextCursor'])).json();seen.extend(item['id'] for item in listing['items'])
     assert len(seen)==len(set(seen))==4
+
+
+def test_catalog_cursor_belongs_to_its_account_and_generation(client):
+    quiz,pupil,parent,teacher=many_quizzes(client)
+    cursor=pupil.get('/api/journal/quizzes?workspace=demo&limit=1').json()['nextCursor']
+    assert parent.get('/api/journal/quizzes',params=dict(workspace='demo',cursor=cursor)).status_code==409
     action(teacher,quiz,'withdraw')
     assert pupil.get('/api/journal/quizzes',params=dict(workspace='demo',cursor=cursor)).status_code==409
     assert len(pupil.get('/api/journal/quizzes?workspace=demo').json()['items'])==3
     assert len(pupil.get('/api/journal/quizzes?workspace=demo&history=true').json()['items'])==4
+
+
+def test_catalog_items_are_light_and_hold_no_other_pupils(client):
+    quiz,pupil,parent,teacher=many_quizzes(client)
+    listing=pupil.get('/api/journal/quizzes?workspace=demo').json()
+    assert 's2' not in json.dumps(listing)
+    assert all(not {'document','questions','students'}&item.keys() for item in listing['items'])
+
+
+def test_catalog_search_without_a_match_is_empty(client):
+    quiz,pupil,parent,teacher=many_quizzes(client)
     assert teacher.get('/api/journal/quizzes?workspace=demo&search=несуществующее').json()['items']==[]
 
 

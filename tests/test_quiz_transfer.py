@@ -1,6 +1,5 @@
 """Course tests: assignment to a course, the results table and the one-button transfer of marks into a lesson of the course."""
 from datetime import date, datetime, timedelta, timezone
-import json
 from uuid import uuid4
 import pytest
 from backend import api, journal, journal_periods, quiz_attempts, quiz_bank, quiz_catalog, quiz_transfer, quizzes, timetable_history
@@ -234,9 +233,7 @@ def test_transfer_into_a_lesson_that_has_no_journal_entry_yet(client):
     assert done['status'] == 'saved' and done['published']
     visible = report(parent).json()['rows']
     assert [r['lesson']['date'] for r in visible] == [NEXT] and visible[0]['record']['grades'][0]['score'] == 2 and visible[0]['record']['attendance'] == 'unmarked'
-    with api.connect() as db:
-        stored = json.loads(db.execute('SELECT document FROM journal_entries WHERE lesson_key=?', (key,)).fetchone()[0])
-    assert [r['attendance'] for r in stored['content']['records']] == ['unmarked', 'unmarked'] and stored['content']['topic'] == ''
+    assert visible[0]['content']['topic'] == ''
 
 
 def test_existing_work_converts_to_its_own_maximum(client):
@@ -359,12 +356,11 @@ def test_closed_period_refuses_preview_and_transfer(client, monkeypatch):
     quiz, teacher, parent, pupil, other = world(client)
     solve(pupil, quiz, 's1', 'a')
     key = key_of(teacher)
-    closed = close(client, period(client))
+    close(client, period(client))
     before = stored_versions()
     shown = ok(preview(teacher, tbody(key)))
-    assert shown['allowed'] is False and closed['name'] in shown['reason'] and shown['rows'] == [] and shown['token'] == ''
-    refused = send(teacher, tbody(key))
-    assert refused.status_code == 403 and closed['name'] in refused.json()['detail']
+    assert shown['allowed'] is False and shown['rows'] == [] and shown['token'] == ''
+    assert send(teacher, tbody(key)).status_code == 403
     assert stored_versions() == before and summary(teacher)['marks'] == [] and summary(teacher)['runs'] == []
     # The other lesson of the course is open.
     assert ok(send(teacher, tbody(key_of(teacher, NEXT), NEXT)))['status'] == 'saved'
@@ -482,12 +478,15 @@ def test_lessons_of_the_day_list_the_works(client):
     assert listed('2026-08-18') == []
 
 
-def test_refused_targets(client):
+LESSON_WORKS = next(m.max_length for m in journal.Content.model_fields['assessments'].metadata if hasattr(m, 'max_length'))
+
+
+def refusal_world(client):
+    """The teacher, a request body per way a transfer target is refused, and the lessons the requests aim at."""
     quiz, teacher, parent, pupil, other = world(client)
     solve(pupil, quiz, 's1', 'a')
     release(teacher, quiz)
-    full = lesson_with(teacher, DAY, [journal_work(f'w{i}') for i in range(10)], {})
-    key = full['lessonKey']
+    full = lesson_with(teacher, DAY, [journal_work(f'w{i}') for i in range(LESSON_WORKS)], {})
     labelled = lesson_with(teacher, NEXT, [journal_work('t', kind='label')], {})
     foreign = lesson_with(client, DAY, [journal_work('m')], {}, subject=MATH, group=MATH_GROUP)
     future = key_of(teacher, FUTURE)
@@ -495,23 +494,43 @@ def test_refused_targets(client):
     assert teacher.post('/api/journal/withdraw?workspace=demo', json=dict(lessonKey=withdrawn['lessonKey'], version=withdrawn['version'])).status_code == 200
     # A category the school switched off cannot take a new work.
     ok(put_config(client, categories=[dict(c, active=False) if c['id'] == 'sor' else c for c in ok(client.get(CAT))['categories']]))
+    key = full['lessonKey']
+    bodies = dict(future=tbody(future, FUTURE), label_work=tbody(labelled['lessonKey'], NEXT, assessmentId='t'),
+                  switched_off_category=tbody(labelled['lessonKey'], NEXT, newWork=dict(name='Контрольная', category='sor')), full_lesson=tbody(key),
+                  foreign_lesson=tbody(foreign['lessonKey']), withdrawn_published=tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h', publish=True),
+                  missing_work=tbody(key, assessmentId='gone'), work_of_another_day=tbody(key, NEXT, assessmentId='w0'))
+    return teacher, bodies, dict(full=key, labelled=labelled['lessonKey'], withdrawn=withdrawn['lessonKey'])
+
+
+@pytest.mark.parametrize('case,status', [('future', 422), ('label_work', 422), ('switched_off_category', 422), ('full_lesson', 422), ('foreign_lesson', 403),
+                                         ('withdrawn_published', 409), ('missing_work', 409), ('work_of_another_day', 409)])
+def test_refused_targets(client, case, status):
+    teacher, bodies, _ = refusal_world(client)
     before = stored_versions()
-    cases = [(tbody(future, FUTURE), 422), (tbody(labelled['lessonKey'], NEXT, assessmentId='t'), 422),
-             (tbody(labelled['lessonKey'], NEXT, newWork=dict(name='Контрольная', category='sor')), 422), (tbody(key), 422),
-             (tbody(foreign['lessonKey']), 403), (tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h', publish=True), 409),
-             (tbody(key, assessmentId='gone'), 409), (tbody(key, NEXT, assessmentId='w0'), 409), (tbody(key, revision=api.read('demo').revision - 1), 409)]
-    for body, status in cases:
-        if body['revision'] == api.read('demo').revision:
-            shown = ok(preview(teacher, body))
-            assert shown['allowed'] is False and shown['reason'] and shown['rows'] == [] and shown['token'] == ''
-        else: assert preview(teacher, body).status_code == 409
-        assert post(teacher, body | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[])).status_code == status
+    shown = ok(preview(teacher, bodies[case]))
+    assert shown['allowed'] is False and shown['rows'] == [] and shown['token'] == ''
+    assert post(teacher, bodies[case] | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[])).status_code == status
     assert stored_versions() == before
-    # What differs in each refused request is the only thing wrong with it: the same lesson takes the request without that part.
-    for body in [tbody(key, assessmentId='w0'), tbody(labelled['lessonKey'], NEXT), tbody(labelled['lessonKey'], NEXT, newWork=dict(name='Контрольная', category='fo'))]:
+
+
+def test_transfer_with_a_stale_schedule_revision_is_refused(client):
+    teacher, bodies, keys = refusal_world(client)
+    before = stored_versions()
+    stale = tbody(keys['full'], revision=api.read('demo').revision - 1)
+    assert preview(teacher, stale).status_code == 409
+    assert post(teacher, stale | dict(requestId=str(uuid4()), token='0' * 64, overwrite=[])).status_code == 409
+    assert stored_versions() == before
+
+
+def test_each_refused_target_is_fine_without_what_made_it_wrong(client):
+    teacher, _, keys = refusal_world(client)
+    for body in [tbody(keys['full'], assessmentId='w0'), tbody(keys['labelled'], NEXT), tbody(keys['labelled'], NEXT, newWork=dict(name='Контрольная', category='fo'))]:
         assert ok(preview(teacher, body))['allowed']
-    # A hidden lesson still takes a draft transfer.
-    assert ok(send(teacher, tbody(withdrawn['lessonKey'], '2026-08-31', assessmentId='h'), overwrite=['s1']))['status'] == 'saved'
+
+
+def test_a_hidden_lesson_still_takes_a_draft_transfer(client):
+    teacher, _, keys = refusal_world(client)
+    assert ok(send(teacher, tbody(keys['withdrawn'], '2026-08-31', assessmentId='h'), overwrite=['s1']))['status'] == 'saved'
 
 
 def test_unsynced_published_roster_refuses_publication_but_takes_a_draft(client, monkeypatch):

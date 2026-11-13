@@ -1,7 +1,7 @@
 """Question-specific files, immutable editions and a projection without pupils."""
 from datetime import timedelta
 import json
-from backend import api, teaching_material_files
+from backend import api
 from test_access import client, signed
 from test_live_lessons import setup, ok, get, new, current, action, cmd, url, answer
 from test_quizzes import question
@@ -74,7 +74,7 @@ def test_library_edits_archive_copy_and_retention(client, setup):
     ok(t.put(url('/' + copy), json=cmd(version=1, definition=doc)))
     with api.connect() as db:
         db.execute("UPDATE teaching_material_files SET created='2000-01-01T00:00:00+00:00'")
-        teaching_material_files.collect_unused(db)
+    ok(upload(t, b'trigger', 'trigger.txt'))  # an upload sweeps unused files, as the product does
     ok(action(t, copy, 'start')); ok(action(t, copy, 'open'))
     assert download(p, copy, image).status_code == 200
     assert download(p, copy, hidden, part='solutionMaterials').status_code == 404
