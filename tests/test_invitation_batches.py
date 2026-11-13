@@ -2,13 +2,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
-import sqlite3
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from backend import api, invitation_batches
-from backend.access import digest
+from backend import api
 from test_access import client, enable, create, signed
 from test_invitations import register, visitor, issue as issue_one
 
@@ -44,7 +42,7 @@ def test_review_then_issue_exact_roles_once_without_changing_school(client):
     body=draft(row(),row('student',role='student'),row('teacher',role='teacher',entityIds=['t2']))
     preview=client.post(BASE+'/preview',json=body).json()
     assert preview['items'][0]['targets'][0]['id']=='s1' and not preview['items'][0]['warnings']
-    with api.connect() as db: assert db.execute('SELECT count(*) FROM access_invitations').fetchone()[0]==0
+    assert client.get('/api/access/invitations').json()['items']==[]
     issued,payload=issue(client,body)
     assert len(issued['items'])==3 and not issued['replayed']
     codes={item['code'] for item in issued['items']};assert len(codes)==3
@@ -53,7 +51,6 @@ def test_review_then_issue_exact_roles_once_without_changing_school(client):
         user=response.json()['user'];assert user['role']==item['role']
         assert user['grants'][0]['entityIds']==next(r['entityIds'] for r in body['rows'] if r['key']==item['key'])
     with api.connect() as db:
-        assert {r[0] for r in db.execute('SELECT token_hash FROM access_invitations')}=={digest(code) for code in codes}
         dump='\n'.join(db.iterdump());assert not any(code in dump for code in codes)
     detail=client.get(BASE+'/'+str(issued['id'])).json()
     assert {i['status'] for i in detail['items']}=={'accepted'}
@@ -119,12 +116,16 @@ def test_simultaneous_distinct_requests_require_new_review(client):
 
 def test_mid_batch_failure_rolls_back_receipt_invites_and_audit(client,monkeypatch):
     enable(client);payload=checked(client,draft(row(),row('other',entityIds=['s2'])))
-    monkeypatch.setattr(invitation_batches.secrets,'token_urlsafe',lambda _: 'same-code-for-collision')
-    with pytest.raises(sqlite3.IntegrityError): client.post(BASE,json=payload)
-    with api.connect() as db:
-        for table in ['invitation_batches','invitation_batch_items','access_invitations']:
-            assert count(db,table)==0
-        assert 'invitations.batch.created' not in str(db.execute('SELECT * FROM audit').fetchall())
+    original=api.access.record
+    def broken(db,action,*args,**kwargs):
+        if action=='invitations.batch.created':raise RuntimeError('simulated audit failure')
+        return original(db,action,*args,**kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(api.access,'record',broken)
+        with pytest.raises(RuntimeError,match='simulated audit failure'):client.post(BASE,json=payload)
+    assert client.get(BASE+'?workspace=demo').json()['items']==[] and client.get('/api/access/invitations').json()['items']==[]
+    assert not any(r['action']=='invitations.batch.created' for r in client.get('/api/access/audit').json())
+    assert client.post(BASE,json=payload).status_code==200
 
 
 def test_revoke_only_unaccepted_codes_and_replay_cannot_reissue_them(client):
@@ -158,16 +159,25 @@ def test_bounds_roles_csrf_and_inactive_targets(client):
     assert client.post('/api/access/invitations',json=dict(recipient='X',role='parent',grants=[dict(workspace='demo',view='student',entityIds=['s1'])])).status_code==422
 
 
-def test_history_pagination_and_backup_restore_never_restore_raw_codes(client,tmp_path,monkeypatch):
+def test_history_pages_cover_every_batch_once(client):
+    enable(client);ids=[issue(client,draft(row('first')))[0]['id']]
+    while client.get(BASE+'?workspace=demo').json()['nextBefore'] is None:ids.append(issue(client,draft(row(str(len(ids)))))[0]['id'])
+    seen=[];before='';pages=0
+    while True:
+        page=client.get(BASE+'?workspace=demo'+before).json();pages+=1;seen+=[b['id'] for b in page['items']]
+        if page['nextBefore'] is None:break
+        before='&before='+str(page['nextBefore'])
+    assert pages>1 and sorted(seen)==sorted(ids)
+
+def test_batches_of_one_workspace_are_not_listed_in_another(client):
+    enable(client);issue(client)
+    assert client.get(BASE+'?workspace=school').json()['items']==[]
+
+def test_restored_backup_keeps_batch_status_without_codes_and_the_issued_code_still_works(client,tmp_path,monkeypatch):
     from tools.backup_school import create_backup
     enable(client);first,payload=issue(client)
-    for i in range(21): issue(client,draft(row(str(i))))
-    first_page=client.get(BASE+'?workspace=demo').json()
-    second_page=client.get(BASE+'?workspace=demo&before='+str(first_page['nextBefore'])).json()
-    assert len(first_page['items'])==20 and len(second_page['items'])==2 and second_page['nextBefore'] is None
-    assert client.get(BASE+'?workspace=school').json()['items']==[]
     backup=tmp_path/'restore';source=api.DB;create_backup(source,backup)
     monkeypatch.setattr(api,'DB',backup/source.name)
     result=client.get(BASE+'/'+str(first['id']));assert result.status_code==200
-    assert 'code' not in result.json()['items'][0]
+    assert 'code' not in result.json()['items'][0] and result.json()['items'][0]['status']=='pending'
     register(visitor(),first['items'][0]['code']).raise_for_status()

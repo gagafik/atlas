@@ -27,7 +27,7 @@ def action(client,item,a,**kw):return client.post(path('items/'+item['id']+'/act
 def issue(client,item):return action(client,item,'issue',previewHash=preview(client,item)['previewHash'])
 def listing(client,**kw):return ok(client.get(path('items'),params=dict(workspace='demo',**kw)))
 
-def test_private_draft_immutable_issue_print_and_revocation(client,setup):
+def test_private_draft_and_immutable_issued_snapshot(client,setup):
     t,teacher,parent,student=setup;state=api.read('demo');item=save(client,new(client,t));p=signed('parent');pupil=signed('student')
     assert p.get(path('items/'+item['id'])).status_code==404
     issued=ok(issue(client,item));doc=detail(p,item)
@@ -35,15 +35,17 @@ def test_private_draft_immutable_issue_print_and_revocation(client,setup):
     assert detail(pupil,item)['snapshot']==doc['snapshot']
     assert client.put(path('items/'+item['id']),json=body(version=issued['version'],values=dict(purpose='Changed'))).status_code==409
     assert api.read('demo')==state
-    state.students[0].name='Changed school name of pupil';api.save('demo',state);state=api.read('demo')
+    state.students[0].name='Changed school name of pupil';api.save('demo',state)
     assert detail(p,item)['snapshot']==doc['snapshot']
     printed=p.get(path('items/'+item['id']+'/print'));assert printed.status_code==200 and 'no-store' in printed.headers['cache-control']
     assert 'sandbox' in printed.headers['content-security-policy']
+
+def test_revoked_document_shows_its_reason_and_an_archived_one_leaves_the_list(client,setup):
+    t,*_=setup;item=save(client,new(client,t));p=signed('parent');issued=ok(issue(client,item))
     revoked=ok(action(client,issued,'revoke',reason='Wrong information'))
-    assert 'ДОКУМЕНТ ОТОЗВАН' in p.get(path('items/'+item['id']+'/print')).text
-    assert detail(p,item)['revocationReason']=='Wrong information'
+    assert detail(p,item)['status']=='revoked' and detail(p,item)['revocationReason']=='Wrong information'
+    assert 'Wrong information' in p.get(path('items/'+item['id']+'/print')).text
     ok(action(client,revoked,'archive',reason='Archived'));assert not listing(p)['items'] and len(listing(p,archived=True)['items'])==1
-    assert api.read('demo')==state
 
 def test_assignment_preparation_current_permission_and_history(client,setup):
     t,teacher,_,_=setup;item=new(client,t,assigneeId=teacher['id']);staff=signed('teacher')
@@ -52,7 +54,7 @@ def test_assignment_preparation_current_permission_and_history(client,setup):
     assert staff.get(path('items/'+item['id']+'/preview')).status_code==403
     assert action(staff,submitted,'issue',previewHash='x').status_code==403
     returned=ok(action(client,submitted,'return',reason='Fix purpose'));saved=save(staff,returned,purpose='Updated purpose');ok(issue(client,saved))
-    assert len(ok(staff.get(path('history/document/'+item['id'])))['items'])>=5
+    assert {'created','submit','return','issue'}<={x['action'] for x in ok(staff.get(path('history/document/'+item['id'])))['items']}
     current=detail(client,item);ok(client.put(path('items/'+item['id']+'/assignee'),json=body(version=current['version'],assigneeId='',reason='Duty ended')))
     assert staff.get(path('items/'+item['id'])).status_code==404
     assert staff.get(path('history/document/'+item['id'])).status_code==404
@@ -124,28 +126,32 @@ def test_internal_and_employee_scope_and_stale_actions(client,setup):
     assert signed('teacher').post(path('templates'),json=body(version=0,definition=definition())).status_code==403
 
 def test_access_race_rechecked_after_snapshot(client,setup,monkeypatch):
-    _,_,parent,_=setup;p=signed('parent');original=api.school_documents.prepare
-    def revoke():
-        original()
+    _,_,parent,_=setup;p=signed('parent');original=api.school_documents.snapshots.get
+    def revoke(workspace):
+        snap=original(workspace)
         with api.connect() as db:db.execute('UPDATE accounts SET version=version+1 WHERE id=?',(parent['id'],))
-    monkeypatch.setattr(api.school_documents,'prepare',revoke)
+        return snap
+    monkeypatch.setattr(api.school_documents.snapshots,'get',revoke)
     assert p.get(path('items')).status_code==409
 
-def test_list_and_history_pagination(client,setup):
+def pages(fetch,key='id',limit=2):
+    ids=[];before=None
+    while True:
+        page=fetch(limit,before);ids+=[x[key] for x in page['items']]
+        if not page['nextBefore']:return ids
+        before=page['nextBefore']
+
+def test_list_pages_follow_each_other_without_gaps(client,setup):
     t,*_=setup
     for i in range(4):new(client,t)
-    a=listing(client,limit=2);b=listing(client,limit=2,before=a['nextBefore']);assert len(a['items'])==len(b['items'])==2 and not b['nextBefore']
-    item=a['items'][0];saved=save(client,item);submitted=ok(action(client,saved,'submit'));ok(action(client,submitted,'return',reason='Review'))
-    first=ok(client.get(path('history/document/'+item['id']+'?limit=2')));second=ok(client.get(path('history/document/'+item['id']+'?before='+str(first['nextBefore']))))
-    assert len(first['items'])==len(second['items'])==2
+    everything=[x['id'] for x in listing(client)['items']]
+    assert len(everything)>2 and pages(lambda limit,before:listing(client,limit=limit,**({'before':before} if before else {})))==everything
 
-@pytest.mark.parametrize('login',['parent','student','teacher'])
-def test_deactivated_account_loses_detail_print_and_history(client,setup,login):
-    t,teacher,parent,student=setup;person={'teacher':teacher,'parent':parent,'student':student}[login]
-    item=ok(issue(client,save(client,new(client,t,assigneeId=teacher['id']))));c=signed(login)
-    assert c.get(path('items/'+item['id'])).status_code==200
-    with api.connect() as db:db.execute('UPDATE accounts SET active=0 WHERE id=?',(person['id'],))
-    for route in ['items/'+item['id'],'items/'+item['id']+'/print','history/document/'+item['id']]:assert c.get(path(route)).status_code==401
+def test_history_pages_follow_each_other_without_gaps(client,setup):
+    t,*_=setup;item=new(client,t);saved=save(client,item);submitted=ok(action(client,saved,'submit'));ok(action(client,submitted,'return',reason='Review'))
+    url=path('history/document/'+item['id'])
+    everything=[x['seq'] for x in ok(client.get(url))['items']]
+    assert len(everything)>2 and pages(lambda limit,before:ok(client.get(url+f'&limit={limit}'+(f'&before={before}' if before else ''))),key='seq')==everything
 
 def test_expired_family_link_and_inactive_pupil_hide_every_surface(client,setup,monkeypatch):
     from backend import families

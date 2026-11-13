@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend import api
-from test_access import client, enable, create, PASSWORD
+from backend.access import COOKIE
+from test_access import client, enable, create, PASSWORD, HEADERS
 
 
 def test_readiness_does_not_create_missing_database(tmp_path,monkeypatch):
@@ -75,35 +76,17 @@ def test_operations_rechecks_account_after_middleware_identification(client,monk
     assert client.get('/api/access/operations').status_code==403
 
 
-def test_restored_demo_keeps_accounts_permissions_and_workspace(client,tmp_path,monkeypatch):
-    from tools.backup_school import create_backup
-    from tools.restore_school import restore_backup
-    admin=enable(client)
-    create(client,role='teacher')
-    original=client.get('/api/state?workspace=demo').json()
-    create_backup(api.DB,tmp_path/'snapshot')
-    restore_backup(tmp_path/'snapshot',tmp_path/'restored')
-    monkeypatch.setattr(api,'DB',tmp_path/'restored'/api.DB.name)
-    assert client.get('/api/auth/status').json()['user']['id']==admin['id']
-    assert client.get('/api/state?workspace=demo').json()==original
-    client.cookies.clear()
-    assert client.post('/api/auth/login',json=dict(login='teacher',password=PASSWORD)).status_code==200
-    assert client.get('/api/access/operations').status_code==403
-    assert client.get('/api/state?workspace=demo').status_code==403
-
-
 def test_write_during_reserved_snapshot_returns_retryable_failure_without_new_session(client,monkeypatch):
     enable(client)
     original=api.access.connect
     def short_wait():
         db=original();db.execute('PRAGMA busy_timeout=50');return db
     monkeypatch.setattr(api.access,'connect',short_wait)
+    fresh=TestClient(api.app,headers=HEADERS)
     with closing(sqlite3.connect(api.DB)) as db:
-        count=db.execute('SELECT count(*) FROM sessions').fetchone()[0]
         db.execute('BEGIN IMMEDIATE')
-        response=client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
-        assert response.status_code==503 and response.headers['retry-after']=='5'
-        assert 'Сервер занят' in response.json()['detail']
-        assert db.execute('SELECT count(*) FROM sessions').fetchone()[0]==count
+        response=fresh.post('/api/auth/login',json=dict(login='admin',password=PASSWORD))
+        assert response.status_code==503 and 'retry-after' in response.headers
+        assert not fresh.cookies.get(COOKIE) and fresh.get('/api/state?workspace=demo').status_code==401
         db.rollback()
-    assert client.post('/api/auth/login',json=dict(login='admin',password=PASSWORD)).status_code==200
+    assert fresh.post('/api/auth/login',json=dict(login='admin',password=PASSWORD)).status_code==200

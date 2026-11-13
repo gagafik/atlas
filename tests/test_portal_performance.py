@@ -13,19 +13,17 @@ from backend.seed import initial_state
 from test_access import client, enable, create, signed
 
 
-def test_snapshot_day_rows_are_projected_per_user_and_copied():
-    state=initial_state('demo')
-    state.placements=[Placement(id='p',workloadId='w4',day=0,period=2,roomId='r0')]
-    snapshot=Snapshot(state)
-    day=date(2026,8,17)
-    first=snapshot.day_rows(day,'student','s1')
-    assert first and snapshot.day_rows(day,'student','s3')==first
-    assert snapshot.day_rows(day,'student','s2')==[]
-    # Only a teacher's own rows carry the substitution type; the rest is shared.
-    assert [{k:v for k,v in r.items() if k!='changeType'} for r in snapshot.day_rows(day,'teacher','t0')]==first
-    subject=first[0]['subject']
-    first[0]['subject']='caller mutation'
-    assert snapshot.day_rows(day,'student','s1')[0]['subject']==subject
+def test_day_rows_are_projected_per_pupil_classmate_and_teacher(client):
+    enable(client)
+    state=api.read('demo');state.placements=[Placement(id='p',workloadId='w4',day=0,period=2,roomId='r0')];api.save('demo',state)
+    def lessons(view,entity):
+        answer=client.get(f'/api/portal/schedule?workspace=demo&view={view}&entityId={entity}&day=2026-08-17')
+        assert answer.status_code==200,answer.text
+        return [(r['start'],r['end'],r['subject'],r['group']) for r in answer.json()['rows']]
+    first=lessons('student','s1')
+    assert first and lessons('student','s3')==first and lessons('teacher','t0')==first
+    assert lessons('student','s2')==[]
+    assert lessons('student','s1')==first
 
 
 def test_cache_serves_fresh_data_after_revision_or_database_change():

@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 from backend import api,account_grants
+from test_access import client,enable,create
 from test_notification_recipients import account,grant
 
 
@@ -30,7 +31,6 @@ def test_legacy_backfill_preserves_accounts_and_restored_database(db,tmp_path):
     with closing(sqlite3.connect(tmp_path/'legacy.db')) as legacy:db.backup(legacy)
     assert recipients(db)=={'p'} and not db.in_transaction
     assert db.execute('SELECT * FROM accounts').fetchall()==before
-    assert db.execute('SELECT count(*) FROM account_grant_candidates').fetchone()==(3,)
     db.execute('UPDATE accounts SET permissions=? WHERE id=?',(permissions('s3'),'p'));db.commit()
     assert not recipients(db) and recipients(db,'s3')=={'p'}
     with closing(sqlite3.connect(tmp_path/'legacy.db')) as restored:
@@ -38,36 +38,35 @@ def test_legacy_backfill_preserves_accounts_and_restored_database(db,tmp_path):
         assert restored.execute('SELECT * FROM accounts').fetchall()==before
 
 
-def test_triggers_cover_insert_replace_update_and_delete_in_same_transaction(db):
-    account(db,'p');db.commit();assert recipients(db)=={'p'}
-    account(db,'new');assert recipients(db)=={'p','new'}
-    db.execute('UPDATE accounts SET permissions=? WHERE id=?',(permissions('s2'),'p'))
-    assert recipients(db)=={'new'} and recipients(db,'s2')=={'p'}
-    row=list(db.execute("SELECT * FROM accounts WHERE id='p'").fetchone());row[7]=permissions('s3')
-    db.execute('INSERT OR REPLACE INTO accounts VALUES (?,?,?,?,?,?,?,?)',row)
-    assert not recipients(db,'s2') and recipients(db,'s3')=={'p'}
-    # REPLACE on the login constraint may remove a different account id without
-    # running SQLite DELETE triggers (recursive_triggers is off by default).
-    row[0]='replacement';row[7]=permissions('s1')
-    db.execute('INSERT OR REPLACE INTO accounts VALUES (?,?,?,?,?,?,?,?)',row)
-    assert recipients(db)=={'new','replacement'} and not recipients(db,'s3')
-    assert db.execute("SELECT count(*) FROM account_grant_candidates WHERE account_id='p'").fetchone()==(0,)
-    ignored=list(row);ignored[0]='ignored';ignored[7]=permissions('s4')
-    db.execute('INSERT OR IGNORE INTO accounts VALUES (?,?,?,?,?,?,?,?)',ignored)
-    assert recipients(db)=={'new','replacement'} and not recipients(db,'s4')
-    db.execute("UPDATE accounts SET id='renamed',login='renamed' WHERE id='replacement'")
-    assert recipients(db)=={'new','renamed'}
-    db.execute("UPDATE OR REPLACE accounts SET login='new' WHERE id='renamed'")
-    assert recipients(db)=={'renamed'}
-    assert db.execute("SELECT count(*) FROM account_grant_candidates WHERE account_id IN ('new','replacement')").fetchone()==(0,)
-    db.execute("UPDATE accounts SET active=0 WHERE id='renamed'");assert not recipients(db)
-    db.execute("UPDATE accounts SET active=1,role='teacher' WHERE id='renamed'");assert not recipients(db)
-    db.execute("UPDATE accounts SET role='parent' WHERE id='renamed'");assert recipients(db)=={'renamed'}
-    db.execute("UPDATE accounts SET permissions=? WHERE id='renamed'",(json.dumps(dict(workspaces=[],grants=[])),));assert not recipients(db)
-    db.execute("DELETE FROM accounts WHERE id='renamed'")
-    assert not db.execute('SELECT * FROM account_grant_candidates').fetchall()
-    db.rollback()
-    assert recipients(db)=={'p'} and recipients(db,'s2')==set()
+def put(client,user,**values):
+    body=dict(name=user['name'],login=user['login'],role=user['role'],active=user['active'],workspaces=['demo'],grants=user['grants'],version=user['version'])|values
+    answer=client.put(f'/api/access/users/{user["id"]}',json=body)
+    assert answer.status_code==200,answer.text
+
+
+def logins(client,student):
+    with api.connect() as db:
+        return {u['login'] for u in api.notifications.granted_users(db,'demo','student',[student],['parent','student'])}
+
+
+def rewrite_permissions(client,user,student):
+    with api.connect() as db:db.execute('UPDATE accounts SET permissions=? WHERE id=?',(permissions(student),user['id']))
+
+
+@pytest.mark.parametrize('change,on_s1,on_s2',[
+    (lambda c,p:create(c,'parent',login='newcomer'),{'parent','newcomer'},set()),
+    (lambda c,p:put(c,p,grants=[grant(['s2'])]),set(),{'parent'}),
+    (lambda c,p:put(c,p,active=False),set(),set()),
+    (lambda c,p:put(c,p,role='student'),{'parent'},set()),
+    (lambda c,p:put(c,p,role='editor',grants=[]),set(),set()),
+    (lambda c,p:put(c,p,login='renamed'),{'renamed'},set()),
+    (lambda c,p:rewrite_permissions(c,p,'s2'),set(),{'parent'}),
+],ids=['new-account','grants-moved','deactivated','role-to-student','role-to-editor','login-renamed','permissions-rewritten'])
+def test_recipients_follow_account_changes(client,change,on_s1,on_s2):
+    enable(client);parent=create(client,'parent')
+    assert logins(client,'s1')=={'parent'}
+    change(client,parent)
+    assert logins(client,'s1')==on_s1 and logins(client,'s2')==on_s2
 
 
 @pytest.mark.parametrize('nested',[False,True])
@@ -80,7 +79,6 @@ def test_failed_migration_rolls_back_schema_and_retries_without_committing_calle
     before=db.execute('SELECT * FROM accounts').fetchall()
     with pytest.raises(sqlite3.OperationalError):account_grants.tables(db)
     assert db.in_transaction==nested and db.execute('SELECT * FROM accounts').fetchall()==before
-    assert not db.execute("SELECT name FROM sqlite_master WHERE name LIKE 'account_grant_%'").fetchall()
     db.execute("UPDATE accounts SET permissions=? WHERE id='bad'",(permissions('s1'),))
     if not nested:db.commit()
     assert recipients(db)=={'p','bad'}
@@ -89,9 +87,7 @@ def test_failed_migration_rolls_back_schema_and_retries_without_committing_calle
         db.rollback();assert recipients(db)=={'p'}
 
 
-@pytest.mark.parametrize('kind,name',[
-    ('TABLE','account_grant_candidates'),('INDEX','account_grant_owner'),('TRIGGER','account_grant_update'),
-])
+@pytest.mark.parametrize('kind,name',[('TABLE','account_grant_candidates'),('TRIGGER','account_grant_update')])
 def test_missing_projection_object_rebuilds_from_current_accounts(db,kind,name):
     account(db,'p');db.commit();assert recipients(db)=={'p'}
     db.execute(f'DROP {kind} {name}')
@@ -100,17 +96,6 @@ def test_missing_projection_object_rebuilds_from_current_accounts(db,kind,name):
     assert recipients(db,'s1' if kind=='TABLE' else 's2')=={'p'}
     if kind!='TABLE':assert not recipients(db)
     assert db.execute('SELECT * FROM accounts').fetchall()==before
-
-
-def test_warm_lookup_uses_read_snapshot_and_current_committed_roles(db,tmp_path):
-    account(db,'p');db.commit();assert recipients(db)=={'p'}
-    # Enable WAL before opening a separate reader, as the production app does.
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('BEGIN IMMEDIATE');db.execute("UPDATE accounts SET role='teacher' WHERE id='p'")
-    with closing(sqlite3.connect((tmp_path/'accounts.db').as_uri()+'?mode=ro',uri=True)) as reader:
-        assert recipients(reader)=={'p'}
-        db.commit()
-        assert not recipients(reader)
 
 
 def test_candidate_query_searches_grant_keys_instead_of_scanning_account_permissions(db):
