@@ -441,6 +441,99 @@ export function afterSave(
     })),
   };
 }
+/** A lesson of the course where «Новое назначение» may add a work (GET journal/course-table/lessons), oldest first. */
+export interface OfferedLesson {
+  lessonKey: string;
+  day: string;
+  start: string;
+  end: string;
+  // The lesson's version as the journal holds it; 0 while it has no journal.
+  version: number;
+  works: number;
+  // The lesson already holds the most works it can.
+  full: boolean;
+}
+export interface NewWorkForm {
+  lessonKey: string;
+  title: string;
+  category: string;
+  kind: "points" | "label";
+  maxScore: string;
+  // A preset of the lesson editor, or "custom" with the typed `customWeight`.
+  weight: string;
+  customWeight: string;
+}
+export interface NewWorkBody {
+  lessonKey: string;
+  title: string;
+  category: string;
+  kind: "points" | "label";
+  maxScore: number;
+  weight: number;
+}
+
+/** The lessons newest first as the dialog's day list: two lessons of one day carry their time, a full lesson is not offered. */
+export function lessonChoices(lessons: OfferedLesson[]) {
+  const perDay = new Map<string, number>();
+  for (const l of lessons) perDay.set(l.day, (perDay.get(l.day) ?? 0) + 1);
+  return [...lessons]
+    .sort(
+      (a, b) =>
+        b.day.localeCompare(a.day) ||
+        b.start.localeCompare(a.start) ||
+        a.lessonKey.localeCompare(b.lessonKey),
+    )
+    .map((l) => ({
+      value: l.lessonKey,
+      disabled: l.full,
+      label:
+        ruDay(l.day) +
+        ((perDay.get(l.day) ?? 0) > 1 ? ` · ${l.start}–${l.end}` : "") +
+        (l.full ? " · уже 10 работ" : ""),
+    }));
+}
+
+/** The lesson the dialog starts on: the latest one that can take another work, else none. */
+export function defaultLesson(lessons: OfferedLesson[]): string {
+  return lessonChoices(lessons).find((c) => !c.disabled)?.value ?? "";
+}
+
+const typed = (text: string) =>
+  text.trim() === "" ? Number.NaN : Number(text.trim().replace(",", "."));
+
+/** The request body of the dialog, or what is wrong with the form (the server checks all of it again). */
+export function newWorkBody(
+  form: NewWorkForm,
+): { body: NewWorkBody } | { error: string } {
+  const title = form.title.trim();
+  if (!form.lessonKey) return { error: "Выберите дату урока." };
+  if (!title) return { error: "Введите название назначения." };
+  if (title.length > 100) return { error: "Название — не больше 100 знаков." };
+  const maxScore = form.kind === "points" ? typed(form.maxScore) : 10;
+  if (!(maxScore > 0 && maxScore <= 10000))
+    return { error: "Максимум баллов — число больше 0 и не больше 10000." };
+  const weight =
+    form.weight === "custom" ? typed(form.customWeight) : Number(form.weight);
+  if (!(weight >= 0 && weight <= 100))
+    return { error: "Вес работы — число от 0 до 100." };
+  return {
+    body: {
+      lessonKey: form.lessonKey,
+      title,
+      category: form.category,
+      kind: form.kind,
+      maxScore,
+      weight,
+    },
+  };
+}
+
+/** The first row of the work's column that takes a mark, or -1: where the cursor goes after the work is added. */
+export function firstOpenRow(table: CourseTable, col: number): number {
+  const work = table.works[col];
+  return work ? table.pupils.findIndex((p) => editable(p, work, table)) : -1;
+}
+
 /** The period of the opening view: the one that contains today, else the latest that has ended, else the year so far. */
 export function defaultCoursePeriod(
   today: string,

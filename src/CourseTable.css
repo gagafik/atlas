@@ -23,6 +23,26 @@
   gap: 8px;
   margin: 8px 0;
 }
+/* «Новое назначение»: one column of fields in the dialog, buttons below. */
+.ct-assign {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.ct-assign .muted,
+.ct-assign-empty p {
+  margin: 0;
+}
+.ct-assign-empty {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.ct-assign-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .ct-problems {
   margin: 6px 0;
   padding-left: 18px;
