@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import sqlite3
@@ -22,6 +23,14 @@ WORKSPACES = ['school', 'demo']
 COOKIE = 'atlas_session'
 LOCAL = dict(id='local', name='Локальный пользователь', role='admin', workspaces=WORKSPACES, grants=[])
 actor = ContextVar('atlas_actor', default=LOCAL)
+
+
+def finite(value):
+    """The same value with NaN and infinity written as text, at any depth."""
+    if isinstance(value,float) and not math.isfinite(value): return str(value)
+    if isinstance(value,dict): return {key:finite(item) for key,item in value.items()}
+    if isinstance(value,(list,tuple)): return [finite(item) for item in value]
+    return value
 
 
 def now(): return datetime.now(timezone.utc)
@@ -215,7 +224,7 @@ class Access:
         from .recovery import register as register_recovery, revoke_all
         register_recovery(self,app)
         from fastapi.exceptions import RequestValidationError
-        from fastapi.exception_handlers import request_validation_exception_handler
+        from fastapi.encoders import jsonable_encoder
 
         @app.exception_handler(RequestValidationError)
         async def credential_validation(request,exc):
@@ -223,7 +232,8 @@ class Access:
                 # Validation input can contain a raw password or recovery code.
                 return JSONResponse(status_code=422,content={'detail':[
                     {key:error[key] for key in ['type','loc','msg']} for error in exc.errors()]})
-            return await request_validation_exception_handler(request,exc)
+            # NaN and infinity have no JSON form: a refusal that echoes one must stay a 422, not become a server error.
+            return JSONResponse(status_code=422,content={'detail':finite(jsonable_encoder(exc.errors()))})
 
         @app.get('/api/auth/status')
         def status(request: Request):
