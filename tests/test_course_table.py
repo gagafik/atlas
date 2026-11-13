@@ -751,6 +751,8 @@ def history_of(c, key):
 
 def test_the_administrator_saves_marks_as_a_draft_and_publishes_them_for_the_family(client, clock):
     teacher, parent = staffed(client)
+    admin = client.get('/api/auth/status').json()['user']
+    teacher_name = signed('teacher').get('/api/auth/status').json()['user']['name']
     course(teacher, DAY, [work('a')], dict(a=dict(s1=5)))
     t = ok(table(client))
     assert column(t, DAY)['editable'] and mark(t, 's1', DAY, 'a')['score'] == 5
@@ -767,8 +769,8 @@ def test_the_administrator_saves_marks_as_a_draft_and_publishes_them_for_the_fam
     key = column(t, DAY)['lessonKey']
     # The history names the administrator as the author of the table's saves, and the teacher as the author of the first one.
     versions = history_of(client, key)
-    names = [h['actor'] for h in versions]
-    assert len(set(names)) == 2 and names[0] != names[-1]
+    names = {h['actor'] for h in versions}
+    assert names == {admin['name'], teacher_name}
 
 
 def test_the_administrator_adds_a_work_and_marks_it(client, clock):

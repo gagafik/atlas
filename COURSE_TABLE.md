@@ -269,7 +269,7 @@ CSV (разделитель `;`, BOM, CRLF) содержит ученика, к�
   Ответ: `saved`, `unchanged`, `conflicts`.
 - `GET /api/journal/course-table/lessons?groupId&subjectId&start&end` — уроки курса за период
   (до 367 дней), в которые можно добавить работу: `lessonKey`, `day`, `start`, `end`, `version`
-  (0, пока у урока нет журнала), `works`, `full`, и `revision`. Только учитель курса (иначе 403).
+  (0, пока у урока нет журнала), `works`, `full`, и `revision`. Учитель курса и администратор (иначе 403).
   Для урока с журналом ответ даёт то же правило `editing_problem`, что таблица и сохранение.
 - `POST /api/journal/course-table/assessments` — `requestId`, `groupId`, `subjectId`, `revision`,
   `day`, `lessonKey`, `version` (версия урока из списка), `title` (1–100 знаков), `category`

@@ -372,11 +372,12 @@ class CourseTable:
         from .journal import today
         state=snap.state;rows=snap.course_rows(group,subject)
         day=max(start,state.settings.yearStart);stop=min(end,today(),state.settings.yearEnd)
-        found=[]
+        found=[];course=course_teachers(state,dict(groupId=group,subjectId=subject))
         while day<=stop:
             for row in rows(day):
                 if row['status']=='cancelled' or not staff_read(user,workspace,row): continue
                 key=key_for(row);previous=self.journal.find(workspace,key,db)
+                if not previous and not set(row['teacherIds'])&course: continue
                 if previous:
                     current=current_lesson(state,previous['document']['lesson'],rows)
                     record=self.journal.resolved_entry(state,workspace,user,key,previous,current,db=db)

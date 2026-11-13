@@ -115,6 +115,18 @@ def test_listing_is_for_the_teacher_of_the_course_and_the_administrator(client, 
     staffed(client)
     create(client, 'teacher', login='unrelated', grants=[dict(workspace='demo', view='teacher', entityIds=['t3'])])
     assert offered(signed('unrelated')).status_code == 403 and offered(signed('parent')).status_code == 403
+    assert ok(offered(client))['lessons']
+
+
+def test_a_substitute_day_without_a_journal_is_offered_to_neither_the_teacher_nor_the_administrator(client, clock):
+    teacher, _ = staffed(client)
+    day = next(d for d in sorted({l['day'] for l in ok(offered(teacher))['lessons']}) if d not in (DAY, NEXT))
+    assert day in {l['day'] for l in ok(offered(client))['lessons']}
+    state = api.read('demo')
+    state.datedLessons = [DatedLesson(id='sub', name='Замена', kind='change', placementId='eng', sourceDate=date.fromisoformat(day),
+                                      onDate=date.fromisoformat(day), teacherIds=['t1'])]
+    api.save('demo', state)
+    assert all(day not in {l['day'] for l in ok(offered(who))['lessons']} for who in (teacher, client))
 
 
 CASES = [('foreign teacher', 403), ('parent', 403), ('unknown category', 422), ('disabled category', 422),
