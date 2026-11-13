@@ -84,13 +84,18 @@ def test_every_outcome_is_counted_and_the_attention_list_gives_reasons(school):
                     'Шесть;Без детей;',
                     'Шесть;Прочерк;-',
                     'Один;Готов;Примеров Александр (7A)',
-                    ';;Макетова Мария (5B)')
+                    ';;Макетова Мария (5B)',
+                    'Семь;Смешанный;Примеров Александр (7A), Эскизов Максим (5B)')  # one child found, one ambiguous
     result = preview(school, file)
-    assert result['counts'] == dict(rows=9, ready=1, readyCovered=0, partial=1, partialCovered=0, notFound=2, ambiguous=1,
+    assert result['counts'] == dict(rows=10, ready=1, readyCovered=0, partial=1, partialCovered=0, notFound=2, ambiguous=2,
                                     noChildren=2, noName=1, repeated=1)
     reasons = {row['recipient']: row for row in result['attention']}
     assert [t['name'] for t in reasons['Два Частично']['found']] == ['Образцова Анна'] and reasons['Два Частично']['missing']
     assert reasons['Три Никого']['missing'] and reasons['Четыре Двое']['ambiguous']
+    assert reasons['Семь Смешанный']['outcome'] == 'ambiguous' and reasons['Семь Смешанный']['ambiguous']
+    mixed = csv_file('Семь;Смешанный;Примеров Александр (7A), Эскизов Максим (5B)')
+    for flags in [{}, dict(includePartial=True), dict(includeCovered=True), dict(includePartial=True, includeCovered=True)]:
+        issue(school, mixed, expect=422, **flags)  # a row with an ambiguous child is never issued, found child or not
     assert reasons['Пять Выбыл']['missing']  # a pupil who left is not an active match
     assert {row['outcome'] for row in result['attention']} == {'partial', 'notFound', 'ambiguous', 'noName'}
 
@@ -115,6 +120,19 @@ def test_existing_access_or_a_pending_code_skips_the_row_unless_asked(school):
     assert {w['kind'] for w in covered['warnings']} == {'invitations'}
     assert recipients(issue(school, file)[0]) == ['Два Свободен']
     assert recipients(issue(school, file, includeCovered=True)[0]) == ['Два Свободен', 'Один Покрыт']
+
+
+@pytest.mark.parametrize('cover', ['pending', 'account'])
+def test_a_partly_found_row_whose_child_has_access_needs_both_opt_ins(school, cover):
+    if cover == 'pending': issue_one(school, ['p2'])
+    else: create(school, 'parent', grants=[dict(workspace='demo', view='student', entityIds=['p2'])])
+    file = csv_file('Два;Частично;Образцова Анна (3D), Никто Неизвестный (3D)')
+    row = preview(school, file)['attention'][0]
+    assert row['outcome'] == 'partial' and row['warnings']
+    for flags in [{}, dict(includePartial=True), dict(includeCovered=True)]:
+        issue(school, file, expect=422, **flags)
+    both, _ = issue(school, file, includePartial=True, includeCovered=True)
+    assert recipients(both) == ['Два Частично'] and [t['id'] for t in both['items'][0]['targets']] == ['p2']
 
 
 def test_a_registered_parent_sees_exactly_the_matched_children(school):
@@ -259,3 +277,21 @@ def test_only_the_administrator_can_preview_or_issue(school):
 def test_the_hand_made_batch_keeps_its_limit_of_fifty(school):
     rows = [dict(key=f'row{i}', recipient=f'Родитель {i}', role='parent', entityIds=['p1']) for i in range(51)]
     assert school.post(BATCHES + '/preview', json=dict(workspace='demo', days=7, rows=rows)).status_code == 422
+
+
+def test_a_register_of_hundreds_of_rows_opens_and_revokes_completely(school):
+    state = api.read('demo')
+    for i in range(300):
+        state.students.append(state.students[0].model_copy(update=dict(id=f'bulk{i}', name=f'Массов Ученик{i}', classId='c7A', active=True, externalId=None)))
+    api.save('demo', state)
+    file = csv_file(*[f'Родитель;Номер {i};Массов Ученик{i} (7A)' for i in range(300)])
+    issued, _ = issue(school, file)
+    assert len(issued['items']) == 300
+    detail = school.get(BATCHES + '/' + str(issued['id'])).json()
+    assert len(detail['items']) == 300 and not any('code' in i for i in detail['items'])
+    assert {i['recipient']: [t['id'] for t in i['targets']] for i in detail['items']} == {f'Родитель Номер {i}': [f'bulk{i}'] for i in range(300)}
+    assert {i['status'] for i in detail['items']} == {'pending'}
+    register(visitor(), issued['items'][7]['code'], login='bulk-family').raise_for_status()
+    revoked = school.post(BATCHES + f"/{issued['id']}/revoke").json()
+    assert revoked['revokedCount'] == 299 and len(revoked['items']) == 300
+    assert sorted({i['status'] for i in revoked['items']}) == ['accepted', 'revoked']

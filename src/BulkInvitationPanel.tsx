@@ -185,16 +185,20 @@ export default function BulkInvitationPanel({
   async function send(path: string, payload: unknown) {
     // Keep the identical request after an uncertain network result. The receipt
     // prevents reissuing codes, including after another account accepted one.
+    // A register request must leave the hand-made batch draft untouched.
+    const isRegister = path === registerBase;
     try {
       const result: BatchReceipt = await api(path, workspace, "POST", payload);
       if (!alive.current) return;
       setReceipt(result);
       setReceiptShown(50);
       setPending(null);
-      if (path === registerBase) setRegisterKey((n) => n + 1);
-      setRows([]);
-      setPreview(null);
-      setAcknowledged([]);
+      if (isRegister) setRegisterKey((n) => n + 1);
+      else {
+        setRows([]);
+        setPreview(null);
+        setAcknowledged([]);
+      }
       setNotice(
         result.replayed
           ? "Пакет уже создан. Повторный запрос не создал новых приглашений. Коды восстановить нельзя; при потере отзовите непринятые приглашения и создайте новый пакет."
@@ -206,9 +210,11 @@ export default function BulkInvitationPanel({
       const status = (e as { status?: number }).status;
       if (alive.current && status && status < 500) {
         setPending(null);
-        setPreview(null);
-        setAcknowledged([]);
-        if (path === registerBase) setRegisterStale((n) => n + 1);
+        if (isRegister) setRegisterStale((n) => n + 1);
+        else {
+          setPreview(null);
+          setAcknowledged([]);
+        }
       }
       throw e;
     }

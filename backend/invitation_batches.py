@@ -122,10 +122,10 @@ def preview(db,access,body):
 def receipt(db,id):
     batch=db.execute('SELECT id,workspace,created,kind,source,summary FROM invitation_batches WHERE id=?',(id,)).fetchone()
     if not batch: raise HTTPException(404,'Пакет приглашений не найден.')
-    items=[]
-    for key,invitation_id,targets in db.execute('SELECT row_key,invitation_id,targets FROM invitation_batch_items WHERE batch_id=? ORDER BY invitation_id',(id,)):
-        row=db.execute('SELECT * FROM access_invitations WHERE id=?',(invitation_id,)).fetchone()
-        items.append(public(row)|dict(key=key,targets=json.loads(targets)))
+    # One joined query: a register may hold thousands of items.
+    items=[public(row[2:])|dict(key=row[0],targets=json.loads(row[1])) for row in db.execute('''SELECT x.row_key,x.targets,i.*
+        FROM invitation_batch_items x JOIN access_invitations i ON i.id=x.invitation_id
+        WHERE x.batch_id=? ORDER BY x.invitation_id''',(id,))]
     return dict(id=batch[0],workspace=batch[1],created=batch[2],kind=batch[3],source=batch[4],
                 summary=json.loads(batch[5]) if batch[5] else None,items=items)
 
