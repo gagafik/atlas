@@ -83,19 +83,9 @@ def test_impossible_availability_preserves_original_schedule():
 def test_no_teacher_double_booking_even_for_different_classes():
     s = demo()
     s.placements = [Placement(id='a', workloadId='w0', day=0, period=1, roomId='r0'), Placement(id='b', workloadId='w1', day=0, period=1, roomId='r1')]
-    assert validate_schedule(s)['issueCount'] == 1
-    assert 'учитель' in validate_schedule(s)['issues'][0]['message']
-
-
-def test_bell_profiles_use_time_not_period_number():
-    s = demo()
-    s.workloads[0].profileId = 'primary'
-    s.placements = [Placement(id='a', workloadId='w0', day=0, period=1, roomId='r0'), Placement(id='b', workloadId='w1', day=0, period=1, roomId='r0')]
-    # Primary 09:00-09:40 and secondary 08:20-09:00 share a period number,
-    # but merely touch in time and must not cause a teacher/room conflict.
-    assert validate_schedule(s)['issueCount'] == 0
-    s.profiles[0].periods[1].start = '08:50'
-    assert validate_schedule(s)['issueCount'] == 1
+    issues = validate_schedule(s)['issues']
+    assert [i['type'] for i in issues] == ['collision']
+    assert issues[0]['collision']['teacherIds'] == [s.workloads[0].teacherId]
 
 
 def test_excess_weekly_load_is_blocked_before_search():

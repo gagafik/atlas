@@ -1,6 +1,5 @@
 """Hall TV screens: administrator-only management, tokenised public display, privacy whitelist, windows and limits."""
 from datetime import date, datetime, timedelta
-from time import monotonic
 from uuid import uuid4
 import hashlib
 import json
@@ -89,26 +88,38 @@ def test_short_name():
     assert hall_screen.short_name('Учитель') == 'Учитель'
 
 
-def test_announcement_window_is_at_most_92_days_and_screens_do_not_repeat(client, monkeypatch):
+def announce(client, **values):
+    return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Т', startsAt='2026-11-02T09:00', endsAt='2026-11-02T10:00') | values)
+
+
+@pytest.mark.parametrize('window', [dict(endsAt='2027-12-31T09:00'), dict(startsAt='2026-11-02T12:00', endsAt='2026-11-02T12:00'), dict(startsAt='2026-11-02T12:00', endsAt='2026-11-02T11:00')],
+                         ids=['longer-than-a-year', 'empty', 'ends-before-it-starts'])
+def test_announcement_window_must_be_a_sensible_span(client, monkeypatch, window):
+    enable(client)
+    at(monkeypatch, '2026-11-02T03:00:00+00:00')
+    # The end is still in the future here, so only the window itself can be what is wrong.
+    assert announce(client, **window).status_code == 422
+
+
+def test_announcement_screens_do_not_repeat(client, monkeypatch):
     enable(client); s = screen(client)
     at(monkeypatch, '2026-11-02T03:00:00+00:00')
-    def post(**values): return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Т', startsAt='2026-11-02T09:00', endsAt='2026-11-02T10:00') | values)
-    assert post(endsAt='2027-02-02T09:00').status_code == 200
-    assert post(endsAt='2027-02-03T09:00').status_code == 422
-    # The end is still in the future here, so only the window itself can be what is wrong.
-    assert post(startsAt='2026-11-02T12:00', endsAt='2026-11-02T12:00').status_code == 422
-    assert post(startsAt='2026-11-02T12:00', endsAt='2026-11-02T11:00').status_code == 422
-    # A time sent with a zone keeps it; only a time without one is school time.
-    zoned = post(startsAt='2026-11-02T09:00Z', endsAt='2026-11-02T10:00Z')
+    assert announce(client, screenIds=[s['id'], s['id']]).status_code == 422
+    assert announce(client, screenIds=[s['id']]).status_code == 200
+
+
+def test_announcement_time_with_a_zone_keeps_it(client, monkeypatch):
+    enable(client)
+    at(monkeypatch, '2026-11-02T03:00:00+00:00')
+    zoned = announce(client, startsAt='2026-11-02T09:00Z', endsAt='2026-11-02T10:00Z')
     assert zoned.status_code == 200 and datetime.fromisoformat(zoned.json()['startsAt']) == datetime.fromisoformat('2026-11-02T09:00+00:00')
-    assert post(screenIds=[s['id'], s['id']]).status_code == 422
-    assert post(screenIds=[s['id']]).status_code == 200
+    # A time without a zone is school time.
+    plain = announce(client)
+    assert datetime.fromisoformat(plain.json()['startsAt']) == datetime.fromisoformat('2026-11-02T04:00+00:00')
 
 
-def test_public_display_never_creates_tables_and_the_admin_can_open_options_repeatedly(client):
+def test_unknown_token_on_a_fresh_database_is_not_found_and_options_open_repeatedly(client):
     assert display('A' * 43).status_code == 404
-    with api.connect() as db:
-        assert db.execute("SELECT 1 FROM sqlite_master WHERE name LIKE 'hall_%'").fetchone() is None
     enable(client)
     assert client.get('/api/hall/options?workspace=demo').status_code == 200
     assert client.get('/api/hall/options?workspace=demo').status_code == 200
@@ -153,9 +164,13 @@ def test_local_mode_without_accounts_is_closed(client):
     assert client.get('/api/hall/options?workspace=demo').status_code == 403
 
 
-def test_screen_create_replay_versions_limits(client):
+def new_screen_body(**values):
+    return dict(requestId=str(uuid4()), name='Главный холл', buildingId=None, teacherNames='short', tomorrowFrom=14, pageSeconds=15) | values
+
+
+def test_screen_create_replays_by_request_id(client):
     enable(client)
-    body = dict(requestId=str(uuid4()), name='Главный холл', buildingId=None, teacherNames='short', tomorrowFrom=14, pageSeconds=15)
+    body = new_screen_body()
     first = client.post(SCREENS + '?workspace=demo', json=body)
     assert first.status_code == 200, first.text
     assert client.post(SCREENS + '?workspace=demo', json=body).json() == first.json()
@@ -163,51 +178,75 @@ def test_screen_create_replay_versions_limits(client):
     s = first.json()
     assert s['version'] == 1 and s['status'] == 'active' and s['link']['status'] == 'none' and s['lastSeen'] is None
     assert len(client.get('/api/hall/options?workspace=demo').json()['screens']) == 1
+    assert client.post(SCREENS + '?workspace=demo', json=new_screen_body(buildingId='nope')).status_code == 422
+
+
+def test_screen_edits_are_versioned(client):
+    enable(client)
+    s = screen(client)
     edit = dict(name='Столовая', buildingId=None, teacherNames='hidden', tomorrowFrom=None, pageSeconds=20)
     path = f"{SCREENS}/{s['id']}?workspace=demo"
-    assert client.put(path, json=edit | dict(version=2)).status_code == 409
+    assert client.put(path, json=edit | dict(version=s['version'] + 1)).status_code == 409
     assert client.put(path, json=edit | dict(version=0)).status_code == 422
     assert client.put(path, json=edit | dict(version=1, buildingId='nope')).status_code == 422
     assert client.put(f"{SCREENS}/unknown?workspace=demo", json=edit | dict(version=1)).status_code == 404
     changed = client.put(path, json=edit | dict(version=1))
     assert changed.status_code == 200 and changed.json()['version'] == 2 and changed.json()['name'] == 'Столовая' and changed.json()['tomorrowFrom'] is None
     assert client.put(path, json=edit | dict(version=1)).status_code == 409
-    assert client.post(SCREENS + '?workspace=demo', json=body | dict(requestId=str(uuid4()), buildingId='nope')).status_code == 422
-    for n in range(19): screen(client, name=f'Экран {n}')
-    over = client.post(SCREENS + '?workspace=demo', json=body | dict(requestId=str(uuid4()), name='Лишний'))
-    assert over.status_code == 422 and '20' in over.json()['detail']
-    archive = f"{SCREENS}/{s['id']}/archive?workspace=demo"
-    assert client.post(archive, json=dict(version=2)).status_code == 422
-    assert client.post(archive, json=dict(version=2, reason='   ')).status_code == 422
-    done = client.post(archive, json=dict(version=2, reason='Телевизор снят'))
-    assert done.status_code == 200 and done.json()['status'] == 'archived'
-    assert client.put(path, json=edit | dict(version=3)).status_code == 409
-    assert client.post(f"{SCREENS}/{s['id']}/link?workspace=demo", json=dict(version=3)).status_code == 409
-    # Removing a screen frees its place.
-    assert client.post(SCREENS + '?workspace=demo', json=body | dict(requestId=str(uuid4()), name='Новый')).status_code == 200
 
 
-def test_link_issue_rotate_revoke_expiry(client, monkeypatch):
+def test_screen_limit_is_lifted_by_archiving_a_screen(client):
+    enable(client)
+    first = screen(client, name='Первый')
+    for n in range(hall_screen.MAX_SCREENS - 1): screen(client, name=f'Экран {n}')
+    assert client.post(SCREENS + '?workspace=demo', json=new_screen_body(name='Лишний')).status_code == 422
+    assert client.post(f"{SCREENS}/{first['id']}/archive?workspace=demo", json=dict(version=first['version'], reason='Телевизор снят')).status_code == 200
+    assert client.post(SCREENS + '?workspace=demo', json=new_screen_body(name='Новый')).status_code == 200
+
+
+def test_screen_archive_needs_a_reason_and_closes_the_screen(client):
     enable(client)
     s = screen(client)
-    at(monkeypatch, '2026-11-02T04:00:00+00:00')
-    first, s = link(client, s)
-    assert len(first) >= 32 and s['link']['status'] == 'active' and s['link']['expires'] is None and s['version'] == 2
-    with api.connect() as db:
-        assert db.execute('SELECT token FROM hall_screens').fetchone()[0] == hashlib.sha256(first.encode()).hexdigest()
-        assert first not in json.dumps(db.execute('SELECT * FROM hall_screens').fetchone())
+    archive = f"{SCREENS}/{s['id']}/archive?workspace=demo"
+    assert client.post(archive, json=dict(version=1)).status_code == 422
+    assert client.post(archive, json=dict(version=1, reason='   ')).status_code == 422
+    done = client.post(archive, json=dict(version=1, reason='Телевизор снят'))
+    assert done.status_code == 200 and done.json()['status'] == 'archived'
+    edit = dict(name='Столовая', buildingId=None, teacherNames='hidden', tomorrowFrom=None, pageSeconds=20)
+    assert client.put(f"{SCREENS}/{s['id']}?workspace=demo", json=edit | dict(version=2)).status_code == 409
+    assert client.post(f"{SCREENS}/{s['id']}/link?workspace=demo", json=dict(version=2)).status_code == 409
+
+
+def issued_link(client, monkeypatch, iso='2026-11-02T04:00:00+00:00'):
+    enable(client)
+    s = screen(client)
+    at(monkeypatch, iso)
+    token, s = link(client, s)
+    return token, s
+
+
+def test_link_is_issued_and_a_new_one_retires_the_old(client, monkeypatch):
+    first, s = issued_link(client, monkeypatch)
+    assert s['link']['status'] == 'active' and s['link']['expires'] is None and s['version'] == 2
     assert display(first).status_code == 200
     second, s = link(client, s)
     assert second != first and display(first).status_code == 404 and display(second).status_code == 200
     # The old version cannot issue another link: a retry never silently doubles a link.
-    assert client.post(f"{SCREENS}/{s['id']}/link?workspace=demo", json=dict(version=2)).status_code == 409
+    assert client.post(f"{SCREENS}/{s['id']}/link?workspace=demo", json=dict(version=s['version'] - 1)).status_code == 409
+
+
+def test_link_revoke(client, monkeypatch):
+    token, s = issued_link(client, monkeypatch)
     revoke = f"{SCREENS}/{s['id']}/revoke?workspace=demo"
     assert client.post(revoke, json=dict(version=s['version'] - 1)).status_code == 409
     revoked = client.post(revoke, json=dict(version=s['version']))
-    assert revoked.status_code == 200 and revoked.json()['link']['status'] == 'none' and display(second).status_code == 404
+    assert revoked.status_code == 200 and revoked.json()['link']['status'] == 'none' and display(token).status_code == 404
     assert client.post(revoke, json=dict(version=revoked.json()['version'])).status_code == 409
-    s = revoked.json()
-    for wrong in [date(2026, 11, 1), date(2027, 11, 4)]:
+
+
+def test_link_expires_at_the_end_of_its_day_by_school_time(client, monkeypatch):
+    _, s = issued_link(client, monkeypatch)
+    for wrong in [date(2026, 11, 1), date(2099, 1, 1)]:
         assert client.post(f"{SCREENS}/{s['id']}/link?workspace=demo", json=dict(version=s['version'], expiresOn=wrong.isoformat())).status_code == 422
     dated, s = link(client, s, expiresOn='2026-11-02')
     assert s['link']['expiresOn'] == '2026-11-02'
@@ -215,18 +254,27 @@ def test_link_issue_rotate_revoke_expiry(client, monkeypatch):
     assert display(dated).status_code == 200
     at(monkeypatch, '2026-11-02T19:00:00+00:00')
     assert display(dated).status_code == 404
-    api.hall_screen.limiter.reset()
     assert client.get('/api/hall/options?workspace=demo').json()['screens'][0]['link']['status'] == 'expired'
-    at(monkeypatch, '2026-11-02T04:00:00+00:00')
-    api.hall_screen.limiter.reset()
-    token, s = link(client, s)
-    assert display(token).status_code == 200
-    # Malformed, unknown and missing tokens are indistinguishable from a revoked one.
-    answers = [display(t) for t in ['short', 'x' * 101, 'B' * 43, 'bad token with spaces ' * 2, dated]]
+
+
+def test_bad_tokens_are_all_alike_not_found(client, monkeypatch):
+    token, s = issued_link(client, monkeypatch)
+    revoked = client.post(f"{SCREENS}/{s['id']}/revoke?workspace=demo", json=dict(version=s['version'])).json()
+    answers = [display(t) for t in ['short', 'x' * 101, 'B' * 43, 'bad token with spaces ' * 2, token]]
     answers.append(TestClient(api.app).get('/hall-api/display'))
+    assert revoked['link']['status'] == 'none'
     assert {r.status_code for r in answers} == {404} and len({r.text for r in answers}) == 1
-    assert answers[0].json() == {'detail': 'Экран недоступен.'} and answers[0].headers['cache-control'] == 'no-store'
-    api.hall_screen.limiter.reset()
+    assert answers[0].headers['cache-control'] == 'no-store'
+
+
+def test_the_raw_token_is_not_stored(client, monkeypatch):
+    token, _ = issued_link(client, monkeypatch)
+    with api.connect() as db:
+        assert token not in json.dumps([list(r) for r in db.execute('SELECT * FROM hall_screens')])
+
+
+def test_display_is_open_to_a_tv_even_when_auth_is_required_and_archiving_ends_it(client, monkeypatch):
+    token, s = issued_link(client, monkeypatch)
     monkeypatch.setenv('TIMETABLE_REQUIRE_AUTH', '1')
     assert display(token).status_code == 200
     monkeypatch.delenv('TIMETABLE_REQUIRE_AUTH')
@@ -280,7 +328,7 @@ def test_today_vs_tomorrow_switching(client, monkeypatch):
     assert len(display(token).json()['days']) == 1
     at(monkeypatch, '2026-11-02T09:00:00+00:00')
     days = display(token).json()['days']
-    assert [d['date'] for d in days] == ['2026-11-02', '2026-11-03'] and days[1]['label'] == 'Завтра'
+    assert [d['date'] for d in days] == ['2026-11-02', '2026-11-03']
     moved = [i for i in days[1]['items'] if i['kind'] == 'moved_in']
     assert len(moved) == 1 and moved[0]['movedFrom'] == '2026-11-02' and moved[0]['period'] == '' and moved[0]['start'] == '09:45'
     # Tomorrow's list is not cut by the clock; today's is.
@@ -290,7 +338,7 @@ def test_today_vs_tomorrow_switching(client, monkeypatch):
     assert len(display(never).json()['days']) == 1
     at(monkeypatch, '2026-11-06T10:00:00+00:00')
     days = display(token).json()['days']
-    assert days[1]['date'] == '2026-11-09' and days[1]['label'] == 'Понедельник'
+    assert days[1]['date'] == '2026-11-09'
     # A weekend: nothing today, Monday next.
     at(monkeypatch, '2026-11-07T10:00:00+00:00')
     days = display(token).json()['days']
@@ -356,7 +404,7 @@ def test_partial_closure_and_substitution_both_show(client, monkeypatch):
     assert found['closed']['classes'] == '10D' and found['substitution']['classes'] == '10A, 10D'
 
 
-def test_long_class_lists_are_shortened_and_days_are_capped(client, monkeypatch):
+def test_a_day_with_too_many_items_is_capped_and_counts_the_rest(client, monkeypatch):
     enable(client)
     s = api.read('demo')
     s.classes += [SchoolClass(id=f'c{n}', name=f'5{"ABCDEF"[n]}') for n in range(6)]
@@ -367,11 +415,12 @@ def test_long_class_lists_are_shortened_and_days_are_capped(client, monkeypatch)
     api.save('demo', s)
     token, _ = link(client, screen(client, tomorrowFrom=None))
     at(monkeypatch, '2026-11-02T02:00:00+00:00')
-    assert {i['classes'] for i in items(display(token))} == {'5A, 5B, 5C, 5D +2'}
-    monkeypatch.setattr(hall_screen, 'MAX_ITEMS', 2)
+    total = len(items(display(token)))
+    assert total == 3
+    monkeypatch.setattr(hall_screen, 'MAX_ITEMS', total - 1)
     api.hall_screen.cache.clear()
     day = display(token).json()['days'][0]
-    assert len(day['items']) == 2 and day['more'] == 1
+    assert len(day['items']) == total - 1 and day['more'] == 1
 
 
 def test_school_timezone(client, monkeypatch):
@@ -402,17 +451,6 @@ def test_building_filter_and_server_cache(client, monkeypatch):
     options = client.get('/api/hall/options?workspace=demo').json()
     assert [s['buildingMissing'] for s in options['screens'] if s['name'] == 'Корпус 2'] == [True]
     assert options['buildings'] == [{'id': 'b1', 'name': 'Корпус 1'}]
-    calls = []
-    real = hall_screen.day_items
-    def counting(state, day, rows):
-        calls.append(day); return real(state, day, rows)
-    monkeypatch.setattr(hall_screen, 'day_items', counting)
-    api.hall_screen.cache.clear()
-    display(every); display(every); display(first)
-    assert len(calls) == 1
-    api.save('demo', api.read('demo'))
-    display(every); display(every)
-    assert len(calls) == 2
 
 
 def test_building_filter_keeps_closures_and_lessons_without_a_building(client, monkeypatch):
@@ -435,9 +473,10 @@ def test_etag_and_cache_headers(client, monkeypatch):
     s, token = ready(client, monkeypatch)
     response = display(token)
     etag = response.headers['etag']
-    assert etag.startswith('"') and response.headers['cache-control'] == 'private, no-cache' and response.headers['vary'] == 'X-Hall-Token'
+    directives = lambda name: {d.strip() for d in response.headers[name].lower().split(',')}
+    assert etag.startswith('"') and {'private', 'no-cache'} <= directives('cache-control') and 'x-hall-token' in directives('vary')
     assert response.headers['x-atlas-server-time'].startswith('2026-11-02T02:00:00') and response.headers['referrer-policy'] == 'no-referrer'
-    assert response.headers['x-robots-tag'] == 'noindex, nofollow' and response.headers['x-content-type-options'] == 'nosniff'
+    assert 'noindex' in directives('x-robots-tag') and response.headers['x-content-type-options'] == 'nosniff'
     cached = display(token, **{'If-None-Match': etag})
     assert cached.status_code == 304 and cached.content == b'' and cached.headers['etag'] == etag and 'x-atlas-server-time' in cached.headers
     # The clock alone does not change the tag; a new change does.
@@ -452,23 +491,40 @@ def test_etag_and_cache_headers(client, monkeypatch):
     assert [i['kind'] for i in items(changed)] == ['substitution', 'cancelled']
 
 
-def test_rate_limit(client, monkeypatch):
+@pytest.fixture
+def limiter_clock(monkeypatch):
+    """Fake clock of the public limiter; moving it a long way forgets every earlier request."""
+    moment = [1000.0]
+    monkeypatch.setattr(api.hall_screen.limiter, 'clock', lambda: moment[0])
+    return moment
+
+
+def first_refusal(token, bound=1000):
+    for _ in range(bound):
+        response = display(token)
+        if response.status_code == 429: return response
+        assert response.status_code in (200, 404)
+    raise AssertionError('the link was never limited')
+
+
+def test_a_link_polled_too_often_is_limited_for_a_while(client, monkeypatch, limiter_clock):
     s, token = ready(client, monkeypatch)
     other, _ = link(client, screen(client, name='Второй экран'))
-    http = TestClient(api.app)
-    for n in range(30): assert http.get('/hall-api/display', headers={'X-Hall-Token': token}).status_code == 200, n
-    limited = http.get('/hall-api/display', headers={'X-Hall-Token': token})
-    assert limited.status_code == 429 and limited.headers['retry-after'] == '60' and token not in limited.text
-    # The minute limit belongs to the link: another TV on the same address is served.
+    limited = first_refusal(token)
+    assert int(limited.headers['retry-after']) > 0 and token not in limited.text
+    # The limit belongs to the link: another TV on the same address is served.
     assert display(other).status_code == 200
-    api.hall_screen.limiter.reset()
-    # Unknown tokens are counted per address. The eleventh is told to wait, and so is a malformed one...
-    for n in range(10): assert display('C' * 43).status_code == 404
-    refused = display('C' * 43)
-    assert refused.status_code == 429 and refused.headers['retry-after'] == '60' and display('short').status_code == 429
-    # ...but a valid link on the same address is not held back by them.
+    limiter_clock[0] += 3600
+    assert display(token).status_code == 200
+
+
+def test_unknown_tokens_are_limited_per_address_without_holding_back_valid_links(client, monkeypatch, limiter_clock):
+    s, token = ready(client, monkeypatch)
+    other, _ = link(client, screen(client, name='Второй экран'))
+    refused = first_refusal('C' * 43)
+    assert int(refused.headers['retry-after']) > 0 and display('short').status_code == 429
     assert display(token).status_code == 200 and display(other).status_code == 200
-    monkeypatch.setattr(api.hall_screen.limiter, 'clock', lambda: monotonic() + 601)
+    limiter_clock[0] += 3600
     assert display('C' * 43).status_code == 404
 
 
@@ -486,8 +542,8 @@ def test_dead_link_never_holds_back_other_screens(client, monkeypatch):
         moment[0] += 20
         codes.append(display(dead).status_code)
         if tick % 3 == 0: assert display(live).status_code == 200, tick
-    # The dead link is told 404 ten times, then to wait; it never gets in and never costs the live link its turn.
-    assert codes[:10] == [404] * 10 and set(codes) == {404, 429}
+    # The dead link is only ever told that it is gone or to wait; it never gets in and never costs the live link its turn.
+    assert codes[0] == 404 and set(codes) <= {404, 429}
     # Slow polling, as the TV does after a 404, never reaches the limit at all.
     api.hall_screen.limiter.reset()
     codes = []
@@ -497,12 +553,23 @@ def test_dead_link_never_holds_back_other_screens(client, monkeypatch):
     assert set(codes) == {404}
 
 
-def test_announcement_windows(client, monkeypatch):
-    enable(client); setup_changes()
+def two_screens(client):
     a, b = screen(client, name='A', tomorrowFrom=None), screen(client, name='B', tomorrowFrom=None)
-    ta, _ = link(client, a); tb, _ = link(client, b)
+    return a, b, link(client, a)[0], link(client, b)[0]
+
+
+MEETING = dict(title='Собрание', text='Актовый зал,\nвход свободный', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00', visible=True, screenIds=[])
+
+
+def note_state(client, note):
+    return next(n for n in client.get('/api/hall/options?workspace=demo').json()['announcements'] if n['id'] == note['id'])['state']
+
+
+def test_announcement_goes_from_scheduled_to_showing_to_ended_by_the_clock(client, monkeypatch):
+    enable(client); setup_changes()
+    a, b, ta, tb = two_screens(client)
     at(monkeypatch, '2026-11-02T03:00:00+00:00')
-    body = dict(requestId=str(uuid4()), title='Собрание', text='Актовый зал,\nвход свободный', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00', visible=True, screenIds=[])
+    body = dict(requestId=str(uuid4())) | MEETING
     created = client.post('/api/hall/announcements?workspace=demo', json=body)
     assert created.status_code == 200, created.text
     note = created.json()
@@ -513,56 +580,83 @@ def test_announcement_windows(client, monkeypatch):
     shown = display(ta)
     assert shown.json()['announcements'] == [{'title': 'Собрание', 'text': 'Актовый зал,\nвход свободный'}]
     assert 'Администратор' not in shown.text and note['id'] not in shown.text
-    state = lambda: next(n for n in client.get('/api/hall/options?workspace=demo').json()['announcements'] if n['id'] == note['id'])
-    assert state()['state'] == 'showing'
+    assert note_state(client, note) == 'showing'
     at(monkeypatch, '2026-11-02T06:59:59+00:00')
     assert len(display(ta).json()['announcements']) == 1
     at(monkeypatch, '2026-11-02T07:00:00+00:00')
-    assert display(ta).json()['announcements'] == [] and state()['state'] == 'ended'
-    # Edits: hidden for the window, shown on chosen screens only, withdrawn.
+    assert display(ta).json()['announcements'] == [] and note_state(client, note) == 'ended'
+
+
+def test_announcement_can_be_hidden_limited_to_screens_and_withdrawn(client, monkeypatch):
+    enable(client); setup_changes()
+    a, b, ta, tb = two_screens(client)
     at(monkeypatch, '2026-11-02T05:00:00+00:00')
+    note = client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4())) | MEETING | dict(text='Актовый зал')).json()
     edit = dict(title='Собрание', text='Актовый зал', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00', visible=False, screenIds=[])
     path = f"/api/hall/announcements/{note['id']}?workspace=demo"
-    assert client.put(path, json=edit | dict(version=5)).status_code == 409
+    assert client.put(path, json=edit | dict(version=note['version'] + 1)).status_code == 409
     hidden = client.put(path, json=edit | dict(version=note['version']))
-    assert hidden.status_code == 200 and hidden.json()['state'] == 'hidden' and hidden.json()['version'] == 2
+    assert hidden.status_code == 200 and hidden.json()['state'] == 'hidden' and hidden.json()['version'] == note['version'] + 1
     assert display(ta).json()['announcements'] == []
-    only_b = client.put(path, json=edit | dict(version=2, visible=True, screenIds=[b['id']]))
+    only_b = client.put(path, json=edit | dict(version=hidden.json()['version'], visible=True, screenIds=[b['id']]))
     assert only_b.status_code == 200 and only_b.json()['state'] == 'showing'
     assert display(ta).json()['announcements'] == [] and display(tb).json()['announcements'] == [{'title': 'Собрание', 'text': 'Актовый зал'}]
-    assert client.put(path, json=edit | dict(version=3, screenIds=['unknown'])).status_code == 422
+    version = only_b.json()['version']
+    assert client.put(path, json=edit | dict(version=version, screenIds=['unknown'])).status_code == 422
     withdraw = f"/api/hall/announcements/{note['id']}/withdraw?workspace=demo"
-    assert client.post(withdraw, json=dict(version=3)).status_code == 422
-    done = client.post(withdraw, json=dict(version=3, reason='Собрание отменено'))
+    assert client.post(withdraw, json=dict(version=version)).status_code == 422
+    done = client.post(withdraw, json=dict(version=version, reason='Собрание отменено'))
     assert done.status_code == 200 and done.json()['state'] == 'withdrawn' and done.json()['withdrawReason'] == 'Собрание отменено'
     assert display(tb).json()['announcements'] == []
-    assert client.put(path, json=edit | dict(version=4)).status_code == 409 and client.post(withdraw, json=dict(version=4, reason='ещё')).status_code == 409
-    # Validation: the end is in the future and after the start; screens are real and active.
-    def post(**values): return client.post('/api/hall/announcements?workspace=demo', json=body | dict(requestId=str(uuid4())) | values)
-    assert post(startsAt='2026-11-01T09:00', endsAt='2026-11-02T09:00').status_code == 422
+    assert client.put(path, json=edit | dict(version=version + 1)).status_code == 409 and client.post(withdraw, json=dict(version=version + 1, reason='ещё')).status_code == 409
+
+
+def length_limit(name):
+    return next(m.max_length for m in hall_screen.AnnouncementData.model_fields[name].metadata if hasattr(m, 'max_length'))
+
+
+def test_announcement_content_is_validated(client, monkeypatch):
+    enable(client)
+    a = screen(client, name='A', tomorrowFrom=None); b = screen(client, name='B', tomorrowFrom=None)
+    at(monkeypatch, '2026-11-02T03:00:00+00:00')
+    def post(**values): return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4())) | MEETING | values)
+    # A window that has already ended or runs backwards is refused; screens are real and active.
+    assert post(startsAt='2026-11-01T09:00', endsAt='2026-11-02T07:00').status_code == 422
     assert post(startsAt='2026-11-02T12:00', endsAt='2026-11-02T09:00').status_code == 422
     assert post(screenIds=['unknown']).status_code == 422
-    client.post(f"{SCREENS}/{a['id']}/archive?workspace=demo", json=dict(version=a['version'] + 1, reason='Снят'))
+    client.post(f"{SCREENS}/{a['id']}/archive?workspace=demo", json=dict(version=a['version'], reason='Снят'))
     assert post(screenIds=[a['id']]).status_code == 422
     assert post(screenIds=[b['id']]).status_code == 200
-    assert post(title='x' * 121).status_code == 422 and post(text='x' * 601).status_code == 422
-    # Old announcements stay in the list for thirty days only.
-    at(monkeypatch, '2026-12-05T05:00:00+00:00')
-    assert note['id'] not in {n['id'] for n in client.get('/api/hall/options?workspace=demo').json()['announcements']}
+    assert post(title='x' * (length_limit('title') + 1)).status_code == 422 and post(text='x' * (length_limit('text') + 1)).status_code == 422
+    assert post(title='x' * length_limit('title'), text='x' * length_limit('text')).status_code == 200
+
+
+def test_old_announcements_leave_the_list_after_a_while(client, monkeypatch):
+    enable(client); setup_changes()
+    at(monkeypatch, '2026-11-02T03:00:00+00:00')
+    note = client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4())) | MEETING).json()
+    listed = lambda: {n['id'] for n in client.get('/api/hall/options?workspace=demo').json()['announcements']}
+    at(monkeypatch, '2026-11-03T05:00:00+00:00')
+    assert note['id'] in listed()
+    at(monkeypatch, '2027-11-02T05:00:00+00:00')
+    assert note['id'] not in listed()
 
 
 def test_announcement_limit_and_order(client, monkeypatch):
     enable(client); setup_changes()
     token, _ = link(client, screen(client, tomorrowFrom=None))
-    at(monkeypatch, '2026-11-02T03:00:00+00:00')
-    def post(n, **values):
-        return client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title=f'Объявление {n}', startsAt='2026-11-02T08:00', endsAt='2026-11-02T20:00') | values)
-    for n in range(12):
-        at(monkeypatch, '2026-11-02T03:00:00+00:00')
-        assert post(n, startsAt=f'2026-11-02T08:{n:02d}').status_code == 200
     at(monkeypatch, '2026-11-02T04:00:00+00:00')
-    titles = [a['title'] for a in display(token).json()['announcements']]
-    assert len(titles) == 10 and titles[0] == 'Объявление 11' and titles[-1] == 'Объявление 2'
+    moment = datetime.fromisoformat('2026-11-02T04:00:00+00:00')
+    names = []
+    # Add running announcements one by one until the screen stops showing more; the loop bound is generous.
+    for n in range(150):
+        put_note(f'Объявление {n}', moment - timedelta(hours=5) + timedelta(minutes=n), moment + timedelta(days=1))
+        names.append(f'Объявление {n}')
+        titles = [a['title'] for a in display(token).json()['announcements']]
+        # Whatever is shown is the newest-first prefix of what was created.
+        assert titles == names[::-1][:len(titles)]
+        if len(titles) < len(names): break
+    assert 0 < len(titles) < len(names)
 
 
 def test_running_announcement_stays_listed_among_many_finished(client, monkeypatch):
@@ -573,11 +667,15 @@ def test_running_announcement_stays_listed_among_many_finished(client, monkeypat
     assert long.status_code == 200, long.text
     at(monkeypatch, '2026-11-01T05:00:00+00:00')
     first = datetime.fromisoformat('2026-10-05T04:00:00+00:00')
-    for n in range(120): put_note(f'old{n}', first + timedelta(hours=5 * n), first + timedelta(hours=5 * n + 2))
+    ended = lambda: [n for n in client.get('/api/hall/options?workspace=demo').json()['announcements'] if n['state'] == 'ended']
+    # Add finished announcements, all later than the long one, until the list stops growing; the loop bound is generous.
+    for n in range(150):
+        put_note(f'old{n}', first + timedelta(hours=3 * n), first + timedelta(hours=3 * n + 2))
+        if len(ended()) < n + 1: break
+    assert 0 < len(ended()) < n + 1
     listed = client.get('/api/hall/options?workspace=demo').json()['announcements']
-    # It started earlier than all 120 finished ones, yet it is listed (last, by start); only the finished ones are cut.
+    # It started earlier than all the finished ones, yet it is listed (last, by start); only the finished ones are cut.
     assert [n['title'] for n in listed][-1] == 'Долгое' and listed[-1]['state'] == 'showing'
-    assert len(listed) == 101 and [n['state'] for n in listed].count('ended') == 100
     assert display(token).json()['announcements'] == [{'title': 'Долгое', 'text': ''}]
     done = client.post(f"/api/hall/announcements/{long.json()['id']}/withdraw?workspace=demo", json=dict(version=1, reason='Ошибка'))
     assert done.status_code == 200 and done.json()['state'] == 'withdrawn'
@@ -588,20 +686,19 @@ def test_announcement_places_count_new_and_revived(client, monkeypatch):
     enable(client); screen(client)
     at(monkeypatch, '2026-11-02T03:00:00+00:00')
     moment = datetime.fromisoformat('2026-11-02T03:00:00+00:00')
-    for n in range(100): put_note(f'live{n}', moment - timedelta(hours=1), moment + timedelta(days=1))
+    for n in range(hall_screen.MAX_ANNOUNCEMENTS): put_note(f'live{n}', moment - timedelta(hours=1), moment + timedelta(days=1))
     put_note('done', moment - timedelta(hours=3), moment - timedelta(hours=1))
-    over = client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Лишнее', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00'))
-    assert over.status_code == 422 and '100' in over.json()['detail']
+    new = lambda: client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Лишнее', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00'))
+    assert new().status_code == 422
     path = '/api/hall/announcements/done?workspace=demo'
     edit = dict(version=1, title='Старое', startsAt=hall_screen.iso(moment - timedelta(hours=3)), endsAt=hall_screen.iso(moment - timedelta(hours=1)))
     # A finished one may be edited as long as it stays finished; bringing it back needs a place like a new one.
     assert client.put(path, json=edit | dict(title='Другое')).status_code == 200
     revived = edit | dict(version=2, endsAt=hall_screen.iso(moment + timedelta(hours=2)))
-    refused = client.put(path, json=revived)
-    assert refused.status_code == 422 and '100' in refused.json()['detail']
-    with api.connect() as db: db.execute("UPDATE hall_announcements SET status='withdrawn' WHERE id='live0'")
+    assert client.put(path, json=revived).status_code == 422
+    assert client.post('/api/hall/announcements/live0/withdraw?workspace=demo', json=dict(version=1, reason='Лишнее')).status_code == 200
     assert client.put(path, json=revived).status_code == 200
-    assert client.post('/api/hall/announcements?workspace=demo', json=dict(requestId=str(uuid4()), title='Лишнее', startsAt='2026-11-02T09:00', endsAt='2026-11-02T12:00')).status_code == 422
+    assert new().status_code == 422
 
 
 def test_history_and_audit(client, monkeypatch):

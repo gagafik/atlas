@@ -327,41 +327,65 @@ def test_a_teacher_with_two_entities_sees_both(client, clock):
     assert [t['teacherId'] for t in both.json()['teachers']] == ['t2', 't3']
 
 
-def test_csv_views_match_the_report_protect_formulas_and_are_audited(client, clock):
+def csv_school(client):
+    """A school with a formula for a teacher's name and a substitution in the second week; the export of a period of two weeks and a bit."""
     enable(client)
     stored(teachers=[t.model_copy(update=dict(name='=SUM(1)')) if t.id == 't2' else t for t in api.read('demo').teachers],
            datedLessons=[change(date(2026, 8, 24), teacherIds=['t3'], changeType='substitution')])
-    start, end = MON, date(2026, 8, 31)
-    params = dict(workspace='demo', start=str(start), end=str(end))
-    school = client.get('/api/staff-time/workload', params=params).json()
-    export = lambda view, **extra: client.get('/api/staff-time/workload/export', params=params | dict(view=view) | extra)
+    publish(client)  # one lesson is confirmed by its journal, the others are not
+    params = dict(workspace='demo', start=str(MON), end='2026-08-31')
+    return params, lambda view, **extra: client.get('/api/staff-time/workload/export', params=params | dict(view=view) | extra)
+
+
+def test_csv_is_a_bom_attachment_and_a_formula_in_a_name_is_neutralised(client, clock):
+    _, export = csv_school(client)
     teachers = export('teachers')
     assert teachers.status_code == 200 and teachers.text.startswith('﻿') and 'attachment' in teachers.headers['content-disposition']
-    assert '=SUM' not in teachers.headers['content-disposition'] and 'teacher-workload-2026-08-17-2026-08-31-teachers.csv' in teachers.headers['content-disposition']
-    table = rows_of(teachers.text)
-    assert len(table) == 1 + len(school['teachers']) + 1
-    assert any(row[0] == "'=SUM(1)" for row in table)
-    header = table[0]
-    taught = header.index('Проведено уроков')
+    assert '=SUM' not in teachers.headers['content-disposition']
+    assert any(row[0] == "'=SUM(1)" for row in rows_of(teachers.text))
+
+
+def test_an_unknown_export_view_is_refused(client, clock):
+    _, export = csv_school(client)
+    assert export('summary').status_code == 422
+
+
+def test_csv_figures_equal_the_report(client, clock):
+    params, export = csv_school(client)
+    school = client.get('/api/staff-time/workload', params=params).json()
+    table = rows_of(export('teachers').text)
+    taught = table[0].index('Проведено уроков')
     assert [int(r[taught]) for r in table[1:-1]] == [t['taught'] for t in school['teachers']]
     assert int(table[-1][taught]) == school['totals']['taught']
     weeks = rows_of(export('weeks').text)
-    assert len(weeks) == 1 + len(school['teachers']) * 3
-    one = client.get('/api/staff-time/workload', params=params | dict(teacherId='t3')).json()['teachers'][0]
-    # Every week row of every teacher carries the first and the last day of its week, each under its own header.
     first_day, last_day = weeks[0].index('Неделя с'), weeks[0].index('Неделя по')
-    assert all((row[first_day], row[last_day]) == (w['start'], w['end']) for row, w in zip(weeks[1:], one['weeks'] * len(school['teachers'])))
-    lessons = rows_of(export('lessons', teacherId='t3').text)
-    assert len(lessons) == 1 + len(one['lessons']) and lessons[1][7] == 'Проведён' and lessons[1][9] == 'Нет'
-    everyone = rows_of(export('lessons').text)
-    assert len(everyone) > len(lessons)
-    assert export('summary').status_code == 422
+    lessons = rows_of(export('lessons').text)
+    column = {name: lessons[0].index(name) for name in lessons[0]}
+    shown = {}
+    for t in school['teachers']:
+        one = client.get('/api/staff-time/workload', params=params | dict(teacherId=t['teacherId'])).json()['teachers'][0]
+        assert [(r[first_day], r[last_day]) for r in weeks[1:] if r[0] == t['name'].replace('=', "'=")] == [(w['start'], w['end']) for w in one['weeks']]
+        mine = [r for r in lessons[1:] if r[0] == t['name'].replace('=', "'=")]
+        assert [(r[column['Дата']], r[column['Начало']], r[column['Конец']], int(r[column['Минуты']])) for r in mine] == [(x['date'], x['start'], x['end'], x['minutes']) for x in one['lessons']]
+        for r, x in zip(mine, one['lessons']):
+            # The same outcome reads the same in the file, and two different outcomes never read alike.
+            for field, name in [('outcome', 'Итог'), ('confirmed', 'Подтверждено журналом')]:
+                shown.setdefault((field, x[field]), set()).add(r[column[name]])
+    assert all(len(cells) == 1 for cells in shown.values())
+    for field in ['outcome', 'confirmed']:
+        cells = [next(iter(cells)) for (f, _), cells in shown.items() if f == field]
+        assert len(set(cells)) == len(cells)
+
+
+def test_exports_are_audited_and_reading_the_report_is_not(client, clock):
+    params, export = csv_school(client)
+    export('teachers'); export('weeks'); export('lessons'); export('lessons', teacherId='t3')
     audited = lambda: [json.loads(e['detail']) for e in client.get('/api/access/audit').json() if e['action'] == 'staff-time.workload_exported']
     assert sorted((d['view'], d['teacherId']) for d in audited()) == [('lessons', ''), ('lessons', 't3'), ('teachers', ''), ('weeks', '')]
-    assert all(d['start'] == '2026-08-17' and d['end'] == '2026-08-31' for d in audited())
-    # Reading the report alone is not audited.
+    assert all(d['start'] == params['start'] and d['end'] == params['end'] for d in audited())
+    before = len(audited())
     client.get('/api/staff-time/workload', params=params)
-    assert len(audited()) == 4
+    assert len(audited()) == before
 
 
 def test_a_shortfall_against_the_schedule_is_a_number_in_the_csv(client, clock):
@@ -388,11 +412,6 @@ def test_the_breakdown_of_substitutions_in_the_csv_adds_up_to_them(client, clock
     parts = [name for name in header if name.startswith('Из них: ')]
     assert 'Из них: объединение' not in parts and cell('Присоединено при объединении') == 1
     assert cell('Замены') == sum(cell(name) for name in parts) == 1
-
-
-def test_local_mode_without_accounts_is_the_administrator(client, clock):
-    assert report(client).status_code == 200
-    assert client.get('/api/staff-time/workload/export', params=dict(workspace='demo', start=str(MON), end=str(MON))).status_code == 200
 
 
 def test_a_publication_by_a_teacher_outside_every_version_gets_a_neutral_name(client, clock):

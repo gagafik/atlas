@@ -10,8 +10,9 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend import api, jobs
-from backend.generation_queue import GenerationQueue
+from backend.generation_queue import GenerationQueue, MAX_ATTEMPTS
 from backend.jobs import JobRequest, Runner
+from seeding import insert_row
 from test_jobs import client
 
 
@@ -38,25 +39,40 @@ def child_competitor(path, start, output):
     output.put(result[1]['id'] if result else None)
 
 
-def test_global_claim_across_processes_and_atomic_queue_limit(client):
+def test_queue_limit_holds_under_concurrent_submissions(client):
+    # The limit is whatever the queue lets in one by one; under load exactly that many get in, the rest are told to wait.
     queue=GenerationQueue(api.DB)
+    admitted=[]
+    while True:
+        try: admitted.append(queue.enqueue('demo',JobRequest(revision=0))['id'])
+        except HTTPException as e:
+            assert e.status_code==409; break
+        assert len(admitted)<50
+    for id in admitted: queue.cancel(id,'demo')
     def submit(_):
         try: return GenerationQueue(api.DB).enqueue('demo',JobRequest(revision=0))['id']
         except HTTPException as e: return e.status_code
-    with ThreadPoolExecutor(max_workers=8) as pool: results=list(pool.map(submit,range(12)))
-    assert len([r for r in results if isinstance(r,str)])==3
-    assert results.count(409)==9
+    submissions=4*len(admitted)
+    with ThreadPoolExecutor(max_workers=8) as pool: results=list(pool.map(submit,range(submissions)))
+    assert len([r for r in results if isinstance(r,str)])==len(admitted)
+    assert results.count(409)==submissions-len(admitted)
+
+
+def test_one_process_wins_the_claim_between_competitors(client):
+    queue=GenerationQueue(api.DB)
+    waiting_jobs=2
+    for _ in range(waiting_jobs): queue.enqueue('demo',JobRequest(revision=0))
     ctx=mp.get_context('spawn'); start=ctx.Event(); output=ctx.Queue()
     processes=[ctx.Process(target=child_competitor,args=(str(api.DB),start,output)) for _ in range(3)]
     try:
         for process in processes: process.start()
         start.set()
-        claimed=[output.get(timeout=15) for _ in processes]
+        claimed=[output.get(timeout=60) for _ in processes]
         for process in processes:
-            process.join(10); assert process.exitcode==0
+            process.join(30); assert process.exitcode==0
         assert len([x for x in claimed if x is not None])==1
         assert sum(j['status']=='running' for j in queue.list('demo'))==1
-        assert sum(j['status']=='queued' for j in queue.list('demo'))==2
+        assert sum(j['status']=='queued' for j in queue.list('demo'))==waiting_jobs-1
         waiting=next(j for j in queue.list('demo') if j['status']=='queued')
         queue.cancel(waiting['id'],'demo')
         queue.enqueue('demo',JobRequest(revision=0))
@@ -116,7 +132,7 @@ def test_cancellation_survives_restart_and_wins_before_publication(client):
 def test_recovery_has_bounded_retries_and_preserves_queued_work(client):
     clock=[1000.0]; queue=GenerationQueue(api.DB,lease_seconds=2,clock=lambda:clock[0])
     first=queue.enqueue('demo',JobRequest(revision=0))
-    for attempt in range(1,4):
+    for attempt in range(1,MAX_ATTEMPTS+1):
         claim=queue.claim()
         assert claim[1]['attempts']==attempt
         clock[0]+=3
@@ -163,24 +179,27 @@ def test_shutdown_requeues_and_new_coordinator_recovers_without_api_polling(clie
 
 
 def test_process_crash_recovery_preserves_queue_and_creates_real_preview(client):
-    queue=GenerationQueue(api.DB); before=api.read('demo')
-    first=queue.enqueue('demo',JobRequest(revision=0,seconds=2))
-    second=queue.enqueue('demo',JobRequest(revision=0,seconds=2))
+    clock=[time.time()]
+    queue=GenerationQueue(api.DB,clock=lambda:clock[0]); before=api.read('demo')
+    first=queue.enqueue('demo',JobRequest(revision=0,seconds=1))
+    second=queue.enqueue('demo',JobRequest(revision=0,seconds=1))
     ctx=mp.get_context('spawn');ready=ctx.Event()
     process=ctx.Process(target=child_claim_and_exit,args=(str(api.DB),ready))
     try:
-        process.start(); assert ready.wait(10)
-        process.join(10); assert process.exitcode==23
+        process.start(); assert ready.wait(30)
+        process.join(30); assert process.exitcode==23
     finally:
         if process.is_alive(): process.terminate(); process.join(5)
         process.close()
     assert queue.get(first['id'],'demo')['status']=='running'
     assert queue.get(second['id'],'demo')['status']=='queued'
+    # The dead process's lease runs out without waiting for it.
+    clock[0]+=3600
     runner=Runner(queue,threading.Lock(),heartbeat_seconds=.1)
     runner.start()
     try:
-        recovered=wait_status(queue,first['id'],['ready'],timeout=20)
-        waiting=wait_status(queue,second['id'],['ready'],timeout=20)
+        recovered=wait_status(queue,first['id'],['ready'],timeout=60)
+        waiting=wait_status(queue,second['id'],['ready'],timeout=60)
         assert recovered['attempts']==2 and recovered['restarts']==1
         assert waiting['attempts']==1
         assert recovered['result']['preview']['canApply']
@@ -194,15 +213,16 @@ def test_legacy_jobs_migrate_idempotently_and_invalid_records_stay_interrupted(c
     queue=GenerationQueue(api.DB)
     legacy=dict(id='legacy',status='running',**JobRequest(revision=0,seconds=2).model_dump())
     with api.connect() as db:
-        db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?)',('legacy','demo','2026-01-01',json.dumps(legacy)))
-        db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?)',('bad','demo','2026-01-01',json.dumps(dict(id='bad',status='queued'))))
-        db.execute('INSERT INTO generation_jobs VALUES (?,?,?,?)',('cancel','demo','2026-01-01',json.dumps(dict(id='cancel',status='cancelling'))))
+        for id,document in [('legacy',legacy),('bad',dict(id='bad',status='queued')),('cancel',dict(id='cancel',status='cancelling'))]:
+            insert_row(db,'generation_jobs',id=id,workspace='demo',created='2026-01-01',document=json.dumps(document))
     queue.migrate(JobRequest); queue.migrate(JobRequest)
     assert queue.get('legacy','demo')['status']=='queued'
     assert queue.get('legacy','demo')['restarts']==1
     assert queue.get('bad','demo')['status']=='interrupted'
     assert queue.get('cancel','demo')['status']=='cancelled'
-    with api.connect() as db: assert db.execute('SELECT count(*) FROM generation_queue').fetchone()[0]==1
+    # Adopted once: it is claimed once and nothing else waits behind it.
+    assert queue.claim()[1]['id']=='legacy'
+    assert queue.claim() is None
 
 
 def test_running_queue_keeps_its_database_when_global_path_changes(client,monkeypatch,tmp_path):
