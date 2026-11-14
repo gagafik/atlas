@@ -58,6 +58,24 @@ def import_file(path):
     data['profiles'] = list(profiles.values())
     colors = ['#dceae2', '#e5e1f2', '#f5e5ce', '#dce9f4', '#f3dddd', '#e6ecd5', '#ddebed', '#eee1d3']
     subjects, teachers, rooms, groups, loads, placements = {}, {}, {}, {g['id']: g for g in data['groups']}, {}, {}
+    # A named group is the classes that meet together. The same name, subject and teacher in classes that never share
+    # a lesson (an elective of year 8 and of year 10 under one name) are different groups with different pupils.
+    meetings = defaultdict(lambda: defaultdict(set))
+    for r in records:
+        if r['group']:
+            meetings[r['group'], r['subject'], r['teacher']][r['day'], r['period']].add(r['className'])
+    part = {}
+    for base, slots in meetings.items():
+        sets = []
+        for names in slots.values():
+            joined = set(names)
+            for other in [s for s in sets if s & joined]:
+                joined |= other
+                sets.remove(other)
+            sets.append(joined)
+        order = [name for name in class_map if any(name in s for s in sets)]
+        for number, names in enumerate(sorted(sets, key=lambda s: min(map(order.index, s)))):
+            part.update({(base, name): number for name in names})
     for r in records:
         c = class_map[r['className']]
         subject_id = ident('sub', r['subject'])
@@ -69,7 +87,9 @@ def import_file(path):
             teachers[teacher_id] = dict(id=teacher_id, name=r['teacher'])
         if room_id:
             rooms[room_id] = dict(id=room_id, name=r['room'])
-        group_id = ident('g', '|'.join([r['group'], r['subject'], r['teacher']])) if r['group'] else f'g-{c["id"]}'
+        base = r['group'], r['subject'], r['teacher']
+        # The first set of classes keeps the id a group had before sets were told apart.
+        group_id = ident('g', '|'.join(base) + (f'|{part[base, r["className"]] + 1}' if part.get((base, r['className'])) else '')) if r['group'] else f'g-{c["id"]}'
         if group_id not in groups:
             groups[group_id] = dict(id=group_id, name=r['group'], classIds=[], studentIds=[], kind='imported')
         if c['id'] not in groups[group_id]['classIds']:
@@ -94,6 +114,7 @@ def import_file(path):
     data.update(subjects=list(subjects.values()), teachers=list(teachers.values()), rooms=list(rooms.values()), groups=list(groups.values()), workloads=list(loads.values()), placements=list(placements.values()))
     data['importInfo'] = dict(filename=Path(path).name, sourceCells=len(records), importedLessons=len(placements), notes=[
         'Все заполненные ячейки сохранены. Одинаковые записи именованной группы объединены по предмету, учителю, профилю звонков, дню, уроку и кабинету.',
+        'Группы с одним названием, предметом и учителем в классах, которые ни разу не занимаются вместе, считаются разными группами.',
         'Состав смешанных групп не указан в файле. До заполнения списков учеников полная проверка их пересечений и генерация недоступны.',
         'Пустые учителя и кабинеты оставлены незаданными. Одноимённые записи учителей не разделялись на разных людей.',
         '0 kaz и 0 rus добавлены из вашего списка; их расписания нет в файле.',
