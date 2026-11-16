@@ -2,56 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
-import { queueParams, queueSections, submissionTag } from "./homeworkQueue";
+import HomeworkQueueTable, { type OpenedWork } from "./HomeworkQueueTable";
+import {
+  fieldsFromAnswer,
+  listKey,
+  mayLeave,
+  nextConditions,
+  pageExpired,
+  periodButtonLabel,
+  periodPatch,
+  periodRefused,
+  queueParams,
+  queueTabs,
+  type QueueFields,
+  type QueueMeta,
+  type QueueResult,
+} from "./homeworkQueue";
+import "./HomeworkQueue.css";
 
-interface Item {
-  lessonKey: string;
-  studentId: string;
-  student: string;
-  subject: string;
-  group: string;
-  preview: string;
-  lessonDate: string;
-  dueDate: string | null;
-  baseDueDate: string | null;
-  extended: boolean;
-  status: string;
-  submittedAt: string | null;
-  late: boolean;
-  assignmentChanged: boolean;
-  overdue: boolean;
-  deadlineClosed: boolean;
-  submission: "online" | "offline";
-  readOnly: boolean;
-  canReview: boolean;
-  canSubmit: boolean;
-}
-interface Result {
-  items: Item[];
-  nextCursor: string | null;
-  staff: boolean;
-  filter: string;
-  // "upcoming" is the default window of pupils and parents; explicit dates give "range".
-  window: "upcoming" | "range";
-  start: string;
-  end: string;
-  yearStart: string;
-  yearEnd: string;
-  schoolToday: string;
-}
-const labels: Record<string, string> = {
-  not_submitted: "Не отправлено",
-  submitted: "На проверке",
-  returned: "На доработке",
-  accepted: "Принято",
+const initial: QueueFields = {
+  start: "",
+  end: "",
+  filter: "",
+  history: false,
+  search: "",
 };
-const sectionTitles = {
-  past: "Прошедшие сроки",
-  next: "Ближайшие две недели",
-  all: "",
-};
-const initial = { start: "", end: "", filter: "", history: false, search: "" };
-const dateLabel = (value: string) => value.split("-").reverse().join(".");
+const heading = (o: OpenedWork) =>
+  [o.subject, o.group, o.student ?? "всё задание"].join(" · ");
 
 export default function HomeworkQueuePanel({
   workspace,
@@ -61,24 +38,37 @@ export default function HomeworkQueuePanel({
   // The child a parent's portal looks at: the queue lists their work only.
   child?: string;
 }) {
+  // `fields` is what is committed (the tabs, the search, the period); what is only typed lives in its own draft.
   const [fields, setFields] = useState(initial),
     [applied, setApplied] = useState(initial);
-  const [result, setResult] = useState<Result | null>(null),
-    [error, setError] = useState("");
+  const [result, setResult] = useState<QueueResult | null>(null),
+    [meta, setMeta] = useState<QueueMeta | null>(null),
+    [error, setError] = useState(""),
+    // The server refused the period itself (422), not the page or the connection.
+    [refused, setRefused] = useState(false);
   const [cursor, setCursor] = useState(""),
     [epoch, setEpoch] = useState(0),
     [busy, setBusy] = useState(true);
-  const [selected, setSelected] = useState<Item | null>(null);
+  const [opened, setOpened] = useState<OpenedWork | null>(null);
+  const [searchText, setSearchText] = useState("");
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const [period, setPeriod] = useState({ start: "", end: "", history: false });
   const [activity, setActivity] = useState({ dirty: false, busy: false });
   const initialized = useRef(false);
+  const browse = useRef<HTMLDivElement>(null),
+    work = useRef<HTMLElement>(null);
+  const listScroll = useRef(0),
+    returnTo = useRef(""),
+    wasOpened = useRef(false),
+    shownList = useRef("");
   useEffect(() => {
     const leave = (e: Event) => {
       if (
-        activity.busy ||
-        (activity.dirty &&
-          !window.confirm(
+        !mayLeave(activity, () =>
+          window.confirm(
             "В домашней работе есть несохранённые изменения. Уйти без сохранения?",
-          ))
+          ),
+        )
       )
         e.preventDefault();
     };
@@ -89,26 +79,45 @@ export default function HomeworkQueuePanel({
     let live = true;
     setBusy(true);
     setError("");
-    setResult(null);
+    setRefused(false);
+    // Another list clears the screen; the same page read again (after a review) stays until the new answer comes.
+    const key = listKey(workspace, child, applied, cursor);
+    const reread = key === shownList.current;
+    if (!reread) {
+      shownList.current = key;
+      setResult(null);
+    }
     api(
       `journal/homework-queue?${queueParams(applied, cursor, child)}`,
       workspace,
     )
-      .then((r: Result) => {
+      .then((r: QueueResult) => {
         if (!live) return;
         setResult(r);
+        setMeta({
+          staff: r.staff,
+          filter: r.filter,
+          window: r.window,
+          start: r.start,
+          end: r.end,
+          yearStart: r.yearStart,
+          yearEnd: r.yearEnd,
+          schoolToday: r.schoolToday,
+        });
         if (!initialized.current) {
           initialized.current = true;
           // The default window has no dates of its own: leave the fields empty to keep it.
-          setFields((v) => ({
-            ...v,
-            ...(r.window === "range" ? { start: r.start, end: r.end } : {}),
-            filter: r.filter,
-          }));
+          setFields((v) => fieldsFromAnswer(v, r));
         }
       })
       .catch((e) => {
-        if (live) setError(e.message);
+        if (!live) return;
+        // A page lives fifteen minutes on the server: a later page read again after a review may be gone.
+        // Then the list starts from the first page instead of showing an error nobody asked for.
+        if (pageExpired(e.status, cursor, reread)) return setCursor("");
+        setError(e.message);
+        setRefused(periodRefused(e.status, applied));
+        setResult(null);
       })
       .finally(() => {
         if (live) setBusy(false);
@@ -117,260 +126,292 @@ export default function HomeworkQueuePanel({
       live = false;
     };
   }, [workspace, child, applied, cursor, epoch]);
+  // The button starts again from the first page; a change made in the opened work reads the same page again.
   function refresh() {
     setCursor("");
     setEpoch((v) => v + 1);
   }
-  function wholeYear(year: Result) {
+  const reload = () => setEpoch((v) => v + 1);
+  // Every change of what is listed asks to leave the opened work first, then starts again from the first page.
+  // What is typed in the search goes with it, so the field and the list never disagree.
+  function apply(patch: Partial<QueueFields>) {
     if (!canLeaveHomework()) return;
-    setSelected(null);
+    const next = nextConditions(fields, searchText, patch);
+    setFields(next);
+    setApplied(next);
     setCursor("");
-    setFields((v) => ({ ...v, start: year.yearStart, end: year.yearEnd }));
-    setApplied((v) => ({ ...v, start: year.yearStart, end: year.yearEnd }));
+    setOpened(null);
+    setPeriodOpen(false);
+  }
+  function open(row: OpenedWork) {
+    if (!canLeaveHomework()) return;
+    listScroll.current = window.scrollY;
+    returnTo.current = row.rowKey;
+    setOpened(row);
   }
   function changePage(next: string) {
     if (!canLeaveHomework()) return;
-    setSelected(null);
+    setOpened(null);
     setCursor(next);
   }
+  // The opened work takes the top of the screen; closing it brings the list back where it was.
+  useEffect(() => {
+    if (opened) {
+      wasOpened.current = true;
+      work.current?.focus({ preventScroll: true });
+      work.current?.scrollIntoView({ block: "start" });
+      return;
+    }
+    if (!wasOpened.current) return;
+    wasOpened.current = false;
+    window.scrollTo(0, listScroll.current);
+    const button = browse.current?.querySelector<HTMLElement>(
+      `[data-row="${CSS.escape(returnTo.current)}"]`,
+    );
+    (button ?? browse.current)?.focus({ preventScroll: true });
+  }, [opened]);
   return (
     <section className="homework-queue" aria-label="Очередь домашних заданий">
-      <p className="info-line">
-        Опубликованные задания и отправленные ответы. Даты фильтра относятся к
-        сроку сдачи; для задания без срока — к дате урока. Срок заканчивается в
-        конце дня по местному времени школы.
-      </p>
-      <form
-        className="homework-queue-filters"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!canLeaveHomework()) return;
-          setSelected(null);
-          setCursor("");
-          setApplied({ ...fields });
-        }}
+      <div
+        className="homework-queue-browse"
+        ref={browse}
+        tabIndex={-1}
+        hidden={!!opened}
       >
-        <label className="field">
-          <span>С даты</span>
-          <input
-            type="date"
-            value={fields.start}
-            onChange={(e) => setFields({ ...fields, start: e.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>По дату</span>
-          <input
-            type="date"
-            value={fields.end}
-            onChange={(e) => setFields({ ...fields, end: e.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Статус работы</span>
-          <select
-            value={fields.filter}
-            onChange={(e) => setFields({ ...fields, filter: e.target.value })}
+        <div className="homework-queue-toolbar">
+          {meta && (
+            <div className="segmented" role="group" aria-label="Статус работы">
+              {queueTabs(meta.staff).map((tab) => (
+                <button
+                  key={tab.filter}
+                  type="button"
+                  className={fields.filter === tab.filter ? "selected" : ""}
+                  aria-pressed={fields.filter === tab.filter}
+                  onClick={() => apply({ filter: tab.filter })}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <form
+            className="homework-queue-search"
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              apply({ search: searchText });
+            }}
           >
-            {!fields.filter && <option value="">Загрузка…</option>}
-            <option value="all">Все работы</option>
-            <option value="todo">Нужно сдать или исправить</option>
-            <option value="submitted">На проверке</option>
-            <option value="returned">На доработке</option>
-            <option value="accepted">Принято</option>
-            <option value="overdue">Просрочено, нужно сдать</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Поиск</span>
-          <input
-            value={fields.search}
-            maxLength={100}
-            placeholder="Предмет, группа или ученик"
-            onChange={(e) => setFields({ ...fields, search: e.target.value })}
-          />
-        </label>
-        <label className="homework-queue-history">
-          <input
-            type="checkbox"
-            checked={fields.history}
-            onChange={(e) =>
-              setFields({ ...fields, history: e.target.checked })
-            }
-          />{" "}
-          Включить прежние и отменённые уроки
-        </label>
-        <div className="dated-toolbar">
-          <button className="primary" disabled={busy || activity.busy}>
-            Применить фильтры
-          </button>
-          <button type="button" disabled={busy} onClick={refresh}>
-            Обновить список
+            <input
+              value={searchText}
+              maxLength={100}
+              aria-label="Поиск"
+              placeholder="Предмет, группа или ученик"
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            <button>Найти</button>
+          </form>
+          <details
+            className="homework-queue-period"
+            open={periodOpen}
+            onToggle={(e) => {
+              const isOpen = e.currentTarget.open;
+              if (isOpen === periodOpen) return;
+              setPeriodOpen(isOpen);
+              if (isOpen)
+                setPeriod({
+                  start: fields.start,
+                  end: fields.end,
+                  history: fields.history,
+                });
+            }}
+          >
+            <summary data-refused={refused ? "" : undefined}>
+              Период
+              {meta || applied.start || applied.end
+                ? ": " + periodButtonLabel(meta, applied, refused)
+                : ""}
+            </summary>
+            <div className="homework-queue-period-panel">
+              <label className="field">
+                <span>С даты</span>
+                <input
+                  type="date"
+                  value={period.start}
+                  onChange={(e) =>
+                    setPeriod({ ...period, start: e.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>По дату</span>
+                <input
+                  type="date"
+                  value={period.end}
+                  onChange={(e) =>
+                    setPeriod({ ...period, end: e.target.value })
+                  }
+                />
+              </label>
+              <label className="homework-queue-history">
+                <input
+                  type="checkbox"
+                  checked={period.history}
+                  onChange={(e) =>
+                    setPeriod({ ...period, history: e.target.checked })
+                  }
+                />{" "}
+                Прежние и отменённые уроки
+              </label>
+              <div className="homework-queue-period-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => apply(periodPatch("dates", period, meta))}
+                >
+                  Показать
+                </button>
+                {meta && (
+                  <button
+                    type="button"
+                    onClick={() => apply(periodPatch("year", period, meta))}
+                  >
+                    Весь учебный год
+                  </button>
+                )}
+                {meta && !meta.staff && (
+                  <button
+                    type="button"
+                    onClick={() => apply(periodPatch("default", period, meta))}
+                  >
+                    Ближайшие сроки
+                  </button>
+                )}
+              </div>
+            </div>
+          </details>
+          <button
+            type="button"
+            className="homework-queue-refresh"
+            disabled={busy}
+            aria-label="Обновить список"
+            title="Обновить список"
+            onClick={refresh}
+          >
+            ↻
           </button>
         </div>
-      </form>
-      {selected && (
+        <p className="homework-queue-note">
+          {meta
+            ? meta.window === "upcoming"
+              ? "Сначала работы с прошедшим сроком, затем сроки на 14 дней вперёд."
+              : meta.staff
+                ? "Сначала ближайшие сроки, затем более поздние. Одно задание может продолжаться на следующей странице: список разбит по ученикам."
+                : "Сначала ближайшие сроки, затем более поздние."
+            : "Опубликованные задания и отправленные ответы."}
+        </p>
+        <details className="homework-queue-rules">
+          <summary>Как считаются сроки</summary>
+          <p>
+            Опубликованные задания и отправленные ответы. Даты фильтра относятся
+            к сроку сдачи; для задания без срока — к дате урока. Срок
+            заканчивается в конце дня по местному времени школы.
+          </p>
+          {meta?.window === "upcoming" && (
+            <p>
+              Сначала работы с прошедшим сроком — от недавних к ранним, затем
+              сроки на 14 дней вперёд. Для другого периода укажите даты.
+            </p>
+          )}
+          {meta?.window === "range" && (
+            <p>Сначала ближайшие сроки, затем более поздние.</p>
+          )}
+          {meta && (
+            <p>
+              {meta.staff
+                ? "Личные черновики учеников здесь не показываются."
+                : child
+                  ? "Показаны работы выбранного ребёнка."
+                  : "Показаны только доступные вам ученики."}
+            </p>
+          )}
+        </details>
+        {error && (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        )}
+        {busy && !result && <p role="status">Загружаем работы…</p>}
+        {result && !result.items.length && (
+          <p className="info-line">
+            Работ по этим условиям на этой странице нет.{" "}
+            {result.nextCursor
+              ? "Продолжите просмотр следующей страницы."
+              : "Попробуйте другой статус, период или включите прежние уроки."}
+          </p>
+        )}
+        {result && result.items.length > 0 && (
+          <HomeworkQueueTable
+            result={result}
+            child={child}
+            busy={activity.busy}
+            onOpen={open}
+          />
+        )}
+        <div className="homework-queue-paging">
+          {cursor && (
+            <button
+              disabled={busy || activity.busy}
+              onClick={() => changePage("")}
+            >
+              В начало списка
+            </button>
+          )}
+          {result?.nextCursor && (
+            <button
+              disabled={busy || activity.busy}
+              onClick={() => changePage(result.nextCursor!)}
+            >
+              Следующие работы
+            </button>
+          )}
+          {result && (
+            <span className="homework-queue-count" role="status">
+              На этой странице: {result.items.length}.
+            </span>
+          )}
+        </div>
+      </div>
+      {opened && (
         <section
-          className="homework-queue-detail"
+          ref={work}
+          tabIndex={-1}
+          className="homework-queue-work"
           aria-label="Выбранная домашняя работа"
         >
-          <div className="dated-toolbar">
-            <h3>
-              {selected.subject} · {selected.student}
-            </h3>
+          <div className="homework-queue-work-head">
             <button
+              type="button"
               disabled={activity.busy}
               onClick={() => {
-                if (canLeaveHomework()) setSelected(null);
+                if (canLeaveHomework()) setOpened(null);
               }}
             >
-              Закрыть работу
+              ← К списку
             </button>
+            <h3>{heading(opened)}</h3>
           </div>
           <HomeworkPanel
-            key={selected.lessonKey + ":" + selected.studentId}
+            key={opened.rowKey}
             workspace={workspace}
-            lessonKey={selected.lessonKey}
-            studentId={selected.studentId}
+            lessonKey={opened.lessonKey}
+            studentId={opened.studentId}
             initiallyOpen
             onActivity={setActivity}
-            onChanged={refresh}
+            onChanged={reload}
           />
         </section>
       )}
-      {error && (
-        <p className="error-banner" role="alert">
-          {error}
-        </p>
-      )}
-      {busy && <p role="status">Загружаем работы…</p>}
-      {result && (
-        <>
-          {result.window === "upcoming" && (
-            <div className="homework-queue-window">
-              <p className="info-line">
-                Сначала работы с прошедшим сроком — от недавних к ранним, затем
-                сроки на 14 дней вперёд. Для другого периода укажите даты.
-              </p>
-              <button
-                type="button"
-                disabled={busy || activity.busy}
-                onClick={() => wholeYear(result)}
-              >
-                Весь учебный год
-              </button>
-            </div>
-          )}
-          <p role="status">
-            На этой странице: {result.items.length}.{" "}
-            {result.window === "range" &&
-              "Сначала ближайшие сроки, затем более поздние. "}
-            {result.staff
-              ? "Личные черновики учеников здесь не показываются."
-              : child
-                ? "Показаны работы выбранного ребёнка."
-                : "Показаны только доступные вам ученики."}
-          </p>
-          {!result.items.length && (
-            <p className="info-line">
-              Работ по этим условиям на этой странице нет.{" "}
-              {result.nextCursor
-                ? "Продолжите просмотр следующей страницы."
-                : "Попробуйте другой статус, период или включите прежние уроки."}
-            </p>
-          )}
-          {queueSections(result.items, result.schoolToday, result.window).map(
-            (section) => (
-              <section key={section.key} className="homework-queue-section">
-                {sectionTitles[section.key] && (
-                  <h3>{sectionTitles[section.key]}</h3>
-                )}
-                <div className="homework-queue-list">
-                  {section.items.map((item) => (
-                    <article
-                      className="homework-queue-card"
-                      key={item.lessonKey + ":" + item.studentId}
-                    >
-                      <div>
-                        <h3>{item.subject}</h3>
-                        <p>
-                          {item.student} · {item.group}
-                        </p>
-                      </div>
-                      <p className="homework-queue-preview">
-                        {item.preview}
-                        {item.preview.length === 240 ? "…" : ""}
-                      </p>
-                      <div className="homework-queue-tags">
-                        <span>
-                          {submissionTag(item, result.schoolToday, labels)}
-                        </span>
-                        {item.submission === "offline" && (
-                          <span>Без онлайн-сдачи</span>
-                        )}
-                        {item.overdue && <span>Срок прошёл</span>}
-                        {item.deadlineClosed && <span>Приём закрыт</span>}
-                        {item.late && <span>Отправлено после срока</span>}
-                        {item.readOnly && (
-                          <span>Прежний урок · только просмотр</span>
-                        )}
-                      </div>
-                      <p>
-                        Срок:{" "}
-                        <strong>
-                          {item.dueDate ? dateLabel(item.dueDate) : "не указан"}
-                          {item.extended ? " · индивидуальный" : ""}
-                        </strong>{" "}
-                        · урок {dateLabel(item.lessonDate)}
-                      </p>
-                      {item.submittedAt && (
-                        <small>
-                          Отправлено:{" "}
-                          {new Date(item.submittedAt).toLocaleString("ru-RU", {
-                            timeZone: "Asia/Qyzylorda",
-                          })}
-                        </small>
-                      )}
-                      <button
-                        disabled={activity.busy}
-                        onClick={() => {
-                          if (canLeaveHomework()) setSelected(item);
-                        }}
-                      >
-                        {item.canReview
-                          ? "Проверить работу"
-                          : item.canSubmit
-                            ? "Выполнить задание"
-                            : item.submission === "offline"
-                              ? "Посмотреть задание"
-                              : "Посмотреть работу"}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ),
-          )}
-        </>
-      )}
-      <div className="dated-toolbar">
-        {cursor && (
-          <button
-            disabled={busy || activity.busy}
-            onClick={() => changePage("")}
-          >
-            В начало списка
-          </button>
-        )}
-        {result?.nextCursor && (
-          <button
-            disabled={busy || activity.busy}
-            onClick={() => changePage(result.nextCursor!)}
-          >
-            Следующие работы
-          </button>
-        )}
-      </div>
     </section>
   );
 }

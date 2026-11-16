@@ -5536,17 +5536,6 @@ main {
     max-width: 100%;
   }
 }
-.homework-queue {
-  display: grid;
-  gap: 18px;
-  min-width: 0;
-}
-.homework-queue-filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
-  gap: 14px;
-  align-items: end;
-}
 .homework-queue-history {
   display: flex;
   gap: 8px;
@@ -5556,72 +5545,6 @@ main {
 .homework-queue-history input {
   width: auto;
   flex: none;
-}
-.homework-queue-window {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  align-items: center;
-}
-.homework-queue-window p {
-  margin: 0;
-  flex: 1 1 280px;
-}
-.homework-queue-section {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-.homework-queue-section h3 {
-  margin: 0;
-}
-.homework-queue-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap: 14px;
-}
-.homework-queue-card,
-.homework-queue-detail {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 18px;
-  background: var(--surface);
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.homework-queue-card {
-  display: flex;
-  flex-direction: column;
-  align-items: start;
-  gap: 12px;
-}
-.homework-queue-card h3,
-.homework-queue-card p {
-  margin: 0;
-}
-.homework-queue-card small {
-  color: var(--text-muted);
-}
-.homework-queue-card > button {
-  margin-top: auto;
-}
-.homework-queue-preview {
-  white-space: pre-wrap;
-}
-.homework-queue-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.homework-queue-tags span {
-  border-radius: var(--radius);
-  padding: 4px 8px;
-  background: var(--accent-tint);
-  color: var(--accent-strong);
-  font-size: 12px;
-}
-.homework-queue-detail .dated-toolbar {
-  justify-content: space-between;
 }
 .homework-deadline {
   display: grid;
