@@ -139,16 +139,31 @@ export function periodLabel(
   return `${dateLabel(meta.start)}–${dateLabel(meta.end)}`;
 }
 // The server sorts so that the pupils of one task come together: only neighbours with one key are one group.
+// A pupil with an individual deadline is sorted by that date, so a task can come back later as another group:
+// `part` counts the groups of the same task before this one (0 for the first).
 export function taskGroups<T extends { lessonKey: string }>(
   items: T[],
-): { lessonKey: string; items: T[] }[] {
-  const groups: { lessonKey: string; items: T[] }[] = [];
+): { lessonKey: string; part: number; items: T[] }[] {
+  const groups: { lessonKey: string; part: number; items: T[] }[] = [];
+  const seen = new Map<string, number>();
   for (const item of items) {
     const last = groups[groups.length - 1];
     if (last && last.lessonKey === item.lessonKey) last.items.push(item);
-    else groups.push({ lessonKey: item.lessonKey, items: [item] });
+    else {
+      const part = seen.get(item.lessonKey) ?? 0;
+      seen.set(item.lessonKey, part + 1);
+      groups.push({ lessonKey: item.lessonKey, part, items: [item] });
+    }
   }
   return groups;
+}
+// The deadline a group of a task sits at: the shared one, or the pupils' own date when all of them have an extension.
+export function groupDeadline(
+  items: Pick<QueueRow, "dueDate" | "baseDueDate" | "extended">[],
+): { date: string | null; individual: boolean } {
+  if (!items.length || items.some((item) => !item.extended))
+    return { date: items[0]?.baseDueDate ?? null, individual: false };
+  return { date: items[0].dueDate, individual: true };
 }
 export type ChipKey = "offline" | "overdue" | "closed" | "late" | "readOnly";
 // The small marks after the main state, always in this order.
@@ -180,6 +195,69 @@ export const manyPupils = (items: { studentId: string }[]) =>
 // The name of an open button: one pupil's work, or the whole task (no pupil) of the staff list.
 export const workKey = (lessonKey: string, studentId?: string) =>
   lessonKey + ":" + (studentId ?? "*");
+// The name of the button of one group of a task: a task that comes back as a second group gets a name of its own.
+export const wholeTaskKey = (lessonKey: string, part = 0) =>
+  workKey(lessonKey) + (part ? "#" + part : "");
 // The moment a work was sent, in the school's time zone.
 export const sentLabel = (iso: string) =>
   new Date(iso).toLocaleString("ru-RU", { timeZone: "Asia/Qyzylorda" });
+
+// What is committed to the queue: the tabs, the search and the period.
+export type QueueFields = QueueFilters;
+// A change of one condition applies everything that is on the screen, the typed search included.
+export const nextConditions = (
+  fields: QueueFields,
+  typedSearch: string,
+  patch: Partial<QueueFields>,
+): QueueFields => ({ ...fields, search: typedSearch, ...patch });
+// The fields after the first answer: the tab the server chose; the dates only when the server used explicit ones.
+export const fieldsFromAnswer = (
+  fields: QueueFields,
+  answer: Pick<QueueResult, "window" | "start" | "end" | "filter">,
+): QueueFields => ({
+  ...fields,
+  ...(answer.window === "range"
+    ? { start: answer.start, end: answer.end }
+    : {}),
+  filter: answer.filter,
+});
+// The three ways to set the period from its panel.
+export function periodPatch(
+  kind: "dates" | "year" | "default",
+  draft: Pick<QueueFields, "start" | "end" | "history">,
+  meta: Pick<QueueMeta, "yearStart" | "yearEnd"> | null,
+): Partial<QueueFields> {
+  if (kind === "year" && meta)
+    return {
+      start: meta.yearStart,
+      end: meta.yearEnd,
+      history: draft.history,
+    };
+  if (kind === "default") return { start: "", end: "", history: draft.history };
+  return draft;
+}
+// The label of the period button. When the server refused the dates, the button says which dates were asked for.
+export function periodButtonLabel(
+  meta: QueueMeta | null,
+  asked: Pick<QueueFields, "start" | "end">,
+  refused: boolean,
+): string {
+  if (refused && (asked.start || asked.end))
+    return `${asked.start ? dateLabel(asked.start) : "…"}–${asked.end ? dateLabel(asked.end) : "…"}`;
+  return meta ? periodLabel(meta) : "";
+}
+// What the list on the screen stands for: another key means another list, the same key is the same page read again.
+export const listKey = (
+  workspace: string,
+  child: string | undefined,
+  applied: QueueFilters,
+  cursor: string,
+) => JSON.stringify([workspace, child ?? "", applied, cursor]);
+// A work with unsaved changes asks before it is left; one that is being sent cannot be left at all.
+export function mayLeave(
+  activity: { dirty: boolean; busy: boolean },
+  confirmLeave: () => boolean,
+): boolean {
+  if (activity.busy) return false;
+  return !activity.dirty || confirmLeave();
+}

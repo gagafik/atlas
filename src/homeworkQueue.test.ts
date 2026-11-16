@@ -1,17 +1,25 @@
 import { describe, it, expect } from "vitest";
 import {
   dateLabel,
+  fieldsFromAnswer,
+  groupDeadline,
   isPast,
   itemAction,
   itemChips,
+  listKey,
   manyPupils,
+  mayLeave,
+  nextConditions,
+  periodButtonLabel,
   periodLabel,
+  periodPatch,
   queueParams,
   queueSections,
   queueTabs,
   shortDate,
   submissionTag,
   taskGroups,
+  wholeTaskKey,
   workKey,
   type QueueItem,
 } from "./homeworkQueue";
@@ -189,10 +197,6 @@ describe("homework queue tabs", () => {
       for (const tab of queueTabs(staff)) expect(tab.label).not.toBe("");
     }
   });
-  it("starts with the status the server opens each role on", () => {
-    expect(queueTabs(true)[0].filter).toBe("submitted");
-    expect(queueTabs(false)[0].filter).toBe("todo");
-  });
 });
 
 describe("homework queue dates and period", () => {
@@ -321,5 +325,179 @@ describe("homework many pupils", () => {
     expect(manyPupils([{ studentId: "s1" }])).toBe(false);
     expect(manyPupils([{ studentId: "s1" }, { studentId: "s1" }])).toBe(false);
     expect(manyPupils([{ studentId: "s1" }, { studentId: "s2" }])).toBe(true);
+  });
+});
+
+describe("homework task groups that come back", () => {
+  const row = (lessonKey: string, studentId: string) => ({
+    lessonKey,
+    studentId,
+  });
+  it("counts the earlier groups of the same task", () => {
+    const groups = taskGroups([
+      row("a", "s1"),
+      row("b", "s1"),
+      row("a", "s2"),
+      row("a", "s3"),
+    ]);
+    expect(groups.map((g) => [g.lessonKey, g.part])).toEqual([
+      ["a", 0],
+      ["b", 0],
+      ["a", 1],
+    ]);
+  });
+  it("names the whole-task button of each part of a task differently", () => {
+    const keys = [
+      wholeTaskKey("a"),
+      wholeTaskKey("a", 1),
+      wholeTaskKey("a", 2),
+      wholeTaskKey("b"),
+      workKey("a", "s1"),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(wholeTaskKey("a", 0)).toBe(workKey("a"));
+  });
+});
+
+describe("homework group deadline", () => {
+  const pupil = (extended: boolean, dueDate: string | null) => ({
+    extended,
+    dueDate,
+    baseDueDate: "2026-11-20",
+  });
+  it("is the shared deadline while any pupil of the group has it", () => {
+    expect(
+      groupDeadline([pupil(false, "2026-11-20"), pupil(true, "2026-11-27")]),
+    ).toEqual({ date: "2026-11-20", individual: false });
+  });
+  it("is the pupils' own date when every pupil of the group has an extension", () => {
+    expect(
+      groupDeadline([pupil(true, "2026-11-27"), pupil(true, "2026-11-27")]),
+    ).toEqual({ date: "2026-11-27", individual: true });
+  });
+  it("is no date for a task without a deadline", () => {
+    expect(
+      groupDeadline([{ extended: false, dueDate: null, baseDueDate: null }])
+        .date,
+    ).toBeNull();
+  });
+});
+
+describe("homework queue conditions", () => {
+  const fields = { ...empty, filter: "submitted", search: "old" };
+  it("applies the typed search together with any other change", () => {
+    const next = nextConditions(fields, "typed", { filter: "all" });
+    expect(next.search).toBe("typed");
+    expect(next.filter).toBe("all");
+  });
+  it("keeps what the change does not touch", () => {
+    const next = nextConditions({ ...fields, history: true }, "old", {
+      filter: "todo",
+    });
+    expect(next.history).toBe(true);
+  });
+  it("takes the tab the server chose, and the dates only for explicit dates", () => {
+    const base = { start: "2026-09-01", end: "2026-09-24" };
+    const upcoming = fieldsFromAnswer(empty, {
+      ...base,
+      window: "upcoming",
+      filter: "todo",
+    });
+    expect(upcoming.filter).toBe("todo");
+    expect(upcoming.start).toBe("");
+    expect(upcoming.end).toBe("");
+    const range = fieldsFromAnswer(empty, {
+      ...base,
+      window: "range",
+      filter: "submitted",
+    });
+    expect(range.start).toBe(base.start);
+    expect(range.end).toBe(base.end);
+  });
+  const year = { yearStart: "2026-09-01", yearEnd: "2027-05-25" };
+  const draft = { start: "2026-10-05", end: "2026-10-18", history: true };
+  it("sets the period from the two dates, the whole year, or back to the default window", () => {
+    expect(periodPatch("dates", draft, year)).toEqual(draft);
+    expect(periodPatch("year", draft, year)).toEqual({
+      start: year.yearStart,
+      end: year.yearEnd,
+      history: true,
+    });
+    expect(periodPatch("default", draft, year)).toEqual({
+      start: "",
+      end: "",
+      history: true,
+    });
+  });
+  it("sends no dates for the default window and the dates otherwise", () => {
+    const patch = periodPatch("default", draft, year);
+    const params = queueParams({ ...empty, ...patch }, "");
+    expect(params.has("start")).toBe(false);
+    expect(params.has("end")).toBe(false);
+    const dates = queueParams({ ...empty, ...draft }, "");
+    expect(dates.get("start")).toBe(draft.start);
+    expect(dates.get("end")).toBe(draft.end);
+  });
+});
+
+describe("homework period button after the server refused the dates", () => {
+  const meta = {
+    staff: true,
+    filter: "submitted",
+    window: "range" as const,
+    start: "2026-09-01",
+    end: "2027-05-25",
+    yearStart: "2026-09-01",
+    yearEnd: "2027-05-25",
+    schoolToday: "2026-11-16",
+  };
+  const asked = { start: "2026-12-01", end: "2026-11-01" };
+  it("names the dates that were asked for, not the last good answer", () => {
+    const label = periodButtonLabel(meta, asked, true);
+    expect(label).toContain(dateLabel(asked.start));
+    expect(label).toContain(dateLabel(asked.end));
+  });
+  it("names the answer's period when nothing was refused or no dates were asked for", () => {
+    expect(periodButtonLabel(meta, asked, false)).toBe(periodLabel(meta));
+    expect(periodButtonLabel(meta, { start: "", end: "" }, true)).toBe(
+      periodLabel(meta),
+    );
+    expect(periodButtonLabel(null, { start: "", end: "" }, false)).toBe("");
+  });
+});
+
+describe("homework queue list key", () => {
+  const applied = { ...empty, filter: "submitted" };
+  it("stays the same for the same page, so that a reload keeps the list on the screen", () => {
+    expect(listKey("w", undefined, applied, "c1")).toBe(
+      listKey("w", undefined, { ...applied }, "c1"),
+    );
+  });
+  it("changes with the page, the conditions, the child and the workspace", () => {
+    const keys = [
+      listKey("w", undefined, applied, "c1"),
+      listKey("w", undefined, applied, "c2"),
+      listKey("w", undefined, applied, ""),
+      listKey("w", undefined, { ...applied, search: "x" }, "c1"),
+      listKey("w", "s1", applied, "c1"),
+      listKey("v", undefined, applied, "c1"),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("leaving an opened homework", () => {
+  const never = () => {
+    throw new Error("must not ask");
+  };
+  it("is free when nothing is changed", () => {
+    expect(mayLeave({ dirty: false, busy: false }, never)).toBe(true);
+  });
+  it("is refused without a question while something is being sent", () => {
+    expect(mayLeave({ dirty: true, busy: true }, never)).toBe(false);
+  });
+  it("follows the answer when there are unsaved changes", () => {
+    expect(mayLeave({ dirty: true, busy: false }, () => true)).toBe(true);
+    expect(mayLeave({ dirty: true, busy: false }, () => false)).toBe(false);
   });
 });

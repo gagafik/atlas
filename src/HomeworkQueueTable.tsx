@@ -1,5 +1,6 @@
 import {
   dateLabel,
+  groupDeadline,
   itemAction,
   itemChips,
   manyPupils,
@@ -8,6 +9,7 @@ import {
   shortDate,
   submissionTag,
   taskGroups,
+  wholeTaskKey,
   workKey,
   type ChipKey,
   type QueueResult,
@@ -180,7 +182,7 @@ function FamilyTable({ result, busy, onOpen }: TableProps) {
                     <button
                       data-row={key}
                       disabled={busy}
-                      aria-label={`${label}: ${item.subject}`}
+                      aria-label={`${label}: ${item.subject}, срок ${item.dueDate ? dateLabel(item.dueDate) : "не указан"}${many ? ", " + item.student : ""}`}
                       onClick={() => onOpen(openRow(item))}
                     >
                       {label}
@@ -215,6 +217,8 @@ function StaffTable({ result, busy, onOpen }: TableProps) {
       {taskGroups(result.items).map((group) => {
         const first = group.items[0];
         const title = `${first.subject} · ${first.group}`;
+        const deadline = groupDeadline(group.items);
+        const rowKey = wholeTaskKey(group.lessonKey, group.part);
         return (
           <tbody key={group.lessonKey + ":" + first.studentId}>
             <tr className="homework-queue-task-row">
@@ -223,9 +227,8 @@ function StaffTable({ result, busy, onOpen }: TableProps) {
                   <strong>{title}</strong>
                   <span>
                     срок{" "}
-                    {first.baseDueDate
-                      ? dateLabel(first.baseDueDate)
-                      : "не указан"}
+                    {deadline.date ? dateLabel(deadline.date) : "не указан"}
+                    {deadline.individual && " · индивидуальный"}
                   </span>
                   <span>урок {shortDate(first.lessonDate)}</span>
                   <span
@@ -235,7 +238,7 @@ function StaffTable({ result, busy, onOpen }: TableProps) {
                     {previewText(first)}
                   </span>
                   <button
-                    data-row={workKey(group.lessonKey)}
+                    data-row={rowKey}
                     disabled={busy}
                     aria-label={`Всё задание, ${title}`}
                     onClick={() =>
@@ -243,7 +246,7 @@ function StaffTable({ result, busy, onOpen }: TableProps) {
                         lessonKey: group.lessonKey,
                         subject: first.subject,
                         group: first.group,
-                        rowKey: workKey(group.lessonKey),
+                        rowKey,
                       })
                     }
                   >
@@ -279,7 +282,7 @@ function StaffTable({ result, busy, onOpen }: TableProps) {
                     <button
                       data-row={key}
                       disabled={busy}
-                      aria-label={`${actionLabels[action]}, ${item.student}`}
+                      aria-label={`${action === "review" ? "Проверить" : "Открыть"} работу, ${item.student}`}
                       onClick={() => onOpen(openRow(item))}
                     >
                       {action === "review" ? "Проверить" : "Открыть"}

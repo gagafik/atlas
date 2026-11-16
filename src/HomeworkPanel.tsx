@@ -757,10 +757,15 @@ export default function HomeworkPanel({
       setBulkBusy(false);
     }
   }
+  // Ticked works and a typed common comment are unsaved choices; a running bulk acceptance cannot be left.
+  const bulkDirty = picked.size > 0 || bulkComment.trim() !== "";
   useEffect(() => {
-    onActivity?.(activity);
+    onActivity?.({
+      dirty: activity.dirty || bulkDirty,
+      busy: activity.busy || bulkBusy,
+    });
     return () => onActivity?.({ dirty: false, busy: false });
-  }, [activity, onActivity]);
+  }, [activity, bulkDirty, bulkBusy, onActivity]);
   function canLeave() {
     return (
       !activity.busy &&

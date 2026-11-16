@@ -4,16 +4,27 @@ import HomeworkPanel from "./HomeworkPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
 import HomeworkQueueTable, { type OpenedWork } from "./HomeworkQueueTable";
 import {
-  periodLabel,
+  fieldsFromAnswer,
+  listKey,
+  mayLeave,
+  nextConditions,
+  periodButtonLabel,
+  periodPatch,
   queueParams,
   queueTabs,
+  type QueueFields,
   type QueueMeta,
   type QueueResult,
 } from "./homeworkQueue";
 import "./HomeworkQueue.css";
 
-const initial = { start: "", end: "", filter: "", history: false, search: "" };
-type Fields = typeof initial;
+const initial: QueueFields = {
+  start: "",
+  end: "",
+  filter: "",
+  history: false,
+  search: "",
+};
 const heading = (o: OpenedWork) =>
   [o.subject, o.group, o.student ?? "всё задание"].join(" · ");
 
@@ -44,15 +55,16 @@ export default function HomeworkQueuePanel({
     work = useRef<HTMLElement>(null);
   const listScroll = useRef(0),
     returnTo = useRef(""),
-    wasOpened = useRef(false);
+    wasOpened = useRef(false),
+    shownList = useRef("");
   useEffect(() => {
     const leave = (e: Event) => {
       if (
-        activity.busy ||
-        (activity.dirty &&
-          !window.confirm(
+        !mayLeave(activity, () =>
+          window.confirm(
             "В домашней работе есть несохранённые изменения. Уйти без сохранения?",
-          ))
+          ),
+        )
       )
         e.preventDefault();
     };
@@ -63,7 +75,12 @@ export default function HomeworkQueuePanel({
     let live = true;
     setBusy(true);
     setError("");
-    setResult(null);
+    // Another list clears the screen; the same page read again (after a review) stays until the new answer comes.
+    const key = listKey(workspace, child, applied, cursor);
+    if (key !== shownList.current) {
+      shownList.current = key;
+      setResult(null);
+    }
     api(
       `journal/homework-queue?${queueParams(applied, cursor, child)}`,
       workspace,
@@ -84,15 +101,13 @@ export default function HomeworkQueuePanel({
         if (!initialized.current) {
           initialized.current = true;
           // The default window has no dates of its own: leave the fields empty to keep it.
-          setFields((v) => ({
-            ...v,
-            ...(r.window === "range" ? { start: r.start, end: r.end } : {}),
-            filter: r.filter,
-          }));
+          setFields((v) => fieldsFromAnswer(v, r));
         }
       })
       .catch((e) => {
-        if (live) setError(e.message);
+        if (!live) return;
+        setError(e.message);
+        setResult(null);
       })
       .finally(() => {
         if (live) setBusy(false);
@@ -101,14 +116,17 @@ export default function HomeworkQueuePanel({
       live = false;
     };
   }, [workspace, child, applied, cursor, epoch]);
+  // The button starts again from the first page; a change made in the opened work reads the same page again.
   function refresh() {
     setCursor("");
     setEpoch((v) => v + 1);
   }
+  const reload = () => setEpoch((v) => v + 1);
   // Every change of what is listed asks to leave the opened work first, then starts again from the first page.
-  function apply(patch: Partial<Fields>) {
+  // What is typed in the search goes with it, so the field and the list never disagree.
+  function apply(patch: Partial<QueueFields>) {
     if (!canLeaveHomework()) return;
-    const next = { ...fields, ...patch };
+    const next = nextConditions(fields, searchText, patch);
     setFields(next);
     setApplied(next);
     setCursor("");
@@ -198,7 +216,16 @@ export default function HomeworkQueuePanel({
                 });
             }}
           >
-            <summary>Период{meta ? ": " + periodLabel(meta) : ""}</summary>
+            <summary
+              data-refused={
+                error && (applied.start || applied.end) ? "" : undefined
+              }
+            >
+              Период
+              {meta || applied.start || applied.end
+                ? ": " + periodButtonLabel(meta, applied, !!error)
+                : ""}
+            </summary>
             <div className="homework-queue-period-panel">
               <label className="field">
                 <span>С даты</span>
@@ -234,20 +261,14 @@ export default function HomeworkQueuePanel({
                 <button
                   type="button"
                   className="primary"
-                  onClick={() => apply(period)}
+                  onClick={() => apply(periodPatch("dates", period, meta))}
                 >
                   Показать
                 </button>
                 {meta && (
                   <button
                     type="button"
-                    onClick={() =>
-                      apply({
-                        start: meta.yearStart,
-                        end: meta.yearEnd,
-                        history: period.history,
-                      })
-                    }
+                    onClick={() => apply(periodPatch("year", period, meta))}
                   >
                     Весь учебный год
                   </button>
@@ -255,9 +276,7 @@ export default function HomeworkQueuePanel({
                 {meta && !meta.staff && (
                   <button
                     type="button"
-                    onClick={() =>
-                      apply({ start: "", end: "", history: period.history })
-                    }
+                    onClick={() => apply(periodPatch("default", period, meta))}
                   >
                     Ближайшие сроки
                   </button>
@@ -376,7 +395,7 @@ export default function HomeworkQueuePanel({
             studentId={opened.studentId}
             initiallyOpen
             onActivity={setActivity}
-            onChanged={refresh}
+            onChanged={reload}
           />
         </section>
       )}
