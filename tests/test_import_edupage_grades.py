@@ -96,7 +96,7 @@ class Journals:
 
 class School:
     def __init__(self, client, tmp):
-        self.client, self.tmp, self.wire = client, tmp, None
+        self.client, self.tmp, self.wire, self.families = client, tmp, None, {}
 
     def journals(self):
         return Journals(api.read('demo'))
@@ -130,6 +130,21 @@ class School:
         records = {r['studentId']: r for r in self.entry(subject, day)['document']['content']['records']}
         return next((g for g in records[pupil]['grades'] if g['assessmentId'] == work), None) if pupil in records else None
 
+    def group_entry(self, group, day, subject=ENGLISH):
+        """The lesson of one group on a day (a subject has lessons of several groups then)."""
+        rows = self.client.get('/api/journal/day', params=dict(workspace='demo', day=day)).json()['lessons']
+        key = next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and r['lesson']['group'] == group and not r['archived'])
+        response = self.client.get('/api/journal/entry', params=dict(workspace='demo', lessonKey=key, day=day))
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def group_works(self, group, day=D1, subject=ENGLISH):
+        return {a['id']: a for a in self.group_entry(group, day, subject)['document']['content']['assessments']}
+
+    def group_grade(self, group, work, pupil, day=D1, subject=ENGLISH):
+        records = {r['studentId']: r for r in self.group_entry(group, day, subject)['document']['content']['records']}
+        return next((g for g in records[pupil]['grades'] if g['assessmentId'] == work), None) if pupil in records else None
+
     def colleague(self):
         """Another administrator: what it saves is not the importer's work."""
         if not hasattr(self, 'other'):
@@ -137,10 +152,10 @@ class School:
             self.other = signed('colleague')
         return self.other
 
-    def edit(self, subject, day, change, publish=False, stored=False):
+    def edit(self, subject, day, change, publish=False, stored=False, group=None):
         """A colleague changes the lesson content by hand and saves it. stored: the attendance the editor only showed as "present" is not saved."""
         rows = self.colleague().get('/api/journal/day', params=dict(workspace='demo', day=day)).json()['lessons']
-        key = next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and not r['archived'])
+        key = next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and not r['archived'] and group in (None, r['lesson']['group']))
         entry = self.colleague().get('/api/journal/entry', params=dict(workspace='demo', lessonKey=key, day=day)).json()
         if stored and entry.get('attendanceDefaulted'):
             for record in entry['document']['content']['records']:
@@ -938,6 +953,294 @@ def test_attempt_works_never_depend_on_which_columns_exist_in_the_source(school)
     assert len(school.works(ENGLISH, D1)) == 9 and all(len(w) <= importer.ID_LIMIT for w in school.works(ENGLISH, D1))
     again = school.run(journals, '--apply')
     assert again['lessons']['toSave'] == 0 and again['works']['new'] == 0 and again['goneFromEdupage'] == 0 and 'PUT' not in school.wire.verbs
+
+
+# ----------------------------------------------------------------------------- the group of a column: the pupils it was made for
+
+def accounted(report):
+    marks = report['marks']
+    return marks['inSource'] == marks['inWorks'] + marks['otherAttempts'] + sum(marks['leftOut'].values())
+
+
+def add_pupils_to_10a(count):
+    """Pupils of 10A beyond the two the demo school has: the English group of 10A holds them all."""
+    state = api.read('demo')
+    for n in range(count):
+        state.students.append(next(s for s in state.students if s.id == 's1').model_copy(update=dict(id=f'x{n}', name=f'{SURNAME_PAIRS[n][0]} {MALE[n]}')))
+    api.save('demo', state)
+
+
+def test_the_pupils_a_column_was_made_for_decide_its_group_not_those_who_only_hold_marks(school):
+    add_pupils_to_10a(1)  # The English group of 10A: s1, s2, x0.
+    journals = school.journals()
+    journals.column('own', classes=('10A', '10D'), only=['s1', 's2', 'x0'])
+    for pupil in ['s1', 's2', 'x0', 's3', 's4']:  # s3 and s4 left the group but still hold marks in its column.
+        journals.mark('own', pupil, '6')
+    report = school.run(journals, '--apply')
+    assert 'noGroup' not in report['columns']['unresolved'] and report['columns']['planned'] == 1
+    assert [school.grade(ENGLISH, D1, 'ep-own', p)['score'] for p in ('s1', 's2', 'x0')] == [6, 6, 6]
+    assert report['marks']['written'] == 3 and report['marks']['leftOut']['outsideGroup'] == 2 and accounted(report)
+    assert school.run(journals, '--apply')['lessons']['toSave'] == 0
+
+
+def test_the_pupils_of_the_column_list_need_a_group_holding_four_fifths_when_none_holds_them_all(school):
+    add_pupils_to_10a(2)  # s1, s2, x0, x1 are in the group; s3 is not.
+    journals = school.journals()
+    journals.column('own', classes=('10A', '10D'), only=['s1', 's2', 'x0', 'x1', 's3'])
+    for pupil in ['s1', 's2', 'x0', 'x1', 's3', 's4']:
+        journals.mark('own', pupil, '6')
+    report = school.run(journals, '--apply')
+    assert report['columns']['planned'] == 1 and report['marks']['written'] == 4 and report['marks']['leftOut']['outsideGroup'] == 2
+    journals = school.journals()
+    journals.column('few', classes=('10A', '10D'), only=['s1', 's2', 's3', 's4'])  # Half of them: no group takes the column.
+    for pupil in ['s1', 's2', 's3', 's4']:
+        journals.mark('few', pupil, '6')
+    report = school.run(journals, '--apply')
+    assert report['columns']['unresolved']['noGroup'] == [dict(subject=ENGLISH, classes=['10A', '10D'], columns=1)] and accounted(report)
+
+
+def test_a_column_without_a_list_of_its_pupils_is_still_chosen_from_the_marks(school):
+    add_pupils_to_10a(1)
+    journals = school.journals()
+    for uid, only in [('plain', []), ('strangers', ['nobody', 'nobody2'])]:  # A list that names nobody Atlas knows says nothing.
+        journals.column(uid, classes=('10A', '10D'), only=only)
+        for pupil in ['s1', 's2', 'x0', 's3', 's4']:
+            journals.mark(uid, pupil, '6')
+    report = school.run(journals, '--apply')
+    assert report['columns']['unresolved']['noGroup'] == [dict(subject=ENGLISH, classes=['10A', '10D'], columns=2)]
+    assert not school.works(ENGLISH, D1) and accounted(report)
+    journals = school.journals()
+    journals.column('known', classes=('10A', '10D'), only=['nobody'])
+    for pupil in ['s1', 's2', 'x0']:
+        journals.mark('known', pupil, '6')
+    assert school.run(journals, '--apply')['columns']['planned'] == 1 and set(school.works(ENGLISH, D1)) == {'ep-known'}
+
+
+# ----------------------------------------------------------------------------- the mark follows the pupil (--follow-pupils)
+
+def english_lessons_for_10d(third_group=False):
+    """10D has its own English lesson on Monday, third period. third_group: s3 also belongs to a second English group of its own."""
+    state = api.read('demo')
+    state.placements.append(Placement(id='eng-d', workloadId='w1', day=0, period=3, roomId='r1'))
+    if third_group:
+        english = next(w.subjectId for w in state.workloads if w.id == 'w1')
+        state.groups.append(next(g for g in state.groups if g.id == 'g-d').model_copy(update=dict(id='g-e', name='10D English plus', studentIds=['s3'])))
+        state.workloads.append(next(w for w in state.workloads if w.id == 'w1').model_copy(update=dict(id='w-e', groupId='g-e', subjectId=english)))
+    api.save('demo', state)
+
+
+def english_group_of_10a_is(*pupils):
+    """The English group of 10A holds exactly these pupils (it may reach into 10D)."""
+    state = api.read('demo')
+    group = next(g for g in state.groups if g.id == 'g-a')
+    group.classIds, group.studentIds = ['c-demo-a', 'c-demo-d'], list(pupils)
+    api.save('demo', state)
+
+
+def made_for_10a(school, marks=(('s1', '8'), ('s2', '7'), ('s3', '5')), uid='c', **column):
+    """A column of the English group of 10A (its list is the two pupils of the group) in which a pupil of 10D holds a mark."""
+    journals = school.journals()
+    journals.column(uid, classes=('10A', '10D'), only=['s1', 's2'], **column)
+    for pupil, text in marks:
+        journals.mark(uid, pupil, text)
+    return journals
+
+
+def family_sees(school, pupil):
+    """{work id: score} of the published marks the family of a pupil sees."""
+    if pupil not in school.families:
+        create(school.client, 'student', login='family-' + pupil, grants=[dict(workspace='demo', view='student', entityIds=[pupil])])
+        school.families[pupil] = signed('family-' + pupil)
+    rows = school.families[pupil].get('/api/journal/report', params=dict(workspace='demo', studentId=pupil, start='2026-08-01', end='2026-10-01')).json()['rows']
+    return {g['assessmentId']: g['score'] for row in rows for g in row['record']['grades']}
+
+
+def test_without_the_flag_nothing_follows(school):
+    english_lessons_for_10d()
+    report = school.run(made_for_10a(school), '--apply')
+    assert school.group_grade('10A', 'ep-c', 's3') is None and not school.group_works('10D')
+    assert report['marks']['leftOut']['outsideGroup'] == 1 and report['marks']['written'] == 2 and accounted(report)
+    assert 'followed' not in report['works'] and 'followed' not in report['marks']
+
+
+def test_with_the_flag_the_mark_goes_to_the_pupils_own_group(school):
+    english_lessons_for_10d()
+    report = school.run(made_for_10a(school, title='Тест', category=SECTION, weight='40', maximum='20'), '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+    own = school.group_works('10A')
+    assert list(own) == ['ep-c'] and school.group_grade('10A', 'ep-c', 's3') is None
+    assert school.group_grade('10D', follow, 's3')['score'] == 5 and school.group_grade('10D', follow, 's4') is None
+    placed = school.group_works('10D')
+    attributes = ('name', 'kind', 'maxScore', 'weight', 'category')
+    assert list(placed) == [follow] and {k: placed[follow][k] for k in attributes} == {k: own['ep-c'][k] for k in attributes}
+    assert report['works']['followed'] == 1 and report['marks']['followed'] == 1 and report['marks']['leftOut']['outsideGroup'] == 0
+    assert report['marks']['written'] == 3 and accounted(report)
+    assert family_sees(school, 's3') == {follow: 5}
+
+
+def test_a_follow_work_is_placed_by_the_lesson_search_of_its_own_group(school):
+    english_lessons_for_10d()
+    journals = made_for_10a(school, termin='20.09.2026')  # A Sunday: the Monday before, in the lessons of 10D.
+    for mark in journals.marks:
+        mark['datum'] = mark['datum_vytvorenia'] = '2026-09-20 09:00:00'
+    school.run(journals, '--apply', '--follow-pupils')
+    assert list(school.group_works('10D')) == [importer.work_id('c', group='g-d')] and list(school.group_works('10A')) == ['ep-c']
+    assert not school.group_works('10D', '2026-09-21')
+
+
+def test_a_pupil_of_two_other_groups_or_of_none_is_not_followed(school):
+    english_lessons_for_10d(third_group=True)  # s3 is in two groups besides 10A, s4 in one.
+    journals = made_for_10a(school, marks=(('s1', '8'), ('s2', '7'), ('s3', '5'), ('s4', '4')))
+    report = school.run(journals, '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+    assert school.group_grade('10D', follow, 's4')['score'] == 4 and school.group_grade('10D', follow, 's3') is None
+    assert report['marks']['followed'] == 1 and report['marks']['leftOut']['outsideGroup'] == 1 and accounted(report)
+    journals = school.journals()  # s2 is in no group of mathematics, but g-math holds s1 and s3.
+    journals.column('m', subject=MATH, classes=('10A', '10D'), only=['s1', 's3'])
+    for pupil in ['s1', 's3', 's2']:
+        journals.mark('m', pupil, '6')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    assert school.grade(MATH, D1, 'ep-m', 's2') is None and report['marks']['followed'] == 0 and report['marks']['leftOut']['outsideGroup'] == 1 and accounted(report)
+
+
+def test_a_second_run_with_the_flag_writes_nothing_and_a_run_without_it_leaves_the_follow_work_alone(school):
+    english_lessons_for_10d()
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+    before = {g: school.group_entry(g, D1)['version'] for g in ('10A', '10D')}
+    again = school.run(journals, '--apply', '--follow-pupils')
+    assert again['lessons']['toSave'] == 0 and again['marks']['written'] == 0 and 'PUT' not in school.wire.verbs
+    assert again['works'] == dict(new=0, updated=0, unchanged=2, companion=0, followed=1) and again['marks']['followed'] == 1 and accounted(again)
+    without = school.run(journals, '--apply')
+    assert without['lessons']['toSave'] == 0 and 'PUT' not in school.wire.verbs and without['goneFromEdupage'] == 0
+    assert school.group_grade('10D', follow, 's3')['score'] == 5 and {g: school.group_entry(g, D1)['version'] for g in ('10A', '10D')} == before
+    assert without['marks']['leftOut']['outsideGroup'] == 1 and without['works'] == dict(new=0, updated=0, unchanged=1, companion=0) and accounted(without)
+
+
+def test_a_follow_work_is_gone_only_when_its_column_is(school):
+    english_lessons_for_10d()
+    both = made_for_10a(school, uid='keep')
+    both.column('drop', classes=('10A', '10D'), only=['s1', 's2'])
+    both.mark('drop', 's1', '3')
+    both.mark('drop', 's3', '4')
+    school.run(both, '--apply', '--follow-pupils')
+    only_keep = made_for_10a(school, uid='keep')
+    assert school.run(only_keep, '--apply', '--follow-pupils')['goneFromEdupage'] == 2  # The column's work and its follow work.
+    assert set(school.group_works('10D')) == {importer.work_id('keep', group='g-d'), importer.work_id('drop', group='g-d')}
+    assert school.run(only_keep, '--apply')['goneFromEdupage'] == 1  # Without the flag the follow works are not looked at.
+
+
+def test_every_mark_counts_gives_the_follow_group_attempt_works_too(school):
+    english_lessons_for_10d()
+    journals = school.journals()
+    journals.column('t', classes=('10A', '10D'), only=['s1', 's2'], maximum='20', every='0', title='Пересдача')
+    journals.mark('t', 's1', '9', '2026-09-14 09:00:00')
+    journals.mark('t', 's3', '5', '2026-09-14 09:00:00')
+    journals.mark('t', 's3', '12', '2026-09-14 10:00:00')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    works = school.group_works('10D')
+    assert len(works) == 2 and report['works']['followed'] == 2 and report['marks']['followed'] == 2 and accounted(report)
+    assert sorted(school.group_grade('10D', w, 's3')['score'] for w in works) == [5, 12]
+    assert importer.work_id('t', group='g-d') in works and sum(a['name'].endswith('попытка 2') for a in works.values()) == 1
+    assert school.run(journals, '--apply', '--follow-pupils')['lessons']['toSave'] == 0
+
+
+def test_the_best_attempt_of_a_followed_pupil_keeps_the_others_in_its_comment(school):
+    english_lessons_for_10d()
+    journals = school.journals()
+    journals.column('t', classes=('10A', '10D'), only=['s1', 's2'], every='1')
+    journals.mark('t', 's1', '9', '2026-09-14 09:00:00')
+    journals.mark('t', 's3', '5', '2026-09-14 09:00:00')
+    journals.mark('t', 's3', '9', '2026-09-14 10:00:00')
+    journals.mark('t', 's3', '7', '2026-09-14 11:00:00')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    grade = school.group_grade('10D', importer.work_id('t', group='g-d'), 's3')
+    assert len(school.group_works('10D')) == 1 and report['works']['followed'] == 1 and report['marks']['otherAttempts'] == 2
+    assert grade['score'] == 9 and '5' in grade['comment'] and '7' in grade['comment'] and accounted(report)
+
+
+def test_a_pupil_who_joins_the_column_group_does_not_get_the_mark_twice(school):
+    english_lessons_for_10d()
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    english_group_of_10a_is('s1', 's2', 's3')  # s3 moved into the group of the column.
+    follow = importer.work_id('c', group='g-d')
+    for flags in (['--follow-pupils'], []):
+        report = school.run(journals, '--apply', *flags)
+        assert school.group_grade('10A', 'ep-c', 's3') is None and school.group_grade('10D', follow, 's3')['score'] == 5
+        assert report['marks']['leftOut']['heldElsewhere'] == 1 and report['marks']['written'] == 0 and 'PUT' not in school.wire.verbs and accounted(report)
+
+
+def test_a_pupil_who_leaves_the_column_group_does_not_get_the_mark_twice(school):
+    english_lessons_for_10d()
+    english_group_of_10a_is('s1', 's2', 's3')
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    assert school.group_grade('10A', 'ep-c', 's3')['score'] == 5
+    english_group_of_10a_is('s1', 's2')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    assert school.group_grade('10A', 'ep-c', 's3')['score'] == 5 and not school.group_works('10D')
+    assert report['marks']['leftOut']['heldElsewhere'] == 1 and report['marks']['followed'] == 0 and accounted(report)
+
+
+def test_a_follow_group_without_a_lesson_leaves_the_mark_counted_as_without_a_lesson(school):
+    report = school.run(made_for_10a(school), '--apply', '--follow-pupils')  # 10D has no English lessons at all.
+    assert report['marks']['leftOut']['noLesson'] == 1 and report['marks']['followed'] == 0 and report['works']['followed'] == 0
+    assert report['columns']['planned'] == 1 and school.group_grade('10A', 'ep-c', 's1')['score'] == 8 and accounted(report)
+
+
+def test_a_teachers_correction_of_a_follow_mark_survives(school):
+    english_lessons_for_10d()
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+
+    def correct(content):
+        record = next(r for r in content['records'] if r['studentId'] == 's3')
+        next(g for g in record['grades'] if g['assessmentId'] == follow).update(score=2)
+
+    school.edit(ENGLISH, D1, correct, publish=True, group='10D')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    assert school.group_grade('10D', follow, 's3')['score'] == 2 and 'PUT' not in school.wire.verbs and report['keptAsInAtlas']['editedMarks'] == 1
+    assert family_sees(school, 's3') == {follow: 2}
+
+
+def test_a_follow_work_the_teacher_deleted_is_not_created_again(school):
+    english_lessons_for_10d()
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+
+    def delete(content):
+        content['assessments'] = [a for a in content['assessments'] if a['id'] != follow]
+        for record in content['records']:
+            record['grades'] = [g for g in record['grades'] if g['assessmentId'] != follow]
+
+    school.edit(ENGLISH, D1, delete, publish=True, group='10D')
+    report = school.run(journals, '--apply', '--follow-pupils')
+    assert not school.group_works('10D') and 'PUT' not in school.wire.verbs and report['keptAsInAtlas']['removedWorks'] == 1 and accounted(report)
+
+
+def test_a_follow_work_waits_in_the_draft_beside_the_teachers_own_changes_in_that_lesson(school):
+    english_lessons_for_10d()
+    entry = school.group_entry('10D', D1)
+    entry['document']['content']['topic'] = 'Тема ещё не для семей'
+    school.save(entry)
+    report = school.run(made_for_10a(school), '--apply', '--follow-pupils')
+    assert report['lessons']['keptAsDraft'] == 1 and report['lessons']['saved'] == 2
+    assert school.group_grade('10D', importer.work_id('c', group='g-d'), 's3')['score'] == 5 and family_sees(school, 's3') == {}
+    assert family_sees(school, 's1') == {'ep-c': 8}
+
+
+def test_a_follow_id_is_stable_distinct_from_every_other_id_and_fits_the_limit():
+    groups = ['g-a', 'g-d', 'g', '', 'х', 'a b', 'L' * 200]
+    bases = {importer.work_id(uid) for uid in NASTY}
+    attempts = {importer.work_id(uid, k) for uid in NASTY for k in (2, 3, 10, 99, 100)}
+    follows = {importer.work_id(uid, k, group=g) for uid in NASTY for g in groups for k in (1, 2, 3, 10, 99, 100)}
+    assert len(follows) == len(NASTY) * len(groups) * 6 and not follows & (bases | attempts)
+    assert all(i.startswith(importer.PREFIX) and 0 < len(i) <= importer.ID_LIMIT for i in follows)
+    assert importer.work_id('x', group='g-a') == importer.work_id('x', group='g-a') != importer.work_id('x', group='g-d') and importer.work_id('x', group='g-a') != importer.work_id('y', group='g-a')
 
 
 # ----------------------------------------------------------------------------- the real HTTP class against a small local server

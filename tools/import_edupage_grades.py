@@ -7,6 +7,13 @@ database. Dry run by default; --apply writes. It is safe to run again while the 
 EduPage: an EduPage column is one Atlas work with a stable id ("ep-<UdalostID>"), so a second run finds
 it and changes nothing unless the column or a mark changed.
 
+The group of a column is the group of the pupils it was made for (onlyStudentids): the smallest group of the subject holding all of them,
+else one holding at least 80 %. Pupils who only hold a mark (they may have left the group, or moved to a parallel class) do not decide it; without
+that list (or when it names nobody Atlas knows) the pupils with marks decide. A work already in Atlas stays in its group. A mark of a pupil outside
+the group is counted and not written, unless --follow-pupils is given: then it goes into a "follow" work (id "ep-~f<hash of column and group>")
+of the one other group of the subject the pupil is in, with the name, kind, maximum, weight and category of the column's work. A mark Atlas
+already holds in another work of the column (the pupil changed groups) is not written a second time (marks.leftOut.heldElsewhere).
+
 What people changed in Atlas by hand is left alone, including a mark a teacher corrected or deleted and a work a teacher removed:
 the importer reads the saved versions of a lesson (history) and tells its own saves from others by the account name, so use an
 administrator account of its own. More than PUBLISH_LIMIT lessons are published only with --publish (every family gets notices).
@@ -246,13 +253,24 @@ def parse_mark(text):
 PLAIN = re.compile(r'[A-Za-z0-9_-]{1,%d}' % (ID_LIMIT - 20))  # A uid kept as it is in a work id; any other is replaced by its hash.
 
 
-def work_id(uid, attempt=1):
-    """The id of the work of a column (attempt 1) or of a further attempt of it. It depends on the uid alone, never on the other columns.
+FOLLOW = re.compile(r'(ep-~f[0-9a-f]{32})(?:~(\d+))?')  # The id of a follow work (see work_id): its base and the number of the attempt.
+
+
+def work_id(uid, attempt=1, group=None):
+    """The id of the work of a column (attempt 1) or of a further attempt of it; with a group, of the follow work the column has in that group.
+    It depends on the uid (and the group) alone, never on the other columns.
 
     The base is "ep-<uid>" for a plain uid (letters, digits, "_" and "-", short) and "ep-~h<hash>" for any other. "~" occurs in no
     base id except right after the prefix of a hashed one, and a further attempt appends "~<k>": "ep-<uid>~<k>" or "ep-~h<hash>~<k>".
-    So an attempt id (one "~" past the prefix, or two) is never the base id of any column, and different columns never share an id."""
-    base = PREFIX + uid if PLAIN.fullmatch(uid) else f'{PREFIX}~h{hashlib.sha256(uid.encode("utf8")).hexdigest()[:32]}'
+    So an attempt id (one "~" past the prefix, or two) is never the base id of any column, and different columns never share an id.
+
+    A follow work (the marks of the pupils of another group, see Planner.follow_pair) has the base "ep-~f<hash of uid and group id>" (a hash
+    keeps it short whatever the group id is) and the same "~<k>" for its attempts. "~f" stands only there, so it never equals an id of
+    the kinds above ("~h", or no "~" right after the prefix), and the hash tells two (column, group) pairs apart as it does two uids."""
+    if group is not None:
+        base = f'{PREFIX}~f{hashlib.sha256(json.dumps([uid, group]).encode("utf8")).hexdigest()[:32]}'
+    else:
+        base = PREFIX + uid if PLAIN.fullmatch(uid) else f'{PREFIX}~h{hashlib.sha256(uid.encode("utf8")).hexdigest()[:32]}'
     return base if attempt == 1 else f'{base}~{attempt}'
 
 
@@ -465,6 +483,7 @@ class Work:
     id: str
     assessment: dict
     grades: dict
+    follow: bool = False  # A follow work: the marks of pupils who are outside the group of the column (--follow-pupils).
 
 
 @dataclass
@@ -476,12 +495,21 @@ class LessonPlan:
 
 
 @dataclass
+class Branch:
+    """The follow works of a column in one other group of its subject: the base work and one more for each further attempt."""
+    group: dict
+    subject: dict
+    works: list
+
+
+@dataclass
 class Prepared:
     column: Column
     group: dict
     subject: dict
     day: date
     works: list
+    branches: list = field(default_factory=list)
 
 
 @dataclass
@@ -735,9 +763,10 @@ class Rules:
 
 
 class Planner:
-    def __init__(self, atlas, source, rules, publish, minute, me=None, progress=quiet):
+    def __init__(self, atlas, source, rules, publish, minute, me=None, progress=quiet, follow=False):
         self.atlas, self.source, self.rules, self.publish, self.minute, self.me, self.progress = atlas, source, rules, publish, minute, me, progress
-        self.lessons, self.matches, self.planned, self.sizes = {}, {}, set(), {}
+        self.follow = follow
+        self.lessons, self.matches, self.planned, self.sizes, self.indexes = {}, {}, set(), {}, {}
         self.unresolved = defaultdict(lambda: defaultdict(int))
         self.report = dict(
             files=source.files, filesUnreadable=source.unreadable,
@@ -746,12 +775,14 @@ class Planner:
             # Every mark read has one fate: inSource == inWorks + otherAttempts + the sum of leftOut, on every run.
             marks=dict(inSource=sum(len(c.marks) for c in source.columns.values()), inWorks=0, otherAttempts=0,
                        written=0, onlyInAtlas=0, textOnly=0, scoresCut=0, adjusted=0, attemptsKept=0,
-                       leftOut=dict(columnNotPlanned=0, outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0, attemptsKept=0)),
+                       leftOut=dict(columnNotPlanned=0, outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0, attemptsKept=0, heldElsewhere=0)),
             titlesShortened=0, moved=dict(anotherDay=0, forCapacity=0),
             lessons=dict(toSave=0, toPublish=0, blocked=0, keptAsDraft=0, saved=0, refused=[]),
             keptAsInAtlas=dict(editedMarks=0, editedWorks=0, removedWorks=0),
             pupilsWithoutMatch={}, categoriesUnmapped={}, goneFromEdupage=0)
         self.counts = self.report['marks']
+        if follow:  # Only a run that follows pupils has these counters (a follow work is also counted in new/updated/unchanged).
+            self.report['works']['followed'] = self.counts['followed'] = 0
 
     # -- what Atlas knows
     def load(self):
@@ -849,10 +880,13 @@ class Planner:
         day = self.work_date(column)
         if day is None:
             return self.unresolve(column, 'noDate')
-        chosen = self.choose_group(column, subjects, pupils)
+        # The pupils a column was made for decide its group, not those who only hold marks in it (they may have left the group since).
+        # A list that names no pupil Atlas knows decides nothing: the pupils with marks do.
+        made_for = {p for p in (self.match(sid) for sid in column.only) if p}
+        chosen = self.choose_group(column, subjects, pupils, made_for or pupils)
         if chosen is None:
             return self.unresolve(column, 'noGroup')
-        return Prepared(column, *chosen, day, self.works_of(column, chosen[0], people))
+        return Prepared(column, *chosen, day, *self.works_of(column, *chosen, subjects, people))
 
     @staticmethod
     def work_date(column):
@@ -862,27 +896,85 @@ class Planner:
             return column.termin
         return first or column.edited
 
-    def choose_group(self, column, subjects, pupils):
-        """(group, subject) of a column: where its work is already placed; else the smallest group holding every pupil; else one holding most."""
+    def choose_group(self, column, subjects, pupils, deciding):
+        """(group, subject) of a column: where its work is already placed (found among the groups of any pupil of the column); else the
+        smallest group holding every one of the deciding pupils; else one holding at least ENOUGH of them."""
         pairs = sorted({(g, s['id']): (self.groups[g], s) for s in subjects for g in self.courses[s['id']] if pupils & self.members(self.groups[g])}.values(),
                        key=lambda p: (len(self.members(p[0])), p[0]['id'], p[1]['id']))
         for group, subject in pairs:
             if any(self.slot_of(i, column.uid) for i in self.atlas.works(group['id'], subject['id'], *self.span)):
                 return group, subject
-        whole = [p for p in pairs if pupils <= self.members(p[0])]
+        whole = [p for p in pairs if deciding <= self.members(p[0])]
         if whole:
             return whole[0]
-        best = max(pairs, key=lambda p: (len(pupils & self.members(p[0])), -len(self.members(p[0]))), default=None)
-        return best if best and len(pupils & self.members(best[0])) >= ENOUGH * len(pupils) else None
+        best = max(pairs, key=lambda p: (len(deciding & self.members(p[0])), -len(self.members(p[0]))), default=None)
+        return best if best and len(deciding & self.members(best[0])) >= ENOUGH * len(deciding) else None
 
     @staticmethod
     def slot_of(work, uid):
-        """Whether an Atlas work id is the work of this column or one of its attempt works (never another column's work)."""
-        base = work_id(uid)
-        return work == base or re.fullmatch(re.escape(base) + r'~\d+', work) is not None
+        """Whether an Atlas work id is the work of this column or one of its attempt works (never another column's work, never a follow work:
+        those are found by follow_index, which knows their ids by the column and the group)."""
+        return Planner.of_base(work, work_id(uid))
 
-    def works_of(self, column, group, people):
-        """The base work and, when every mark counts, one more work for each further attempt."""
+    @staticmethod
+    def of_base(work, base):
+        return work == base or work.startswith(base + '~') and work[len(base) + 1:].isdecimal()
+
+    @staticmethod
+    def attempt_of(work):
+        """The number of the attempt a work id stands for: 1 for a base id."""
+        found = re.search(r'~(\d+)$', work)
+        return int(found.group(1)) if found else 1
+
+    def pairs_of(self, subjects):
+        """Every (group, subject) course of the candidate subjects."""
+        return sorted({(g, s['id']): (self.groups[g], s) for s in subjects for g in self.courses[s['id']]}.values(), key=lambda p: (p[0]['id'], p[1]['id']))
+
+    def follow_pair(self, subjects, group, pupil):
+        """(group, subject) a pupil outside the group of a column follows to: the only other group of the subject(s) he is a member of; else None."""
+        found = [p for p in self.pairs_of(subjects) if p[0]['id'] != group['id'] and pupil in self.members(p[0])]
+        return found[0] if len(found) == 1 else None
+
+    def follow_index(self, group, subject):
+        """{base id of a follow work: [its ids]} among the works of a course (read once: a table can hold thousands of works)."""
+        if (group['id'], subject['id']) not in self.indexes:
+            found = defaultdict(list)
+            for i in self.atlas.works(group['id'], subject['id'], *self.span):
+                match = FOLLOW.fullmatch(i)
+                if match:
+                    found[match.group(1)].append(i)
+            self.indexes[group['id'], subject['id']] = found
+        return self.indexes[group['id'], subject['id']]
+
+    def holdings(self, uid, group, subject, follow=False):
+        """{pupil: {attempt: work id}} of the marks Atlas holds in the works of a column in a course: its own works, or with follow
+        the follow works it has in that course (the group is then another group of the subject)."""
+        found = defaultdict(dict)
+        table = self.atlas.works(group['id'], subject['id'], *self.span)
+        if follow:
+            ids = self.follow_index(group, subject).get(work_id(uid, group=group['id']), [])
+        else:
+            base = work_id(uid)
+            ids = [i for i in table if self.of_base(i, base)]
+        for work in ids:
+            entry = self.entry(*table[work])
+            for record in (entry['document']['content']['records'] if entry else []):
+                if any(g['assessmentId'] == work and any(g[k] not in (None, '') for k in MARKED) for g in record['grades']):
+                    found[record['studentId']][self.attempt_of(work)] = work
+        return found
+
+    def held_marks(self, column, group, subject, subjects):
+        """{pupil: {attempt: {work ids}}}: where Atlas holds the marks of a column, in its own group or in the follow works of other groups."""
+        found = defaultdict(lambda: defaultdict(set))
+        for g, s, follow in [(group, subject, False)] + [(g, s, True) for g, s in self.pairs_of(subjects) if g['id'] != group['id']]:
+            for pupil, slots in self.holdings(column.uid, g, s, follow).items():
+                for k, work in slots.items():
+                    found[pupil][k].add(work)
+        return found
+
+    def works_of(self, column, group, subject, subjects, people):
+        """The base work and, when every mark counts, one more work for each further attempt; and, with --follow-pupils, the same in the
+        group of each pupil who holds a mark but is outside the group of the column (a list of Branch)."""
         report = self.report
         category = self.category(column.category) if column.category else None
         if column.category and category is None:
@@ -892,7 +984,8 @@ class Planner:
         report['titlesShortened'] += len(title) > NAME_LIMIT
         assessment = dict(name=fit(title, NAME_LIMIT), kind='points' if column.maximum else 'label', maxScore=column.maximum or 10,
                           weight=min(100.0, column.weight) if column.category else 0, category=category)
-        members, attempts, grades = self.members(group), defaultdict(list), defaultdict(dict)
+        members, attempts, grades, follows = self.members(group), defaultdict(list), defaultdict(dict), {}
+        held = self.held_marks(column, group, subject, subjects)
         for mark in sorted(column.marks.values(), key=order_key):
             attempts[mark.pupil].append(mark)
         for sid, marks in attempts.items():
@@ -903,40 +996,53 @@ class Planner:
                 chosen = [(1, max((s for s in scored if s[0] is not None), key=lambda s: s[0], default=scored[0])[1])]
                 self.counts['otherAttempts'] += len(marks) - 1
             pupil = people.get(sid)
-            if pupil is None or pupil not in members:
-                self.counts['leftOut']['noPupilMatch' if pupil is None else 'outsideGroup'] += len(chosen)
+            if pupil is None:
+                self.counts['leftOut']['noPupilMatch'] += len(chosen)
                 continue
+            where = None  # The group the mark goes to: the group of the column, or the other group of the pupil.
+            if pupil not in members:
+                where = self.follow_pair(subjects, group, pupil) if self.follow else None
+                if where is None:
+                    self.counts['leftOut']['outsideGroup'] += len(chosen)
+                    continue
             for k, mark in chosen:
-                if pupil in grades[k]:  # Two EduPage records of one pupil: the later never replaces the earlier unseen.
+                if held.get(pupil, {}).get(k) and work_id(column.uid, k, group=where and where[0]['id']) not in held[pupil][k]:
+                    self.counts['leftOut']['heldElsewhere'] += 1  # Atlas holds this mark in another work already (the pupil changed groups): once only.
+                    continue
+                slot = grades if where is None else follows.setdefault(where[0]['id'], (where, defaultdict(dict)))[1]
+                if pupil in slot[k]:  # Two EduPage records of one pupil: the later never replaces the earlier unseen.
                     self.counts['leftOut']['noPupilMatch'] += 1
                     continue
                 grade = make_grade(mark.text, assessment, self.counts)
                 if not column.every and len(marks) > 1:
                     grade['comment'] = fit(f'{grade["comment"]} Другие попытки: ' + '; '.join(m.text for m in marks if m is not mark), COMMENT_LIMIT)
-                grades[k][pupil] = grade
+                slot[k][pupil] = grade
                 self.counts['inWorks'] += 1
+
+        def attempt_work(k, slot, group_id=None):
+            suffix = f' · попытка {k}'
+            named = assessment if k == 1 else dict(assessment, name=fit(assessment['name'], NAME_LIMIT - len(suffix)) + suffix)
+            return Work(work_id(column.uid, k, group=group_id), named, slot[k], group_id is not None)
+
         works = [Work(work_id(column.uid), assessment, grades.get(1, {}))]
         for k in sorted(k for k in grades if k > 1):
-            suffix = f' · попытка {k}'
-            works.append(Work(work_id(column.uid, k), dict(assessment, name=fit(assessment['name'], NAME_LIMIT - len(suffix)) + suffix), grades[k]))
+            works.append(attempt_work(k, grades))
             report['works']['companion'] += 1
-        return works
+        branches = [Branch(g, s, [attempt_work(k, slot, g['id']) for k in sorted(slot) if slot[k]]) for (g, s), slot in follows.values()]
+        return works, branches
 
     def guard_attempts(self, prepared):
         """Attempts are numbered by their order, so an attempt deleted in EduPage would shift the later ones onto the wrong works and
-        leave a mark twice. A pupil who holds more attempts in Atlas than EduPage has keeps what Atlas holds, and it is counted."""
-        held = defaultdict(int)
-        for found, where in self.atlas.works(prepared.group['id'], prepared.subject['id'], *self.span).items():
-            entry = self.slot_of(found, prepared.column.uid) and self.entry(*where)
-            for record in (entry['document']['content']['records'] if entry else []):
-                held[record['studentId']] += any(g['assessmentId'] == found and any(g[k] not in (None, '') for k in MARKED) for g in record['grades'])
-        for pupil, count in held.items():
-            planned = sum(1 for work in prepared.works if pupil in work.grades)
-            if planned and count > planned:
-                dropped = sum(work.grades.pop(pupil, None) is not None for work in prepared.works)
-                self.counts['attemptsKept'] += 1
-                self.counts['leftOut']['attemptsKept'] += dropped
-                self.counts['inWorks'] -= dropped
+        leave a mark twice. A pupil who holds more attempts in Atlas than EduPage has keeps what Atlas holds, and it is counted.
+        The works of the column's own group and the follow works of each other group are looked at one group at a time."""
+        for group, subject, works, follow in [(prepared.group, prepared.subject, prepared.works, False)] + [(b.group, b.subject, b.works, True) for b in prepared.branches]:
+            for pupil, slots in self.holdings(prepared.column.uid, group, subject, follow).items():
+                planned = sum(1 for work in works if pupil in work.grades)
+                if planned and len(slots) > planned:
+                    dropped = sum(work.grades.pop(pupil, None) is not None for work in works)
+                    self.counts['attemptsKept'] += 1
+                    self.counts['leftOut']['attemptsKept'] += dropped
+                    self.counts['inWorks'] -= dropped
 
     # -- lessons
     def entry(self, key, day):
@@ -987,23 +1093,23 @@ class Planner:
         grades = {p: g for p, g in work.grades.items() if p in roster}
         self.counts['leftOut']['notInLesson'] += len(work.grades) - len(grades)
         self.counts['inWorks'] -= len(work.grades) - len(grades)
-        self.plan_of(entry).works[work.id] = Work(work.id, work.assessment, grades)
+        self.plan_of(entry).works[work.id] = Work(work.id, work.assessment, grades, work.follow)
         self.planned.add(work.id)
 
-    def place(self, prepared, work):
-        """A work Atlas already has stays where it is; a new one goes to the first lesson with room."""
-        known = self.atlas.works(prepared.group['id'], prepared.subject['id'], *self.span).get(work.id)
+    def place(self, group, subject, day, work):
+        """A work Atlas already has stays where it is; a new one goes to the first lesson of the course with room, searched from the day."""
+        known = self.atlas.works(group['id'], subject['id'], *self.span).get(work.id)
         if known:
             entry = self.entry(*known)
             if entry:
                 self.add(entry, work)
             return bool(entry)
         first = None
-        for entry in self.candidates(prepared.group, prepared.subject, prepared.day):
+        for entry in self.candidates(group, subject, day):
             first = first or entry
             if self.fits(entry, work):
                 self.add(entry, work)
-                self.report['moved']['anotherDay'] += entry['document']['lesson']['date'] != prepared.day.isoformat()
+                self.report['moved']['anotherDay'] += entry['document']['lesson']['date'] != day.isoformat()
                 self.report['moved']['forCapacity'] += entry is not first
                 return True
         return False
@@ -1026,17 +1132,22 @@ class Planner:
         """Put the works of a prepared column in their lessons; a column some of whose works have no lesson is counted as unresolved."""
         if p.column.every:
             self.guard_attempts(p)
-        placed = [self.place(p, work) for work in p.works]
+        placed = [self.place(p.group, p.subject, p.day, work) for work in p.works]
+        # The follow works are placed on their own: a pupil's mark that finds no lesson in his group is counted, the column is not unresolved by it.
+        lost = sum(len(w.grades) for b in p.branches for w in b.works if not self.place(b.group, b.subject, p.day, w))
         if all(placed):
             self.report['columns']['planned'] += 1
-            return
-        self.unresolve(p.column, 'noLesson')
-        lost = sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
+        else:
+            self.unresolve(p.column, 'noLesson')
+            lost += sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
         self.counts['leftOut']['noLesson'] += lost
         self.counts['inWorks'] -= lost
 
     def finish(self):
         report, lessons = self.report, self.report['lessons']
+        if self.follow:
+            follows = [w for plan in self.lessons.values() for w in plan.works.values() if w.follow]
+            report['works']['followed'], self.counts['followed'] = len(follows), sum(len(w.grades) for w in follows)
         for n, plan in enumerate(self.lessons.values(), 1):
             self.progress('checking', n, len(self.lessons))
             entry = self.atlas.entry(plan.key, plan.day)
@@ -1067,7 +1178,7 @@ class Planner:
                 counter = report['pupilsWithoutMatch'].setdefault(person.klass if person else '?', dict(none=0, ambiguous=0))
                 counter[self.matches[sid][1]] += 1
         known = {work_id(c.uid) for c in self.source.columns.values()}
-        loaded = {i for found in self.atlas.tables.values() for i in found if i.startswith(PREFIX)}
+        loaded = {i for found in self.atlas.tables.values() for i in found if i.startswith(PREFIX) and not FOLLOW.fullmatch(i)}
 
         def base(i):
             found = re.fullmatch(r'(.+)~\d+', i)
@@ -1075,6 +1186,16 @@ class Planner:
 
         # A column that is still in EduPage but could not be planned is not gone; one that is no longer there (or one attempt of it) is.
         report['goneFromEdupage'] = sum(1 for i in loaded - self.planned if base(i) not in known or base(i) in self.planned)
+        if self.follow:
+            # A follow work (looked at only by a run that follows pupils: it never reports them otherwise) is gone when its column is.
+            # A pupil who moved on leaves it where it is, which is not a change in EduPage.
+            for (group, _), found in self.atlas.tables.items():
+                roots = None
+                for i in found:
+                    match = FOLLOW.fullmatch(i)
+                    if match and i not in self.planned:
+                        roots = roots or {work_id(c.uid, group=group): c.uid for c in self.source.columns.values()}
+                        report['goneFromEdupage'] += match.group(1) not in roots
 
     def refusal(self, entry, status, reason):
         lesson = entry['document']['lesson']
@@ -1104,14 +1225,14 @@ def save(atlas, plan, publish, me=None):
                 raise
 
 
-def run(http, workspace, source, rules=None, apply=False, publish=True, minute=None, me=None, confirmed=False, progress=quiet):
+def run(http, workspace, source, rules=None, apply=False, publish=True, minute=None, me=None, confirmed=False, progress=quiet, follow=False):
     """Plan the import and, with apply, save it. The result is the report: counts only.
 
     me is the name the importer is signed in under: the saves under another name are the teachers'. A run that publishes more than
-    PUBLISH_LIMIT lessons writes nothing unless confirmed."""
+    PUBLISH_LIMIT lessons writes nothing unless confirmed. follow: the marks of pupils outside the group of a column go to the group they are in."""
     atlas = Atlas(http, workspace)
     minute = minute or datetime.now(ZoneInfo('Asia/Qyzylorda')).strftime('%H:%M')
-    planner = Planner(atlas, source, rules or Rules(), publish, minute, me, progress)
+    planner = Planner(atlas, source, rules or Rules(), publish, minute, me, progress, follow)
     stopped, planned = None, False
     try:
         report = planner.run()
@@ -1172,6 +1293,8 @@ def main(argv=None, http=None, minute=None):
     publishing = parser.add_mutually_exclusive_group()
     publishing.add_argument('--draft', action='store_true', help='save marks unpublished')
     publishing.add_argument('--publish', action='store_true', help=f'publish even when more than {PUBLISH_LIMIT} lessons are published: every family gets notices')
+    parser.add_argument('--follow-pupils', action='store_true', help='a pupil who holds a mark in a column of a group he is not in (and is in exactly one other group '
+                                                                      'of the subject) gets it in a work of that group (same name, kind, maximum, weight, category)')
     parser.add_argument('--report', help='write the report as JSON to this file')
     args = parser.parse_args(argv)
     signed = False
@@ -1182,7 +1305,7 @@ def main(argv=None, http=None, minute=None):
             raise Stop('files', 0, 'не найдено ни одного читаемого файла журнала')
         rules = Rules.read(args.rules)
         me, signed = sign_in(http, lambda: credentials(args.account))
-        report = run(http, args.workspace, source, rules, args.apply, not args.draft, minute, me, args.publish, Progress())
+        report = run(http, args.workspace, source, rules, args.apply, not args.draft, minute, me, args.publish, Progress(), args.follow_pupils)
     except Stop as stop:
         report = dict(aborted=dict(step=stop.step, status=stop.status, reason=stop.reason))
     finally:
