@@ -10,7 +10,7 @@ import {
   type JournalHistory,
 } from "./journal";
 
-// The saved revisions of the record, newest first, each one to open for viewing.
+// The saved revisions of the record, newest first, each one to open for viewing; they sit inside the «История записи» block.
 export function LessonHistoryList({
   history,
   historyMore,
@@ -24,10 +24,14 @@ export function LessonHistoryList({
   historyPage: (before?: number) => Promise<void>;
   showVersion: (version: number) => Promise<void>;
 }) {
-  if (!history.length) return null;
+  if (!history.length)
+    return (
+      <p className="lesson-hint">
+        {busy ? "Загружаю редакции…" : "Сохранённых редакций нет."}
+      </p>
+    );
   return (
-    <section className="journal-history">
-      <h3>Сохранённые редакции</h3>
+    <>
       {history.map((h) => (
         <div key={h.version}>
           <span>
@@ -52,7 +56,7 @@ export function LessonHistoryList({
           Более ранние редакции
         </button>
       )}
-    </section>
+    </>
   );
 }
 

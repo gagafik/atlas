@@ -186,7 +186,7 @@ export function LessonsTable({
                       type="button"
                       className="journal-row-button"
                       disabled={busy}
-                      title="Открыть урок на карточках учеников"
+                      title="Открыть урок на списке учеников"
                       onClick={() => onPupils(l.lessonKey)}
                     >
                       {lessonAttendance(l)}

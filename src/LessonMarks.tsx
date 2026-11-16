@@ -179,24 +179,3 @@ export function LessonMarkChoices({
     </>
   );
 }
-
-// The old one-block form: the marks and the choices in one line.
-export function LessonMarkBar({
-  marks,
-  studentId,
-}: {
-  marks: LessonMarks;
-  studentId: string;
-}) {
-  if (!marks.info) return null;
-  return (
-    <div className="lesson-marks" aria-label="Похвалы и замечания за урок">
-      <LessonMarkChips marks={marks} studentId={studentId} />
-      <LessonMarkChoices
-        marks={marks}
-        studentId={studentId}
-        disabled={Boolean(marks.busy)}
-      />
-    </div>
-  );
-}

@@ -76,6 +76,19 @@ export type JournalFocus =
       finalsPeriodId?: never;
     };
 
+// Brings a part of the opened lesson into view; a folded block (a <details>) is opened first, so a link to the topic
+// from the plan lands on the open picker.
+function reveal(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const fold =
+    target instanceof HTMLDetailsElement
+      ? target
+      : target.querySelector<HTMLDetailsElement>("details[data-reveal]");
+  if (fold) fold.open = true;
+  target.scrollIntoView({ block: "start" });
+}
+
 export default function JournalPanel({
   workspace,
   year,
@@ -503,8 +516,7 @@ export default function JournalPanel({
   // A lesson of the day grid: the editor opens under its row (again to close it); `target` is the place of the editor to scroll to.
   function openFromGrid(key: string, target = "") {
     if (entry?.lessonKey === key) {
-      if (target)
-        document.getElementById(target)?.scrollIntoView({ block: "start" });
+      if (target) reveal(target);
       else if (canLeave()) clearEditor();
       return;
     }
@@ -633,6 +645,9 @@ export default function JournalPanel({
           uploading,
           refreshDay,
           homeworkGraded,
+          close: () => {
+            if (canLeave()) clearEditor();
+          },
         }}
       />
     );
@@ -702,7 +717,7 @@ export default function JournalPanel({
     if (aim.current?.key === entry.lessonKey) {
       const id = aim.current.id;
       aim.current = null;
-      document.getElementById(id)?.scrollIntoView({ block: "start" });
+      reveal(id);
     }
   }, [entry, ready, moveTo]);
   // The calendar colours the days of the own lessons; the administrator sees one class at a time.
@@ -847,7 +862,9 @@ export default function JournalPanel({
             </button>
           </div>
           {mode === "day" ? (
-            <div className="teacher-day-layout">
+            <div
+              className={`teacher-day-layout${entry ? " teacher-day-editing" : ""}`}
+            >
               <div className="teacher-day-main">
                 <header className="teacher-day-head">
                   <h2>{title}</h2>

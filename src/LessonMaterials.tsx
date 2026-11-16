@@ -49,6 +49,8 @@ export function MaterialView({
   );
 }
 
+const MAX_MATERIALS = 10;
+
 export default function LessonMaterials({
   items,
   workspace,
@@ -67,51 +69,83 @@ export default function LessonMaterials({
     new Set(items.map((item) => item.id + ":" + item.version)),
   );
   if (!items.length && !onChange) return null;
+  if (!onChange) {
+    // The family's view of the published materials.
+    return (
+      <section className="lesson-materials" aria-label="Материалы урока">
+        <h3>Материалы урока</h3>
+        {items.map((item) => (
+          <div key={item.id}>
+            <MaterialView
+              item={item}
+              workspace={workspace}
+              lessonKey={lessonKey}
+            />
+          </div>
+        ))}
+      </section>
+    );
+  }
+  // The teacher's editor: one row with the count and the button; the list appears only when there are materials.
   return (
-    <section className="lesson-materials" aria-label="Материалы урока">
-      <h3>Материалы урока</h3>
-      {onChange && (
-        <p className="muted">
-          До десяти материалов из библиотеки. Выбранные версии сохраняются
-          вместе с уроком и становятся доступны семье после публикации. Файлы с
-          условиями домашнего задания добавляйте в его отдельный раздел.
-        </p>
-      )}
-      {items.map((item) => (
-        <div key={item.id}>
-          <MaterialView
-            item={item}
-            workspace={workspace}
-            lessonKey={
-              !onChange || saved.current.has(item.id + ":" + item.version)
-                ? lessonKey
-                : undefined
-            }
-          />
-          {onChange && (
-            <button
-              disabled={disabled}
-              onClick={() => onChange(items.filter((m) => m.id !== item.id))}
-            >
-              Убрать «{item.title}» из урока
-            </button>
-          )}
-        </div>
-      ))}
-      {onChange && (
+    <section
+      className="lesson-materials lesson-materials-editor"
+      aria-label="Материалы урока"
+    >
+      <div className="lesson-row">
+        <strong>
+          Материалы урока · {items.length}/{MAX_MATERIALS}
+        </strong>
         <button
+          type="button"
           disabled={disabled}
           onClick={() => setChoosing(!choosing)}
           aria-expanded={choosing}
         >
           {choosing ? "Закрыть выбор материала" : "Выбрать из библиотеки"}
         </button>
+        <small className="lesson-hint">
+          До десяти материалов; семья увидит их после публикации. Файлы к
+          заданию добавляйте ниже.
+        </small>
+      </div>
+      {items.length > 0 && (
+        <ul className="lesson-material-list">
+          {items.map((item) => (
+            <li key={item.id}>
+              <details>
+                <summary>
+                  {item.title} <small>версия {item.version}</small>
+                </summary>
+                <MaterialView
+                  item={item}
+                  workspace={workspace}
+                  lessonKey={
+                    saved.current.has(item.id + ":" + item.version)
+                      ? lessonKey
+                      : undefined
+                  }
+                />
+              </details>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onChange(items.filter((m) => m.id !== item.id))}
+              >
+                Убрать «{item.title}» из урока
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {choosing && !disabled && (
         <Library
           workspace={workspace}
           onChoose={(item) => {
-            if (items.length >= 10 && !items.some((m) => m.id === item.id)) {
+            if (
+              items.length >= MAX_MATERIALS &&
+              !items.some((m) => m.id === item.id)
+            ) {
               window.alert("В урок можно добавить до десяти материалов.");
               return;
             }

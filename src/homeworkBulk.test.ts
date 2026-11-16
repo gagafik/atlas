@@ -3,6 +3,7 @@ import {
   acceptable,
   bulkItems,
   bulkSummary,
+  nextLessonText,
   orderTargets,
   parallelBody,
   rosterCounts,
@@ -222,5 +223,23 @@ describe("late replies", () => {
     );
     expect(fail).toHaveBeenCalledTimes(1);
     expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("the note about the next lesson", () => {
+  it("writes the dates as day.month.year", () => {
+    const found = nextLessonText({
+      date: "2026-08-20",
+      start: "08:30",
+      searchedUntil: "2026-10-01",
+    });
+    expect(found).toContain("20.08.2026");
+    expect(found).not.toContain("2026-08-20");
+    const missing = nextLessonText({
+      date: null,
+      searchedUntil: "2026-10-01",
+    });
+    expect(missing).toContain("01.10.2026");
+    expect(missing).not.toContain("2026-10-01");
   });
 });

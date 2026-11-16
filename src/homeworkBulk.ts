@@ -1,4 +1,5 @@
 /** Pure helpers of the teacher's homework tools: bulk acceptance, the next lesson's date and publishing to other classes. */
+import { dayText } from "./pupilJournal";
 export interface RosterStudent {
   studentId: string;
   name: string;
@@ -65,8 +66,8 @@ export interface NextLesson {
 }
 export function nextLessonText(next: NextLesson) {
   if (!next.date)
-    return `Следующий урок этого класса не найден до ${next.searchedUntil}. Укажите срок вручную.`;
-  return `Следующий урок: ${next.date}${next.start ? `, ${next.start}` : ""}. Срок можно изменить.`;
+    return `Следующий урок этого класса не найден до ${dayText(next.searchedUntil)}. Укажите срок вручную.`;
+  return `Следующий урок: ${dayText(next.date)}${next.start ? `, ${next.start}` : ""}. Срок можно изменить.`;
 }
 
 export interface ParallelTarget {

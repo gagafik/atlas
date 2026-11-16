@@ -3,6 +3,8 @@ import { uploadFile } from "./uploads";
 import { api } from "./api";
 import type { JournalEntry } from "./journal";
 
+const MAX_FILES = 5;
+
 export interface Material {
   id: string;
   filename: string;
@@ -137,7 +139,7 @@ export default function AssignmentFilesPanel({
     setError("");
     controller.current = new AbortController();
     try {
-      if (picked.length + selectedRef.current.length > 5)
+      if (picked.length + selectedRef.current.length > MAX_FILES)
         throw Error("К заданию можно приложить до пяти материалов.");
       if (picked.some((f) => !f.size || f.size > 10 * 1024 * 1024))
         throw Error("Каждый файл должен быть непустым и не больше 10 МБ.");
@@ -174,13 +176,35 @@ export default function AssignmentFilesPanel({
       }
     }
   }
+  const hasHomework = !!entry.document.content.homework.trim();
+  const blocked =
+    disabled || uploading || selected.length >= MAX_FILES || !hasHomework;
   return (
     <div className="assignment-materials">
-      <h3>Материалы домашнего задания</h3>
-      <p className="muted">
-        До пяти файлов по 10 МБ. Ученики и родители увидят выбранные материалы
-        после публикации журнала. Прежние версии сохраняются в истории.
-      </p>
+      <div className="lesson-row">
+        <strong>
+          Материалы задания · {selected.length}/{MAX_FILES}
+        </strong>
+        <label className={`lesson-file-button${blocked ? " is-disabled" : ""}`}>
+          Добавить файл
+          <input
+            type="file"
+            multiple
+            disabled={blocked}
+            accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+            onChange={(e) => {
+              const picked = Array.from(e.target.files || []);
+              e.target.value = "";
+              void upload(picked);
+            }}
+          />
+        </label>
+        <small className="lesson-hint">
+          {hasHomework
+            ? "До пяти файлов по 10 МБ; семья увидит их после публикации."
+            : "Сначала напишите задание. До пяти файлов по 10 МБ."}
+        </small>
+      </div>
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -188,28 +212,6 @@ export default function AssignmentFilesPanel({
       )}
       {uploading && <p role="status">Загружаю материалы…</p>}
       {serverBusy && <p role="status">Сервер занят, повторяем…</p>}
-      <label className="field">
-        <span>Добавить материалы задания</span>
-        <input
-          type="file"
-          multiple
-          disabled={
-            disabled ||
-            uploading ||
-            selected.length >= 5 ||
-            !entry.document.content.homework.trim()
-          }
-          accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
-          onChange={(e) => {
-            const picked = Array.from(e.target.files || []);
-            e.target.value = "";
-            void upload(picked);
-          }}
-        />
-      </label>
-      {!entry.document.content.homework.trim() && (
-        <p className="muted">Сначала добавьте описание домашнего задания.</p>
-      )}
       <MaterialLinks
         items={items.filter((f) => selected.includes(f.id))}
         workspace={workspace}
@@ -225,8 +227,8 @@ export default function AssignmentFilesPanel({
                 disabled={
                   disabled ||
                   uploading ||
-                  !entry.document.content.homework.trim() ||
-                  (!selected.includes(f.id) && selected.length >= 5)
+                  !hasHomework ||
+                  (!selected.includes(f.id) && selected.length >= MAX_FILES)
                 }
                 onChange={(e) =>
                   change(

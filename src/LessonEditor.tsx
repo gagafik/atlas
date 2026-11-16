@@ -1,4 +1,10 @@
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import {
+  useEffect,
+  useState,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import HomeworkPanel from "./HomeworkPanel";
 import HomeworkParallelPanel from "./HomeworkParallelPanel";
 import LessonMaterials from "./LessonMaterials";
@@ -9,7 +15,13 @@ import { LessonHistoryList, LessonHistoryPreview } from "./LessonHistory";
 import LessonPupilTable from "./LessonPupilTable";
 import type { LessonMarks } from "./LessonMarks";
 import type { CategoryConfig } from "./assessmentCategories";
-import { attendanceCounts, summaryParts } from "./lessonEditorModel";
+import { dayText } from "./pupilJournal";
+import {
+  attendanceCounts,
+  editorState,
+  lessonLine,
+  summaryParts,
+} from "./lessonEditorModel";
 import {
   absenceCodeNames,
   documentRows,
@@ -22,6 +34,7 @@ import {
   type JournalHistory,
   type PupilRecord,
 } from "./journal";
+import "./LessonEditor.css";
 
 // What the editor asks of the panel that owns the state: every change, save and request goes through it.
 export interface LessonEditorActions {
@@ -41,10 +54,13 @@ export interface LessonEditorActions {
   refreshDay: () => void;
   // A homework mark was published from the list of works under the lesson.
   homeworkGraded: () => void;
+  // Back to the day: asks about unsaved fields first.
+  close: () => void;
 }
 
-// The editor of the open lesson. It holds no state of its own: the panel keeps the entry, the unsaved flag and the
-// save lock, so leaving the lesson, the unsaved-changes prompt and the payload stay where they were.
+// The editor of the open lesson: «Урок» on the left (what a teacher fills every lesson), «Ученики» on the right. It holds
+// no state of the lesson: the panel keeps the entry, the unsaved flag and the save lock, so leaving the lesson, the
+// unsaved-changes prompt and the payload stay where they were.
 export default function LessonEditor({
   workspace,
   entry,
@@ -99,10 +115,21 @@ export default function LessonEditor({
     uploading,
     refreshDay,
     homeworkGraded,
+    close,
   } = actions;
-  const summary = summaryParts(
-    attendanceCounts(entry.document.content, entry.document.lesson.students),
-  );
+  const lesson = entry.document.lesson;
+  const body = entry.document.content;
+  const summary = summaryParts(attendanceCounts(body, lesson.students));
+  const state = editorState(entry, dirty);
+  // The saved revisions are read the first time the block opens, and again after a save has cleared them.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => setHistoryOpen(false), [entry.lessonKey]);
+  const noHistory = !history.length;
+  useEffect(() => {
+    if (historyOpen && entry.version && noHistory) void historyPage();
+    // The request belongs to the moment the block opens or the record changes, not to every render.
+  }, [historyOpen, entry.lessonKey, entry.version, noHistory]);
+  const hasHomework = !!body.homework;
   return (
     <section
       className="journal-editor"
@@ -110,296 +137,358 @@ export default function LessonEditor({
       tabIndex={-1}
       aria-label="Редактор журнала урока"
     >
-      <header>
-        <div>
-          <h2>
-            {entry.document.lesson.subject} · {entry.document.lesson.group}
-          </h2>
-          <p>
-            {entry.document.lesson.date} · {entry.document.lesson.start}–
-            {entry.document.lesson.end} · {entry.document.lesson.teachers}
-          </p>
-        </div>
-        <span>
-          {dirty
-            ? "Есть несохранённые поля"
-            : entry.version
-              ? `Редакция ${entry.version}`
-              : "Новая запись"}
-        </span>
+      <header className="lesson-editor-head">
+        <button type="button" className="lesson-editor-back" onClick={close}>
+          ← Журнал дня
+        </button>
+        <h2>
+          {lesson.subject} · {lesson.group}
+        </h2>
+        <p className="lesson-editor-line">{lessonLine(lesson)}</p>
       </header>
-      <p className="info-line">
-        {entry.attendanceDefaulted
-          ? "Все отмечены присутствующими по умолчанию. Семья увидит отметки после сохранения."
-          : entry.hasPublished &&
-              entry.lessonBegun &&
-              entry.publishedVersion === entry.version
-            ? "Семья видит эту редакцию; каждое сохранение сразу видно семье."
-            : entry.hasPublished
-              ? `Ученики видят редакцию ${entry.publishedVersion}. Изменения черновика появятся после публикации.`
-              : "Запись ещё не видна ученикам."}
-        {entry.updated &&
-          ` Последнее изменение: ${entry.actor}, ${new Date(entry.updated).toLocaleString("ru-RU")}.`}
-      </p>
-      {!entry.document.lesson.rosterComplete && (
-        <p className="error-banner">
-          Состав группы не подтверждён полностью. Здесь показаны только
-          внесённые ученики.
-        </p>
-      )}
-      {!entry.writable && (
+      <div className="lesson-editor-notes">
         <p className="info-line">
-          {entry.periodLocks?.length
-            ? `Период закрыт: ${entry.periodLocks.map((p) => p.name).join(", ")}. Для исправления администратор должен открыть все закрытые периоды с указанием причины.`
-            : "Запись доступна только для просмотра: урок отменён, удалён или назначен другому преподавателю."}
+          {entry.attendanceDefaulted
+            ? "По умолчанию все присутствуют; семья увидит отметки после сохранения."
+            : entry.hasPublished &&
+                entry.lessonBegun &&
+                entry.publishedVersion === entry.version
+              ? "Семья видит эту редакцию; каждое сохранение сразу видно ей."
+              : entry.hasPublished
+                ? `Ученики видят редакцию ${entry.publishedVersion}; изменения появятся после публикации.`
+                : "Запись ещё не видна ученикам."}
+          {entry.updated &&
+            ` Изменил: ${entry.actor}, ${new Date(entry.updated).toLocaleString("ru-RU")}.`}
         </p>
-      )}
-      {entry.futureLesson && (
-        <p className="info-line">
-          Урок ещё не прошёл. Тему, домашнее задание и материалы можно
-          опубликовать заранее; посещаемость и оценки публикуются в день урока.
-        </p>
-      )}
-      {entry.rosterFrozen && entry.hasPublished && (
-        <p className="info-line">
-          Состав, время и учителя урока зафиксированы при публикации:
-          последующие изменения расписания и составов их не меняют.
-        </p>
-      )}
-      {entry.needsSync && entry.writable && (
-        <div className="info-line">
-          <p>
-            Расписание или состав группы изменились. Просмотрите обновление
-            перед редактированием. Прежние ученики и их оценки сохранятся; новые
-            ученики появятся без отметок.
-            {entry.currentDate !== entry.document.lesson.date &&
-              ` Текущая дата урока: ${entry.currentDate}.`}
+        {!lesson.rosterComplete && (
+          <p className="error-banner">
+            Состав группы подтверждён не полностью: показаны только внесённые
+            ученики.
           </p>
-          <button
-            disabled={busy}
-            onClick={() => void openEntry(entry.lessonKey, true)}
-          >
-            Обновить состав и время
-          </button>
-        </div>
-      )}
-      {syncRoster && (
-        <p className="info-line">
-          Обновлённый состав показан для проверки. Он сохранится вместе с
-          записью.
-        </p>
-      )}
-      <fieldset disabled={!editable} className="journal-content-fields">
-        <label className="field">
-          <span>Тема урока</span>
-          <textarea
-            maxLength={2000}
-            value={entry.document.content.topic}
-            onChange={(e) => content((c) => ({ ...c, topic: e.target.value }))}
-          />
-        </label>
-        <div id="journal-lesson-topic">
-          <LessonTopic
-            workspace={workspace}
-            lessonKey={entry.lessonKey}
-            day={entry.document.lesson.date}
-            value={entry.document.content.curriculum}
-            materials={entry.document.content.materials || []}
-            disabled={!editable}
-            onChange={(curriculum, materials) =>
-              content((c) => ({
-                ...c,
-                curriculum,
-                materials: materials ?? c.materials,
-                topic:
-                  curriculum &&
-                  (curriculum.planId !== c.curriculum?.planId ||
-                    curriculum.version !== c.curriculum?.version ||
-                    curriculum.topicId !== c.curriculum?.topicId)
-                    ? curriculum.title
-                    : c.topic,
-              }))
-            }
-          />
-        </div>
-        <label className="field" id="journal-homework">
-          <span>Домашнее задание</span>
-          <textarea
-            maxLength={4000}
-            value={entry.document.content.homework}
-            onChange={(e) =>
-              content((c) => ({
-                ...c,
-                homework: e.target.value,
-                dueDate: e.target.value ? c.dueDate : null,
-                homeworkFiles: e.target.value ? c.homeworkFiles : [],
-                homeworkLatePolicy: e.target.value
-                  ? c.homeworkLatePolicy
-                  : "allow",
-                homeworkSubmission: e.target.value
-                  ? c.homeworkSubmission
-                  : "online",
-              }))
-            }
-          />
-        </label>
-        <label className="field">
-          <span>Срок домашнего задания</span>
-          <input
-            type="date"
-            disabled={!entry.document.content.homework}
-            value={entry.document.content.dueDate || ""}
-            onChange={(e) =>
-              content((c) => ({
-                ...c,
-                dueDate: e.target.value || null,
-                homeworkLatePolicy: e.target.value
-                  ? c.homeworkLatePolicy
-                  : "allow",
-              }))
-            }
-          />
-        </label>
-        <div className="journal-due-next">
-          <button
-            type="button"
-            disabled={!entry.document.content.homework || dueBusy}
-            onClick={() => void dueNextLesson()}
-          >
-            К следующему уроку
-          </button>
-          {dueNote && <small role="status">{dueNote}</small>}
-        </div>
-        <label className="field">
-          <span>Сдача работы</span>
-          <select
-            disabled={!entry.document.content.homework}
-            value={entry.document.content.homeworkSubmission || "online"}
-            onChange={(e) =>
-              content((c) => ({
-                ...c,
-                homeworkSubmission: e.target.value as "online" | "offline",
-                homeworkLatePolicy:
-                  e.target.value === "offline" ? "allow" : c.homeworkLatePolicy,
-              }))
-            }
-          >
-            <option value="online">Ученики отправляют ответ в Атласе</option>
-            <option value="offline">
-              Без онлайн-сдачи (показывают на уроке)
-            </option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Приём после срока</span>
-          <select
-            disabled={
-              !entry.document.content.dueDate ||
-              entry.document.content.homeworkSubmission === "offline"
-            }
-            value={entry.document.content.homeworkLatePolicy || "allow"}
-            onChange={(e) =>
-              content((c) => ({
-                ...c,
-                homeworkLatePolicy: e.target.value as "allow" | "block",
-              }))
-            }
-          >
-            <option value="allow">Разрешать с отметкой об опоздании</option>
-            <option value="block">Закрывать приём после срока</option>
-          </select>
-          <small>
-            Срок заканчивается в 23:59 по времени школы (Кызылорда). При
-            закрытом приёме для повторной сдачи после возврата тоже потребуется
-            продление срока.
-          </small>
-        </label>
-        <LessonMaterials
-          key={workspace + entry.lessonKey + entry.version}
-          items={entry.document.content.materials || []}
-          workspace={workspace}
-          lessonKey={entry.lessonKey}
-          disabled={!editable}
-          onChange={(materials) => content((c) => ({ ...c, materials }))}
-        />
-        <AssignmentFilesPanel
-          key={workspace + entry.lessonKey}
-          entry={entry}
-          workspace={workspace}
-          disabled={!editable}
-          change={(ids) => content((c) => ({ ...c, homeworkFiles: ids }))}
-          onUploading={uploading}
-        />
-        <LessonAssessments
-          entry={entry}
-          editable={editable}
-          categories={categories}
-          customWeights={customWeights}
-          setCustomWeights={setCustomWeights}
-          content={content}
-          patchWork={patchWork}
-        />
-      </fieldset>
-      <section className="lesson-pupils-block">
-        <div className="lesson-pupils-head">
-          <h3 id="journal-pupil-cards">Ученики</h3>
-          {!!entry.document.lesson.students.length && (
-            <span className="lesson-pupils-summary">
-              {summary.length
-                ? summary.map(([label, n]) => `${label}: ${n}`).join(" · ")
-                : "Все присутствуют"}
-            </span>
-          )}
-          {nobodyAbsent ? (
+        )}
+        {!entry.writable && (
+          <p className="info-line">
+            {entry.periodLocks?.length
+              ? `Период закрыт: ${entry.periodLocks.map((p) => p.name).join(", ")}. Исправить может администратор, открыв периоды с указанием причины.`
+              : "Только просмотр: урок отменён, удалён или передан другому учителю."}
+          </p>
+        )}
+        {entry.futureLesson && (
+          <p className="info-line">
+            Урок ещё не прошёл: тему, задание и материалы можно опубликовать
+            заранее, посещаемость и оценки — в день урока.
+          </p>
+        )}
+        {entry.rosterFrozen && entry.hasPublished && (
+          <p className="info-line">
+            Состав, время и учителя зафиксированы при публикации.
+          </p>
+        )}
+        {entry.needsSync && entry.writable && (
+          <div className="info-line">
+            <p>
+              Расписание или состав изменились. Просмотрите обновление: прежние
+              ученики и оценки сохранятся, новые появятся без отметок.
+              {entry.currentDate &&
+                entry.currentDate !== lesson.date &&
+                ` Текущая дата урока: ${dayText(entry.currentDate)}.`}
+            </p>
             <button
               type="button"
-              className="primary"
+              disabled={busy}
+              onClick={() => void openEntry(entry.lessonKey, true)}
+            >
+              Обновить состав и время
+            </button>
+          </div>
+        )}
+        {syncRoster && (
+          <p className="info-line">
+            Обновлённый состав показан для проверки и сохранится вместе с
+            записью.
+          </p>
+        )}
+      </div>
+      <div className="lesson-editor-body">
+        <div className="lesson-editor-col lesson-editor-lesson">
+          <h3 className="lesson-editor-title">Урок</h3>
+          <fieldset disabled={!editable} className="lesson-editor-fields">
+            <label className="field">
+              <span>Тема урока</span>
+              <textarea
+                rows={2}
+                maxLength={2000}
+                value={body.topic}
+                onChange={(e) =>
+                  content((c) => ({ ...c, topic: e.target.value }))
+                }
+              />
+            </label>
+            <div id="journal-lesson-topic">
+              <LessonTopic
+                workspace={workspace}
+                lessonKey={entry.lessonKey}
+                day={lesson.date}
+                value={body.curriculum}
+                materials={body.materials || []}
+                disabled={!editable}
+                onChange={(curriculum, materials) =>
+                  content((c) => ({
+                    ...c,
+                    curriculum,
+                    materials: materials ?? c.materials,
+                    topic:
+                      curriculum &&
+                      (curriculum.planId !== c.curriculum?.planId ||
+                        curriculum.version !== c.curriculum?.version ||
+                        curriculum.topicId !== c.curriculum?.topicId)
+                        ? curriculum.title
+                        : c.topic,
+                  }))
+                }
+              />
+            </div>
+            <label className="field" id="journal-homework">
+              <span>Домашнее задание</span>
+              <textarea
+                rows={2}
+                maxLength={4000}
+                value={body.homework}
+                onChange={(e) =>
+                  content((c) => ({
+                    ...c,
+                    homework: e.target.value,
+                    dueDate: e.target.value ? c.dueDate : null,
+                    homeworkFiles: e.target.value ? c.homeworkFiles : [],
+                    homeworkLatePolicy: e.target.value
+                      ? c.homeworkLatePolicy
+                      : "allow",
+                    homeworkSubmission: e.target.value
+                      ? c.homeworkSubmission
+                      : "online",
+                  }))
+                }
+              />
+            </label>
+            {hasHomework && (
+              <div className="lesson-hw">
+                <div className="lesson-row">
+                  <label className="lesson-inline-field">
+                    <span>Срок</span>
+                    <input
+                      type="date"
+                      value={body.dueDate || ""}
+                      onChange={(e) =>
+                        content((c) => ({
+                          ...c,
+                          dueDate: e.target.value || null,
+                          homeworkLatePolicy: e.target.value
+                            ? c.homeworkLatePolicy
+                            : "allow",
+                        }))
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={dueBusy}
+                    onClick={() => void dueNextLesson()}
+                  >
+                    К следующему уроку
+                  </button>
+                  <label className="lesson-inline-field">
+                    <span>Сдача</span>
+                    <select
+                      value={body.homeworkSubmission || "online"}
+                      onChange={(e) =>
+                        content((c) => ({
+                          ...c,
+                          homeworkSubmission: e.target.value as
+                            "online" | "offline",
+                          homeworkLatePolicy:
+                            e.target.value === "offline"
+                              ? "allow"
+                              : c.homeworkLatePolicy,
+                        }))
+                      }
+                    >
+                      <option value="online">Онлайн в Атласе</option>
+                      <option value="offline">Без онлайн-сдачи</option>
+                    </select>
+                  </label>
+                  <label className="lesson-inline-field">
+                    <span>После срока</span>
+                    <select
+                      disabled={
+                        !body.dueDate || body.homeworkSubmission === "offline"
+                      }
+                      value={body.homeworkLatePolicy || "allow"}
+                      onChange={(e) =>
+                        content((c) => ({
+                          ...c,
+                          homeworkLatePolicy: e.target.value as
+                            "allow" | "block",
+                        }))
+                      }
+                    >
+                      <option value="allow">Принимать с пометкой</option>
+                      <option value="block">Закрывать приём</option>
+                    </select>
+                  </label>
+                </div>
+                {dueNote && (
+                  <small className="lesson-hint" role="status">
+                    {dueNote}
+                  </small>
+                )}
+                <small className="lesson-hint">
+                  «Без онлайн-сдачи» — ответы показывают на уроке. Срок
+                  заканчивается в 23:59 по времени школы (Кызылорда); при
+                  закрытом приёме для повторной сдачи после возврата тоже нужно
+                  продлить срок.
+                </small>
+              </div>
+            )}
+            <LessonMaterials
+              key={workspace + entry.lessonKey + entry.version}
+              items={body.materials || []}
+              workspace={workspace}
+              lessonKey={entry.lessonKey}
               disabled={!editable}
-              title="Отметит присутствующими всех, кто не отмечен, и сразу сохранит урок для семьи."
-              onClick={() =>
-                void save(
-                  true,
-                  withNoAbsentees(
-                    entry.document.content,
-                    entry.document.lesson.students,
-                    entry.attendanceApprovals,
-                  ),
-                )
-              }
+              onChange={(materials) => content((c) => ({ ...c, materials }))}
+            />
+            <AssignmentFilesPanel
+              key={workspace + entry.lessonKey}
+              entry={entry}
+              workspace={workspace}
+              disabled={!editable}
+              change={(ids) => content((c) => ({ ...c, homeworkFiles: ids }))}
+              onUploading={uploading}
+            />
+            <LessonAssessments
+              entry={entry}
+              editable={editable}
+              categories={categories}
+              customWeights={customWeights}
+              setCustomWeights={setCustomWeights}
+              content={content}
+              patchWork={patchWork}
+            />
+          </fieldset>
+          {entry.hasPublished &&
+            entry.publishedVersion === entry.version &&
+            body.homework.trim() && (
+              <details className="lesson-editor-fold">
+                <summary>Задание в других классах</summary>
+                <HomeworkParallelPanel
+                  key={workspace + entry.lessonKey + entry.version}
+                  workspace={workspace}
+                  entry={entry}
+                  disabled={dirty || busy}
+                  onPublished={refreshDay}
+                />
+              </details>
+            )}
+          {!!entry.version && (
+            <HomeworkPanel
+              key={workspace + entry.lessonKey + entry.publishedVersion}
+              workspace={workspace}
+              lessonKey={entry.lessonKey}
+              onGraded={homeworkGraded}
+            />
+          )}
+          {!!entry.version && (
+            <details
+              className="journal-history"
+              open={historyOpen}
+              onToggle={(e) => setHistoryOpen(e.currentTarget.open)}
             >
-              Отсутствующих нет
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={!editable || !!entry.futureLesson}
-              onClick={() =>
-                content((c) =>
-                  withNoAbsentees(
-                    c,
-                    entry.document.lesson.students,
-                    entry.attendanceApprovals,
-                  ),
-                )
-              }
-            >
-              Неотмеченные присутствуют
-            </button>
+              <summary>История записи</summary>
+              <LessonHistoryList
+                history={history}
+                historyMore={historyMore}
+                busy={busy}
+                historyPage={historyPage}
+                showVersion={showVersion}
+              />
+              {historical?.document && (
+                <LessonHistoryPreview
+                  workspace={workspace}
+                  entry={entry}
+                  historical={historical}
+                  categories={categories}
+                  closeVersion={closeVersion}
+                />
+              )}
+            </details>
           )}
         </div>
-        <p className="lesson-pupils-hint">
-          Комментарии видны ученику и родителю после публикации.
-        </p>
-        <LessonPupilTable
-          entry={entry}
-          categories={categories}
-          lessonMarks={lessonMarks}
-          onPupil={pupil}
-          onGrade={grade}
-          readOnly={!editable}
-        />
-      </section>
+        <div className="lesson-editor-col lesson-editor-pupils">
+          <section className="lesson-pupils-block">
+            <div className="lesson-pupils-head">
+              <h3 id="journal-pupil-cards">Ученики</h3>
+              {!!lesson.students.length && (
+                <span className="lesson-pupils-summary">
+                  {summary.length
+                    ? summary.map(([label, n]) => `${label}: ${n}`).join(" · ")
+                    : "Все присутствуют"}
+                </span>
+              )}
+              {nobodyAbsent ? (
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={!editable}
+                  title="Отметит присутствующими всех, кто не отмечен, и сразу сохранит урок для семьи."
+                  onClick={() =>
+                    void save(
+                      true,
+                      withNoAbsentees(
+                        body,
+                        lesson.students,
+                        entry.attendanceApprovals,
+                      ),
+                    )
+                  }
+                >
+                  Отсутствующих нет
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!editable || !!entry.futureLesson}
+                  onClick={() =>
+                    content((c) =>
+                      withNoAbsentees(
+                        c,
+                        lesson.students,
+                        entry.attendanceApprovals,
+                      ),
+                    )
+                  }
+                >
+                  Неотмеченные присутствуют
+                </button>
+              )}
+            </div>
+            <p className="lesson-pupils-hint">
+              Комментарии видны ученику и родителю после публикации.
+            </p>
+            <LessonPupilTable
+              entry={entry}
+              categories={categories}
+              lessonMarks={lessonMarks}
+              onPupil={pupil}
+              onGrade={grade}
+              readOnly={!editable}
+            />
+          </section>
+        </div>
+      </div>
       <div className="dated-toolbar journal-savebar">
+        <span className="lesson-editor-state" data-state={state.kind}>
+          {state.text}
+        </span>
         {entry.lessonBegun ? (
           <>
             <button
@@ -451,48 +540,7 @@ export default function LessonEditor({
         >
           CSV текущих полей
         </button>
-        <button
-          disabled={!entry.version || busy}
-          onClick={() => void historyPage()}
-        >
-          История записи
-        </button>
       </div>
-      <LessonHistoryList
-        history={history}
-        historyMore={historyMore}
-        busy={busy}
-        historyPage={historyPage}
-        showVersion={showVersion}
-      />
-      {entry.hasPublished &&
-        entry.publishedVersion === entry.version &&
-        entry.document.content.homework.trim() && (
-          <HomeworkParallelPanel
-            key={workspace + entry.lessonKey + entry.version}
-            workspace={workspace}
-            entry={entry}
-            disabled={dirty || busy}
-            onPublished={refreshDay}
-          />
-        )}
-      {!!entry.version && (
-        <HomeworkPanel
-          key={workspace + entry.lessonKey + entry.publishedVersion}
-          workspace={workspace}
-          lessonKey={entry.lessonKey}
-          onGraded={homeworkGraded}
-        />
-      )}
-      {historical?.document && (
-        <LessonHistoryPreview
-          workspace={workspace}
-          entry={entry}
-          historical={historical}
-          categories={categories}
-          closeVersion={closeVersion}
-        />
-      )}
     </section>
   );
 }
