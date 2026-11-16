@@ -143,17 +143,34 @@ export interface DayLesson {
   present: number | null;
   marked: number | null;
 }
-/** Where the lesson stands for the families, in the teacher's words. */
-export const dayLessonState = (l: DayLesson) =>
+/** How far the record of a lesson has come; the one definition behind the state words and the counts of filled lessons. */
+export type DayLessonFill =
+  "archived" | "cancelled" | "published" | "draft" | "empty";
+export const dayLessonFill = (l: DayLesson): DayLessonFill =>
   l.archived
-    ? "Архивная запись"
+    ? "archived"
     : l.lesson.status === "cancelled"
-      ? "Отменено"
+      ? "cancelled"
       : l.hasPublished
-        ? `Ученикам: редакция ${l.publishedVersion}${l.publishedVersion !== l.version ? " · есть черновик" : ""}`
+        ? "published"
         : l.version
-          ? "Черновик"
-          : "Не заполнено";
+          ? "draft"
+          : "empty";
+/** Where the lesson stands for the families, in the teacher's words. */
+export const dayLessonState = (l: DayLesson) => {
+  switch (dayLessonFill(l)) {
+    case "archived":
+      return "Архивная запись";
+    case "cancelled":
+      return "Отменено";
+    case "published":
+      return `Ученикам: редакция ${l.publishedVersion}${l.publishedVersion !== l.version ? " · есть черновик" : ""}`;
+    case "draft":
+      return "Черновик";
+    default:
+      return "Не заполнено";
+  }
+};
 export interface JournalRow {
   lessonKey: string;
   lesson: Omit<JournalLesson, "students">;

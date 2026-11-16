@@ -20,7 +20,19 @@ import TeacherGradebook from "./TeacherGradebook";
 import JournalPeriodsPanel from "./JournalPeriodsPanel";
 import FinalGradesPanel from "./FinalGradesPanel";
 import MonthCalendar from "./MonthCalendar";
-import TeacherDayGrid from "./TeacherDayGrid";
+import { ClassesTable, LessonsTable } from "./JournalDayTables";
+import {
+  NO_CLASS,
+  classOfLesson,
+  classSummaries,
+  classesOf,
+  countFill,
+  lessonRows,
+  lessonsOfClass,
+  matchesQuery,
+  naturalOrder,
+  searchLessons,
+} from "./journalDay";
 import { dayProfile, slotsFor } from "./bells";
 import { dayText, shiftDate, weekdayName } from "./pupilJournal";
 import { useCoverageDays, type CoverageScope } from "./useCoverageDays";
@@ -448,6 +460,9 @@ export default function JournalPanel({
     onLeaveView?.();
     coverageOpened.current = true;
     clearEditor();
+    // The administrator lands in the class of the lesson, picked below once the list of the day is read.
+    setSearch("");
+    setClassFilter("");
     setMode("day");
     setDay(date);
     void openEntry(key, false, date);
@@ -1301,20 +1316,46 @@ export default function JournalPanel({
       document.getElementById(id)?.scrollIntoView({ block: "start" });
     }
   }, [entry, ready]);
-  const classNames = [
+  const admin = !!options?.admin,
+    query = search.trim();
+  // Every class of the school, also those without a lesson on the day.
+  const known = [
     ...new Set(
-      [...lessons.flatMap((l) => l.classes), classFilter].filter(Boolean),
+      (options?.students ?? []).map((s) => s.className).filter(Boolean),
     ),
-  ].sort((a, b) => a.localeCompare(b, "ru", { numeric: true }));
-  const shown = lessons.filter(
-    (l) =>
-      (!classFilter || l.classes.includes(classFilter)) &&
-      `${l.lesson.subject} ${l.lesson.group} ${l.lesson.teachers} ${l.classes.join(" ")}`
-        .toLocaleLowerCase()
-        .includes(search.toLocaleLowerCase()),
+  ] as string[];
+  const summaries = admin ? classSummaries(lessons, known) : [];
+  const classNames = [
+    ...new Set([...summaries.map((c) => c.name), classFilter].filter(Boolean)),
+  ].sort(
+    (a, b) =>
+      (a === NO_CLASS ? 1 : 0) - (b === NO_CLASS ? 1 : 0) || naturalOrder(a, b),
   );
+  // The administrator sees the classes first; a class, or a search over the whole school, shows lessons.
+  const classesView = admin && !classFilter && !query;
+  const found =
+    admin && !classFilter && query
+      ? searchLessons(lessons, query)
+      : { rows: [], more: 0 };
+  const shown = classesView
+    ? []
+    : admin && !classFilter
+      ? found.rows
+      : (classFilter ? lessonsOfClass(lessons, classFilter) : lessons).filter(
+          (l) => matchesQuery(l, query),
+        );
   const profile = dayProfile(lessons, options?.profiles);
   const slots = profile && day ? slotsFor(profile, day) : [];
+  const rows = lessonRows(shown, slots);
+  // A lesson opened from another screen (or from the search) puts the administrator into its class, so the editor sits in a row.
+  const openKey = entry?.lessonKey;
+  useEffect(() => {
+    if (!admin || !openKey || !ready) return;
+    const open = lessons.find((l) => l.lessonKey === openKey);
+    if (!open) return;
+    if (classFilter ? !classesOf(open).includes(classFilter) : !query)
+      setClassFilter(classOfLesson(open));
+  }, [admin, openKey, ready, lessons, classFilter, query]);
   // The calendar colours the days of the own lessons; the administrator sees one class at a time.
   const coverage: CoverageScope | null = !options?.staff
     ? null
@@ -1359,6 +1400,15 @@ export default function JournalPanel({
         aimed === "homework" ? "journal-homework" : "journal-lesson-topic",
       );
   }, [aimed, options, single, mode, day, ready, loading]);
+  // Another class (or all classes) in place; a lesson open in the editor is left first.
+  function chooseClass(name: string) {
+    if (name === classFilter) return;
+    if (entry) {
+      if (!canLeave()) return;
+      clearEditor();
+    }
+    setClassFilter(name);
+  }
   function goDay(next: string) {
     if (!options || !next) return;
     const target = clampDay(next, options.yearStart, options.yearEnd);
@@ -1492,52 +1542,90 @@ export default function JournalPanel({
                   </div>
                 </header>
                 <div className="teacher-day-tools">
-                  {options.admin && (
-                    <label className="field">
-                      <span>Класс</span>
-                      <select
-                        value={classFilter}
-                        onChange={(e) => setClassFilter(e.target.value)}
-                      >
-                        <option value="">Все классы</option>
-                        {classNames.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                  {admin && (
+                    <>
+                      {classFilter && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => chooseClass("")}
+                        >
+                          ← Все классы
+                        </button>
+                      )}
+                      <label className="field">
+                        <span>Класс</span>
+                        <select
+                          value={classFilter}
+                          disabled={busy}
+                          onChange={(e) => chooseClass(e.target.value)}
+                        >
+                          <option value="">Все классы</option>
+                          {classNames.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </>
                   )}
                   <label className="field">
                     <span>Найти урок</span>
                     <input
                       type="search"
-                      placeholder="Предмет или группа"
+                      placeholder="Предмет, класс или учитель"
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                     />
                   </label>
                 </div>
                 {loading && !ready && <p role="status">Загружаю уроки…</p>}
-                {ready && !loading && !shown.length && (
+                {ready && !loading && !lessons.length && (
                   <p className="empty-state">
                     Доступных уроков на эту дату нет.
                   </p>
                 )}
-                <TeacherDayGrid
-                  day={day}
-                  lessons={shown}
-                  slots={slots}
-                  selectedKey={entry?.lessonKey}
-                  busy={busy}
-                  onOpen={(key) => openFromGrid(key)}
-                  onPupils={(key) => openFromGrid(key, "journal-pupil-cards")}
-                  onPlan={(key) => openFromGrid(key, "journal-lesson-topic")}
-                  renderEditor={editor}
-                />
+                {ready &&
+                  !loading &&
+                  !!lessons.length &&
+                  !classesView &&
+                  !rows.length && (
+                    <p className="empty-state">
+                      {query
+                        ? "По запросу уроков не найдено."
+                        : `В классе ${classFilter} нет уроков на эту дату.`}
+                    </p>
+                  )}
+                {ready && classesView && (
+                  <ClassesTable
+                    classes={summaries}
+                    total={countFill(lessons)}
+                    onOpen={chooseClass}
+                  />
+                )}
+                {!!rows.length && (
+                  <LessonsTable
+                    rows={rows}
+                    label={`Уроки ${dayText(day)}`}
+                    showClass={!classFilter}
+                    selectedKey={entry?.lessonKey}
+                    busy={busy}
+                    onOpen={(key) => openFromGrid(key)}
+                    onPupils={(key) => openFromGrid(key, "journal-pupil-cards")}
+                    onPlan={(key) => openFromGrid(key, "journal-lesson-topic")}
+                    renderEditor={editor}
+                  />
+                )}
+                {found.more > 0 && (
+                  <p className="pupil-muted">
+                    Показаны первые {found.rows.length} уроков, ещё {found.more}
+                    : уточните запрос или выберите класс.
+                  </p>
+                )}
                 {ready &&
                   entry &&
-                  !shown.some((l) => l.lessonKey === entry.lessonKey) &&
+                  !rows.some((r) => r.lesson.lessonKey === entry.lessonKey) &&
                   editor()}
               </div>
               <aside className="teacher-day-side">
