@@ -6,6 +6,7 @@ import { chunked } from "./finalGrades";
 import type { ClassReport, Named, Options } from "./finalGradesTypes";
 import { CLASS_PRINT, printNode } from "./printReport";
 import ReportCards from "./ReportCards";
+import { bookFor } from "./reportCardsView";
 import { useBusy } from "./useBusy";
 
 type Layout = {
@@ -70,6 +71,10 @@ export default function ReportCardSteps({
   leave,
   onDirty,
   onChanged,
+  periodId: fixedPeriod,
+  classId: fixedClass,
+  bookId,
+  initialStep = 1,
 }: {
   workspace: string;
   options: Options;
@@ -79,11 +84,17 @@ export default function ReportCardSteps({
   leave: () => boolean;
   onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
+  // The period and the class the screen has already chosen: the picks are not shown.
+  periodId?: string;
+  classId?: string;
+  // An older statement of the period that was chosen on purpose; the newest one otherwise.
+  bookId?: string;
+  initialStep?: number;
 }) {
   const { busy, error, notice, setError, setNotice, run } = useBusy();
-  const [periodId, setPeriodId] = useState(""),
-    [classId, setClassId] = useState(""),
-    [step, setStep] = useState(1),
+  const [periodId, setPeriodId] = useState(fixedPeriod ?? ""),
+    [classId, setClassId] = useState(fixedClass ?? ""),
+    [step, setStep] = useState(initialStep),
     [layout, setLayout] = useState<Layout | null>(null),
     [items, setItems] = useState<Named[]>([]),
     [hidden, setHidden] = useState<string[]>([]),
@@ -91,14 +102,12 @@ export default function ReportCardSteps({
     [subjectId, setSubjectId] = useState(""),
     [preview, setPreview] = useState<ClassReport | null>(null),
     [final, setFinal] = useState<ClassReport | null>(null),
-    [phrases, setPhrases] = useState(options.phrases.join("\n")),
-    [yearRule, setYearRule] = useState(options.yearRule),
     [loading, setLoading] = useState(false);
   const cards = useRef<HTMLDivElement>(null),
     mounted = useRef(false);
   const admin = options.admin;
   // The newest book of the period; a re-closure gets a book of its own.
-  const book = options.books.find((b) => b.period.id === periodId);
+  const book = bookFor(periodId, options.books, bookId);
   const ready = !!periodId && !!classId;
   const query = `periodId=${encodeURIComponent(periodId)}&classId=${encodeURIComponent(classId)}`;
   // The selects stay usable while a load runs, so a reply is shown only while the period and class it was asked for are still chosen.
@@ -189,22 +198,27 @@ export default function ReportCardSteps({
   const printable = (r: ClassReport | null) =>
     !!r?.pupils.some((p) => p.items.length);
 
-  const picks = (
-    <div className="dated-toolbar">
-      <Pick
-        label="Период"
-        value={periodId}
-        items={options.periods}
-        onChange={(id) => leave() && setPeriodId(id)}
-      />
-      <Pick
-        label="Класс"
-        value={classId}
-        items={options.classes}
-        onChange={(id) => leave() && setClassId(id)}
-      />
-    </div>
-  );
+  const picks =
+    fixedPeriod && fixedClass ? null : (
+      <div className="dated-toolbar">
+        {!fixedPeriod && (
+          <Pick
+            label="Период"
+            value={periodId}
+            items={options.periods}
+            onChange={(id) => leave() && setPeriodId(id)}
+          />
+        )}
+        {!fixedClass && (
+          <Pick
+            label="Класс"
+            value={classId}
+            items={options.classes}
+            onChange={(id) => leave() && setClassId(id)}
+          />
+        )}
+      </div>
+    );
   const messages = (
     <>
       {error && (
@@ -399,60 +413,6 @@ export default function ReportCardSteps({
                   }}
                 />
               )}
-              <details>
-                <summary>Фразы словесной оценки и годовая оценка школы</summary>
-                <label className="field">
-                  Готовые фразы, по одной в строке
-                  <textarea
-                    rows={5}
-                    value={phrases}
-                    onChange={(e) => setPhrases(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  Годовая оценка
-                  <select
-                    value={yearRule}
-                    onChange={(e) =>
-                      setYearRule(e.target.value as Options["yearRule"])
-                    }
-                  >
-                    <option value="periods">
-                      По итогам четвертей или полугодий
-                    </option>
-                    <option value="works">По всем работам года</option>
-                  </select>
-                </label>
-                <p>
-                  Рекомендация по итогам периодов работает для шкал с весом
-                  оценок; округление идёт к ближайшей оценке, середина — вверх.
-                  Правило нужно подтвердить в школе.
-                </p>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await api(
-                        "final-grades/report-settings",
-                        workspace,
-                        "PUT",
-                        {
-                          version: options.reportVersion,
-                          phrases: phrases
-                            .split("\n")
-                            .map((p) => p.trim())
-                            .filter(Boolean),
-                          yearRule,
-                        },
-                      );
-                      onChanged();
-                      setNotice("Настройки табеля сохранены.");
-                    })
-                  }
-                >
-                  Сохранить настройки табеля
-                </button>
-              </details>
             </div>
           )}
           {step === 4 && (

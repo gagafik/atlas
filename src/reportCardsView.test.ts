@@ -19,6 +19,7 @@ import {
   finishedBook,
   gridGpa,
   hasPoints,
+  rowActionAllowed,
   searchPupils,
   statusMark,
   stateText,
@@ -403,5 +404,23 @@ describe("CSV of a personal report card", () => {
     expect(table.every((r) => r.length === table[0].length)).toBe(true);
     expect(table[1]).toContain("Образцов");
     expect(cardCsvRows([])).toHaveLength(1);
+  });
+});
+
+describe("actions on one row", () => {
+  it("accepts an action only in the status the server expects", () => {
+    expect(rowActionAllowed("approve", "submitted", true)).toBe(true);
+    expect(rowActionAllowed("approve", "draft", true)).toBe(false);
+    expect(rowActionAllowed("publish", "approved", true)).toBe(true);
+    expect(rowActionAllowed("publish", "submitted", true)).toBe(false);
+    expect(rowActionAllowed("reopen", "published", true)).toBe(true);
+    expect(rowActionAllowed("return", "approved", true)).toBe(true);
+    expect(rowActionAllowed("assign", "draft", true)).toBe(true);
+    expect(rowActionAllowed("assign", "published", true)).toBe(false);
+  });
+  it("leaves only the withdrawal on a statement of an older closure", () => {
+    expect(rowActionAllowed("approve", "submitted", false)).toBe(false);
+    expect(rowActionAllowed("publish", "approved", false)).toBe(false);
+    expect(rowActionAllowed("withdraw", "published", false)).toBe(true);
   });
 });

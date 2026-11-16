@@ -317,3 +317,37 @@ export function cardCsvRows(items: Published[]): (string | number)[][] {
     ]),
   ];
 }
+
+// ---- Actions on one row ---------------------------------------------------
+
+export const ROW_ACTIONS = [
+  "approve",
+  "return",
+  "publish",
+  "reopen",
+  "withdraw",
+] as const;
+
+/** Whether the server accepts the action on a row in this status; a statement of an older closure only allows withdrawing. */
+export function rowActionAllowed(
+  action: string,
+  status: string,
+  current: boolean,
+): boolean {
+  if (action === "withdraw") return true;
+  if (!current) return false;
+  switch (action) {
+    case "assign":
+      return status === "draft";
+    case "approve":
+      return status === "submitted";
+    case "return":
+      return status === "submitted" || status === "approved";
+    case "publish":
+      return status === "approved";
+    case "reopen":
+      return status === "published";
+    default:
+      return false;
+  }
+}

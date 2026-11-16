@@ -1,4 +1,5 @@
 // Shapes of the final-grades API shared by the panel and its tables, matrix and report cards.
+import type { CategoryConfig } from "./assessmentCategories";
 export type Named = { id: string; name: string };
 export type Scale = Named & {
   version: number;
@@ -208,4 +209,29 @@ export type Job = {
   attempts: number;
   message: string;
   bookId: string;
+};
+
+// What the screens of the report-card part get from the panel that owns them.
+export type FinalsShared = {
+  workspace: string;
+  // A past school year (archived only): everything is read-only.
+  year?: string;
+  options: Options;
+  // The school's categories of works, for the badges of the evidence and for the editor in the settings.
+  categories: CategoryConfig | null;
+  onCategoriesSaved: () => void;
+  lastScale: { current: string };
+  // Raised after every change, so the tables never show numbers from before it.
+  epoch: number;
+  changed: () => void;
+  leave: () => boolean;
+  // Whether some table or row holds unsaved results.
+  dirty: boolean;
+  onDirty: (table: string, dirty: boolean) => void;
+  reloadOptions: () => Promise<Options | undefined>;
+  // The «Обновить» of the toolbar: asks about unsaved results, reloads the options and the tables.
+  refresh: () => void;
+  busy: boolean;
+  run: (work: () => Promise<void>) => Promise<boolean>;
+  setNotice: (text: string) => void;
 };
