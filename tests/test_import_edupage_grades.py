@@ -1233,6 +1233,71 @@ def test_a_follow_work_waits_in_the_draft_beside_the_teachers_own_changes_in_tha
     assert family_sees(school, 's1') == {'ep-c': 8}
 
 
+def drop_s3_mark_of(work):
+    def change(content):
+        next(r for r in content['records'] if r['studentId'] == 's3')['grades'] = []
+    return change
+
+
+def drop_work_of(work):
+    def change(content):
+        content['assessments'] = [a for a in content['assessments'] if a['id'] != work]
+        for record in content['records']:
+            record['grades'] = [g for g in record['grades'] if g['assessmentId'] != work]
+    return change
+
+
+@pytest.mark.parametrize('delete', [drop_s3_mark_of, drop_work_of], ids=['mark deleted', 'work deleted'])
+def test_a_mark_the_teacher_deleted_does_not_come_back_in_a_follow_work_when_the_pupil_leaves_the_group(school, delete):
+    english_lessons_for_10d()
+    english_group_of_10a_is('s1', 's2', 's3')
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    assert family_sees(school, 's3') == {'ep-c': 5}
+    school.edit(ENGLISH, D1, delete('ep-c'), publish=True, group='10A')
+    english_group_of_10a_is('s1', 's2')  # s3 has left the group of the column: his mark would follow him to 10D.
+    for _ in range(2):
+        report = school.run(journals, '--apply', '--follow-pupils')
+        assert not school.group_works('10D') and family_sees(school, 's3') == {} and 'PUT' not in school.wire.verbs
+        assert report['marks']['leftOut']['removedElsewhere'] == 1 and report['marks']['followed'] == 0 and accounted(report)
+
+
+def test_a_follow_mark_the_teacher_deleted_does_not_come_back_in_the_group_the_pupil_joins(school):
+    english_lessons_for_10d()
+    english_group_of_10a_is('s1', 's2')
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    follow = importer.work_id('c', group='g-d')
+    school.edit(ENGLISH, D1, drop_s3_mark_of(follow), publish=True, group='10D')
+    english_group_of_10a_is('s1', 's2', 's3')
+    for flags in (['--follow-pupils'], []):
+        report = school.run(journals, '--apply', *flags)
+        assert school.group_grade('10A', 'ep-c', 's3') is None and school.group_grade('10D', follow, 's3') is None and 'PUT' not in school.wire.verbs
+        assert report['marks']['leftOut']['removedElsewhere'] == 1 and accounted(report)
+
+
+def test_a_mark_stays_in_the_follow_work_of_a_course_that_was_dropped_and_is_not_written_again(school):
+    english_lessons_for_10d(third_group=True)
+    state = api.read('demo')
+    for group, pupils in (('g-d', ['s3', 's4']), ('g-e', ['s4'])):
+        next(g for g in state.groups if g.id == group).studentIds = pupils
+    api.save('demo', state)
+    journals = made_for_10a(school)
+    school.run(journals, '--apply', '--follow-pupils')
+    old = importer.work_id('c', group='g-d')
+    assert family_sees(school, 's3') == {old: 5}
+    state = api.read('demo')  # 10D English is reorganised: its course is replaced by another one, and s3 belongs to that.
+    state.placements = [p for p in state.placements if p.id != 'eng-d'] + [Placement(id='eng-e', workloadId='w-e', day=0, period=3, roomId='r1')]
+    state.workloads = [w for w in state.workloads if w.id != 'w1']
+    for group, pupils in (('g-d', ['s4']), ('g-e', ['s3', 's4'])):
+        next(g for g in state.groups if g.id == group).studentIds = pupils
+    api.save('demo', state)
+    for _ in range(2):
+        report = school.run(journals, '--apply', '--follow-pupils')
+        assert family_sees(school, 's3') == {old: 5} and report['marks']['leftOut']['heldElsewhere'] == 1 and report['marks']['followed'] == 0 and accounted(report)
+        assert not school.group_works('10D English plus') or importer.work_id('c', group='g-e') not in school.group_works('10D English plus')
+
+
 def test_a_follow_id_is_stable_distinct_from_every_other_id_and_fits_the_limit():
     groups = ['g-a', 'g-d', 'g', '', 'х', 'a b', 'L' * 200]
     bases = {importer.work_id(uid) for uid in NASTY}

@@ -12,7 +12,8 @@ else one holding at least 80 %. Pupils who only hold a mark (they may have left 
 that list (or when it names nobody Atlas knows) the pupils with marks decide. A work already in Atlas stays in its group. A mark of a pupil outside
 the group is counted and not written, unless --follow-pupils is given: then it goes into a "follow" work (id "ep-~f<hash of column and group>")
 of the one other group of the subject the pupil is in, with the name, kind, maximum, weight and category of the column's work. A mark Atlas
-already holds in another work of the column (the pupil changed groups) is not written a second time (marks.leftOut.heldElsewhere).
+already holds in another work of the column (the pupil changed groups; also in the archived lesson of a course that is gone) is not written a second
+time (marks.leftOut.heldElsewhere), nor is one a teacher deleted there (the mark or the whole work: marks.leftOut.removedElsewhere).
 
 What people changed in Atlas by hand is left alone, including a mark a teacher corrected or deleted and a work a teacher removed:
 the importer reads the saved versions of a lesson (history) and tells its own saves from others by the account name, so use an
@@ -510,6 +511,8 @@ class Prepared:
     day: date
     works: list
     branches: list = field(default_factory=list)
+    subjects: list = field(default_factory=list)  # The candidate subjects of the column.
+    strays: list = field(default_factory=list)  # (group id, lessonKey, day) of the archived lessons of other groups near the date (see Planner.strays).
 
 
 @dataclass
@@ -613,6 +616,17 @@ def grade_pick(work_id, pupil):
         found = next((g for g in record['grades'] if g['assessmentId'] == work_id), None) if record else None
         return {k: found.get(k) for k in MARKED} if found else None
     return pick
+
+
+def marked_pick(work_id, pupil):
+    """Like grade_pick, but only a grade that holds a mark (a blank one is nothing the importer wrote)."""
+    pick = grade_pick(work_id, pupil)
+    return lambda content: next((found for found in [pick(content)] if found and any(found[k] not in (None, '') for k in MARKED)), None)
+
+
+def marked_in(content, work):
+    """The pupils who hold a mark in a work of a lesson content."""
+    return {r['studentId'] for r in content['records'] if any(g['assessmentId'] == work and any(g[k] not in (None, '') for k in MARKED) for g in r['grades'])}
 
 
 def foreign(content):
@@ -766,7 +780,7 @@ class Planner:
     def __init__(self, atlas, source, rules, publish, minute, me=None, progress=quiet, follow=False):
         self.atlas, self.source, self.rules, self.publish, self.minute, self.me, self.progress = atlas, source, rules, publish, minute, me, progress
         self.follow = follow
-        self.lessons, self.matches, self.planned, self.sizes, self.indexes = {}, {}, set(), {}, {}
+        self.lessons, self.matches, self.planned, self.sizes, self.indexes, self.archives, self.at = {}, {}, set(), {}, {}, {}, {}
         self.unresolved = defaultdict(lambda: defaultdict(int))
         self.report = dict(
             files=source.files, filesUnreadable=source.unreadable,
@@ -775,7 +789,7 @@ class Planner:
             # Every mark read has one fate: inSource == inWorks + otherAttempts + the sum of leftOut, on every run.
             marks=dict(inSource=sum(len(c.marks) for c in source.columns.values()), inWorks=0, otherAttempts=0,
                        written=0, onlyInAtlas=0, textOnly=0, scoresCut=0, adjusted=0, attemptsKept=0,
-                       leftOut=dict(columnNotPlanned=0, outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0, attemptsKept=0, heldElsewhere=0)),
+                       leftOut=dict(columnNotPlanned=0, outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0, attemptsKept=0, heldElsewhere=0, removedElsewhere=0)),
             titlesShortened=0, moved=dict(anotherDay=0, forCapacity=0),
             lessons=dict(toSave=0, toPublish=0, blocked=0, keptAsDraft=0, saved=0, refused=[]),
             keptAsInAtlas=dict(editedMarks=0, editedWorks=0, removedWorks=0),
@@ -886,7 +900,8 @@ class Planner:
         chosen = self.choose_group(column, subjects, pupils, made_for or pupils)
         if chosen is None:
             return self.unresolve(column, 'noGroup')
-        return Prepared(column, *chosen, day, *self.works_of(column, *chosen, subjects, people))
+        strays = self.strays(day, subjects, chosen[0])
+        return Prepared(column, *chosen, day, *self.works_of(column, *chosen, subjects, people, strays), subjects, strays)
 
     @staticmethod
     def work_date(column):
@@ -963,16 +978,87 @@ class Planner:
                     found[record['studentId']][self.attempt_of(work)] = work
         return found
 
-    def held_marks(self, column, group, subject, subjects):
-        """{pupil: {attempt: {work ids}}}: where Atlas holds the marks of a column, in its own group or in the follow works of other groups."""
+    def archived_on(self, day):
+        """The archived lessons of a day (the placement of a course was removed: its lessons and their marks stay), read once per day."""
+        if day not in self.archives:
+            visible = self.year[0] <= day <= min(self.year[1], self.today)
+            self.archives[day] = [i for i in self.atlas.day(day.isoformat()) if i.get('archived')] if visible else []
+        return self.archives[day]
+
+    def strays(self, day, subjects, group):
+        """[(group id, lessonKey, day)] of the archived lessons of the candidate subjects, in groups other than `group`, within the search window of a date.
+        A course that is gone (its workload was removed, a new group took over) is not among the courses of the subjects any more, yet a follow work
+        the column once had there still holds its marks: the id of that work is known from the column and the group the lesson belongs to."""
+        names, ids, found = {s['name'] for s in subjects}, {s['id'] for s in subjects}, []
+        for offset in [0, *range(-1, -SEARCH_DAYS - 1, -1), *range(1, SEARCH_DAYS + 1)]:
+            for item in self.archived_on(day + timedelta(days=offset)):
+                if item['lesson']['subject'] not in names:
+                    continue
+                entry = self.entry(item['lessonKey'], item['lesson']['date'])
+                lesson = entry and entry['document']['lesson']
+                if lesson and lesson['subjectId'] in ids and lesson['groupId'] != group['id']:
+                    found.append((lesson['groupId'], entry['lessonKey'], lesson['date']))
+        return found
+
+    def held_marks(self, column, group, subject, subjects, strays=()):
+        """{pupil: {attempt: {work ids}}}: where Atlas holds the marks of a column, in its own group, in the follow works of other groups, or in
+        the follow works left in the archived lessons of a course that is gone."""
         found = defaultdict(lambda: defaultdict(set))
         for g, s, follow in [(group, subject, False)] + [(g, s, True) for g, s in self.pairs_of(subjects) if g['id'] != group['id']]:
             for pupil, slots in self.holdings(column.uid, g, s, follow).items():
                 for k, work in slots.items():
                     found[pupil][k].add(work)
+        for gid, key, day in strays:
+            entry, base = self.entry(key, day), work_id(column.uid, group=gid)
+            for work in sorted({a['id'] for a in entry['document']['content']['assessments'] if self.of_base(a['id'], base)}) if entry else []:
+                for pupil in marked_in(entry['document']['content'], work):
+                    found[pupil][self.attempt_of(work)].add(work)
         return found
 
-    def works_of(self, column, group, subject, subjects, people):
+    def homes(self, p, k, skip):
+        """[(work id, lessonKey, day)]: where the importer may once have put the mark of attempt k of a pupil of this column, apart from the work `skip`:
+        the work of the column's own group, the follow works of the other courses, the follow works in archived lessons. Only works Atlas has
+        or this run places are known, so a follow work a teacher deleted whole is not looked for."""
+        uid, found = p.column.uid, []
+
+        def add(work, where):
+            if where and (work, *where) not in found and work != skip:
+                found.append((work, *where))
+
+        main = work_id(uid, k)
+        add(main, self.atlas.works(p.group['id'], p.subject['id'], *self.span).get(main) or self.at.get(main))
+        for g, s in self.pairs_of(p.subjects):
+            if g['id'] != p.group['id']:
+                follow = work_id(uid, k, group=g['id'])
+                add(follow, self.atlas.works(g['id'], s['id'], *self.span).get(follow) or self.at.get(follow))
+        for gid, key, day in p.strays:
+            add(work_id(uid, k, group=gid), (key, day))
+        return found
+
+    def deleted_elsewhere(self, p, work, pupil, k):
+        """Whether the importer once wrote this mark in another work of the column and a colleague has deleted it since (the mark, or the whole work).
+        Such a mark is not written again under the id of another work: the pupil moved to another group, but the teacher's deletion stands."""
+        for other, key, day in self.homes(p, k, work):
+            entry = self.entry(key, day)
+            if entry and entry['version'] > 0 and pupil not in marked_in(entry['document']['content'], other) \
+                    and Past(self.atlas, key, self.me).removed(marked_pick(other, pupil), ours=True):
+                return True
+        return False
+
+    def withhold(self, p, group, subject, works, follow):
+        """Take out of planned works the marks a colleague deleted elsewhere in the column (see deleted_elsewhere); each is counted once as left out.
+        A mark the work holds already is no move and stays."""
+        here = self.holdings(p.column.uid, group, subject, follow) if any(w.grades for w in works) else {}
+        for work in works:
+            k = self.attempt_of(work.id)
+            for pupil in list(work.grades):
+                if here.get(pupil, {}).get(k) != work.id and self.deleted_elsewhere(p, work.id, pupil, k):
+                    del work.grades[pupil]
+                    self.counts['inWorks'] -= 1
+                    self.counts['leftOut']['removedElsewhere'] += 1
+                    self.report['keptAsInAtlas']['editedMarks'] += 1
+
+    def works_of(self, column, group, subject, subjects, people, strays=()):
         """The base work and, when every mark counts, one more work for each further attempt; and, with --follow-pupils, the same in the
         group of each pupil who holds a mark but is outside the group of the column (a list of Branch)."""
         report = self.report
@@ -985,7 +1071,7 @@ class Planner:
         assessment = dict(name=fit(title, NAME_LIMIT), kind='points' if column.maximum else 'label', maxScore=column.maximum or 10,
                           weight=min(100.0, column.weight) if column.category else 0, category=category)
         members, attempts, grades, follows = self.members(group), defaultdict(list), defaultdict(dict), {}
-        held = self.held_marks(column, group, subject, subjects)
+        held = self.held_marks(column, group, subject, subjects, strays)
         for mark in sorted(column.marks.values(), key=order_key):
             attempts[mark.pupil].append(mark)
         for sid, marks in attempts.items():
@@ -1095,6 +1181,7 @@ class Planner:
         self.counts['inWorks'] -= len(work.grades) - len(grades)
         self.plan_of(entry).works[work.id] = Work(work.id, work.assessment, grades, work.follow)
         self.planned.add(work.id)
+        self.at[work.id] = entry['lessonKey'], entry['document']['lesson']['date']
 
     def place(self, group, subject, day, work):
         """A work Atlas already has stays where it is; a new one goes to the first lesson of the course with room, searched from the day."""
@@ -1114,6 +1201,9 @@ class Planner:
                 return True
         return False
 
+    def exists(self, group, subject, work):
+        return work.id in self.atlas.works(group['id'], subject['id'], *self.span)
+
     def run(self):
         self.load()
         columns, prepared = list(self.source.columns.values()), []
@@ -1132,9 +1222,14 @@ class Planner:
         """Put the works of a prepared column in their lessons; a column some of whose works have no lesson is counted as unresolved."""
         if p.column.every:
             self.guard_attempts(p)
-        placed = [self.place(p.group, p.subject, p.day, work) for work in p.works]
+        self.withhold(p, p.group, p.subject, p.works, False)
+        placed = [self.place(p.group, p.subject, p.day, work) for work in p.works if work is p.works[0] or work.grades or self.exists(p.group, p.subject, work)]
         # The follow works are placed on their own: a pupil's mark that finds no lesson in his group is counted, the column is not unresolved by it.
-        lost = sum(len(w.grades) for b in p.branches for w in b.works if not self.place(b.group, b.subject, p.day, w))
+        # They come after the works of the column's own group, whose lessons tell where the marks the pupils had there may have been deleted.
+        lost = 0
+        for b in p.branches:
+            self.withhold(p, b.group, b.subject, b.works, True)
+            lost += sum(len(w.grades) for w in b.works if (w.grades or self.exists(b.group, b.subject, w)) and not self.place(b.group, b.subject, p.day, w))
         if all(placed):
             self.report['columns']['planned'] += 1
         else:
