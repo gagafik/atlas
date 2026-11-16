@@ -85,7 +85,8 @@ export function useLessonMarks(
   return { info, busy, error, mark };
 }
 
-export function LessonMarkBar({
+// The marks already given to one pupil for this lesson.
+export function LessonMarkChips({
   marks,
   studentId,
 }: {
@@ -95,10 +96,8 @@ export function LessonMarkBar({
   const { info } = marks;
   if (!info) return null;
   const own = info.notes.filter((n) => n.studentId === studentId);
-  const quick = info.categories.filter((c) => c.quick);
-  const disabled = Boolean(marks.busy);
   return (
-    <div className="lesson-marks" aria-label="Похвалы и замечания за урок">
+    <>
       {own.map((n) => (
         <span key={n.id} className={`lesson-mark lesson-mark-${n.kind}`}>
           {n.kind === "praise" ? "＋ " : "− "}
@@ -106,51 +105,98 @@ export function LessonMarkBar({
           {n.status === "pending" ? " · на согласовании" : ""}
         </span>
       ))}
-      {info.canMark && (
-        <>
-          {quick.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`lesson-mark-button lesson-mark-${c.kind}`}
-              disabled={disabled}
-              onClick={() => marks.mark(studentId, c, "")}
-            >
-              {c.kind === "praise" ? "＋ " : "− "}
-              {c.title}
-            </button>
-          ))}
-          <select
-            aria-label="Другая похвала или замечание"
-            value=""
-            disabled={disabled}
-            onChange={(e) => {
-              const category = info.categories.find(
-                (c) => c.id === e.target.value,
-              );
-              if (!category) return;
-              const text = window.prompt(
-                `${category.title}: комментарий для семьи (можно оставить пустым)`,
-                "",
-              );
-              if (text !== null) marks.mark(studentId, category, text);
-            }}
-          >
-            <option value="">Другая отметка…</option>
-            {info.categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.kind === "praise" ? "Похвала" : "Замечание"}: {c.title}
-                {c.approval ? " · согласование" : ""}
-              </option>
-            ))}
-          </select>
-        </>
-      )}
-      {marks.error?.studentId === studentId && (
-        <span role="alert" className="lesson-mark-error">
-          {marks.error.text}
-        </span>
-      )}
+    </>
+  );
+}
+
+// The refusal of the server to the last mark given to this pupil.
+export function LessonMarkError({
+  marks,
+  studentId,
+}: {
+  marks: LessonMarks;
+  studentId: string;
+}) {
+  if (marks.error?.studentId !== studentId) return null;
+  return (
+    <span role="alert" className="lesson-mark-error">
+      {marks.error.text}
+    </span>
+  );
+}
+
+// What a teacher may give: the quick praise and remarks, any other category with a prompt for the family's note, and the
+// error of the last attempt. Nothing shows to a user who may not mark.
+export function LessonMarkChoices({
+  marks,
+  studentId,
+  disabled,
+}: {
+  marks: LessonMarks;
+  studentId: string;
+  disabled: boolean;
+}) {
+  const { info } = marks;
+  if (!info?.canMark) return null;
+  const quick = info.categories.filter((c) => c.quick);
+  return (
+    <>
+      {quick.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          className={`lesson-mark-button lesson-mark-${c.kind}`}
+          disabled={disabled}
+          onClick={() => marks.mark(studentId, c, "")}
+        >
+          {c.kind === "praise" ? "＋ " : "− "}
+          {c.title}
+        </button>
+      ))}
+      <select
+        aria-label="Другая похвала или замечание"
+        value=""
+        disabled={disabled}
+        onChange={(e) => {
+          const category = info.categories.find((c) => c.id === e.target.value);
+          if (!category) return;
+          const text = window.prompt(
+            `${category.title}: комментарий для семьи (можно оставить пустым)`,
+            "",
+          );
+          if (text !== null) marks.mark(studentId, category, text);
+        }}
+      >
+        <option value="">Другая отметка…</option>
+        {info.categories.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.kind === "praise" ? "Похвала" : "Замечание"}: {c.title}
+            {c.approval ? " · согласование" : ""}
+          </option>
+        ))}
+      </select>
+      <LessonMarkError marks={marks} studentId={studentId} />
+    </>
+  );
+}
+
+// The old one-block form: the marks and the choices in one line.
+export function LessonMarkBar({
+  marks,
+  studentId,
+}: {
+  marks: LessonMarks;
+  studentId: string;
+}) {
+  if (!marks.info) return null;
+  return (
+    <div className="lesson-marks" aria-label="Похвалы и замечания за урок">
+      <LessonMarkChips marks={marks} studentId={studentId} />
+      <LessonMarkChoices
+        marks={marks}
+        studentId={studentId}
+        disabled={Boolean(marks.busy)}
+      />
     </div>
   );
 }

@@ -6,9 +6,10 @@ import LessonTopic from "./LessonTopic";
 import AssignmentFilesPanel from "./AssignmentFilesPanel";
 import LessonAssessments from "./LessonAssessments";
 import { LessonHistoryList, LessonHistoryPreview } from "./LessonHistory";
-import LessonPupilCards from "./LessonPupilCards";
+import LessonPupilTable from "./LessonPupilTable";
 import type { LessonMarks } from "./LessonMarks";
 import type { CategoryConfig } from "./assessmentCategories";
+import { attendanceCounts, summaryParts } from "./lessonEditorModel";
 import {
   absenceCodeNames,
   documentRows,
@@ -99,6 +100,9 @@ export default function LessonEditor({
     refreshDay,
     homeworkGraded,
   } = actions;
+  const summary = summaryParts(
+    attendanceCounts(entry.document.content, entry.document.lesson.students),
+  );
   return (
     <section
       className="journal-editor"
@@ -335,17 +339,23 @@ export default function LessonEditor({
           content={content}
           patchWork={patchWork}
         />
-        <h3 id="journal-pupil-cards">Ученики и посещаемость</h3>
-        <p>
-          Комментарии к ученику и оценкам будут видны этому ученику и его
-          родителю после публикации.
-        </p>
-        {nobodyAbsent ? (
-          <div className="lesson-quick">
+      </fieldset>
+      <section className="lesson-pupils-block">
+        <div className="lesson-pupils-head">
+          <h3 id="journal-pupil-cards">Ученики</h3>
+          {!!entry.document.lesson.students.length && (
+            <span className="lesson-pupils-summary">
+              {summary.length
+                ? summary.map(([label, n]) => `${label}: ${n}`).join(" · ")
+                : "Все присутствуют"}
+            </span>
+          )}
+          {nobodyAbsent ? (
             <button
               type="button"
               className="primary"
               disabled={!editable}
+              title="Отметит присутствующими всех, кто не отмечен, и сразу сохранит урок для семьи."
               onClick={() =>
                 void save(
                   true,
@@ -359,36 +369,36 @@ export default function LessonEditor({
             >
               Отсутствующих нет
             </button>
-            <small>
-              Отметит присутствующими всех, кто не отмечен, и сразу сохранит
-              урок для семьи.
-            </small>
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={!!entry.futureLesson}
-            onClick={() =>
-              content((c) =>
-                withNoAbsentees(
-                  c,
-                  entry.document.lesson.students,
-                  entry.attendanceApprovals,
-                ),
-              )
-            }
-          >
-            Неотмеченные присутствуют
-          </button>
-        )}
-        <LessonPupilCards
+          ) : (
+            <button
+              type="button"
+              disabled={!editable || !!entry.futureLesson}
+              onClick={() =>
+                content((c) =>
+                  withNoAbsentees(
+                    c,
+                    entry.document.lesson.students,
+                    entry.attendanceApprovals,
+                  ),
+                )
+              }
+            >
+              Неотмеченные присутствуют
+            </button>
+          )}
+        </div>
+        <p className="lesson-pupils-hint">
+          Комментарии видны ученику и родителю после публикации.
+        </p>
+        <LessonPupilTable
           entry={entry}
           categories={categories}
           lessonMarks={lessonMarks}
           onPupil={pupil}
           onGrade={grade}
+          readOnly={!editable}
         />
-      </fieldset>
+      </section>
       <div className="dated-toolbar journal-savebar">
         {entry.lessonBegun ? (
           <>
