@@ -23,6 +23,7 @@ export function SavedPlanTopic({ value }: { value?: TopicReference | null }) {
 }
 
 // The topic of the curriculum plan the lesson belongs to: one row with the chosen topic; the picker opens on demand.
+// `disabled` means the record cannot be changed at all (read-only); a save in progress does not unmount the picker.
 export default function LessonTopic({
   workspace,
   lessonKey,
@@ -160,9 +161,22 @@ export default function LessonTopic({
   return (
     <section className="lesson-topic" aria-label="Тема учебного плана">
       {disabled ? (
-        <div className="lesson-row" title={planName}>
-          <span>Тема из плана:</span> {chosen}
-        </div>
+        <>
+          <div className="lesson-row">
+            <span>Тема из плана:</span> {chosen}
+          </div>
+          {value && (
+            <p className="lesson-topic-plan">
+              {planName}
+              {value.standard && (
+                <>
+                  <br />
+                  {value.standard}
+                </>
+              )}
+            </p>
+          )}
+        </>
       ) : (
         <details
           className="lesson-topic-picker"

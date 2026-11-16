@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   ATTENDANCE_CHOICES,
   absenceOptions,
+  attendanceButtonName,
   attendanceCounts,
   editorState,
   lessonLine,
   needsDetails,
   pupilRows,
+  updateRecord,
   showClasses,
   summaryParts,
 } from "./lessonEditorModel";
@@ -43,12 +45,22 @@ const entryOf = (
         date: "2026-11-16",
         start: "08:30",
         end: "09:15",
-        teachers: "Учитель",
+        teachers: "Эскизова Ирина",
         rooms: "301",
         students: [
-          { id: "a", name: "Первый", className: "7А", enrolled: true },
-          { id: "b", name: "Второй", className: "7А", enrolled: true },
-          { id: "c", name: "Ученик", className: "7Б", enrolled: false },
+          {
+            id: "a",
+            name: "Примеров Александр",
+            className: "7А",
+            enrolled: true,
+          },
+          { id: "b", name: "Образцова Анна", className: "7А", enrolled: true },
+          {
+            id: "c",
+            name: "Вымыслов Максим",
+            className: "7Б",
+            enrolled: false,
+          },
         ],
       },
       content: { records, assessments: [] },
@@ -56,14 +68,17 @@ const entryOf = (
     ...over,
   }) as unknown as JournalEntry;
 
-describe("attendance choices", () => {
-  it("offers the four marks a teacher sets, none of the old ones", () => {
-    expect(ATTENDANCE_CHOICES.map((c) => c.status)).toEqual([
-      "present",
-      "absent",
-      "late",
-      "left",
-    ]);
+describe("attendanceButtonName", () => {
+  it("starts with the word on the button, so voice control and screen readers match what is shown", () => {
+    for (const { status, label } of ATTENDANCE_CHOICES)
+      expect(attendanceButtonName(label, status).startsWith(label)).toBe(true);
+  });
+  it("adds the full status to the word", () => {
+    const [present, absent] = ATTENDANCE_CHOICES.map(({ status, label }) =>
+      attendanceButtonName(label, status),
+    );
+    expect(present).not.toBe(absent);
+    expect(present.length).toBeGreaterThan(ATTENDANCE_CHOICES[0].label.length);
   });
 });
 
@@ -138,9 +153,29 @@ describe("pupilRows", () => {
     expect(counted[0].comments).toBe(2);
     expect(counted[1].comments).toBe(0);
   });
-  it("still gives a row to a pupil without a record", () => {
+  it("still gives an unmarked row to a pupil without a record", () => {
     const [first] = pupilRows(entryOf([]));
     expect(first.record.attendance).toBe("unmarked");
+  });
+});
+
+describe("updateRecord", () => {
+  const mark = (p: PupilRecord): PupilRecord => ({
+    ...p,
+    attendance: "absent",
+  });
+  it("changes the record of the pupil and leaves the others alone", () => {
+    const next = updateRecord(
+      [record("a", "present"), record("b", "present")],
+      "b",
+      mark,
+    );
+    expect(next.map((r) => r.attendance)).toEqual(["present", "absent"]);
+  });
+  it("gives a pupil without a record one, so a click on his row is not lost", () => {
+    const next = updateRecord([record("a", "present")], "c", mark);
+    expect(next.find((r) => r.studentId === "c")?.attendance).toBe("absent");
+    expect(next).toHaveLength(2);
   });
 });
 
@@ -202,7 +237,7 @@ describe("lessonLine", () => {
     date: "2026-11-16",
     start: "08:30",
     end: "09:15",
-    teachers: "Учитель",
+    teachers: "Эскизова Ирина",
     rooms: "301",
   };
   it("writes the date as day.month.year", () => {

@@ -14,20 +14,34 @@ import {
 export function LessonHistoryList({
   history,
   historyMore,
+  failed = false,
+  retry,
   busy,
   historyPage,
   showVersion,
 }: {
   history: JournalHistory[];
   historyMore: boolean;
+  // The last read of the list did not work: the list may be incomplete, so it is not said to be empty.
+  failed?: boolean;
+  retry?: () => void;
   busy: boolean;
-  historyPage: (before?: number) => Promise<void>;
+  historyPage: (before?: number) => Promise<boolean | void>;
   showVersion: (version: number) => Promise<void>;
 }) {
   if (!history.length)
     return (
       <p className="lesson-hint">
-        {busy ? "Загружаю редакции…" : "Сохранённых редакций нет."}
+        {busy
+          ? "Загружаю редакции…"
+          : failed
+            ? "Не удалось загрузить редакции. "
+            : "Сохранённых редакций нет."}
+        {failed && !busy && retry && (
+          <button type="button" onClick={retry}>
+            Повторить
+          </button>
+        )}
       </p>
     );
   return (

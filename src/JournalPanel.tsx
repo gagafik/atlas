@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import LessonEditor from "./LessonEditor";
+import { updateRecord } from "./lessonEditorModel";
 import { nextLessonText, whileCurrent, type NextLesson } from "./homeworkBulk";
 import AbsencePanel from "./AbsencePanel";
 import FamilyJournal from "./FamilyJournal";
@@ -76,8 +77,8 @@ export type JournalFocus =
       finalsPeriodId?: never;
     };
 
-// Brings a part of the opened lesson into view; a folded block (a <details>) is opened first, so a link to the topic
-// from the plan lands on the open picker.
+// Brings a part of the opened lesson into view; a folded block (a <details>) is opened first, so «Из плана» in the day
+// table lands on the open picker. The text of the topic and the homework have ids of their own and open nothing.
 function reveal(id: string) {
   const target = document.getElementById(id);
   if (!target) return;
@@ -307,7 +308,7 @@ export default function JournalPanel({
   function pupil(id: string, update: (p: PupilRecord) => PupilRecord) {
     content((c) => ({
       ...c,
-      records: c.records.map((p) => (p.studentId === id ? update(p) : p)),
+      records: updateRecord(c.records, id, update),
     }));
   }
   function grade(id: string, a: Assessment, update: Partial<Grade>) {
@@ -377,8 +378,9 @@ export default function JournalPanel({
       saveLock.current = false;
     }
   }
+  // Resolves to false when the revisions could not be read.
   async function historyPage(before?: number) {
-    if (!entry) return;
+    if (!entry) return true;
     setBusy(true);
     setError("");
     try {
@@ -388,8 +390,10 @@ export default function JournalPanel({
       );
       setHistory((rows) => (before ? [...rows, ...r] : r));
       setHistoryMore(hasEarlierRevisions(r));
+      return true;
     } catch (e: any) {
       setError(e.message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -761,7 +765,7 @@ export default function JournalPanel({
     if (lesson)
       openFromGrid(
         lesson.lessonKey,
-        aimed === "homework" ? "journal-homework" : "journal-lesson-topic",
+        aimed === "homework" ? "journal-homework" : "journal-lesson-topic-text",
       );
   }, [aimed, options, single, mode, day, ready, loading]);
   // Another class (or all classes) in place; a lesson open in the editor is left first.

@@ -22,6 +22,31 @@ export const ATTENDANCE_CHOICES = [
 ] as const;
 export type AttendanceChoice = (typeof ATTENDANCE_CHOICES)[number]["status"];
 
+// The name a button announces: it starts with the word on the button (voice control and screen readers match it),
+// and adds the full status.
+export const attendanceButtonName = (label: string, status: string) =>
+  `${label}: ${attendanceNames[status] ?? status}`;
+
+// The record of a pupil the lesson has no record for yet: nothing is marked.
+export const blankRecord = (studentId: string): PupilRecord => ({
+  studentId,
+  attendance: "unmarked",
+  lateMinutes: 0,
+  comment: "",
+  grades: [],
+});
+
+// Applies a change to the record of one pupil; a pupil without a record gets one first, so a row never ignores a click.
+export function updateRecord(
+  records: PupilRecord[],
+  studentId: string,
+  update: (p: PupilRecord) => PupilRecord,
+): PupilRecord[] {
+  return records.some((p) => p.studentId === studentId)
+    ? records.map((p) => (p.studentId === studentId ? update(p) : p))
+    : [...records, update(blankRecord(studentId))];
+}
+
 // The absence types to offer for one record: the active ones, and the type the record holds even if it was switched off
 // (or is no longer in the list), so a correction does not drop it.
 export function absenceOptions(
@@ -52,15 +77,9 @@ export interface PupilRow {
 export function pupilRows(entry: JournalEntry): PupilRow[] {
   const { lesson, content } = entry.document;
   return lesson.students.map((student, index) => {
-    const record: PupilRecord = content.records.find(
-      (p) => p.studentId === student.id,
-    ) ?? {
-      studentId: student.id,
-      attendance: "unmarked",
-      lateMinutes: 0,
-      comment: "",
-      grades: [],
-    };
+    const record: PupilRecord =
+      content.records.find((p) => p.studentId === student.id) ??
+      blankRecord(student.id);
     const status = record.attendance;
     return {
       number: index + 1,

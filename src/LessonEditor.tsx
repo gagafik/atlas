@@ -44,7 +44,8 @@ export interface LessonEditorActions {
   grade: (id: string, a: Assessment, update: Partial<Grade>) => void;
   save: (publish: boolean, override?: JournalContent) => Promise<void>;
   openEntry: (key: string, sync?: boolean) => Promise<void>;
-  historyPage: (before?: number) => Promise<void>;
+  // Resolves to false when the revisions could not be read.
+  historyPage: (before?: number) => Promise<boolean>;
   dueNextLesson: () => Promise<void>;
   withdraw: () => Promise<void>;
   showVersion: (version: number) => Promise<void>;
@@ -121,15 +122,21 @@ export default function LessonEditor({
   const body = entry.document.content;
   const summary = summaryParts(attendanceCounts(body, lesson.students));
   const state = editorState(entry, dirty);
-  // The saved revisions are read the first time the block opens, and again after a save has cleared them.
+  // The saved revisions are read each time the block opens, and again after a save has changed the record.
   const [historyOpen, setHistoryOpen] = useState(false);
   useEffect(() => setHistoryOpen(false), [entry.lessonKey]);
-  const noHistory = !history.length;
+  const [historyFailed, setHistoryFailed] = useState(false);
+  const loadHistory = () => {
+    setHistoryFailed(false);
+    return historyPage().then((ok) => setHistoryFailed(!ok));
+  };
   useEffect(() => {
-    if (historyOpen && entry.version && noHistory) void historyPage();
-    // The request belongs to the moment the block opens or the record changes, not to every render.
-  }, [historyOpen, entry.lessonKey, entry.version, noHistory]);
+    if (historyOpen && entry.version) void loadHistory();
+    // The list is read every time the block opens and when the record changes; not on every render.
+  }, [historyOpen, entry.lessonKey, entry.version]);
   const hasHomework = !!body.homework;
+  // Read-only for the whole time the record cannot be changed; a save in progress only switches the fields off.
+  const readOnly = !entry.writable || entry.needsSync;
   return (
     <section
       className="journal-editor"
@@ -213,7 +220,7 @@ export default function LessonEditor({
         <div className="lesson-editor-col lesson-editor-lesson">
           <h3 className="lesson-editor-title">Урок</h3>
           <fieldset disabled={!editable} className="lesson-editor-fields">
-            <label className="field">
+            <label className="field" id="journal-lesson-topic-text">
               <span>Тема урока</span>
               <textarea
                 rows={2}
@@ -226,12 +233,13 @@ export default function LessonEditor({
             </label>
             <div id="journal-lesson-topic">
               <LessonTopic
+                key={entry.lessonKey}
                 workspace={workspace}
                 lessonKey={entry.lessonKey}
                 day={lesson.date}
                 value={body.curriculum}
                 materials={body.materials || []}
-                disabled={!editable}
+                disabled={readOnly}
                 onChange={(curriculum, materials) =>
                   content((c) => ({
                     ...c,
@@ -407,6 +415,8 @@ export default function LessonEditor({
               <LessonHistoryList
                 history={history}
                 historyMore={historyMore}
+                failed={historyFailed}
+                retry={() => void loadHistory()}
                 busy={busy}
                 historyPage={historyPage}
                 showVersion={showVersion}
@@ -475,6 +485,7 @@ export default function LessonEditor({
               Комментарии видны ученику и родителю после публикации.
             </p>
             <LessonPupilTable
+              key={entry.lessonKey}
               entry={entry}
               categories={categories}
               lessonMarks={lessonMarks}

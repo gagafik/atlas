@@ -20,6 +20,7 @@ import {
 } from "./journal";
 import {
   ATTENDANCE_CHOICES,
+  attendanceButtonName,
   needsDetails,
   pupilRows,
   showClasses,
@@ -147,7 +148,7 @@ export default function LessonPupilTable({
                               key={status}
                               data-status={status}
                               aria-pressed={pressed}
-                              aria-label={attendanceNames[status]}
+                              aria-label={attendanceButtonName(label, status)}
                               title={attendanceNames[status]}
                               disabled={locked}
                               onClick={() =>
