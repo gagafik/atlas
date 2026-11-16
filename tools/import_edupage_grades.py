@@ -743,8 +743,10 @@ class Planner:
             files=source.files, filesUnreadable=source.unreadable,
             columns=dict(total=0, notSubject=len(source.not_subject), skippedByRules=0, withoutPupils=0, planned=0, unresolved={}),
             works=dict(new=0, updated=0, unchanged=0, companion=0),
-            marks=dict(written=0, onlyInAtlas=0, textOnly=0, scoresCut=0, adjusted=0, attemptsKept=0,
-                       leftOut=dict(outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0)),
+            # Every mark read has one fate: inSource == inWorks + otherAttempts + the sum of leftOut, on every run.
+            marks=dict(inSource=sum(len(c.marks) for c in source.columns.values()), inWorks=0, otherAttempts=0,
+                       written=0, onlyInAtlas=0, textOnly=0, scoresCut=0, adjusted=0, attemptsKept=0,
+                       leftOut=dict(columnNotPlanned=0, outsideGroup=0, notInLesson=0, noPupilMatch=0, noLesson=0, attemptsKept=0)),
             titlesShortened=0, moved=dict(anotherDay=0, forCapacity=0),
             lessons=dict(toSave=0, toPublish=0, blocked=0, keptAsDraft=0, saved=0, refused=[]),
             keptAsInAtlas=dict(editedMarks=0, editedWorks=0, removedWorks=0),
@@ -822,6 +824,8 @@ class Planner:
     # -- one column
     def unresolve(self, column, reason):
         self.unresolved[reason][column.subject, tuple(sorted(column.classes))] += 1
+        if reason != 'noLesson':  # The marks of a column without a lesson are counted work by work, where it is placed.
+            self.counts['leftOut']['columnNotPlanned'] += len(column.marks)
 
     def prepare(self, column):
         report = self.report['columns']
@@ -829,6 +833,7 @@ class Planner:
         subject_key = text_key(column.subject)
         if subject_key in self.rules.skip:
             report['skippedByRules'] += 1
+            self.counts['leftOut']['columnNotPlanned'] += len(column.marks)
             return None
         sids = set(column.only) | {m.pupil for m in column.marks.values()}
         if not sids:
@@ -896,6 +901,7 @@ class Planner:
             else:
                 scored = [(parse_mark(m.text)[0], m) for m in marks]
                 chosen = [(1, max((s for s in scored if s[0] is not None), key=lambda s: s[0], default=scored[0])[1])]
+                self.counts['otherAttempts'] += len(marks) - 1
             pupil = people.get(sid)
             if pupil is None or pupil not in members:
                 self.counts['leftOut']['noPupilMatch' if pupil is None else 'outsideGroup'] += len(chosen)
@@ -908,6 +914,7 @@ class Planner:
                 if not column.every and len(marks) > 1:
                     grade['comment'] = fit(f'{grade["comment"]} Другие попытки: ' + '; '.join(m.text for m in marks if m is not mark), COMMENT_LIMIT)
                 grades[k][pupil] = grade
+                self.counts['inWorks'] += 1
         works = [Work(work_id(column.uid), assessment, grades.get(1, {}))]
         for k in sorted(k for k in grades if k > 1):
             suffix = f' · попытка {k}'
@@ -926,9 +933,10 @@ class Planner:
         for pupil, count in held.items():
             planned = sum(1 for work in prepared.works if pupil in work.grades)
             if planned and count > planned:
-                for work in prepared.works:
-                    work.grades.pop(pupil, None)
+                dropped = sum(work.grades.pop(pupil, None) is not None for work in prepared.works)
                 self.counts['attemptsKept'] += 1
+                self.counts['leftOut']['attemptsKept'] += dropped
+                self.counts['inWorks'] -= dropped
 
     # -- lessons
     def entry(self, key, day):
@@ -978,6 +986,7 @@ class Planner:
         roster = self.roster(entry)
         grades = {p: g for p, g in work.grades.items() if p in roster}
         self.counts['leftOut']['notInLesson'] += len(work.grades) - len(grades)
+        self.counts['inWorks'] -= len(work.grades) - len(grades)
         self.plan_of(entry).works[work.id] = Work(work.id, work.assessment, grades)
         self.planned.add(work.id)
 
@@ -1022,7 +1031,9 @@ class Planner:
             self.report['columns']['planned'] += 1
             return
         self.unresolve(p.column, 'noLesson')
-        self.counts['leftOut']['noLesson'] += sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
+        lost = sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
+        self.counts['leftOut']['noLesson'] += lost
+        self.counts['inWorks'] -= lost
 
     def finish(self):
         report, lessons = self.report, self.report['lessons']

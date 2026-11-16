@@ -495,6 +495,36 @@ def test_pupils_without_a_match_and_columns_that_cannot_be_placed_are_counted(sc
     assert report['marks']['leftOut']['noPupilMatch'] == 2
 
 
+def test_the_report_accounts_for_every_mark_read(school):
+    journals = school.journals()
+    journals.stranger('10A')
+    journals.column('known')
+    journals.mark('known', 's1', '5')
+    journals.mark('known', '-stranger', '6')
+    journals.column('chemistry', subject='Химия')
+    journals.mark('chemistry', 's1', '5')
+    journals.column('split', classes=('10A', '10D'))
+    journals.mark('split', 's1', '5')
+    journals.mark('split', 's3', '5')
+    journals.column('best', every='1')
+    journals.mark('best', 's1', '4')
+    journals.mark('best', 's1', '9', day='2026-09-21')
+    journals.column('each', every='0')
+    journals.mark('each', 's1', '4')
+    journals.mark('each', 's1', '9', day='2026-09-21')
+
+    def whole(report):
+        marks = report['marks']
+        return marks['inSource'] == marks['inWorks'] + marks['otherAttempts'] + sum(marks['leftOut'].values())
+
+    first = school.run(journals, '--apply')
+    assert first['marks']['inSource'] == 9 and whole(first)
+    assert first['marks']['inWorks'] == first['marks']['written'] == 4 and first['marks']['otherAttempts'] == 1
+    assert first['marks']['leftOut']['columnNotPlanned'] == 3 and first['marks']['leftOut']['noPupilMatch'] == 1
+    again = school.run(journals, '--apply')  # Nothing is written the second time, and every mark still has its fate.
+    assert again['marks']['written'] == 0 and again['marks']['inWorks'] == 4 and whole(again)
+
+
 def test_a_group_with_most_of_the_pupils_takes_the_column_and_the_others_are_counted(school):
     state = api.read('demo')
     for n in range(4):
