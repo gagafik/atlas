@@ -1,10 +1,12 @@
 import { Fragment, type ReactNode } from "react";
-import { dayLessonFill, dayLessonState } from "./journal";
 import {
   classLabel,
   groupLabel,
   lessonAttendance,
+  rowFill,
+  rowState,
   type ClassSummary,
+  type ClockNow,
   type FillCount,
   type LessonRow,
 } from "./journalDay";
@@ -14,10 +16,13 @@ import "./JournalDay.css";
 export function ClassesTable({
   classes,
   total,
+  busy,
   onOpen,
 }: {
   classes: ClassSummary[];
   total: FillCount;
+  // A lesson is being opened: the class it belongs to is chosen when it arrives, not by a click in the meantime.
+  busy: boolean;
   onOpen: (name: string) => void;
 }) {
   return (
@@ -26,6 +31,12 @@ export function ClassesTable({
         Уроков: <strong>{total.lessons}</strong> · заполнено:{" "}
         <strong>{total.filled}</strong> · не заполнено:{" "}
         <strong>{total.unfilled}</strong>
+        {total.upcoming > 0 && (
+          <>
+            {" "}
+            · ещё впереди: <strong>{total.upcoming}</strong>
+          </>
+        )}
       </p>
       <div className="journal-classes-scroll">
         <table className="journal-classes-table">
@@ -43,12 +54,13 @@ export function ClassesTable({
               <tr
                 key={c.name}
                 className={c.unfilled ? "journal-class-missing" : undefined}
-                onClick={() => onOpen(c.name)}
+                onClick={() => !busy && onOpen(c.name)}
               >
                 <td data-label="Класс">
                   <button
                     type="button"
                     className="journal-class-open"
+                    disabled={busy}
                     aria-label={`Открыть класс ${c.name}: ${c.state}`}
                   >
                     {c.name}
@@ -77,6 +89,7 @@ export function LessonsTable({
   rows,
   label,
   showClass,
+  now,
   selectedKey,
   busy,
   onOpen,
@@ -88,6 +101,8 @@ export function LessonsTable({
   label: string;
   // The class column: not needed where the whole table is one class.
   showClass: boolean;
+  // The moment the day is read at: a lesson that has not ended is not yet «не заполнено».
+  now: ClockNow;
   // The lesson open in the editor.
   selectedKey?: string;
   busy: boolean;
@@ -123,7 +138,7 @@ export function LessonsTable({
         <tbody>
           {rows.map(({ lesson: l, number }) => {
             const open = l.lessonKey === selectedKey,
-              fill = dayLessonFill(l),
+              fill = rowFill(l, now),
               topic = l.topic.trim();
             return (
               <Fragment key={l.lessonKey}>
@@ -177,7 +192,7 @@ export function LessonsTable({
                     data-label="Состояние"
                     className={`journal-lesson-state journal-lesson-state-${fill}`}
                   >
-                    {dayLessonState(l)}
+                    {rowState(l, now)}
                   </td>
                   <td className="journal-lesson-actions">
                     <button

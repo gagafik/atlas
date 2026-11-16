@@ -51,6 +51,11 @@
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+}
+/* The compact type is the type of the data cells only: the lesson editor in the row under a lesson keeps the panel's own. */
+.journal-classes-table,
+.journal-lessons-table th,
+.journal-lessons-table tr:not(.journal-lessons-editor) > td {
   font-size: 12px;
   line-height: 16px;
 }
@@ -114,6 +119,8 @@
 /* The lessons of a day: one row of about 40 px per lesson; text that does not fit wraps in two lines, the topic is cut. */
 .journal-lessons-box {
   container-type: inline-size;
+  /* Between the stacked layout and the width the ten columns need, the table scrolls inside its box, never the page. */
+  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -127,7 +134,7 @@
 .journal-lessons-table tr:last-child > td {
   border-bottom: 0;
 }
-.journal-lessons-table td:first-child {
+.journal-lessons-table tr:not(.journal-lessons-editor) > td:first-child {
   font-weight: var(--weight-bold);
 }
 .journal-lesson-time {
@@ -174,12 +181,13 @@
 .journal-lessons-table tr.journal-lessons-editor > td {
   padding: 8px;
   background: var(--surface-alt);
+  overflow-wrap: normal;
 }
 .journal-lessons-editor .journal-editor {
   margin: 0;
 }
 /* Narrow: the table is stacked, one block per row with the name of each cell in front of it (same as the other tables). */
-@container (max-width: 640px) {
+@container (max-width: 720px) {
   .journal-lessons-table thead {
     position: absolute;
     width: 1px;

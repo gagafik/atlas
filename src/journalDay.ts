@@ -1,6 +1,12 @@
 // «Классный журнал»: how the lessons of one day are laid out for the staff. Pure functions, no React.
 import { placeInSlots } from "./bells";
-import { dayLessonFill, type BellSlot, type DayLesson } from "./journal";
+import {
+  dayLessonFill,
+  dayLessonState,
+  type BellSlot,
+  type DayLesson,
+  type DayLessonFill,
+} from "./journal";
 
 /** The row for lessons that name no class at all, so that nothing a teacher can hold falls out of the administrator's view. */
 export const NO_CLASS = "Без класса";
@@ -19,20 +25,47 @@ export const classesOf = (l: DayLesson) =>
 export const classOfLesson = (l: DayLesson) =>
   [...classesOf(l)].sort(naturalOrder)[0];
 
+/** The moment the day is read at: the date as YYYY-MM-DD and the time as HH:MM. */
+export interface ClockNow {
+  date: string;
+  time: string;
+}
+/** A lesson that is over (or on a past day). */
+export const lessonEnded = (l: DayLesson, now: ClockNow) =>
+  l.lesson.date < now.date ||
+  (l.lesson.date === now.date && l.lesson.end <= now.time);
+
+/** What a row shows: the state of the card, except that a lesson nobody could have filled yet is «ahead». */
+export type RowFill = DayLessonFill | "upcoming";
+export const rowFill = (l: DayLesson, now: ClockNow): RowFill => {
+  const fill = dayLessonFill(l);
+  return fill === "empty" && !lessonEnded(l, now) ? "upcoming" : fill;
+};
+export const rowState = (l: DayLesson, now: ClockNow) =>
+  rowFill(l, now) === "upcoming" ? "Урок ещё не прошёл" : dayLessonState(l);
+
 export interface FillCount {
   // Lessons that take place: a cancelled lesson is neither filled nor missing and is not counted.
   lessons: number;
   filled: number;
+  // Not filled although the lesson is over.
   unfilled: number;
+  // Not filled yet, and the lesson has not ended: nothing is missing.
+  upcoming: number;
 }
-/** What the card of a lesson shows as «Не заполнено» is unfilled; any other record of a held lesson is filled. */
-export function countFill(lessons: DayLesson[]): FillCount {
-  const count: FillCount = { lessons: 0, filled: 0, unfilled: 0 };
+/**
+ * What the card of a lesson shows as «Не заполнено» is unfilled once the lesson is over; before that it is ahead.
+ * Any other record of a held lesson is filled (a draft is the one the family does not see yet; the server's own
+ * «контроль заполнения» is stricter about it).
+ */
+export function countFill(lessons: DayLesson[], now: ClockNow): FillCount {
+  const count: FillCount = { lessons: 0, filled: 0, unfilled: 0, upcoming: 0 };
   for (const l of lessons) {
-    const fill = dayLessonFill(l);
+    const fill = rowFill(l, now);
     if (fill === "cancelled") continue;
     count.lessons++;
     if (fill === "empty") count.unfilled++;
+    else if (fill === "upcoming") count.upcoming++;
     else count.filled++;
   }
   return count;
@@ -47,7 +80,9 @@ export const classState = (c: FillCount) =>
     ? "Уроков нет"
     : c.unfilled
       ? `Не заполнено: ${c.unfilled}`
-      : "Всё заполнено";
+      : c.upcoming
+        ? `Уроков впереди: ${c.upcoming}`
+        : "Всё заполнено";
 
 /**
  * One row per class: the classes with lessons that day first, then the rest of the school's classes (`known`),
@@ -55,7 +90,8 @@ export const classState = (c: FillCount) =>
  */
 export function classSummaries(
   lessons: DayLesson[],
-  known: string[] = [],
+  known: string[],
+  now: ClockNow,
 ): ClassSummary[] {
   const byClass = new Map<string, DayLesson[]>();
   for (const name of known) byClass.set(name, []);
@@ -66,7 +102,7 @@ export function classSummaries(
       else byClass.set(name, [l]);
     }
   const rows = [...byClass.entries()].map(([name, own]) => {
-    const count = countFill(own);
+    const count = countFill(own, now);
     return { name, ...count, state: classState(count) };
   });
   const order = (a: ClassSummary, b: ClassSummary) =>
@@ -80,6 +116,15 @@ export function classSummaries(
 
 export const lessonsOfClass = (lessons: DayLesson[], name: string) =>
   lessons.filter((l) => classesOf(l).includes(name));
+
+/**
+ * The class to switch the administrator to so that the editor of an open lesson sits in a row of its table, or null
+ * when the view already shows the lesson (its class, or a search that was typed).
+ */
+export const classToShow = (l: DayLesson, classFilter: string, query: string) =>
+  (classFilter ? !classesOf(l).includes(classFilter) : !query)
+    ? classOfLesson(l)
+    : null;
 
 /** The text a search looks in. */
 const searchText = (l: DayLesson) =>
@@ -135,9 +180,15 @@ export const classLabel = (l: DayLesson) =>
   l.classes.join(", ") || l.lesson.group;
 /** The group column: empty when the group is the whole class (or the lesson names no class and the group is its only label). */
 export const groupLabel = (l: DayLesson) =>
-  l.classes.length && l.lesson.group !== l.classes.join(", ")
+  l.classes.length && !isWholeClasses(l.lesson.group, l.classes)
     ? l.lesson.group
     : "";
+/** The group names exactly these classes, in whatever order (the server sorts them as text, people write them in school order). */
+const isWholeClasses = (group: string, classes: string[]) => {
+  const named = group.split(",").map((c) => c.trim()).sort();
+  const own = [...classes].sort();
+  return named.length === own.length && named.every((c, i) => c === own[i]);
+};
 export const lessonAttendance = (l: DayLesson) =>
   l.present === null
     ? "не отмечено"

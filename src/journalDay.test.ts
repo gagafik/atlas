@@ -5,12 +5,16 @@ import {
   SEARCH_LIMIT,
   classOfLesson,
   classSummaries,
+  classToShow,
   countFill,
   groupLabel,
   lessonAttendance,
   lessonRows,
   lessonsOfClass,
+  rowFill,
+  rowState,
   searchLessons,
+  type ClockNow,
 } from "./journalDay";
 
 let counter = 0;
@@ -55,30 +59,54 @@ function lesson(
   } as DayLesson;
 }
 const published = { version: 2, publishedVersion: 2, hasPublished: true };
+// After every lesson of the test day: nothing is «ещё не прошёл» unless a test says so.
+const evening: ClockNow = { date: "2026-11-16", time: "18:00" };
 
 describe("countFill", () => {
   it("counts what the card shows as «Не заполнено» as unfilled and a draft or a published lesson as filled", () => {
-    const count = countFill([
-      lesson(["5А"]),
-      lesson(["5А"], { version: 1 }),
-      lesson(["5А"], published),
-    ]);
-    expect(count).toEqual({ lessons: 3, filled: 2, unfilled: 1 });
+    const count = countFill(
+      [lesson(["5А"]), lesson(["5А"], { version: 1 }), lesson(["5А"], published)],
+      evening,
+    );
+    expect(count).toEqual({ lessons: 3, filled: 2, unfilled: 1, upcoming: 0 });
   });
   it("leaves a cancelled lesson out of every count", () => {
     const cancelled = lesson(["5А"], { status: "cancelled" });
-    expect(countFill([cancelled, lesson(["5А"])])).toEqual({
+    expect(countFill([cancelled, lesson(["5А"])], evening)).toEqual({
       lessons: 1,
       filled: 0,
       unfilled: 1,
+      upcoming: 0,
     });
+  });
+  it("does not call a lesson that has not ended yet «не заполнено»: a future day, or later today", () => {
+    const later = lesson(["5А"], { start: "15:00", end: "15:40" });
+    const tomorrow = lesson(["5А"]);
+    tomorrow.lesson.date = "2026-11-17";
+    const noon: ClockNow = { date: "2026-11-16", time: "12:00" };
+    expect(countFill([later, tomorrow, lesson(["5А"])], noon)).toEqual({
+      lessons: 3,
+      filled: 0,
+      unfilled: 1,
+      upcoming: 2,
+    });
+    // the same lesson once it is over
+    expect(
+      countFill([later], { date: "2026-11-16", time: "15:40" }),
+    ).toMatchObject({ unfilled: 1, upcoming: 0 });
+  });
+  it("shows a lesson of a past day that nobody filled as unfilled", () => {
+    const old = lesson(["5А"]);
+    expect(
+      countFill([old], { date: "2026-11-20", time: "07:00" }),
+    ).toMatchObject({ unfilled: 1 });
   });
 });
 
 describe("classSummaries", () => {
   it("counts a lesson of a mixed group for every class it includes", () => {
     const mixed = lesson(["10А", "10Б"], { group: "Информатика 10" });
-    const rows = classSummaries([mixed, lesson(["10А"], published)]);
+    const rows = classSummaries([mixed, lesson(["10А"], published)], [], evening);
     const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
     expect(byName["10А"]).toMatchObject({ lessons: 2, filled: 1, unfilled: 1 });
     expect(byName["10Б"]).toMatchObject({ lessons: 1, filled: 0, unfilled: 1 });
@@ -87,6 +115,7 @@ describe("classSummaries", () => {
     const rows = classSummaries(
       [lesson(["10А"]), lesson(["2А"]), lesson(["9Б"])],
       ["10А", "2А", "9Б", "1А", "11Б"],
+      evening,
     );
     expect(rows.map((r) => r.name)).toEqual(["2А", "9Б", "10А", "1А", "11Б"]);
     expect(rows.find((r) => r.name === "1А")).toMatchObject({
@@ -95,21 +124,64 @@ describe("classSummaries", () => {
     });
   });
   it("names the state in words", () => {
-    const rows = classSummaries([
-      lesson(["5А"], published),
-      lesson(["5Б"]),
-      lesson(["5Б"]),
-    ]);
+    const rows = classSummaries(
+      [lesson(["5А"], published), lesson(["5Б"]), lesson(["5Б"])],
+      [],
+      evening,
+    );
     expect(rows.find((r) => r.name === "5А")?.state).toBe("Всё заполнено");
     expect(rows.find((r) => r.name === "5Б")?.state).toBe("Не заполнено: 2");
   });
   it("keeps a lesson that names no class in a row of its own, after the classes", () => {
-    const rows = classSummaries([lesson([]), lesson(["5А"])], ["5А"]);
+    const rows = classSummaries([lesson([]), lesson(["5А"])], ["5А"], evening);
     expect(rows.map((r) => r.name)).toEqual(["5А", NO_CLASS]);
   });
   it("shows a class whose only lessons are cancelled as having no lessons", () => {
-    const rows = classSummaries([lesson(["5А"], { status: "cancelled" })]);
+    const rows = classSummaries(
+      [lesson(["5А"], { status: "cancelled" })],
+      [],
+      evening,
+    );
     expect(rows[0]).toMatchObject({ name: "5А", state: "Уроков нет" });
+  });
+  it("says in words that the lessons of a class are still ahead, and still names a missing record first", () => {
+    const morning: ClockNow = { date: "2026-11-16", time: "07:00" };
+    const ahead = classSummaries([lesson(["5А"]), lesson(["5А"])], [], morning);
+    expect(ahead[0]).toMatchObject({ unfilled: 0, upcoming: 2 });
+    expect(ahead[0].state).not.toBe("Всё заполнено");
+    expect(ahead[0].state).not.toMatch(/Не заполнено/);
+    const past = lesson(["5А"], { start: "06:00", end: "06:40" });
+    const mixed = classSummaries([past, lesson(["5А"])], [], morning);
+    expect(mixed[0].state).toBe("Не заполнено: 1");
+  });
+});
+
+describe("rowFill and rowState", () => {
+  const noon: ClockNow = { date: "2026-11-16", time: "12:00" };
+  it("marks an empty lesson that has not ended as ahead, and keeps every other state", () => {
+    const later = lesson(["5А"], { start: "15:00", end: "15:40" });
+    expect(rowFill(later, noon)).toBe("upcoming");
+    expect(rowState(later, noon)).not.toBe("Не заполнено");
+    expect(rowFill(later, evening)).toBe("empty");
+    expect(rowState(later, evening)).toBe("Не заполнено");
+    const draft = lesson(["5А"], { start: "15:00", end: "15:40", version: 1 });
+    expect(rowFill(draft, noon)).toBe("draft");
+    expect(rowFill(lesson(["5А"], published), noon)).toBe("published");
+  });
+});
+
+describe("classToShow", () => {
+  const five = lesson(["5А"]);
+  it("sends the administrator to the class of a lesson from another screen", () => {
+    expect(classToShow(five, "", "")).toBe("5А");
+  });
+  it("leaves him where he is while the lesson is in the class or in the search he is looking at", () => {
+    expect(classToShow(five, "5А", "")).toBeNull();
+    expect(classToShow(five, "", "мат")).toBeNull();
+  });
+  it("moves him when the lesson is not in the class he is looking at", () => {
+    expect(classToShow(five, "7Б", "")).toBe("5А");
+    expect(classToShow(lesson(["10А", "10Б"]), "10Б", "")).toBeNull();
   });
 });
 
@@ -175,6 +247,14 @@ describe("row text", () => {
       "5А англ. 1",
     );
     expect(groupLabel(lesson([], { group: "Кружок" }))).toBe("");
+  });
+  it("does not call a mixed group a group when it lists the same classes in another order", () => {
+    // the server orders the classes as text («10А» before «5А»), the group label as people write it
+    expect(groupLabel(lesson(["10А", "5А"], { group: "5А, 10А" }))).toBe("");
+    expect(groupLabel(lesson(["5А", "5Б"], { group: "5Б, 5А" }))).toBe("");
+    expect(groupLabel(lesson(["5А", "5Б"], { group: "5А, 5Б, 5В" }))).toBe(
+      "5А, 5Б, 5В",
+    );
   });
   it("says «не отмечено» until attendance is published", () => {
     expect(lessonAttendance(lesson(["5А"]))).toBe("не отмечено");

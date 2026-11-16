@@ -23,9 +23,8 @@ import MonthCalendar from "./MonthCalendar";
 import { ClassesTable, LessonsTable } from "./JournalDayTables";
 import {
   NO_CLASS,
-  classOfLesson,
   classSummaries,
-  classesOf,
+  classToShow,
   countFill,
   lessonRows,
   lessonsOfClass,
@@ -1300,22 +1299,14 @@ export default function JournalPanel({
   }
   const panels = options ? journalPanels(options) : [];
   const today = options?.today ?? new Date().toLocaleDateString("sv-SE");
+  // A lesson that has not ended yet is not «не заполнено»; the time of day is the computer's.
+  const wall = new Date();
+  const readAt = {
+    date: today,
+    time: `${String(wall.getHours()).padStart(2, "0")}:${String(wall.getMinutes()).padStart(2, "0")}`,
+  };
   const ready = listed.day === day;
   const lessons = ready ? listed.items : [];
-  // A lesson of another day opens before the list of that day is read; the editor mounts with the list, and only then can it take the focus.
-  useEffect(() => {
-    if (!entry || !editorPanel.current) return;
-    if (coverageOpened.current) {
-      coverageOpened.current = false;
-      editorPanel.current.focus({ preventScroll: true });
-      editorPanel.current.scrollIntoView({ block: "start" });
-    }
-    if (aim.current?.key === entry.lessonKey) {
-      const id = aim.current.id;
-      aim.current = null;
-      document.getElementById(id)?.scrollIntoView({ block: "start" });
-    }
-  }, [entry, ready]);
   const admin = !!options?.admin,
     query = search.trim();
   // Every class of the school, also those without a lesson on the day.
@@ -1324,7 +1315,7 @@ export default function JournalPanel({
       (options?.students ?? []).map((s) => s.className).filter(Boolean),
     ),
   ] as string[];
-  const summaries = admin ? classSummaries(lessons, known) : [];
+  const summaries = admin ? classSummaries(lessons, known, readAt) : [];
   const classNames = [
     ...new Set([...summaries.map((c) => c.name), classFilter].filter(Boolean)),
   ].sort(
@@ -1349,13 +1340,31 @@ export default function JournalPanel({
   const rows = lessonRows(shown, slots);
   // A lesson opened from another screen (or from the search) puts the administrator into its class, so the editor sits in a row.
   const openKey = entry?.lessonKey;
+  const moveTo =
+    admin && ready
+      ? (() => {
+          const open = lessons.find((l) => l.lessonKey === openKey);
+          return open ? classToShow(open, classFilter, query) : null;
+        })()
+      : null;
   useEffect(() => {
-    if (!admin || !openKey || !ready) return;
-    const open = lessons.find((l) => l.lessonKey === openKey);
-    if (!open) return;
-    if (classFilter ? !classesOf(open).includes(classFilter) : !query)
-      setClassFilter(classOfLesson(open));
-  }, [admin, openKey, ready, lessons, classFilter, query]);
+    if (moveTo) setClassFilter(moveTo);
+  }, [moveTo]);
+  // A lesson of another day opens before the list of that day is read; the editor mounts with the list, and only then can it take the focus.
+  // The administrator's editor mounts once, in the row of its class, so the focus waits until he has been taken there.
+  useEffect(() => {
+    if (!entry || !editorPanel.current || moveTo) return;
+    if (coverageOpened.current) {
+      coverageOpened.current = false;
+      editorPanel.current.focus({ preventScroll: true });
+      editorPanel.current.scrollIntoView({ block: "start" });
+    }
+    if (aim.current?.key === entry.lessonKey) {
+      const id = aim.current.id;
+      aim.current = null;
+      document.getElementById(id)?.scrollIntoView({ block: "start" });
+    }
+  }, [entry, ready, moveTo]);
   // The calendar colours the days of the own lessons; the administrator sees one class at a time.
   const coverage: CoverageScope | null = !options?.staff
     ? null
@@ -1600,7 +1609,8 @@ export default function JournalPanel({
                 {ready && classesView && (
                   <ClassesTable
                     classes={summaries}
-                    total={countFill(lessons)}
+                    total={countFill(lessons, readAt)}
+                    busy={busy}
                     onOpen={chooseClass}
                   />
                 )}
@@ -1609,6 +1619,7 @@ export default function JournalPanel({
                     rows={rows}
                     label={`Уроки ${dayText(day)}`}
                     showClass={!classFilter}
+                    now={readAt}
                     selectedKey={entry?.lessonKey}
                     busy={busy}
                     onOpen={(key) => openFromGrid(key)}
@@ -1625,6 +1636,7 @@ export default function JournalPanel({
                 )}
                 {ready &&
                   entry &&
+                  !moveTo &&
                   !rows.some((r) => r.lesson.lessonKey === entry.lessonKey) &&
                   editor()}
               </div>
