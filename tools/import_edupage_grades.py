@@ -440,6 +440,32 @@ class Past:
                 return not self.me or row['actor'] != self.me
         return True
 
+    def pending(self, since):
+        """Whether the importer has a save of its own that is not published yet (saved after version `since`). Without a name any save may be its own."""
+        return any(r['version'] > since and (not self.me or r['actor'] == self.me) for r in self.rows() or [])
+
+    def hand_edited(self, since):
+        """Whether someone other than the importer saved, after version `since` (0: from the start), a change to an imported work or to a mark of one.
+
+        Each such save is compared with the save before it; what cannot be read counts as a change."""
+        rows = self.rows()
+        if rows is None:
+            return True
+        for i, row in enumerate(rows):
+            if row['version'] <= since:
+                return False
+            if self.me and row['actor'] == self.me:
+                continue
+            later = self.atlas.content(self.key, row['version'])
+            if i + 1 < len(rows):
+                earlier = self.atlas.content(self.key, rows[i + 1]['version'])
+            else:
+                earlier = {} if row['version'] == 1 else None  # The list holds 50 saves; the one before this is out of sight.
+            current, before = (imported_part(later), imported_part(earlier)) if later is not None and earlier is not None else (None, None)
+            if current is None or before is None or current != before:
+                return True
+        return False
+
 
 def work_pick(work_id, keys):
     def pick(content):
@@ -475,6 +501,18 @@ def without_imported(content):
     result['assessments'] = [a for a in result['assessments'] if not a['id'].startswith(PREFIX)]
     result['records'] = {r['studentId']: dict(r, grades=[g for g in r['grades'] if not g['assessmentId'].startswith(PREFIX)]) for r in result['records']}
     return result
+
+
+def imported_part(content):
+    """The imported works and their marks of a lesson content, in a form that compares (None when the content is not valid)."""
+    if not content:
+        return {}, {}
+    try:
+        data = Content.model_validate(content).model_dump(mode='json')
+    except ValidationError:
+        return None
+    return ({a['id']: a for a in data['assessments'] if a['id'].startswith(PREFIX)},
+            {(r['studentId'], g['assessmentId']): g for r in data['records'] for g in r['grades'] if g['assessmentId'].startswith(PREFIX)})
 
 
 def adjust(grade, work):
@@ -554,15 +592,17 @@ def merge(entry, plan, publish, withdrawn, past, published):
     if publish and marked:
         if public is None:
             # Never published: only when the draft holds nothing of its own and the teacher has not hidden it.
-            safe = version == 0 or not foreign(original) and not withdrawn()
+            safe = version == 0 or not foreign(original) and not withdrawn() and not past.hand_edited(0)
         elif public == version:
             safe = True
         else:
             # The draft is ahead of the publication: publishing it shows only the imported works when nothing else differs.
+            # A change someone else saved to an imported work or mark counts as a difference too: it is not the importer's to publish.
             before = published()
             base = without_imported(before) if before else None
-            safe = base is not None and base == without_imported(original)
-        result.kept = not safe
+            safe = base is not None and base == without_imported(original) and not past.hand_edited(public)
+        # A lesson stays a draft only when the importer has something of its own there: a write now, or marks it saved and nobody published.
+        result.kept = not safe and (result.changed or past.pending(public or 0))
         result.publish = safe and (result.changed or public != version)
     return result
 

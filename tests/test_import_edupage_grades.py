@@ -131,11 +131,14 @@ class School:
             self.other = signed('colleague')
         return self.other
 
-    def edit(self, subject, day, change, publish=False):
-        """A colleague changes the lesson content by hand and saves it."""
+    def edit(self, subject, day, change, publish=False, stored=False):
+        """A colleague changes the lesson content by hand and saves it. stored: the attendance the editor only showed as "present" is not saved."""
         rows = self.colleague().get('/api/journal/day', params=dict(workspace='demo', day=day)).json()['lessons']
         key = next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and not r['archived'])
         entry = self.colleague().get('/api/journal/entry', params=dict(workspace='demo', lessonKey=key, day=day)).json()
+        if stored and entry.get('attendanceDefaulted'):
+            for record in entry['document']['content']['records']:
+                record['attendance'] = 'unmarked'
         change(entry['document']['content'])
         payload = dict(lessonKey=key, day=day, revision=entry['revision'], version=entry['version'], content=entry['document']['content'], publish=publish)
         response = self.colleague().put('/api/journal/entry?workspace=demo', json=payload)
@@ -804,3 +807,57 @@ def test_a_run_cut_short_still_reports_what_it_saved(school):
     assert school.run(journals, '--apply')['lessons']['saved'] == 1 and school.run(journals, '--apply')['lessons']['toSave'] == 0
     assert set(school.works(ENGLISH, D1)) == {'ep-a'} and set(school.works(ENGLISH, D0)) == {'ep-b'}
 
+
+
+# ----------------------------------------------------------------------------- a teacher's unpublished edit of an imported work or mark
+
+def own_grade(content, pupil='s1', work='ep-a'):
+    record = next(r for r in content['records'] if r['studentId'] == pupil)
+    return next(g for g in record['grades'] if g['assessmentId'] == work)
+
+
+def drop_mark(content):
+    record = next(r for r in content['records'] if r['studentId'] == 's1')
+    record['grades'] = [g for g in record['grades'] if g['assessmentId'] != 'ep-a']
+
+
+def drop_work(content):
+    content['assessments'] = [a for a in content['assessments'] if a['id'] != 'ep-a']
+    for record in content['records']:
+        record['grades'] = [g for g in record['grades'] if g['assessmentId'] != 'ep-a']
+
+
+@pytest.mark.parametrize('change', [
+    lambda c: own_grade(c).update(score=3),
+    lambda c: own_grade(c).update(comment='Пересдача'),
+    drop_mark,
+    lambda c: next(a for a in c['assessments'] if a['id'] == 'ep-a').update(weight=3),
+    drop_work,
+], ids=['score', 'comment', 'mark deleted', 'work edited', 'work deleted'])
+def test_a_teachers_unpublished_edit_of_an_imported_work_is_never_published_by_a_rerun(school, change):
+    journals = english_marks(school, ['a', 'b'])
+    school.run(journals, '--apply')
+    school.edit(ENGLISH, D1, change, stored=True)
+    before = school.entry(ENGLISH, D1)
+    seen = school.seen_by()
+    report = school.run(journals, '--apply')
+    after = school.entry(ENGLISH, D1)
+    assert (after['version'], after['publishedVersion']) == (before['version'], before['publishedVersion']) and before['version'] > before['publishedVersion']
+    assert after['document']['content'] == before['document']['content']
+    assert 'PUT' not in school.wire.verbs and school.seen_by() == seen == {'ep-a': 8, 'ep-b': 8}
+    assert report['lessons']['toPublish'] == 0 and report['lessons']['saved'] == 0 and report['lessons']['keptAsDraft'] == 0
+
+
+def test_the_importers_own_save_waits_in_the_draft_beside_a_teachers_unpublished_edit(school):
+    journals = english_marks(school, ['a'])
+    journals.mark('a', 's2', '8')
+    school.run(journals, '--apply')
+    school.edit(ENGLISH, D1, lambda c: own_grade(c).update(score=3), stored=True)
+    changed = english_marks(school, ['a'])
+    changed.mark('a', 's2', '9')
+    report = school.run(changed, '--apply')
+    entry = school.entry(ENGLISH, D1)
+    assert entry['publishedVersion'] < entry['version'] and report['lessons']['saved'] == 1 and report['lessons']['keptAsDraft'] == 1
+    assert (school.grade(ENGLISH, D1, 'ep-a', 's1')['score'], school.grade(ENGLISH, D1, 'ep-a', 's2')['score']) == (3, 9)
+    assert school.seen_by() == {'ep-a': 8}
+    assert school.run(changed, '--apply')['lessons']['saved'] == 0 and school.seen_by() == {'ep-a': 8}
