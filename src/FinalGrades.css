@@ -481,3 +481,79 @@
     max-width: 140px;
   }
 }
+
+/* Fixes after the first look in a browser. */
+/* Words of a subject name are never cut in the middle; the pupil's name stays on one line. */
+.finals-grid thead th,
+.finals-head-button {
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+.finals-grid .finals-grid-pupil,
+.finals-name-button {
+  white-space: nowrap;
+  max-width: none;
+}
+.finals-legend {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.finals-detail .finals-details-head {
+  justify-content: flex-start;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+/* The class by subject matrix: the class name is one word on one line. */
+.final-grid thead th:first-child,
+.final-grid tbody th {
+  white-space: nowrap;
+}
+/* The personal report card: one line per subject. */
+.final-card-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.final-card-table th,
+.final-card-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.final-card-table thead th {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.final-card-table tbody th {
+  font-weight: var(--weight-semibold);
+}
+.final-card-table th,
+.final-card-table td {
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+.final-card-table td:nth-child(2),
+.final-card-table .final-card-date {
+  white-space: nowrap;
+}
+/* On a phone the card is the subject and the grade; the date stays in the CSV and on paper. */
+@media (max-width: 520px) {
+  .final-report {
+    padding: 12px 8px;
+  }
+  .final-card-table .final-card-date {
+    display: none;
+  }
+}
+.final-card-table .final-stale {
+  display: block;
+  font-weight: var(--weight-semibold);
+}
+.final-card-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}

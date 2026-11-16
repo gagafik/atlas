@@ -17,11 +17,14 @@ import {
   classRows,
   classState,
   courseRows,
+  dayText,
   defaultPeriod,
   familyPeriod,
   finishedBook,
   gridGpa,
   hasPoints,
+  percentShown,
+  periodDates,
   pupilCardSource,
   rowActionAllowed,
   searchPupils,
@@ -60,6 +63,28 @@ const counts = (c: Partial<Counts> = {}): Counts => ({
   unassigned: 0,
   unavailable: 0,
   ...c,
+});
+
+describe("percentage of a calculation", () => {
+  it("keeps two decimals at most and says when there is none", () => {
+    expect(percentShown("53.33333333333333333333333333")).toBe("53,33 %");
+    expect(percentShown("70")).toBe("70 %");
+    expect(percentShown(null)).toBe("нет");
+    expect(percentShown("")).toBe("нет");
+  });
+});
+
+describe("dates of a period", () => {
+  it("writes a day as day, month, year and keeps anything that is not a date", () => {
+    expect(dayText("2026-10-05")).toBe("05.10.2026");
+    expect(dayText("2026-10-05T08:40:00")).toBe("05.10.2026");
+    expect(dayText("позже")).toBe("позже");
+  });
+  it("joins the first and the last day of a period", () => {
+    expect(periodDates({ start: "2026-09-01", end: "2026-10-23" })).toBe(
+      "01.09.2026–23.10.2026",
+    );
+  });
 });
 
 describe("period and statement choice", () => {

@@ -57,6 +57,7 @@ export default function TeacherFinals({
           value={periodId}
           items={periods}
           empty="Нет периодов"
+          required
           onChange={pickPeriod}
         />
         {own.length > 1 && (

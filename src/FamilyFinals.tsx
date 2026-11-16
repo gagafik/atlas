@@ -59,6 +59,7 @@ export default function FamilyFinals({
             label="Период"
             value={periodId}
             items={available}
+            required
             onChange={(id) => id && setPicked({ pupilId, periodId: id })}
           />
         )}

@@ -263,6 +263,24 @@ export function cellLabel(row: Row): string {
   return (result && finalLabel(result)) || "—";
 }
 
+/** A percentage of a calculation for reading: two decimals at most, a comma, «нет» when there is none. */
+export function percentShown(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "нет";
+  const n = Number(value);
+  return Number.isFinite(n)
+    ? `${n.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} %`
+    : value;
+}
+
+/** A day of the period as the school writes it: 05.10.2026. */
+export function dayText(day: string): string {
+  const [y, m, d] = day.slice(0, 10).split("-");
+  return d && m && y ? `${d}.${m}.${y}` : day;
+}
+/** The dates of a period in one piece. */
+export const periodDates = (p: { start: string; end: string }) =>
+  `${dayText(p.start)}–${dayText(p.end)}`;
+
 const MARKS: Record<string, string> = {
   draft: "чер.",
   submitted: "ждёт",

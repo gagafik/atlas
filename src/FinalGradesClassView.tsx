@@ -13,7 +13,7 @@ import type {
 } from "./finalGradesTypes";
 import ReportLayoutDialog from "./ReportLayoutDialog";
 import ReportPrintDialog from "./ReportPrintDialog";
-import { stateText, type ClassRow } from "./reportCardsView";
+import { periodDates, stateText, type ClassRow } from "./reportCardsView";
 import "./FinalGrades.css";
 
 type Dialog = { kind: "print"; pupilId: string } | { kind: "layout" } | null;
@@ -59,7 +59,8 @@ export default function FinalGradesClassView({
     // Raised to read the open subject table again after unsaved results were given up.
     [tableKey, setTableKey] = useState(0),
     [dialog, setDialog] = useState<Dialog>(null);
-  const grid = useRef<HTMLDivElement>(null),
+  const top = useRef<HTMLElement>(null),
+    grid = useRef<HTMLDivElement>(null),
     generation = useRef(0);
 
   // The grid pages through the same listing as the subject table; the layout gives the order of the columns.
@@ -106,6 +107,14 @@ export default function FinalGradesClassView({
     setSubjectId("");
     setDetail(null);
   }, [book.id, classId]);
+
+  // A table or a grade opened from the grid takes the grid's place; without this it would open below the screen.
+  const shown = detail ? `row-${detail.id}` : subjectId;
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) return void (first.current = false);
+    top.current?.scrollIntoView({ block: "start" });
+  }, [shown]);
 
   const subjectName =
     layout?.subjects.find((s) => s.id === subjectId)?.name ||
@@ -187,7 +196,11 @@ export default function FinalGradesClassView({
   }
 
   return (
-    <section className="finals-class" aria-label={`Класс ${className}`}>
+    <section
+      className="finals-class"
+      aria-label={`Класс ${className}`}
+      ref={top}
+    >
       <div className="finals-class-head">
         <button onClick={() => onBack()}>← Все классы</button>
         <h3>
@@ -196,7 +209,7 @@ export default function FinalGradesClassView({
       </div>
       {classRow && (
         <p className="finals-status-line">
-          {book.period.start}–{book.period.end} · учеников:{" "}
+          {periodDates(book.period)} · учеников:{" "}
           <strong>{classRow.pupils}</strong> · итоги:{" "}
           <strong>
             {classRow.state.done} из {classRow.total}
@@ -236,25 +249,31 @@ export default function FinalGradesClassView({
       )}
       {!rows && !error && <p role="status">Загрузка…</p>}
       {rows && layout && (
-        <ClassGrid
-          ref={grid}
-          rows={rows}
-          layout={layout}
-          className={className}
-          periodName={book.period.name}
-          subjectId={subjectId}
-          onSubject={openSubject}
-          onCell={openCell}
-          onPupil={(id) => setDialog({ kind: "print", pupilId: id })}
-        />
+        <div hidden={!!subjectId || !!detail}>
+          <ClassGrid
+            ref={grid}
+            rows={rows}
+            layout={layout}
+            className={className}
+            periodName={book.period.name}
+            subjectId={subjectId}
+            onSubject={openSubject}
+            onCell={openCell}
+            onPupil={(id) => setDialog({ kind: "print", pupilId: id })}
+          />
+        </div>
       )}
       {subjectId && (
-        <section className="finals-detail" aria-label="Таблица предмета">
+        <section
+          className="finals-detail"
+          aria-label="Таблица предмета"
+          hidden={!!detail}
+        >
           <div className="finals-details-head">
+            <button onClick={closeTable}>← Ведомость класса</button>
             <h3>
               {className} · {subjectName}
             </h3>
-            <button onClick={closeTable}>Закрыть таблицу</button>
           </div>
           <FinalGradesTable
             key={`${book.id}-${classId}-${subjectId}-${tableKey}`}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { defaultDraft, finalLabel, names, needsReason } from "./finalGrades";
 import FinalSelect from "./FinalSelect";
-import { ROW_ACTIONS, rowActionAllowed } from "./reportCardsView";
+import { percentShown, ROW_ACTIONS, rowActionAllowed } from "./reportCardsView";
 import { unsavedMessage } from "./useUnsavedGuard";
 import { useBusy } from "./useBusy";
 import CategoryBadge from "./CategoryBadge";
@@ -308,8 +308,8 @@ export default function FinalGradeRowDetails({
             {calculation && (
               <p>
                 Рекомендация: {calculation.recommended || "нет"}. Процент:{" "}
-                {calculation.rawPercent || "нет"}; после округления:{" "}
-                {calculation.roundedPercent || "нет"}. Минимум работ:{" "}
+                {percentShown(calculation.rawPercent)}; после округления:{" "}
+                {percentShown(calculation.roundedPercent)}. Минимум работ:{" "}
                 {draftScale?.minCount}.
               </p>
             )}
@@ -390,8 +390,9 @@ export default function FinalGradeRowDetails({
             <p>
               Сохранённый итог: {finalLabel(row.proposal)}. Рекомендация:{" "}
               {row.proposal.calculation.recommended || "нет"}. Процент:{" "}
-              {row.proposal.calculation.rawPercent || "нет"}; после округления:{" "}
-              {row.proposal.calculation.roundedPercent || "нет"}. Шкала «
+              {percentShown(row.proposal.calculation.rawPercent)}; после
+              округления:{" "}
+              {percentShown(row.proposal.calculation.roundedPercent)}. Шкала «
               {row.proposal.scale.name}», редакция {row.proposal.scale.version}.{" "}
               {row.proposal.approval &&
                 `Утвердил: ${row.proposal.approval.actor}.`}

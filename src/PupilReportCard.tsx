@@ -5,7 +5,7 @@ import { finalLabel } from "./finalGrades";
 import type { Gpa, Measure, Period, Published } from "./finalGradesTypes";
 import { PERSONAL_PRINT, printNode } from "./printReport";
 import { ReportExtras } from "./ReportCards";
-import { cardCsvRows } from "./reportCardsView";
+import { cardCsvRows, dayText, periodDates } from "./reportCardsView";
 
 type Card = {
   period: Period;
@@ -72,6 +72,8 @@ export default function PupilReportCard({
     node.current?.focus({ preventScroll: true });
     node.current?.scrollIntoView({ block: "start" });
   }, [card, reveal]);
+  // The comment column appears only when some subject has something to say in it.
+  const notes = !!card?.items.some((r) => r.comment || !r.current);
   return (
     <section className="pupil-report">
       {error && (
@@ -82,48 +84,7 @@ export default function PupilReportCard({
       {loading && <p role="status">Загрузка…</p>}
       {card && (
         <>
-          <div
-            className="final-report"
-            aria-label="Табель ученика"
-            tabIndex={-1}
-            ref={node}
-          >
-            <h3>Табель · {card.period.name}</h3>
-            <p>
-              {name} · {card.period.start}–{card.period.end}
-            </p>
-            {!card.items.length && <p>Опубликованных итогов пока нет.</p>}
-            {card.items.map((r) => (
-              <article key={r.subjectId}>
-                <h4>
-                  {r.subject} — {finalLabel(r)}
-                </h4>
-                <p>{r.comment}</p>
-                <p>
-                  Шкала: {r.scale.name}. Опубликовано:{" "}
-                  {new Date(r.publishedAt).toLocaleString("ru-RU")}.
-                </p>
-                {!r.current && (
-                  <p className="error">
-                    Последний опубликованный итог. Период открыт для исправлений
-                    или уже закрыт повторно; нового итога пока нет.
-                  </p>
-                )}
-              </article>
-            ))}
-            <ReportExtras gpa={card.gpa} measures={card.measures} />
-          </div>
-          <p>
-            Показаны только опубликованные итоги. Пустой табель не означает
-            нулевые оценки.
-          </p>
           <div className="dated-toolbar">
-            <button
-              disabled={!card.items.length}
-              onClick={() => downloadCsv(cardCsvRows(card.items), "Табель.csv")}
-            >
-              Скачать табель CSV
-            </button>
             <button
               disabled={!card.items.length}
               onClick={() => {
@@ -133,7 +94,74 @@ export default function PupilReportCard({
             >
               Печать
             </button>
+            <button
+              disabled={!card.items.length}
+              onClick={() => downloadCsv(cardCsvRows(card.items), "Табель.csv")}
+            >
+              Скачать табель CSV
+            </button>
           </div>
+          <div
+            className="final-report"
+            aria-label="Табель ученика"
+            tabIndex={-1}
+            ref={node}
+          >
+            <h3>Табель · {card.period.name}</h3>
+            <p>
+              {name} · {periodDates(card.period)}
+            </p>
+            {!card.items.length && <p>Опубликованных итогов пока нет.</p>}
+            {!!card.items.length && (
+              <table className="final-card-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Предмет</th>
+                    <th scope="col">Итог</th>
+                    {notes && <th scope="col">Комментарий</th>}
+                    <th scope="col" className="final-card-date">
+                      Опубликовано
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {card.items.map((r) => (
+                    <tr key={r.subjectId}>
+                      <th scope="row">{r.subject}</th>
+                      <td>
+                        <b>{finalLabel(r)}</b>
+                      </td>
+                      {notes && (
+                        <td>
+                          {r.comment}
+                          {!r.current && (
+                            <span className="final-stale">
+                              Последний опубликованный итог. Период открыт для
+                              исправлений или уже закрыт повторно; нового итога
+                              пока нет.
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td
+                        className="final-card-date"
+                        title={`Шкала: ${r.scale.name}`}
+                      >
+                        {dayText(
+                          new Date(r.publishedAt).toLocaleDateString("sv-SE"),
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <ReportExtras gpa={card.gpa} measures={card.measures} />
+          </div>
+          <p className="final-card-note">
+            Показаны только опубликованные итоги. Пустой табель не означает
+            нулевые оценки.
+          </p>
         </>
       )}
     </section>

@@ -7,6 +7,7 @@ export default function FinalSelect({
   onChange,
   items,
   empty = "Выберите",
+  required = false,
   disabled,
 }: {
   label: string;
@@ -14,6 +15,8 @@ export default function FinalSelect({
   onChange: (value: string) => void;
   items: Named[];
   empty?: string;
+  // No empty option once there is something to choose: the list always has a value.
+  required?: boolean;
   disabled?: boolean;
 }) {
   return (
@@ -24,7 +27,7 @@ export default function FinalSelect({
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
       >
-        <option value="">{empty}</option>
+        {!(required && items.length) && <option value="">{empty}</option>}
         {items.map((i) => (
           <option key={i.id} value={i.id}>
             {i.name}

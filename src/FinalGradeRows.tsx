@@ -221,57 +221,88 @@ export default function FinalGradeRows({
           </div>
         </>
       )}
-      <div className="attendance-cards">
-        {sheet.items.map((r) => (
-          <article className="absence-card" key={r.id}>
-            {!readOnly && (
-              <label>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(r.id)}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? [...selected, r.id]
-                        : selected.filter((id) => id !== r.id),
-                    )
-                  }
-                />{" "}
-                Выбрать {r.source.student.name}, {r.source.subject}
-              </label>
-            )}
-            <h4>
-              {r.source.student.name} · {r.source.student.className}
-            </h4>
-            <p>
-              {r.source.subject} · {names[r.status]}
-            </p>
-            <p>
-              {r.proposal ? finalLabel(r.proposal) : "Итог не подготовлен"} ·
-              работ с баллами: {r.source.numeric}
-            </p>
-            <p>
-              Ответственный:{" "}
-              {teachers.find((t) => t.id === r.assigned)?.name ||
-                (r.assigned ? "Учётная запись недоступна" : "Не назначен")}
-            </p>
-            {r.published && (
-              <p>
-                В табеле: {finalLabel(r.published)}
-                {r.status !== "published"
-                  ? " — сохраняется до новой публикации"
-                  : ""}
-              </p>
-            )}
-            <button
-              onClick={() => {
-                if (leave()) setOpened(r);
-              }}
-            >
-              Итог и работы: {r.source.student.name}, {r.source.subject}
-            </button>
-          </article>
-        ))}
+      <div className="finals-box">
+        <div className="finals-scroll">
+          <table className="finals-table" aria-label="Строки ведомости">
+            <thead>
+              <tr>
+                {!readOnly && (
+                  <th>
+                    <span className="sr-only">Выбрать</span>
+                  </th>
+                )}
+                <th>Ученик</th>
+                <th>Класс</th>
+                <th>Предмет</th>
+                <th>Статус</th>
+                <th>Итог</th>
+                <th>Работ</th>
+                <th>Ответственный</th>
+                <th>В табеле</th>
+                <th>
+                  <span className="sr-only">Действия</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sheet.items.map((r) => (
+                <tr key={r.id}>
+                  {!readOnly && (
+                    <td data-label="Выбрать">
+                      <input
+                        type="checkbox"
+                        aria-label={`Выбрать ${r.source.student.name}, ${r.source.subject}`}
+                        checked={selected.includes(r.id)}
+                        onChange={(e) =>
+                          setSelected(
+                            e.target.checked
+                              ? [...selected, r.id]
+                              : selected.filter((id) => id !== r.id),
+                          )
+                        }
+                      />
+                    </td>
+                  )}
+                  <td data-label="Ученик">
+                    <strong>{r.source.student.name}</strong>
+                  </td>
+                  <td data-label="Класс">{r.source.student.className}</td>
+                  <td data-label="Предмет">{r.source.subject}</td>
+                  <td data-label="Статус">{names[r.status]}</td>
+                  <td data-label="Итог">
+                    {r.proposal ? <b>{finalLabel(r.proposal)}</b> : "—"}
+                  </td>
+                  <td data-label="Работ" className="finals-num">
+                    {r.source.numeric}
+                  </td>
+                  <td data-label="Ответственный">
+                    {teachers.find((t) => t.id === r.assigned)?.name ||
+                      (r.assigned
+                        ? "Учётная запись недоступна"
+                        : "Не назначен")}
+                  </td>
+                  <td data-label="В табеле">
+                    {r.published ? finalLabel(r.published) : "—"}
+                    {r.published && r.status !== "published"
+                      ? " — до новой публикации"
+                      : ""}
+                  </td>
+                  <td className="finals-actions">
+                    <button
+                      className="finals-row-button"
+                      aria-label={`Итог и работы: ${r.source.student.name}, ${r.source.subject}`}
+                      onClick={() => {
+                        if (leave()) setOpened(r);
+                      }}
+                    >
+                      Открыть
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
       <div className="dated-toolbar">
         <button

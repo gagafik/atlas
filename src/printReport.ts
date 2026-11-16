@@ -40,7 +40,7 @@ export const LETTERHEAD_PRINT =
 
 export const PERSONAL_PRINT =
   LETTERHEAD_PRINT +
-  "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}";
+  "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top}tr{break-inside:avoid}.final-stale{display:block;font-weight:bold}";
 
 // One card per page; the signature lines are drawn with borders so they print without any form controls.
 export const CLASS_PRINT =

@@ -389,6 +389,7 @@ export default function FinalGradesHome({
           value={periodId}
           items={options.periods}
           empty="Нет периодов"
+          required
           onChange={pickPeriod}
         />
         {!!periodId && (
