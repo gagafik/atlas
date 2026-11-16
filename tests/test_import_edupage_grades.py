@@ -393,10 +393,10 @@ def test_every_mark_counts_puts_later_attempts_in_companion_works(school):
     journals.mark('t', 's1', '15', '2026-09-14 11:00:00')
     report = school.run(journals, '--apply')
     works = school.works(ENGLISH, D1)
-    assert set(works) == {'ep-t', 'ep-t-2', 'ep-t-3'} and report['works']['companion'] == 2
-    assert [school.grade(ENGLISH, D1, w)['score'] for w in ('ep-t', 'ep-t-2', 'ep-t-3')] == [5, 12, 15]
+    assert len(works) == 3 and 'ep-t' in works and report['works']['companion'] == 2
+    assert sorted(school.grade(ENGLISH, D1, w)['score'] for w in works) == [5, 12, 15] and school.grade(ENGLISH, D1, 'ep-t')['score'] == 5
     assert all((works[w]['category'], works[w]['maxScore'], works[w]['weight']) == ('sor', 20, 2) for w in works)
-    assert works['ep-t-2']['name'] != works['ep-t']['name'] and works['ep-t-2']['name'].startswith('Пересдача')
+    assert len({a['name'] for a in works.values()}) == 3 and all(a['name'].startswith('Пересдача') for a in works.values())
     assert school.run(journals, '--apply')['lessons']['toSave'] == 0
 
 
@@ -861,3 +861,44 @@ def test_the_importers_own_save_waits_in_the_draft_beside_a_teachers_unpublished
     assert (school.grade(ENGLISH, D1, 'ep-a', 's1')['score'], school.grade(ENGLISH, D1, 'ep-a', 's2')['score']) == (3, 9)
     assert school.seen_by() == {'ep-a': 8}
     assert school.run(changed, '--apply')['lessons']['saved'] == 0 and school.seen_by() == {'ep-a': 8}
+
+
+# ----------------------------------------------------------------------------- the ids of attempt works
+
+NASTY = ['x', 'x-2', 'x~2', 'x-2~2', '-12', '-12-2', '-12~2', '', ' ', 'х 1', 'a/b', 'ep-', '~', '~2', 'L' * 100, 'L' * 100 + '-2', 'L' * 61, 'L' * 60]
+
+
+def test_an_attempt_id_is_never_the_id_of_any_column_and_fits_the_limit():
+    bases = {importer.work_id(uid) for uid in NASTY}
+    assert len(bases) == len(NASTY)
+    attempts = {importer.work_id(uid, k) for uid in NASTY for k in (2, 3, 10, 99, 100)}
+    assert len(attempts) == len(NASTY) * 5 and not attempts & bases
+    assert all(i.startswith(importer.PREFIX) and 0 < len(i) <= importer.ID_LIMIT for i in attempts | bases)
+
+
+def test_attempt_works_never_depend_on_which_columns_exist_in_the_source(school):
+    wanted = {'Alpha': ('x', '34'), 'Bravo': ('x-2', '9'), 'Charlie': ('x~2', '7'), 'Delta': ('-12', '12'), 'Echo': ('L' * 100, '56'), 'Foxtrot': ('-12-2', '8')}
+
+    def build(titles):
+        journals = school.journals()
+        for title in titles:
+            uid, texts = wanted[title]
+            journals.column(uid, title=title, every='0')
+            for n, text in enumerate(texts):
+                journals.mark(uid, 's1', text, f'2026-09-14 {9 + n:02d}:00:00')
+        return journals
+
+    def held():
+        works = school.works(ENGLISH, D1)
+        return {title: sorted(school.grade(ENGLISH, D1, w)['score'] for w, a in works.items() if a['name'].startswith(title) and school.grade(ENGLISH, D1, w)) for title in wanted}
+
+    # The first run knows only the first column; the others come with later runs, and each later run finds the attempt works where they are.
+    school.run(build(['Alpha']), '--apply')
+    school.run(build(['Alpha', 'Bravo']), '--apply')
+    school.run(build(['Alpha', 'Bravo', 'Charlie']), '--apply')
+    journals = build(list(wanted))
+    school.run(journals, '--apply')
+    assert held() == dict(Alpha=[3, 4], Bravo=[9], Charlie=[7], Delta=[1, 2], Echo=[5, 6], Foxtrot=[8])
+    assert len(school.works(ENGLISH, D1)) == 9 and all(len(w) <= importer.ID_LIMIT for w in school.works(ENGLISH, D1))
+    again = school.run(journals, '--apply')
+    assert again['lessons']['toSave'] == 0 and again['works']['new'] == 0 and again['goneFromEdupage'] == 0 and 'PUT' not in school.wire.verbs

@@ -215,9 +215,17 @@ def parse_mark(text):
     return None, unbracket(text)
 
 
+PLAIN = re.compile(r'[A-Za-z0-9_-]{1,%d}' % (ID_LIMIT - 20))  # A uid kept as it is in a work id; any other is replaced by its hash.
+
+
 def work_id(uid, attempt=1):
-    base = PREFIX + uid if len(PREFIX + uid) <= ID_LIMIT - 4 else PREFIX + hashlib.sha256(uid.encode('utf8')).hexdigest()[:32]
-    return base if attempt == 1 else f'{base}-{attempt}'
+    """The id of the work of a column (attempt 1) or of a further attempt of it. It depends on the uid alone, never on the other columns.
+
+    The base is "ep-<uid>" for a plain uid (letters, digits, "_" and "-", short) and "ep-~h<hash>" for any other. "~" occurs in no
+    base id except right after the prefix of a hashed one, and a further attempt appends "~<k>": "ep-<uid>~<k>" or "ep-~h<hash>~<k>".
+    So an attempt id (one "~" past the prefix, or two) is never the base id of any column, and different columns never share an id."""
+    base = PREFIX + uid if PLAIN.fullmatch(uid) else f'{PREFIX}~h{hashlib.sha256(uid.encode("utf8")).hexdigest()[:32]}'
+    return base if attempt == 1 else f'{base}~{attempt}'
 
 
 def make_grade(text, work, counts):
@@ -633,7 +641,6 @@ class Planner:
     def __init__(self, atlas, source, rules, publish, minute, me=None):
         self.atlas, self.source, self.rules, self.publish, self.minute, self.me = atlas, source, rules, publish, minute, me
         self.lessons, self.matches, self.planned, self.sizes = {}, {}, set(), {}
-        self.bases = {work_id(c.uid) for c in source.columns.values()}
         self.unresolved = defaultdict(lambda: defaultdict(int))
         self.report = dict(
             files=source.files, filesUnreadable=source.unreadable,
@@ -766,15 +773,11 @@ class Planner:
         best = max(pairs, key=lambda p: (len(pupils & self.members(p[0])), -len(self.members(p[0]))), default=None)
         return best if best and len(pupils & self.members(best[0])) >= ENOUGH * len(pupils) else None
 
-    def slot_of(self, work, uid):
+    @staticmethod
+    def slot_of(work, uid):
         """Whether an Atlas work id is the work of this column or one of its attempt works (never another column's work)."""
         base = work_id(uid)
-        return work == base or work not in self.bases and re.fullmatch(re.escape(base) + r'[-~]\d+', work) is not None
-
-    def companion_id(self, uid, attempt):
-        """The id of the work of a further attempt; it takes another separator when the usual id is the id of a column of its own."""
-        found = work_id(uid, attempt)
-        return found if found not in self.bases else f'{work_id(uid)}~{attempt}'
+        return work == base or re.fullmatch(re.escape(base) + r'~\d+', work) is not None
 
     def works_of(self, column, group, people):
         """The base work and, when every mark counts, one more work for each further attempt."""
@@ -811,7 +814,7 @@ class Planner:
         works = [Work(work_id(column.uid), assessment, grades.get(1, {}))]
         for k in sorted(k for k in grades if k > 1):
             suffix = f' · попытка {k}'
-            works.append(Work(self.companion_id(column.uid, k), dict(assessment, name=fit(assessment['name'], NAME_LIMIT - len(suffix)) + suffix), grades[k]))
+            works.append(Work(work_id(column.uid, k), dict(assessment, name=fit(assessment['name'], NAME_LIMIT - len(suffix)) + suffix), grades[k]))
             report['works']['companion'] += 1
         return works
 
@@ -948,7 +951,7 @@ class Planner:
         loaded = {i for found in self.atlas.tables.values() for i in found if i.startswith(PREFIX)}
 
         def base(i):
-            found = re.fullmatch(r'(.+)[-~]\d+', i)
+            found = re.fullmatch(r'(.+)~\d+', i)
             return i if i in known or not found else found.group(1)
 
         # A column that is still in EduPage but could not be planned is not gone; one that is no longer there (or one attempt of it) is.
