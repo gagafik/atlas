@@ -496,7 +496,6 @@ export default function JournalPanel({
             key={`final-grades-${workspace}`}
             workspace={workspace}
             year={year}
-            defaultOpen
             focus={focus?.finalsPeriodId ? focus : undefined}
           />
         );

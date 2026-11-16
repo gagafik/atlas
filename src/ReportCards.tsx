@@ -2,6 +2,7 @@ import { forwardRef } from "react";
 import Letterhead from "./Letterhead";
 import { finalLabel } from "./finalGrades";
 import type { ClassReport, Gpa, Measure } from "./finalGradesTypes";
+import { periodDates } from "./reportCardsView";
 
 export const gpaText = (gpa: Gpa) => gpa.value.replace(".", ",");
 const dayText = (day: string) => new Date(day).toLocaleDateString("ru-RU");
@@ -51,8 +52,7 @@ const ReportCards = forwardRef<HTMLDivElement, { report: ClassReport }>(
               )}
             </h3>
             <p>
-              {pupil.name} · {report.className} · {report.period.start}–
-              {report.period.end}
+              {pupil.name} · {report.className} · {periodDates(report.period)}
             </p>
             {!pupil.items.length && <p>Опубликованных итогов пока нет.</p>}
             {pupil.items.map((item) => (

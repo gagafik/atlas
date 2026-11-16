@@ -2,27 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import FinalGradesTable from "./FinalGradesTable";
 import { cellKey, chunked, eligibleFor, visibleSelection } from "./finalGrades";
-import type { Book, Named, Scale } from "./finalGradesTypes";
+import type { Book, Cell, Matrix, Named, Row, Scale } from "./finalGradesTypes";
+import { courseRows, stateText } from "./reportCardsView";
+import "./FinalGrades.css";
 
-type Cell = {
-  classId: string;
-  subjectId: string;
-  total: number;
-  draft: number;
-  submitted: number;
-  approved: number;
-  published: number;
-  proposed: number;
-  unassigned: number;
-  // Drafts whose teacher account is no longer valid.
-  unavailable: number;
-};
-type Matrix = {
-  book: Book;
-  classes: Named[];
-  subjects: Named[];
-  cells: Cell[];
-};
 type Handle = { id: string; version: number; status: string };
 
 const ACTIONS: Record<string, string> = {
@@ -44,7 +27,7 @@ const progress = (c: Cell) =>
 const cellText = (d: Matrix, c: Cell) =>
   `${d.classes.find((x) => x.id === c.classId)?.name || c.classId}, ${d.subjects.find((x) => x.id === c.subjectId)?.name || c.subjectId}`;
 
-// Progress of the whole book by class and subject. A teacher sees a list of own courses, the administrator a grid with mass actions.
+// Progress of the whole book by class and subject. A teacher sees a compact table of own courses, the administrator a grid with mass actions.
 export default function FinalGradesMatrix({
   workspace,
   book,
@@ -53,11 +36,12 @@ export default function FinalGradesMatrix({
   phrases,
   teachers,
   lastScale,
-  classFilter = "",
   refresh = 0,
   leave,
   onDirty,
   onChanged,
+  onOpenRow,
+  tableEpoch = 0,
 }: {
   workspace: string;
   book: Book;
@@ -66,13 +50,15 @@ export default function FinalGradesMatrix({
   phrases: string[];
   teachers: Named[];
   lastScale: { current: string };
-  // Show the row of one class only (the report-card steps).
-  classFilter?: string;
   // Raised by the parent after changes made outside this matrix (the row list, the preparation, another matrix).
   refresh?: number;
   leave: () => boolean;
   onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
+  // Makes the pupils of the opened table buttons that open the details of the row.
+  onOpenRow?: (row: Row) => void;
+  // Raised by the parent when a row was changed outside the table: the open table is read again.
+  tableEpoch?: number;
 }) {
   const [data, setData] = useState<Matrix | null>(null),
     [selected, setSelected] = useState<string[]>([]),
@@ -92,15 +78,13 @@ export default function FinalGradesMatrix({
     const r = await api(`final-grades/books/${book.id}/matrix`, workspace);
     if (mine === generation.current) setData(r);
   }
-  // The cells on screen: with a class filter the other classes are not shown, so they cannot be acted on either.
-  const shown = (d: Matrix | null) =>
-    (d?.cells || []).filter((c) => !classFilter || c.classId === classFilter);
+  const shown = (d: Matrix | null) => d?.cells || [];
   useEffect(() => {
     setOpened(null);
     setSelected([]);
     setError("");
     void load().catch((e) => setError(e instanceof Error ? e.message : ""));
-  }, [book.id, classFilter]);
+  }, [book.id]);
   useEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
@@ -207,11 +191,7 @@ export default function FinalGradesMatrix({
       <p role="status">Загрузка…</p>
     );
   const cells = shown(data);
-  const classes = data.classes.filter(
-    (c) => !classFilter || c.id === classFilter,
-  );
-  const name = (list: Named[], id: string) =>
-    list.find((x) => x.id === id)?.name || id;
+  const classes = data.classes;
   const find = (c: string, s: string) =>
     cells.find((x) => x.classId === c && x.subjectId === s);
   const label = (c: Cell) => cellText(data, c);
@@ -226,18 +206,6 @@ export default function FinalGradesMatrix({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      {!book.current && (
-        <p className="error">
-          Ведомость устарела: действия над итогами недоступны, смотреть можно.
-        </p>
-      )}
-      {classFilter && cells.some((c) => c.draft + c.submitted > 0) && (
-        <p className="error">
-          Не все итоги класса утверждены: черновиков{" "}
-          {cells.reduce((n, c) => n + c.draft, 0)}, на утверждении{" "}
-          {cells.reduce((n, c) => n + c.submitted, 0)}.
-        </p>
-      )}
       {admin ? (
         <>
           <p>
@@ -350,28 +318,83 @@ export default function FinalGradesMatrix({
           </p>
         </>
       ) : (
-        <>
-          <p>Ваши предметы и классы.</p>
-          <ul className="final-courses">
-            {[...cells]
-              .sort((a, b) => label(a).localeCompare(label(b), "ru"))
-              .map((c) => (
-                <li key={cellKey(c)}>
-                  <button onClick={() => open(c)}>
-                    {name(data.classes, c.classId)} ·{" "}
-                    {name(data.subjects, c.subjectId)}
-                  </button>{" "}
-                  — {progress(c)}
-                </li>
-              ))}
-          </ul>
-        </>
+        !opened && (
+          <>
+            {!cells.length && (
+              <p>Вам пока не назначены строки итоговых оценок.</p>
+            )}
+            {!!cells.length && (
+              <div className="finals-box">
+                <div className="finals-scroll">
+                  <table className="finals-table" aria-label="Мои предметы">
+                    <thead>
+                      <tr>
+                        <th>Класс</th>
+                        <th>Предмет</th>
+                        <th>Учеников</th>
+                        <th>Выставлено</th>
+                        <th>Состояние</th>
+                        <th>
+                          <span className="sr-only">Действия</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {courseRows(data).map((c) => (
+                        <tr key={cellKey(c)}>
+                          <td data-label="Класс">
+                            <strong>{c.className}</strong>
+                          </td>
+                          <td data-label="Предмет">{c.subjectName}</td>
+                          <td data-label="Учеников">{c.total}</td>
+                          <td data-label="Выставлено">
+                            {c.state.done} из {c.total}
+                          </td>
+                          <td data-label="Состояние" className="finals-state">
+                            {stateText(c.state)}
+                          </td>
+                          <td className="finals-actions">
+                            <button
+                              type="button"
+                              className="finals-row-button"
+                              aria-label={`Открыть таблицу: ${c.className}, ${c.subjectName}`}
+                              onClick={() => open(c)}
+                            >
+                              Открыть
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )
       )}
       {opened && (
         <section className="final-table-section">
           <h3>{label(opened)}</h3>
+          <div className="dated-toolbar">
+            <button
+              onClick={() => {
+                if (leave()) setOpened(null);
+              }}
+            >
+              {admin ? "Закрыть таблицу" : "← Мои предметы"}
+            </button>
+            {!admin && (
+              <a
+                href={`/api/final-grades/books/${book.id}/export?${new URLSearchParams({ workspace, classId: opened.classId, subjectId: opened.subjectId, status: "all" })}`}
+                download
+              >
+                CSV
+              </a>
+            )}
+          </div>
           <FinalGradesTable
-            key={cellKey(opened)}
+            key={`${cellKey(opened)}-${tableEpoch}`}
             workspace={workspace}
             bookId={book.id}
             classId={opened.classId}
@@ -381,18 +404,12 @@ export default function FinalGradesMatrix({
             current={book.current}
             lastScale={lastScale}
             onDirty={onDirty}
+            onOpenRow={onOpenRow}
             onChanged={() => {
               void load();
               onChanged();
             }}
           />
-          <button
-            onClick={() => {
-              if (leave()) setOpened(null);
-            }}
-          >
-            Закрыть таблицу
-          </button>
         </section>
       )}
     </div>

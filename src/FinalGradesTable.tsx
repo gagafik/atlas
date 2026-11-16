@@ -38,6 +38,7 @@ export default function FinalGradesTable({
   lastScale,
   onDirty,
   onChanged,
+  onOpenRow,
 }: {
   workspace: string;
   bookId: string;
@@ -49,6 +50,8 @@ export default function FinalGradesTable({
   lastScale: { current: string };
   onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
+  // Makes the name of a pupil a button that opens the details of the row.
+  onOpenRow?: (row: Row) => void;
 }) {
   const [rows, setRows] = useState<Row[]>([]),
     [scaleId, setScaleId] = useState(""),
@@ -432,7 +435,20 @@ export default function FinalGradesTable({
                 const advice = r.advice;
                 return (
                   <tr key={r.id}>
-                    <th scope="row">{name}</th>
+                    <th scope="row">
+                      {onOpenRow ? (
+                        <button
+                          type="button"
+                          className="finals-name-button"
+                          aria-label={`Итог и работы: ${name}`}
+                          onClick={() => onOpenRow(r)}
+                        >
+                          {name}
+                        </button>
+                      ) : (
+                        name
+                      )}
+                    </th>
                     <td>{r.source.numeric}</td>
                     <td>
                       {advice?.basis === "periods" && advice.points

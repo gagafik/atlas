@@ -1,4 +1,5 @@
 // Shapes of the final-grades API shared by the panel and its tables, matrix and report cards.
+import type { CategoryConfig } from "./assessmentCategories";
 export type Named = { id: string; name: string };
 export type Scale = Named & {
   version: number;
@@ -115,6 +116,8 @@ export type Options = {
   scales: Scale[];
   books: Book[];
   periods: Period[];
+  // For a family: the ids of the periods in which each of its children has a published card, newest period first.
+  studentPeriods?: Record<string, string[]>;
   students: Named[];
   teachers: Named[];
   classes: Named[];
@@ -174,4 +177,72 @@ export type ClassReport = {
   subjects: Named[];
   pupils: Card[];
   preview: boolean;
+};
+export type Cell = {
+  classId: string;
+  subjectId: string;
+  total: number;
+  draft: number;
+  submitted: number;
+  approved: number;
+  published: number;
+  proposed: number;
+  unassigned: number;
+  // Drafts whose teacher account is no longer valid.
+  unavailable: number;
+};
+export type Matrix = {
+  book: Book;
+  // Pupils: distinct pupils of the class among the rows the viewer can see.
+  classes: (Named & { pupils?: number })[];
+  subjects: Named[];
+  cells: Cell[];
+};
+// A background run that prepares the statement of a closed period.
+export type Job = {
+  id: string;
+  periodId: string;
+  periodName: string;
+  closureVersion: number;
+  status: string;
+  phase: string;
+  completed: number;
+  total: number;
+  attempts: number;
+  message: string;
+  bookId: string;
+};
+
+// What the screens of the report-card part get from the panel that owns them.
+export type FinalsShared = {
+  workspace: string;
+  // A past school year (archived only): everything is read-only.
+  year?: string;
+  options: Options;
+  // The school's categories of works, for the badges of the evidence and for the editor in the settings.
+  categories: CategoryConfig | null;
+  onCategoriesSaved: () => void;
+  lastScale: { current: string };
+  // Raised after every change, so the tables never show numbers from before it.
+  epoch: number;
+  changed: () => void;
+  // `leave("row")` leaves out the typing of the row that is being saved itself.
+  leave: (except?: string) => boolean;
+  // Whether some table or row holds unsaved results.
+  dirty: boolean;
+  onDirty: (table: string, dirty: boolean) => void;
+  reloadOptions: () => Promise<Options | undefined>;
+  // The «Обновить» of the toolbar: asks about unsaved results, reloads the options and the tables.
+  refresh: () => void;
+  busy: boolean;
+  run: (work: () => Promise<void>) => Promise<boolean>;
+  setNotice: (text: string) => void;
+};
+
+// The order and the visibility of the subjects on the report cards of one class.
+export type ReportLayout = {
+  version: number;
+  order: string[];
+  hidden: string[];
+  subjects: Named[];
 };

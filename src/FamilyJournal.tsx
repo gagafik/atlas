@@ -121,7 +121,6 @@ export default function FamilyJournal({
       <FinalGradesPanel
         workspace={workspace}
         year={year}
-        defaultOpen
         studentId={child}
         focus={
           focus?.finalsPeriodId && focus.studentId

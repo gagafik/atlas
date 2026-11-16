@@ -248,6 +248,34 @@ def test_matrix_counts_and_scope(client):
     assert matrix(signed('idle'),b).status_code==404 and matrix(client,dict(b,id='missing')).status_code==404
 
 
+def test_matrix_waits_for_a_teacher_only_on_drafts(client):
+    p,b,s,r,_=seeded(client)
+    free=lambda:sum(c['unassigned'] for c in matrix(client,b).json()['cells'])
+    before=free()
+    left=batch(client,[r],'assign',teacherId='');assert left.status_code==200,left.text
+    assert free()==before+1
+    # The administrator fills in the row himself: nobody is missing for it any more, whether it is submitted or approved.
+    submitted=propose(client,left.json()['items'][0],s);assert submitted.status_code==200,submitted.text
+    assert free()==before
+    approved=batch(client,[submitted.json()],'approve');assert approved.status_code==200,approved.text
+    assert free()==before
+
+
+def test_matrix_classes_count_pupils_not_rows(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher')
+    def expected(c):
+        pupils={}
+        for row in sheet(c,b).json()['items']:pupils.setdefault(row['classId'],set()).add(row['studentId'])
+        return {k:len(v) for k,v in pupils.items()}
+    def counted(c):return {x['id']:x['pupils'] for x in matrix(c,b).json()['classes']}
+    # A pupil has a row per subject, so the pupils of a class are fewer than its rows when it has several subjects.
+    everyone=expected(client);assert everyone and counted(client)==everyone
+    rows=sheet(client,b).json()['items'];assert len(rows)>sum(everyone.values())
+    # A teacher counts the pupils of the own rows only.
+    own=expected(t);assert own and counted(t)==own and sum(own.values())<sum(everyone.values())
+    assert matrix(signed('parent'),b).status_code==403
+
+
 def test_matrix_shows_drafts_left_with_a_departed_teacher(client):
     english(client);teacher=create(client,'teacher');b=prepare(client,close(client,period(client)))
     cell=lambda subject:next(c for c in matrix(client,b).json()['cells'] if c['subjectId']==subject)

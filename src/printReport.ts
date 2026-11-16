@@ -40,7 +40,7 @@ export const LETTERHEAD_PRINT =
 
 export const PERSONAL_PRINT =
   LETTERHEAD_PRINT +
-  "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}";
+  "body{font:14px sans-serif;padding:24px;color:#111}article{break-inside:avoid;border-top:1px solid #ccc;padding:8px}h4,p{margin:8px 0}.error{font-weight:bold}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top}tr{break-inside:avoid}.final-stale{display:block;font-weight:bold}";
 
 // One card per page; the signature lines are drawn with borders so they print without any form controls.
 export const CLASS_PRINT =
@@ -55,3 +55,8 @@ export const DRILL_PRINT =
 export const BRIEFING_PRINT =
   LETTERHEAD_PRINT +
   "body{font:14px sans-serif;padding:24px;color:#000;background:#fff}h2,h3,p{margin:8px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:6px 8px;text-align:left}.sf-sign{display:table-cell;width:30%;height:28px}.sf-printonly{display:block}thead{display:table-header-group}tr{break-inside:avoid}button{display:none}";
+
+// The class statement as one table on landscape paper: pupils in rows, subjects in columns; the cells are plain text.
+export const GRID_PRINT =
+  LETTERHEAD_PRINT +
+  "@page{size:landscape}body{font:12px sans-serif;padding:16px;color:#000;background:#fff}h2,h3,p{margin:6px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:3px 6px;text-align:left}th{background:#eee}thead{display:table-header-group}tr{break-inside:avoid}button{all:unset;font:inherit}.finals-mark{margin-left:4px;font-size:10px}.finals-grid-hidden{font-style:italic}caption{text-align:left;font-weight:bold;margin-bottom:6px}";

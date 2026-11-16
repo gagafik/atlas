@@ -6014,31 +6014,6 @@ main {
   padding: 6px 0;
   border-bottom: 1px solid var(--line);
 }
-.final-step-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  list-style: none;
-  padding: 0;
-  margin: 10px 0;
-}
-.final-step-list button[aria-current="step"] {
-  font-weight: 700;
-  border-color: var(--primary);
-  outline: 2px solid var(--accent);
-}
-.final-subjects {
-  list-style: none;
-  padding: 0;
-}
-.final-subjects li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line);
-}
 .final-cards {
   margin: 12px 0;
 }

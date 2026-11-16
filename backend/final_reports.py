@@ -231,7 +231,8 @@ def register(service,app,Workspace):
             cells={};names={'class':{},'subject':{}}
             for c,s,status,free,proposed,n,class_name,subject_name in rows:
                 cell=cells.setdefault((c,s),dict(classId=c,subjectId=s,total=0,draft=0,submitted=0,approved=0,published=0,proposed=0,unassigned=0,unavailable=0))
-                cell['total']+=n;cell[status]+=n;cell['proposed']+=n*proposed;cell['unassigned']+=n*free
+                # Only a draft waits for somebody to be made responsible; a row the administrator filled in himself needs no teacher.
+                cell['total']+=n;cell[status]+=n;cell['proposed']+=n*proposed;cell['unassigned']+=n*free*(status=='draft')
                 names['class'][c]=class_name or '';names['subject'][s]=subject_name or ''
             # Drafts left with an account that is no longer a teacher's (the teacher left or lost the grant): nobody can edit them until the administrator reassigns.
             if user['role']=='admin':
@@ -239,7 +240,10 @@ def register(service,app,Workspace):
                 for c,s,account,n in db.execute("SELECT r.class_id,r.subject_id,r.assigned,count(*) FROM grading_rows r WHERE "+where+" AND r.status='draft' AND r.assigned<>'' GROUP BY 1,2,3",params):
                     if account not in live:cells[(c,s)]['unavailable']+=n
             ordered=lambda kind:[dict(id=k,name=v) for k,v in sorted(names[kind].items(),key=lambda x:(natural(x[1]),x[0]))]
-            return dict(book=book,classes=ordered('class'),subjects=ordered('subject'),cells=sorted(cells.values(),key=lambda c:(c['classId'],c['subjectId'])))
+            # Rows are not pupils (groups and electives give a pupil several rows), so the pupils are counted over the same visible rows.
+            pupils=dict(db.execute('SELECT r.class_id,count(DISTINCT r.student_id) FROM grading_rows r WHERE '+where+' GROUP BY 1',params).fetchall())
+            classes=[dict(c,pupils=pupils.get(c['id'],0)) for c in ordered('class')]
+            return dict(book=book,classes=classes,subjects=ordered('subject'),cells=sorted(cells.values(),key=lambda c:(c['classId'],c['subjectId'])))
 
     @app.get('/api/final-grades/books/{id}/handles')
     def handles(id:str,request:Request,workspace:Workspace='school',classId:str=Query(min_length=1,max_length=100),subjectId:str='',status:Literal['all','draft','submitted','approved','published']='all'):
