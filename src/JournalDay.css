@@ -1,4 +1,4 @@
-/* «Классный журнал» of a teacher: the day grid, its month calendar and the editor under the open lesson. */
+/* «Классный журнал»: the classes and the lessons of the day, its month calendar and the editor under the open lesson. */
 .teacher-day-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 270px;
@@ -31,81 +31,280 @@
   margin: 0;
   min-width: 150px;
 }
-.teacher-day {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+/* The classes of the school for the day: a compact table that scrolls inside its own area, not the page. */
+.journal-day-total {
+  margin: 0 0 6px;
+  color: var(--text-muted);
 }
-.teacher-day-row {
-  display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
-  gap: 12px;
-  padding: 10px 12px;
+.journal-day-total strong {
+  color: var(--text);
+}
+.journal-classes-scroll {
+  max-height: min(62vh, 520px);
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
 }
-.teacher-day-slot {
-  display: flex;
-  flex-direction: column;
-  color: var(--text);
+.journal-classes-table,
+.journal-lessons-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
 }
-.teacher-day-slot strong {
-  font-size: 1.5em;
-  line-height: 1.1;
+/* The compact type is the type of the data cells only: the lesson editor in the row under a lesson keeps the panel's own. */
+.journal-classes-table,
+.journal-lessons-table th,
+.journal-lessons-table tr:not(.journal-lessons-editor) > td {
+  font-size: 12px;
+  line-height: 16px;
 }
-.teacher-day-body {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-.teacher-day-nothing {
-  margin: 0;
-  color: var(--text-subtle);
-}
-.teacher-lesson {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  background: var(--surface-alt);
-}
-.teacher-lesson-open {
-  outline: 2px solid var(--focus);
-  outline-offset: 0;
-}
-.teacher-lesson-cancelled h3 {
-  text-decoration: line-through;
-}
-.teacher-lesson header h3 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.teacher-lesson header p,
-.teacher-lesson p {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.teacher-topic {
-  font-weight: 600;
-}
-.teacher-homework {
+.journal-classes-table th,
+.journal-lessons-table th {
+  padding: 4px 8px;
+  background: var(--surface-sunken);
   color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
 }
-.teacher-lesson-line,
-.teacher-lesson-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
+.journal-classes-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
-.teacher-count {
+.journal-classes-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.journal-classes-table tbody tr {
+  cursor: pointer;
+}
+.journal-classes-table tbody tr:hover {
+  background: var(--accent-tint);
+}
+.journal-classes-table tbody tr:focus-within {
+  background: var(--accent-tint);
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.journal-classes-table th:nth-child(n + 2):nth-child(-n + 4),
+.journal-classes-table td:nth-child(n + 2):nth-child(-n + 4) {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+.journal-class-open {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-strong);
+  font-weight: var(--weight-bold);
+}
+.journal-class-open:hover {
+  background: none;
+  text-decoration: underline;
+}
+.journal-class-state {
+  font-weight: var(--weight-semibold);
+}
+.journal-class-missing .journal-class-state,
+.journal-lesson-state-empty {
+  color: var(--danger);
+  font-weight: var(--weight-bold);
+}
+
+/* The lessons of a day: one row of about 40 px per lesson; text that does not fit wraps in two lines, the topic is cut. */
+.journal-lessons-box {
+  container-type: inline-size;
+  /* No overflow here: a scrolling box would capture the lesson editor's sticky save bar. The cells wrap instead. */
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.journal-lessons-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  overflow-wrap: break-word;
+}
+.journal-lessons-table tr:last-child > td {
+  border-bottom: 0;
+}
+.journal-lessons-table tr:not(.journal-lessons-editor) > td:first-child {
+  font-weight: var(--weight-bold);
+}
+.journal-lesson-time {
   white-space: nowrap;
 }
-/* The editor opens as a block of its own under the row, as wide as the grid. */
-.teacher-day > .journal-editor {
+.journal-lesson-subject {
+  font-weight: var(--weight-semibold);
+}
+.journal-lesson-topic {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.journal-lesson-no-topic {
+  color: var(--text-subtle);
+}
+.journal-lesson-cancelled .journal-lesson-subject {
+  text-decoration: line-through;
+}
+.journal-lesson-cancelled td {
+  color: var(--text-muted);
+}
+.journal-lesson-open > td {
+  background: var(--accent-tint);
+}
+.journal-lesson-state-published {
+  color: var(--success);
+}
+.journal-lesson-actions {
+  white-space: nowrap;
+}
+.journal-row-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.journal-lesson-actions .journal-row-button + .journal-row-button {
+  margin-left: 4px;
+}
+/* The editor opens in a row of its own under the row of its lesson, as wide as the table. */
+.journal-lessons-table tr.journal-lessons-editor > td {
+  padding: 8px;
+  background: var(--surface-alt);
+  overflow-wrap: normal;
+}
+.journal-lessons-editor .journal-editor {
   margin: 0;
+}
+.journal-lessons-table > tbody > tr:not(.journal-lessons-editor) > td {
+  overflow-wrap: break-word;
+}
+/* Medium (a small laptop, a tablet on its side): still a table, without the number, the room and the topic, which the lesson shows. */
+@container (min-width: 601px) and (max-width: 720px) {
+  .journal-lessons-table .journal-col-extra {
+    display: none;
+  }
+}
+/* Narrow: the table is stacked, one block per row with the name of each cell in front of it (same as the other tables). */
+@container (max-width: 600px) {
+  .journal-lessons-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .journal-lessons-table,
+  .journal-lessons-table tbody,
+  .journal-lessons-table tr,
+  .journal-lessons-table td {
+    display: block;
+  }
+  .journal-lessons-table tr {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .journal-lessons-table tr:last-child {
+    border-bottom: 0;
+  }
+  .journal-lessons-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+    border: 0;
+    text-align: right;
+  }
+  .journal-lessons-table td::before {
+    content: attr(data-label);
+    flex: 0 0 34%;
+    color: var(--text-muted);
+    font-weight: var(--weight-semibold);
+    text-align: left;
+  }
+  .journal-lessons-table td.journal-lesson-subject {
+    display: block;
+    text-align: left;
+    font-size: 13px;
+  }
+  .journal-lessons-table td.journal-lesson-subject::before,
+  .journal-lessons-table td[colspan]::before,
+  .journal-lessons-table td.journal-lesson-actions::before {
+    content: none;
+  }
+  .journal-lessons-table td.journal-lesson-actions {
+    justify-content: flex-start;
+    padding-top: 4px;
+  }
+  .journal-lessons-table tr.journal-lessons-editor {
+    padding: 6px 0;
+  }
+  .journal-lessons-table tr.journal-lessons-editor > td {
+    display: block;
+    text-align: left;
+    padding: 0;
+  }
+  .journal-lesson-topic {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    text-align: right;
+  }
+  .journal-row-button {
+    min-height: 32px;
+  }
+}
+@media (max-width: 700px) {
+  .journal-classes-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .journal-classes-table,
+  .journal-classes-table tbody,
+  .journal-classes-table tr,
+  .journal-classes-table td {
+    display: block;
+  }
+  .journal-classes-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 14px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .journal-classes-table td,
+  .journal-classes-table td:nth-child(n + 2):nth-child(-n + 4) {
+    display: block;
+    width: auto;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .journal-classes-table td:first-child {
+    flex: 0 0 4.5em;
+  }
+  .journal-classes-table td:nth-child(n + 2):nth-child(-n + 4)::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+  }
+  .journal-classes-table td:last-child {
+    flex: 1 0 100%;
+  }
+  .journal-class-open {
+    min-height: 24px;
+  }
 }
 .month-calendar-unfilled {
   background: var(--danger-tint);
@@ -124,26 +323,12 @@
   font-size: 0.85em;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .teacher-day-layout {
     grid-template-columns: minmax(0, 1fr);
   }
   .teacher-day-layout .month-calendar {
     max-width: 360px;
-  }
-}
-@media (max-width: 640px) {
-  .teacher-day-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
-  }
-  .teacher-day-slot {
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .teacher-day-slot strong {
-    font-size: 1.25em;
   }
 }
 @media print {
@@ -152,7 +337,7 @@
   }
   .teacher-day-layout .month-calendar,
   .teacher-day-tools,
-  .teacher-lesson-actions {
+  .journal-lesson-actions {
     display: none !important;
   }
 }
