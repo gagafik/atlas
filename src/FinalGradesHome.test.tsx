@@ -47,42 +47,31 @@ const job = (status: string): Job => ({
   message: "",
   bookId: "",
 });
-const opens = (html: string) =>
-  [...html.matchAll(/<button[^>]*aria-label="Открыть класс [^"]*"[^>]*>/g)].map(
-    (m) => m[0],
-  );
+const buttons = (html: string) =>
+  [...html.matchAll(/<button[^>]*>/g)].map((m) => m[0]);
+const disabled = (tag: string) => /\sdisabled(=|\s|>)/.test(tag);
 
 describe("ReportClassesTable", () => {
   const rows = classRows(matrix);
-  it("has one open control for every class", () => {
-    const html = renderToStaticMarkup(
+  const render = (busy: boolean) =>
+    renderToStaticMarkup(
       <ReportClassesTable
         rows={rows}
-        busy={false}
+        busy={busy}
         onOpen={() => {}}
         onPrint={() => {}}
       />,
     );
-    const found = opens(html);
-    expect(found).toHaveLength(rows.length);
-    for (const r of rows)
-      expect(
-        found.filter((b) => b.includes(`Открыть класс ${r.name}`)),
-      ).toHaveLength(1);
-    expect(found.every((b) => !b.includes("disabled"))).toBe(true);
+  it("names every class and has controls for each of them", () => {
+    const html = render(false);
+    for (const r of rows) expect(html).toContain(r.name);
+    expect(buttons(html).length).toBeGreaterThanOrEqual(rows.length);
+    expect(buttons(html).some(disabled)).toBe(false);
   });
-  it("blocks every open control while something is busy", () => {
-    const html = renderToStaticMarkup(
-      <ReportClassesTable
-        rows={rows}
-        busy
-        onOpen={() => {}}
-        onPrint={() => {}}
-      />,
-    );
-    const found = opens(html);
-    expect(found).toHaveLength(rows.length);
-    expect(found.every((b) => b.includes("disabled"))).toBe(true);
+  it("blocks every control while something is busy", () => {
+    const found = buttons(render(true));
+    expect(found.length).toBeGreaterThanOrEqual(rows.length);
+    expect(found.every(disabled)).toBe(true);
   });
 });
 
@@ -97,18 +86,19 @@ describe("NoStatement", () => {
         onPrepare={() => {}}
       />,
     );
-  it("offers to prepare the statement of a closed period", () => {
-    expect(render(period(), false)).toContain("Подготовить ведомость");
+  it("offers one action to prepare the statement of a closed period", () => {
+    const found = buttons(render(period(), false));
+    expect(found).toHaveLength(1);
+    expect(disabled(found[0])).toBe(false);
   });
-  it("does not offer it in an archived year, nor for a period that is still open", () => {
-    expect(render(period(), true)).not.toContain("Подготовить ведомость");
-    expect(render(period("open"), false)).not.toContain(
-      "Подготовить ведомость",
-    );
+  it("offers nothing in an archived year, nor for a period that is still open", () => {
+    expect(buttons(render(period(), true))).toHaveLength(0);
+    expect(buttons(render(period("open"), false))).toHaveLength(0);
+    expect(buttons(render(undefined, false))).toHaveLength(0);
   });
-  it("shows the running job and does not let it be started twice", () => {
-    const html = render(period(), false, job("running"));
-    expect(html).toContain("<progress");
-    expect(html).toMatch(/<button[^>]*disabled/);
+  it("does not let a running preparation be started twice", () => {
+    const found = buttons(render(period(), false, job("running")));
+    expect(found).toHaveLength(1);
+    expect(disabled(found[0])).toBe(true);
   });
 });

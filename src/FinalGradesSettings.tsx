@@ -5,6 +5,7 @@ import type { CategoryConfig } from "./assessmentCategories";
 import FinalSelect from "./FinalSelect";
 import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import type { Options, Scale } from "./finalGradesTypes";
+import { settingsLocked } from "./reportCardsView";
 import { useBusy } from "./useBusy";
 import type { Preparations } from "./usePreparations";
 import "./FinalGrades.css";
@@ -382,7 +383,7 @@ export default function FinalGradesSettings({
             Это архивный учебный год: настройки можно смотреть, но не менять.
           </p>
         )}
-        <fieldset disabled={!!year}>
+        <fieldset disabled={settingsLocked(year, tab)}>
           {tab === "scales" && (
             <ScaleEditor
               workspace={workspace}
@@ -403,6 +404,7 @@ export default function FinalGradesSettings({
                 periods={options.periods}
                 preparations={preparations}
                 initialPeriodId={periodId}
+                readOnly={!!year}
                 onOpen={onOpenBook}
               />
               <FinalSelect

@@ -21,6 +21,7 @@ export default function PupilReportCard({
   periodId,
   name,
   reveal = false,
+  refresh = 0,
 }: {
   workspace: string;
   studentId: string;
@@ -29,6 +30,8 @@ export default function PupilReportCard({
   name: string;
   // Bring the card into view and focus it once it has loaded (a notification opened it).
   reveal?: boolean;
+  // Raised to read the card again, for instance after the screen was refreshed.
+  refresh?: number;
 }) {
   const [card, setCard] = useState<Card | null>(null),
     [error, setError] = useState(""),
@@ -61,7 +64,7 @@ export default function PupilReportCard({
     return () => {
       sequence.current++;
     };
-  }, [workspace, studentId, periodId]);
+  }, [workspace, studentId, periodId, refresh]);
   // The card sits below the page header, so one opened from a notification would otherwise load out of sight.
   useEffect(() => {
     if (!card || !reveal || revealed.current) return;

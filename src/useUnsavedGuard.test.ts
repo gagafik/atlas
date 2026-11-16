@@ -13,4 +13,12 @@ describe("what is asked before unsaved results are dropped", () => {
     expect(table).not.toBe(row);
     expect(unsavedMessage(["row", "table-1"])).toBe(table);
   });
+  it("leaves out the place that is being saved itself, but not the others", () => {
+    expect(unsavedMessage(["row"], "row")).toBe("");
+    // A row saves its own draft: typing in an open table is still at risk and is still asked about.
+    expect(unsavedMessage(["row", "table-1"], "row")).toBe(
+      unsavedMessage(["table-1"]),
+    );
+    expect(unsavedMessage(["table-1"], "row")).not.toBe("");
+  });
 });

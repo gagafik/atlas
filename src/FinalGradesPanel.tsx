@@ -120,6 +120,9 @@ export default function FinalGradesPanel({
             options={shared.options}
             studentId={studentId}
             focus={focus}
+            epoch={shared.epoch}
+            busy={shared.busy}
+            onRefresh={shared.refresh}
           />
         ))}
     </section>

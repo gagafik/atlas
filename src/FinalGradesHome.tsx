@@ -277,14 +277,20 @@ export default function FinalGradesHome({
           );
       });
   }, [book?.id, epoch]);
-  // A statement that was finished while nobody looked: the lists are read again and the table appears.
+  // A statement that was finished while nobody looked, for a period without one or for one closed again: the lists are read again
+  // and the screen switches to it. Not while results are typed, the switch would drop them; it waits for the save.
   useEffect(() => {
-    if (book) return;
+    if (dirty) return;
     const id = finishedBook(preparations.jobs, periodId, options.books);
     if (!id || reloaded.current === id) return;
     reloaded.current = id;
-    void reloadOptions();
-  }, [preparations.jobs, periodId, book]);
+    void (async () => {
+      const next = await reloadOptions();
+      if (!next?.books.some((b) => b.id === id)) return;
+      setBookOverride("");
+      setNotice("Готова ведомость нового закрытия.");
+    })();
+  }, [preparations.jobs, periodId, options.books, dirty]);
 
   const back = () => {
     if (!leave()) return;
@@ -501,6 +507,7 @@ export default function FinalGradesHome({
           run={run}
           setNotice={setNotice}
           book={book}
+          previewable={!!found?.current}
           classId={classView.classId}
           className={className}
           classRow={classRow}
@@ -519,7 +526,7 @@ export default function FinalGradesHome({
           }
           admin
           bookId={book.id}
-          currentBook={book.current}
+          currentBook={!!found?.current}
           initialTile="final"
           onClose={() => setPrintClass("")}
         />
@@ -609,6 +616,7 @@ export default function FinalGradesHome({
                     readOnly={readOnly}
                     categories={categories}
                     lastScale={lastScale}
+                    leave={leave}
                     onDirty={onDirty}
                     onChanged={() => {
                       setTableEpoch((n) => n + 1);

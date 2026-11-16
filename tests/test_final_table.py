@@ -248,6 +248,19 @@ def test_matrix_counts_and_scope(client):
     assert matrix(signed('idle'),b).status_code==404 and matrix(client,dict(b,id='missing')).status_code==404
 
 
+def test_matrix_waits_for_a_teacher_only_on_drafts(client):
+    p,b,s,r,_=seeded(client)
+    free=lambda:sum(c['unassigned'] for c in matrix(client,b).json()['cells'])
+    before=free()
+    left=batch(client,[r],'assign',teacherId='');assert left.status_code==200,left.text
+    assert free()==before+1
+    # The administrator fills in the row himself: nobody is missing for it any more, whether it is submitted or approved.
+    submitted=propose(client,left.json()['items'][0],s);assert submitted.status_code==200,submitted.text
+    assert free()==before
+    approved=batch(client,[submitted.json()],'approve');assert approved.status_code==200,approved.text
+    assert free()==before
+
+
 def test_matrix_classes_count_pupils_not_rows(client):
     p,b,s,r,_=seeded(client);t=signed('teacher')
     def expected(c):

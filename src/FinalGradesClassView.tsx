@@ -34,6 +34,7 @@ export default function FinalGradesClassView({
   run,
   setNotice,
   book,
+  previewable,
   classId,
   className,
   classRow,
@@ -41,6 +42,8 @@ export default function FinalGradesClassView({
 }: FinalsShared & {
   // The statement of the period; not current for an older closure and for an archived year.
   book: Book;
+  // The statement is of the last closure of its period, even if the school year is archived: the preliminary cards can be built.
+  previewable: boolean;
   classId: string;
   className: string;
   // The counters of the class from the classes table; they follow every change.
@@ -281,6 +284,7 @@ export default function FinalGradesClassView({
           readOnly={readOnly}
           categories={categories}
           lastScale={lastScale}
+          leave={leave}
           onDirty={onDirty}
           onChanged={() => {
             setTableKey((n) => n + 1);
@@ -297,10 +301,17 @@ export default function FinalGradesClassView({
           className={className}
           admin
           bookId={book.id}
-          currentBook={book.current}
-          gridRef={grid}
+          currentBook={previewable}
+          // The grid can be printed only once it is on screen.
+          gridRef={rows?.length && layout ? grid : undefined}
           initialTile={dialog.pupilId ? "pupil" : undefined}
           initialPupilId={dialog.pupilId}
+          initialPupilName={
+            rows?.find((r) => r.studentId === dialog.pupilId)?.source.student
+              .name
+          }
+          // A class is checked before it is published, so the pupil opens as the preview, not as an empty published card.
+          initialPreliminary={!!dialog.pupilId}
           onClose={() => setDialog(null)}
         />
       )}

@@ -2,6 +2,7 @@
 import { finalLabel, names } from "./finalGrades";
 import type {
   Book,
+  ClassReport,
   Matrix,
   Named,
   Period,
@@ -63,6 +64,48 @@ export function finishedBook(
   );
 }
 
+/**
+ * The periods a family can choose for one child, newest first: those the child has a published card in.
+ * An older server does not say which child has which, so then every period is offered.
+ */
+export function childPeriods(
+  periods: Period[],
+  studentPeriods: Record<string, string[]> | undefined,
+  pupilId: string,
+): Period[] {
+  const own = studentPeriods?.[pupilId];
+  return own ? periods.filter((p) => own.includes(p.id)) : periods;
+}
+
+/** The period a family sees: the one it picked for this child if the child still has it, else the newest of the child. */
+export function familyPeriod(
+  available: Period[],
+  picked: { pupilId: string; periodId: string } | null,
+  pupilId: string,
+): string {
+  if (
+    picked &&
+    picked.pupilId === pupilId &&
+    available.some((p) => p.id === picked.periodId)
+  )
+    return picked.periodId;
+  return available[0]?.id ?? "";
+}
+
+/** Where the card of a pupil in the print dialog comes from: the class report, the pupil's own card when he is no longer in the class, or nowhere yet. */
+export function pupilCardSource(
+  report: ClassReport | undefined,
+  pupilId: string,
+): "class" | "personal" | "none" {
+  if (!report || !pupilId) return "none";
+  return report.pupils.some((p) => p.id === pupilId) ? "class" : "personal";
+}
+
+/** Whether the settings tab is read-only: an archived year cannot be changed, but its statements can still be looked through. */
+export function settingsLocked(year: string | undefined, tab: string): boolean {
+  return !!year && tab !== "preparation";
+}
+
 // ---- Where a class or a course stands -------------------------------------
 
 export type Counts = {
@@ -86,7 +129,8 @@ export type ClassState = {
 
 /** The one thing a class or course waits for, in the order the people involved have to act. */
 export function classState(c: Counts): ClassState {
-  const done = c.submitted + c.approved + c.published;
+  // A saved draft is already a result set by the teacher, so it counts as well; a submitted, approved or published row always has one.
+  const done = Math.max(c.proposed, c.submitted + c.approved + c.published);
   const state = (kind: StateKind, count: number): ClassState => ({
     kind,
     count,

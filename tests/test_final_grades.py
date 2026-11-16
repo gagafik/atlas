@@ -74,6 +74,18 @@ def test_workflow_assignment_privacy_and_personal_publication(client):
     assert propose(u,r,s).status_code==404
     assert t.get(BASE+'/options?workspace=school').status_code==403
 
+def test_options_tell_a_family_which_periods_each_child_has(client):
+    p,b,s,r,_=seeded(client);t=signed('teacher')
+    publish(client,propose(t,r,s).json())
+    create(client,'parent',login='both',grants=[dict(workspace='demo',view='student',entityIds=['s1','s2'])])
+    got=opts(signed('both'))
+    assert [x['id'] for x in got['periods']]==[p['id']]
+    # The child with a published card has the period; the other child has none, so a family never lands on an empty card by default.
+    assert got['studentPeriods']['s1']==[p['id']] and got['studentPeriods'].get('s2',[])==[]
+    # Staff are not families: nothing is listed per child.
+    assert not opts(client).get('studentPeriods')
+
+
 def test_expected_unmarked_and_explicit_no_grade(client):
     p,b,s,r,_=seeded(client)
     empty=next(v for v in sheet(client,b).json()['items'] if not v['source']['published'])

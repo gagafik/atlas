@@ -321,11 +321,16 @@ class FinalGrades:
                     start,end,_=school_years.bounds(db,workspace,snap.state,year)
                     inside=lambda p:start<=p['start'] and p['end']<=end
                     periods=[p for p in periods if inside(p)];books=[b for b in books if inside(b['period'])]
+                # Which of the listed periods has a published card for which child, so a family opens the newest period of the child on screen.
+                owned={}
+                if not staff:
+                    have=set(db.execute('SELECT DISTINCT student_id,period_id FROM final_results WHERE workspace=? AND student_id IN (SELECT value FROM json_each(?))',(workspace,encoded(sorted(ids)))).fetchall())
+                    owned={i:[p['id'] for p in periods if (i,p['id']) in have] for i in sorted(ids)}
                 students=[dict(id=s.id,name=s.name) for s in snap.state.students if user['role']=='admin' or user['role'] in ['parent','student'] and s.id in user_ids(user,workspace,'student') or s.id in pupils]
                 # Classes for the report-card steps: all of them for the administrator, the led ones for a class teacher.
                 shown=[c for c in snap.state.classes if user['role']=='admin' or c.id in leading]
                 settings=school(db,workspace) if staff else {}
-                return dict(admin=user['role']=='admin',staff=staff,classTeacher=bool(leading),scales=scales,books=books,periods=periods,students=students,teachers=self.teachers(db,workspace,snap) if user['role']=='admin' else [],
+                return dict(admin=user['role']=='admin',staff=staff,classTeacher=bool(leading),scales=scales,books=books,periods=periods,studentPeriods=owned,students=students,teachers=self.teachers(db,workspace,snap) if user['role']=='admin' else [],
                     classes=[dict(id=c.id,name=c.name) for c in sorted(shown,key=lambda c:(natural(c.name),c.id))],phrases=settings.get('phrases',[]),yearRule=settings.get('yearRule','periods'),reportVersion=settings.get('version',0))
 
         @app.put('/api/final-grades/scales/{id}')

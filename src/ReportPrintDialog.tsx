@@ -4,8 +4,9 @@ import { downloadCsv } from "./downloadCsv";
 import type { ClassReport } from "./finalGradesTypes";
 import FinalSelect from "./FinalSelect";
 import { CLASS_PRINT, GRID_PRINT, printNode } from "./printReport";
+import PupilReportCard from "./PupilReportCard";
 import ReportCards from "./ReportCards";
-import { cardCsvRows } from "./reportCardsView";
+import { cardCsvRows, pupilCardSource } from "./reportCardsView";
 
 export type PrintTile = "final" | "preview" | "pupil" | "grid" | "csv";
 
@@ -71,6 +72,8 @@ export default function ReportPrintDialog({
   gridRef,
   initialTile,
   initialPupilId = "",
+  initialPupilName = "",
+  initialPreliminary = false,
   onClose,
 }: {
   workspace: string;
@@ -80,12 +83,16 @@ export default function ReportPrintDialog({
   // The administrator also sees the preliminary cards, the CSV and, with a grid, the ledger; everyone else the published cards only.
   admin: boolean;
   bookId: string;
-  // False for an older closure and an archived year: no preliminary cards are built from it.
+  // False for an older closure: no preliminary cards are built from it. True in an archived year too, when the statement is of the period's last closure.
   currentBook: boolean;
   // The class grid on screen, when the dialog is opened from the class view.
   gridRef?: RefObject<HTMLDivElement | null>;
   initialTile?: PrintTile;
   initialPupilId?: string;
+  // The name of that pupil, for the case that he has left the class and only his own card can be shown.
+  initialPupilName?: string;
+  // Start with the preliminary cards (approved and published), the administrator's preview.
+  initialPreliminary?: boolean;
   onClose: () => void;
 }) {
   const ids = availableTiles({
@@ -98,7 +105,9 @@ export default function ReportPrintDialog({
     initialTile && ids.includes(initialTile) ? initialTile : null,
   );
   const [pupilId, setPupilId] = useState(initialPupilId);
-  const [preliminary, setPreliminary] = useState(false);
+  const [preliminary, setPreliminary] = useState(
+    initialPreliminary && admin && currentBook,
+  );
   const [reports, setReports] = useState<{
     final?: ClassReport;
     preview?: ClassReport;
@@ -149,15 +158,17 @@ export default function ReportPrintDialog({
     return { ...report, pupils: report.pupils.filter((p) => p.id === pupilId) };
   }, [report, tile, pupilId]);
   const pupil = report?.pupils.find((p) => p.id === pupilId);
+  // A pupil who left the class is not in its report; his own published card is still there.
+  const source = pupilCardSource(report, pupilId);
 
   function print(title: string) {
     if (!printNode(cards.current, title, CLASS_PRINT))
       setError("Разрешите открытие окна для печати.");
   }
   function printGrid() {
-    if (
-      !printNode(gridRef?.current ?? null, `Ведомость ${className}`, GRID_PRINT)
-    )
+    const grid = gridRef?.current ?? null;
+    if (!grid) return setError("Ведомость класса ещё не загружена.");
+    if (!printNode(grid, `Ведомость ${className}`, GRID_PRINT))
       setError("Разрешите открытие окна для печати.");
   }
   const exportLink = `/api/final-grades/books/${bookId}/export?${new URLSearchParams({ workspace, classId, subjectId: "", status: "all" })}`;
@@ -229,10 +240,15 @@ export default function ReportPrintDialog({
             <FinalSelect
               label="Ученик"
               value={pupilId}
-              items={(report?.pupils ?? []).map((p) => ({
-                id: p.id,
-                name: p.name,
-              }))}
+              items={[
+                ...(report?.pupils ?? []).map((p) => ({
+                  id: p.id,
+                  name: p.name,
+                })),
+                ...(source === "personal" && initialPupilName
+                  ? [{ id: pupilId, name: initialPupilName }]
+                  : []),
+              ]}
               onChange={setPupilId}
             />
             {admin && currentBook && (
@@ -246,6 +262,21 @@ export default function ReportPrintDialog({
               </label>
             )}
           </div>
+          {source === "personal" && (
+            <>
+              <p role="status">
+                Ученика сейчас нет в составе класса: показан его опубликованный
+                табель.
+              </p>
+              <PupilReportCard
+                key={pupilId}
+                workspace={workspace}
+                studentId={pupilId}
+                periodId={periodId}
+                name={initialPupilName}
+              />
+            </>
+          )}
           {shown && pupil && (
             <>
               <div className="finals-toolbar">

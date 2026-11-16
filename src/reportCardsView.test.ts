@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   Book,
+  ClassReport,
   Matrix,
   Period,
   Published,
@@ -11,16 +12,20 @@ import {
   bookFor,
   cardCsvRows,
   cellLabel,
+  childPeriods,
   classGrid,
   classRows,
   classState,
   courseRows,
   defaultPeriod,
+  familyPeriod,
   finishedBook,
   gridGpa,
   hasPoints,
+  pupilCardSource,
   rowActionAllowed,
   searchPupils,
+  settingsLocked,
   statusMark,
   stateText,
   teacherPeriods,
@@ -106,6 +111,81 @@ describe("period and statement choice", () => {
     expect(finishedBook([job("q1", "running", "")], "q1", [])).toBe("");
     expect(finishedBook([job("q1", "failed", "b9")], "q1", [])).toBe("");
   });
+  it("reports the new statement of a period that closed again and already has an older one", () => {
+    const jobs = [{ periodId: "q1", status: "succeeded", bookId: "new" }];
+    expect(finishedBook(jobs, "q1", [{ id: "old" }])).toBe("new");
+    expect(finishedBook(jobs, "q1", [{ id: "old" }, { id: "new" }])).toBe("");
+  });
+});
+
+describe("periods of a family", () => {
+  const newer = period("q2"),
+    older = period("q1");
+  const periods = [newer, older];
+  const published = { a: ["q2", "q1"], b: ["q1"], c: [] as string[] };
+  it("offers a child only the periods in which the child has a card", () => {
+    expect(childPeriods(periods, published, "a").map((p) => p.id)).toEqual([
+      "q2",
+      "q1",
+    ]);
+    expect(childPeriods(periods, published, "b").map((p) => p.id)).toEqual([
+      "q1",
+    ]);
+    expect(childPeriods(periods, published, "c")).toEqual([]);
+  });
+  it("offers every period when the server does not say which child has which", () => {
+    expect(childPeriods(periods, undefined, "a")).toBe(periods);
+  });
+  it("opens each child at the own newest period, not at the newest of the family", () => {
+    const of = (id: string) => childPeriods(periods, published, id);
+    expect(familyPeriod(of("a"), null, "a")).toBe("q2");
+    expect(familyPeriod(of("b"), null, "b")).toBe("q1");
+    expect(familyPeriod(of("c"), null, "c")).toBe("");
+  });
+  it("keeps a period that was picked for this child and drops it for another child", () => {
+    const picked = { pupilId: "a", periodId: "q1" };
+    expect(
+      familyPeriod(childPeriods(periods, published, "a"), picked, "a"),
+    ).toBe("q1");
+    expect(
+      familyPeriod(childPeriods(periods, published, "b"), picked, "b"),
+    ).toBe("q1");
+    // A pick the child does not have is not kept.
+    const other = { pupilId: "b", periodId: "q2" };
+    expect(
+      familyPeriod(childPeriods(periods, published, "b"), other, "b"),
+    ).toBe("q1");
+    expect(
+      familyPeriod(childPeriods(periods, published, "a"), other, "a"),
+    ).toBe("q2");
+  });
+});
+
+describe("where a card of the print dialog comes from", () => {
+  const report = (...ids: string[]) =>
+    ({ pupils: ids.map((id) => ({ id })) }) as unknown as ClassReport;
+  it("takes the card from the class report while the pupil is in the class", () => {
+    expect(pupilCardSource(report("p1", "p2"), "p2")).toBe("class");
+  });
+  it("falls back to the pupil's own card when he has left the class", () => {
+    expect(pupilCardSource(report("p1"), "gone")).toBe("personal");
+  });
+  it("has no card before the report arrives or before a pupil is chosen", () => {
+    expect(pupilCardSource(undefined, "p1")).toBe("none");
+    expect(pupilCardSource(report("p1"), "")).toBe("none");
+  });
+});
+
+describe("settings of an archived year", () => {
+  it("locks what changes the school and leaves the statements open to look through", () => {
+    for (const tab of ["scales", "categories", "report"])
+      expect(settingsLocked("2025", tab)).toBe(true);
+    expect(settingsLocked("2025", "preparation")).toBe(false);
+  });
+  it("locks nothing in the current year", () => {
+    for (const tab of ["scales", "categories", "report", "preparation"])
+      expect(settingsLocked(undefined, tab)).toBe(false);
+  });
 });
 
 describe("state of a class", () => {
@@ -121,6 +201,14 @@ describe("state of a class", () => {
       counts({ draft: 4, submitted: 3, approved: 2, published: 1 }),
     );
     expect([s.kind, s.done, s.total]).toEqual(["drafting", 6, 10]);
+  });
+  it("counts a saved draft as a result set, so a teacher who saved all grades sees them", () => {
+    const s = classState(counts({ draft: 10, proposed: 7 }));
+    expect([s.kind, s.done, s.total]).toEqual(["drafting", 7, 10]);
+    // Never fewer than the rows already handed in.
+    expect(
+      classState(counts({ draft: 4, submitted: 6, proposed: 1 })).done,
+    ).toBe(6);
   });
   it("then waits for approval, then for publication, then is published", () => {
     expect(classState(counts({ submitted: 2, approved: 8 })).kind).toBe(

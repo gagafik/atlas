@@ -305,6 +305,7 @@ export default function FinalGradeRows({
           readOnly={readOnly}
           categories={categories}
           lastScale={lastScale}
+          leave={leave}
           onDirty={onDirty}
           onChanged={onChanged}
           onClose={() => {

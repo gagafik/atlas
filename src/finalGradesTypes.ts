@@ -116,6 +116,8 @@ export type Options = {
   scales: Scale[];
   books: Book[];
   periods: Period[];
+  // For a family: the ids of the periods in which each of its children has a published card, newest period first.
+  studentPeriods?: Record<string, string[]>;
   students: Named[];
   teachers: Named[];
   classes: Named[];
@@ -224,7 +226,8 @@ export type FinalsShared = {
   // Raised after every change, so the tables never show numbers from before it.
   epoch: number;
   changed: () => void;
-  leave: () => boolean;
+  // `leave("row")` leaves out the typing of the row that is being saved itself.
+  leave: (except?: string) => boolean;
   // Whether some table or row holds unsaved results.
   dirty: boolean;
   onDirty: (table: string, dirty: boolean) => void;

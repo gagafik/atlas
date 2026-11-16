@@ -130,6 +130,7 @@ export default function TeacherFinals({
               readOnly={readOnly}
               categories={categories}
               lastScale={lastScale}
+              leave={leave}
               onDirty={onDirty}
               onChanged={() => {
                 setTableEpoch((n) => n + 1);

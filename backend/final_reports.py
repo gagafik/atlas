@@ -231,7 +231,8 @@ def register(service,app,Workspace):
             cells={};names={'class':{},'subject':{}}
             for c,s,status,free,proposed,n,class_name,subject_name in rows:
                 cell=cells.setdefault((c,s),dict(classId=c,subjectId=s,total=0,draft=0,submitted=0,approved=0,published=0,proposed=0,unassigned=0,unavailable=0))
-                cell['total']+=n;cell[status]+=n;cell['proposed']+=n*proposed;cell['unassigned']+=n*free
+                # Only a draft waits for somebody to be made responsible; a row the administrator filled in himself needs no teacher.
+                cell['total']+=n;cell[status]+=n;cell['proposed']+=n*proposed;cell['unassigned']+=n*free*(status=='draft')
                 names['class'][c]=class_name or '';names['subject'][s]=subject_name or ''
             # Drafts left with an account that is no longer a teacher's (the teacher left or lost the grant): nobody can edit them until the administrator reassigns.
             if user['role']=='admin':

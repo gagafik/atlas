@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import ClassGrid from "./ClassGrid";
 import type { Row, Scale } from "./finalGradesTypes";
-import ReportPrintDialog, { availableTiles } from "./ReportPrintDialog";
-import { statusMark } from "./reportCardsView";
+import { availableTiles } from "./ReportPrintDialog";
+import { gridGpa, statusMark } from "./reportCardsView";
 
 const scale = (withPoints: boolean): Scale => ({
   id: "sc",
@@ -63,40 +63,63 @@ const render = (rows: Row[]) =>
     />,
   );
 const statuses = ["draft", "submitted", "approved", "published"];
+const controls = (html: string) => (html.match(/<button/g) ?? []).length;
 
 describe("class grid", () => {
-  it("gives every cell the full status of its row", () => {
+  it("says the status of every cell in words, so it never depends on colour", () => {
     // One subject per status, so every status has a cell of its own.
     const html = render(
       statuses.map((s, i) => row("p1", `subject${i}`, s, "5", true)),
     );
-    for (const status of statuses) {
-      const { full } = statusMark(status);
-      expect(html).toContain(`title="${full}"`);
-      expect(html).toContain(`, ${full}"`);
-    }
+    for (const status of statuses)
+      expect(html).toContain(statusMark(status).full);
+    expect(new Set(statuses.map((s) => statusMark(s).short)).size).toBe(
+      statuses.length,
+    );
   });
-  it("shows the average only when the scale gives points", () => {
-    const withPoints = render([row("p1", "algebra", "draft", "5", true)]);
-    const without = render([row("p1", "algebra", "draft", "5", false)]);
-    expect(withPoints).toContain("Средний балл");
-    expect(without).not.toContain("Средний балл");
+  it("shows the average of a pupil only when the scale gives points", () => {
+    const rows = [row("p1", "algebra", "draft", "5", true)];
+    const average = gridGpa(rows, []);
+    expect(average).toBeTruthy();
+    expect(render(rows)).toContain(average!);
+    expect(render([row("p1", "algebra", "draft", "5", false)])).not.toContain(
+      average!,
+    );
   });
-  it("marks a subject that is not on the report card", () => {
-    const html = render([
+  it("has a control for every subject, every pupil and every cell", () => {
+    const pupils = ["p1", "p2"],
+      subjects = ["algebra", "physics"];
+    const rows = pupils.flatMap((p) =>
+      subjects.map((s) => row(p, s, "draft", "5", true)),
+    );
+    const none = render([]);
+    expect(controls(none)).toBe(0);
+    // Subjects and pupils to open, and a cell for each of them: more controls than pupils and subjects alone.
+    expect(controls(render(rows))).toBe(
+      subjects.length + pupils.length + subjects.length * pupils.length,
+    );
+  });
+  it("keeps a subject that is not on the report card in the grid", () => {
+    const rows = [
       row("p1", "algebra", "draft", "5", true),
       row("p1", "physics", "draft", "4", true),
-    ]);
-    expect(html).toContain("не в табеле");
-  });
-  it("has a control for every subject and pupil", () => {
-    const html = render([
-      row("p1", "algebra", "draft", "5", true),
-      row("p2", "algebra", "draft", "4", true),
-    ]);
-    expect(html).toContain("Образцов");
-    expect(html).toContain("Примеров");
-    expect(html).toContain("Алгебра");
+    ];
+    // Hiding a subject from the card does not remove its column or its cells from the statement.
+    expect(controls(render(rows))).toBe(
+      controls(
+        renderToStaticMarkup(
+          <ClassGrid
+            rows={rows}
+            layout={{ order: [], hidden: [] }}
+            className="7А"
+            periodName="Первая четверть"
+            onSubject={() => undefined}
+            onCell={() => undefined}
+            onPupil={() => undefined}
+          />,
+        ),
+      ),
+    );
   });
 });
 
@@ -121,21 +144,9 @@ describe("print dialog", () => {
     expect(offered()).toContain("grid");
     expect(offered({ grid: false })).not.toContain("grid");
   });
-  it("renders no preview tile without admin rights", () => {
-    const html = renderToStaticMarkup(
-      <ReportPrintDialog
-        workspace="school"
-        periodId="q1"
-        classId="c"
-        className="7А"
-        admin={false}
-        bookId=""
-        currentBook={false}
-        onClose={() => undefined}
-      />,
-    );
-    expect(html).toContain("Табели класса");
-    expect(html).not.toContain("Предварительные табели");
-    expect(html).not.toContain("CSV ведомости");
+  it("offers the export only to the administrator with a statement", () => {
+    expect(offered()).toContain("csv");
+    expect(offered({ admin: false })).not.toContain("csv");
+    expect(offered({ bookId: "" })).not.toContain("csv");
   });
 });

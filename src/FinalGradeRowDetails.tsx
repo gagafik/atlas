@@ -96,6 +96,7 @@ export default function FinalGradeRowDetails({
   onDirty,
   onChanged,
   onClose,
+  leave,
 }: {
   workspace: string;
   // The row as the list or the table knows it; the details read it again.
@@ -112,6 +113,8 @@ export default function FinalGradeRowDetails({
   onDirty: (table: string, dirty: boolean) => void;
   onChanged: () => void;
   onClose: () => void;
+  // The screen's check of unsaved results. An action here reads the tables again, so what is typed in an open table must be asked about too.
+  leave?: (except?: string) => boolean;
 }) {
   const { busy, error, notice, setNotice, run } = useBusy();
   const [row, setRow] = useState<Row | null>(null),
@@ -174,7 +177,8 @@ export default function FinalGradeRowDetails({
   };
   async function act(action: string) {
     if (!row) return;
-    if (dirty && !window.confirm(unsavedMessage(["row"]))) return;
+    if (leave ? !leave() : dirty && !window.confirm(unsavedMessage(["row"])))
+      return;
     if (
       action === "publish" &&
       !window.confirm(
@@ -197,6 +201,8 @@ export default function FinalGradeRowDetails({
   }
   async function save(submit: boolean) {
     if (!row) return;
+    // The row's own draft is what is saved; only the typing of other places is asked about.
+    if (leave && !leave("row")) return;
     await run(async () => {
       const r = await api(`final-grades/rows/${row.id}`, workspace, "PUT", {
         ...draft,

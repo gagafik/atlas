@@ -12,12 +12,15 @@ export default function GradebookPreparationPanel({
   periods,
   preparations,
   initialPeriodId = "",
+  readOnly = false,
   onOpen,
 }: {
   periods: Period[];
   // The jobs and the actions on them; the screen holds one instance, so the first view and the settings show the same jobs.
   preparations: Preparations;
   initialPeriodId?: string;
+  // An archived year: statements are looked through and opened, not prepared or cancelled.
+  readOnly?: boolean;
   onOpen: (id: string) => Promise<void>;
 }) {
   const { jobs, busy, error, action, prepare, cancel, refresh } = preparations;
@@ -65,6 +68,7 @@ export default function GradebookPreparationPanel({
           </label>
           <button
             disabled={
+              readOnly ||
               !periodId ||
               jobs.some(
                 (j) =>
@@ -113,7 +117,7 @@ export default function GradebookPreparationPanel({
                 Открыть готовую ведомость
               </button>
             )}
-            {isActiveJob(job) && (
+            {isActiveJob(job) && !readOnly && (
               <button
                 disabled={job.status === "cancelling"}
                 onClick={() => void cancel(job)}
@@ -121,12 +125,13 @@ export default function GradebookPreparationPanel({
                 Отменить подготовку
               </button>
             )}
-            {["failed", "stale", "cancelled"].includes(job.status) && (
-              <p>
-                Чтобы повторить подготовку, выберите актуальное закрытие периода
-                выше.
-              </p>
-            )}
+            {["failed", "stale", "cancelled"].includes(job.status) &&
+              !readOnly && (
+                <p>
+                  Чтобы повторить подготовку, выберите актуальное закрытие
+                  периода выше.
+                </p>
+              )}
           </article>
         ))}
         <p>Показаны активные задания и последние завершённые, до 50 записей.</p>
