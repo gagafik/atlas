@@ -6,6 +6,10 @@ section.journal-editor {
   min-width: 0;
   padding: 12px 14px;
 }
+/* The lesson takes the focus when it opens, so the keyboard starts in it; a ring around the whole screen says nothing. */
+section.journal-editor:focus {
+  outline: none;
+}
 .journal-editor [id^="journal-"] {
   scroll-margin-top: 72px;
 }
