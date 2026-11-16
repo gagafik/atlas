@@ -36,7 +36,6 @@ export default function FinalGradesMatrix({
   phrases,
   teachers,
   lastScale,
-  classFilter = "",
   refresh = 0,
   leave,
   onDirty,
@@ -51,8 +50,6 @@ export default function FinalGradesMatrix({
   phrases: string[];
   teachers: Named[];
   lastScale: { current: string };
-  // Show the row of one class only (the report-card steps).
-  classFilter?: string;
   // Raised by the parent after changes made outside this matrix (the row list, the preparation, another matrix).
   refresh?: number;
   leave: () => boolean;
@@ -81,15 +78,13 @@ export default function FinalGradesMatrix({
     const r = await api(`final-grades/books/${book.id}/matrix`, workspace);
     if (mine === generation.current) setData(r);
   }
-  // The cells on screen: with a class filter the other classes are not shown, so they cannot be acted on either.
-  const shown = (d: Matrix | null) =>
-    (d?.cells || []).filter((c) => !classFilter || c.classId === classFilter);
+  const shown = (d: Matrix | null) => d?.cells || [];
   useEffect(() => {
     setOpened(null);
     setSelected([]);
     setError("");
     void load().catch((e) => setError(e instanceof Error ? e.message : ""));
-  }, [book.id, classFilter]);
+  }, [book.id]);
   useEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
@@ -196,9 +191,7 @@ export default function FinalGradesMatrix({
       <p role="status">Загрузка…</p>
     );
   const cells = shown(data);
-  const classes = data.classes.filter(
-    (c) => !classFilter || c.id === classFilter,
-  );
+  const classes = data.classes;
   const find = (c: string, s: string) =>
     cells.find((x) => x.classId === c && x.subjectId === s);
   const label = (c: Cell) => cellText(data, c);
@@ -213,13 +206,6 @@ export default function FinalGradesMatrix({
         </p>
       )}
       {notice && <p role="status">{notice}</p>}
-      {classFilter && cells.some((c) => c.draft + c.submitted > 0) && (
-        <p className="error">
-          Не все итоги класса утверждены: черновиков{" "}
-          {cells.reduce((n, c) => n + c.draft, 0)}, на утверждении{" "}
-          {cells.reduce((n, c) => n + c.submitted, 0)}.
-        </p>
-      )}
       {admin ? (
         <>
           <p>

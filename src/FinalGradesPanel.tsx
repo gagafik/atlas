@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { useAssessmentCategories } from "./assessmentCategories";
+import FamilyFinals from "./FamilyFinals";
 import FinalGradesHome from "./FinalGradesHome";
 import type { FinalsShared, Options } from "./finalGradesTypes";
-import ReportCardChooser from "./ReportCardChooser";
 import TeacherFinals from "./TeacherFinals";
 import { useUnsavedGuard } from "./useUnsavedGuard";
 
@@ -115,12 +115,11 @@ export default function FinalGradesPanel({
         ) : shared.options.staff ? (
           <TeacherFinals {...shared} focus={focus} />
         ) : (
-          <ReportCardChooser
+          <FamilyFinals
             workspace={workspace}
             options={shared.options}
             studentId={studentId}
             focus={focus}
-            title="Опубликованный личный табель"
           />
         ))}
     </section>

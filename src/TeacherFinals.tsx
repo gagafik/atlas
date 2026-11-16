@@ -3,8 +3,8 @@ import FinalGradeRowDetails from "./FinalGradeRowDetails";
 import FinalGradesMatrix from "./FinalGradesMatrix";
 import FinalSelect from "./FinalSelect";
 import type { FinalsShared, Row } from "./finalGradesTypes";
-import ReportCardChooser from "./ReportCardChooser";
-import ReportCardSteps from "./ReportCardSteps";
+import PupilReportCard from "./PupilReportCard";
+import ReportPrintDialog from "./ReportPrintDialog";
 import { bookFor, teacherPeriods } from "./reportCardsView";
 import "./FinalGrades.css";
 
@@ -20,7 +20,6 @@ export default function TeacherFinals({
   leave,
   dirty,
   onDirty,
-  reloadOptions,
   refresh,
   busy,
   focus,
@@ -39,7 +38,8 @@ export default function TeacherFinals({
   const [bookId, setBookId] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [tableEpoch, setTableEpoch] = useState(0);
-  const [classId, setClassId] = useState("");
+  // The class whose published cards are open in the print dialog.
+  const [printClass, setPrintClass] = useState("");
   const own = options.books.filter((b) => b.period.id === periodId);
   const found = bookFor(periodId, options.books, bookId);
   const book = found && readOnly ? { ...found, current: false } : found;
@@ -147,40 +147,39 @@ export default function TeacherFinals({
           {options.classes.map((c) => (
             <section key={c.id} className="finals-my-class">
               <h3>Мой класс: {c.name}</h3>
-              <button
-                aria-pressed={classId === c.id}
-                disabled={!periodId}
-                onClick={() => {
-                  if (leave()) setClassId(classId === c.id ? "" : c.id);
-                }}
-              >
+              <button disabled={!periodId} onClick={() => setPrintClass(c.id)}>
                 Табели класса
               </button>
-              {classId === c.id && periodId && (
-                <ReportCardSteps
-                  key={`${periodId}-${c.id}`}
-                  workspace={workspace}
-                  options={options}
-                  lastScale={lastScale}
-                  refresh={epoch}
-                  leave={leave}
-                  onDirty={onDirty}
-                  periodId={periodId}
-                  classId={c.id}
-                  onChanged={() => {
-                    void reloadOptions();
-                    changed();
-                  }}
-                />
-              )}
             </section>
           ))}
-          <ReportCardChooser
-            workspace={workspace}
-            options={options}
-            focus={focus}
-            title="Табели учеников вашего класса"
-          />
+          {focus?.finalsPeriodId && (
+            <PupilReportCard
+              key={`${focus.studentId}/${focus.finalsPeriodId}`}
+              workspace={workspace}
+              studentId={focus.studentId}
+              periodId={focus.finalsPeriodId}
+              name={
+                options.students.find((x) => x.id === focus.studentId)?.name ??
+                ""
+              }
+              reveal
+            />
+          )}
+          {printClass && periodId && (
+            <ReportPrintDialog
+              workspace={workspace}
+              periodId={periodId}
+              classId={printClass}
+              className={
+                options.classes.find((c) => c.id === printClass)?.name ?? ""
+              }
+              admin={false}
+              bookId=""
+              currentBook={false}
+              initialTile="final"
+              onClose={() => setPrintClass("")}
+            />
+          )}
         </>
       )}
     </div>

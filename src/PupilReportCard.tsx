@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { downloadCsv } from "./downloadCsv";
 import { finalLabel } from "./finalGrades";
 import type { Gpa, Measure, Period, Published } from "./finalGradesTypes";
 import { PERSONAL_PRINT, printNode } from "./printReport";
 import { ReportExtras } from "./ReportCards";
 import { cardCsvRows } from "./reportCardsView";
-import { csvCell } from "./utils";
 
 type Card = {
   period: Period;
@@ -13,24 +13,6 @@ type Card = {
   gpa: Gpa | null;
   measures: Measure[];
 };
-
-function download(rows: unknown[][], filename: string) {
-  const blob = new Blob(
-    [
-      "﻿" +
-        rows
-          .map((r) => r.map((v) => csvCell(String(v ?? ""))).join(";"))
-          .join("\r\n"),
-    ],
-    { type: "text/csv;charset=utf-8" },
-  );
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 // The published report card of one pupil for one period: it loads itself, an answer that is not the latest asked is dropped.
 export default function PupilReportCard({
@@ -135,7 +117,7 @@ export default function PupilReportCard({
           <div className="dated-toolbar">
             <button
               disabled={!card.items.length}
-              onClick={() => download(cardCsvRows(card.items), "Табель.csv")}
+              onClick={() => downloadCsv(cardCsvRows(card.items), "Табель.csv")}
             >
               Скачать табель CSV
             </button>

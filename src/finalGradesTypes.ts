@@ -235,3 +235,11 @@ export type FinalsShared = {
   run: (work: () => Promise<void>) => Promise<boolean>;
   setNotice: (text: string) => void;
 };
+
+// The order and the visibility of the subjects on the report cards of one class.
+export type ReportLayout = {
+  version: number;
+  order: string[];
+  hidden: string[];
+  subjects: Named[];
+};

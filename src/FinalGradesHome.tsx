@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import FinalGradeRowDetails from "./FinalGradeRowDetails";
 import FinalGradeRows from "./FinalGradeRows";
+import FinalGradesClassView from "./FinalGradesClassView";
 import FinalGradesMatrix from "./FinalGradesMatrix";
 import FinalGradesSettings, { type SettingsTab } from "./FinalGradesSettings";
 import FinalSelect from "./FinalSelect";
@@ -13,7 +14,7 @@ import type {
   Row,
 } from "./finalGradesTypes";
 import PupilReportCard from "./PupilReportCard";
-import ReportCardSteps from "./ReportCardSteps";
+import ReportPrintDialog from "./ReportPrintDialog";
 import {
   bookFor,
   classRows,
@@ -33,7 +34,7 @@ import "./FinalGrades.css";
 
 type View =
   | { kind: "home" }
-  | { kind: "class"; classId: string; print: boolean }
+  | { kind: "class"; classId: string }
   | { kind: "pupil"; studentId: string; reveal: boolean };
 type Tab = "classes" | "subjects" | "rows";
 const TABS: { id: Tab; title: string }[] = [
@@ -230,6 +231,8 @@ export default function FinalGradesHome({
   const [view, setView] = useState<View>({ kind: "home" });
   const [settings, setSettings] = useState<SettingsTab | null>(null);
   const [search, setSearch] = useState("");
+  // The class whose cards the «Печать» of the classes table opens in a dialog.
+  const [printClass, setPrintClass] = useState("");
   // The row opened from a pupil name in the table of «По предметам», and the raised counter that reads that table again.
   const [detail, setDetail] = useState<Row | null>(null);
   const [tableEpoch, setTableEpoch] = useState(0);
@@ -300,9 +303,9 @@ export default function FinalGradesHome({
     setDetail(null);
     setTab(next);
   }
-  function openClass(classId: string, print: boolean) {
+  function openClass(classId: string) {
     if (!leave()) return;
-    setView({ kind: "class", classId, print });
+    setView({ kind: "class", classId });
   }
   function openPupil(studentId: string) {
     if (!leave()) return;
@@ -371,12 +374,6 @@ export default function FinalGradesHome({
     classRow?.name ||
     options.classes.find((c) => c.id === classView?.classId)?.name ||
     "";
-  const stepOptions = readOnly
-    ? {
-        ...options,
-        books: options.books.map((b) => ({ ...b, current: false })),
-      }
-    : options;
 
   return (
     <div className="finals-home">
@@ -485,44 +482,47 @@ export default function FinalGradesHome({
         </section>
       )}
       {book && classView && (
-        <section className="finals-class" aria-label={`Класс ${className}`}>
-          <div className="finals-class-head">
-            <button onClick={back}>← Все классы</button>
-            <h3>
-              {className} · {book.period.name}
-            </h3>
-          </div>
-          {classRow && (
-            <p className="finals-status-line">
-              {book.period.start}–{book.period.end} · учеников:{" "}
-              <strong>{classRow.pupils}</strong> · итоги:{" "}
-              <strong>
-                {classRow.state.done} из {classRow.total}
-              </strong>{" "}
-              · утверждено:{" "}
-              <strong>{classRow.approved + classRow.published}</strong> ·
-              опубликовано: <strong>{classRow.published}</strong> ·{" "}
-              {stateText(classRow.state)}
-            </p>
-          )}
-          <ReportCardSteps
-            key={`${book.id}-${classView.classId}`}
-            workspace={workspace}
-            options={stepOptions}
-            lastScale={lastScale}
-            refresh={epoch}
-            leave={leave}
-            onDirty={onDirty}
-            periodId={book.period.id}
-            classId={classView.classId}
-            bookId={book.id}
-            initialStep={classView.print ? 5 : 1}
-            onChanged={() => {
-              void reloadOptions();
-              changed();
-            }}
-          />
-        </section>
+        <FinalGradesClassView
+          key={`${book.id}-${classView.classId}`}
+          workspace={workspace}
+          year={year}
+          options={options}
+          categories={categories}
+          onCategoriesSaved={onCategoriesSaved}
+          lastScale={lastScale}
+          epoch={epoch}
+          changed={changed}
+          leave={leave}
+          dirty={dirty}
+          onDirty={onDirty}
+          reloadOptions={reloadOptions}
+          refresh={refresh}
+          busy={busy}
+          run={run}
+          setNotice={setNotice}
+          book={book}
+          classId={classView.classId}
+          className={className}
+          classRow={classRow}
+          onBack={back}
+        />
+      )}
+      {book && printClass && (
+        <ReportPrintDialog
+          workspace={workspace}
+          periodId={book.period.id}
+          classId={printClass}
+          className={
+            rows.find((r) => r.id === printClass)?.name ||
+            options.classes.find((c) => c.id === printClass)?.name ||
+            ""
+          }
+          admin
+          bookId={book.id}
+          currentBook={book.current}
+          initialTile="final"
+          onClose={() => setPrintClass("")}
+        />
       )}
       {book && view.kind === "home" && (
         <>
@@ -557,8 +557,8 @@ export default function FinalGradesHome({
                   <ReportClassesTable
                     rows={rows}
                     busy={busy}
-                    onOpen={(id) => openClass(id, false)}
-                    onPrint={(id) => openClass(id, true)}
+                    onOpen={openClass}
+                    onPrint={setPrintClass}
                   />
                 )}
               </>
