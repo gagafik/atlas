@@ -119,8 +119,7 @@
 /* The lessons of a day: one row of about 40 px per lesson; text that does not fit wraps in two lines, the topic is cut. */
 .journal-lessons-box {
   container-type: inline-size;
-  /* Between the stacked layout and the width the ten columns need, the table scrolls inside its box, never the page. */
-  overflow-x: auto;
+  /* No overflow here: a scrolling box would capture the lesson editor's sticky save bar. The cells wrap instead. */
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -129,7 +128,7 @@
   padding: 5px 8px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .journal-lessons-table tr:last-child > td {
   border-bottom: 0;
@@ -186,8 +185,17 @@
 .journal-lessons-editor .journal-editor {
   margin: 0;
 }
+.journal-lessons-table > tbody > tr:not(.journal-lessons-editor) > td {
+  overflow-wrap: break-word;
+}
+/* Medium (a small laptop, a tablet on its side): still a table, without the number, the room and the topic, which the lesson shows. */
+@container (min-width: 601px) and (max-width: 720px) {
+  .journal-lessons-table .journal-col-extra {
+    display: none;
+  }
+}
 /* Narrow: the table is stacked, one block per row with the name of each cell in front of it (same as the other tables). */
-@container (max-width: 720px) {
+@container (max-width: 600px) {
   .journal-lessons-table thead {
     position: absolute;
     width: 1px;

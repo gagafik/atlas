@@ -120,14 +120,14 @@ export function LessonsTable({
       <table className="journal-lessons-table" aria-label={label}>
         <thead>
           <tr>
-            <th>№</th>
+            <th className="journal-col-extra">№</th>
             <th>Время</th>
             {showClass && <th>Класс</th>}
             <th>Предмет</th>
             {showGroup && <th>Группа</th>}
             <th>Учитель</th>
-            <th>Кабинет</th>
-            <th>Тема</th>
+            <th className="journal-col-extra">Кабинет</th>
+            <th className="journal-col-extra">Тема</th>
             <th>Посещаемость</th>
             <th>Состояние</th>
             <th>
@@ -150,7 +150,9 @@ export function LessonsTable({
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  <td data-label="№">{number || "—"}</td>
+                  <td data-label="№" className="journal-col-extra">
+                    {number || "—"}
+                  </td>
                   <td data-label="Время" className="journal-lesson-time">
                     {l.lesson.start}–{l.lesson.end}
                   </td>
@@ -164,8 +166,10 @@ export function LessonsTable({
                     <td data-label="Группа">{groupLabel(l) || "—"}</td>
                   )}
                   <td data-label="Учитель">{l.lesson.teachers || "—"}</td>
-                  <td data-label="Кабинет">{l.lesson.rooms || "—"}</td>
-                  <td data-label="Тема">
+                  <td data-label="Кабинет" className="journal-col-extra">
+                    {l.lesson.rooms || "—"}
+                  </td>
+                  <td data-label="Тема" className="journal-col-extra">
                     <span
                       className={
                         topic
