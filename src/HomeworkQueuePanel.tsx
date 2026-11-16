@@ -8,8 +8,10 @@ import {
   listKey,
   mayLeave,
   nextConditions,
+  pageExpired,
   periodButtonLabel,
   periodPatch,
+  periodRefused,
   queueParams,
   queueTabs,
   type QueueFields,
@@ -41,7 +43,9 @@ export default function HomeworkQueuePanel({
     [applied, setApplied] = useState(initial);
   const [result, setResult] = useState<QueueResult | null>(null),
     [meta, setMeta] = useState<QueueMeta | null>(null),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    // The server refused the period itself (422), not the page or the connection.
+    [refused, setRefused] = useState(false);
   const [cursor, setCursor] = useState(""),
     [epoch, setEpoch] = useState(0),
     [busy, setBusy] = useState(true);
@@ -75,9 +79,11 @@ export default function HomeworkQueuePanel({
     let live = true;
     setBusy(true);
     setError("");
+    setRefused(false);
     // Another list clears the screen; the same page read again (after a review) stays until the new answer comes.
     const key = listKey(workspace, child, applied, cursor);
-    if (key !== shownList.current) {
+    const reread = key === shownList.current;
+    if (!reread) {
       shownList.current = key;
       setResult(null);
     }
@@ -106,7 +112,11 @@ export default function HomeworkQueuePanel({
       })
       .catch((e) => {
         if (!live) return;
+        // A page lives fifteen minutes on the server: a later page read again after a review may be gone.
+        // Then the list starts from the first page instead of showing an error nobody asked for.
+        if (pageExpired(e.status, cursor, reread)) return setCursor("");
         setError(e.message);
+        setRefused(periodRefused(e.status, applied));
         setResult(null);
       })
       .finally(() => {
@@ -216,14 +226,10 @@ export default function HomeworkQueuePanel({
                 });
             }}
           >
-            <summary
-              data-refused={
-                error && (applied.start || applied.end) ? "" : undefined
-              }
-            >
+            <summary data-refused={refused ? "" : undefined}>
               Период
               {meta || applied.start || applied.end
-                ? ": " + periodButtonLabel(meta, applied, !!error)
+                ? ": " + periodButtonLabel(meta, applied, refused)
                 : ""}
             </summary>
             <div className="homework-queue-period-panel">
@@ -284,8 +290,15 @@ export default function HomeworkQueuePanel({
               </div>
             </div>
           </details>
-          <button type="button" disabled={busy} onClick={refresh}>
-            Обновить
+          <button
+            type="button"
+            className="homework-queue-refresh"
+            disabled={busy}
+            aria-label="Обновить список"
+            title="Обновить список"
+            onClick={refresh}
+          >
+            ↻
           </button>
         </div>
         <p className="homework-queue-note">

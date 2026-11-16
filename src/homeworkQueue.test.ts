@@ -10,9 +10,11 @@ import {
   manyPupils,
   mayLeave,
   nextConditions,
+  pageExpired,
   periodButtonLabel,
   periodLabel,
   periodPatch,
+  periodRefused,
   queueParams,
   queueSections,
   queueTabs,
@@ -463,6 +465,26 @@ describe("homework period button after the server refused the dates", () => {
       periodLabel(meta),
     );
     expect(periodButtonLabel(null, { start: "", end: "" }, false)).toBe("");
+  });
+});
+
+describe("what a failed answer of the queue means", () => {
+  const dates = { start: "2026-12-01", end: "2026-11-01" };
+  it("blames the period only when the server refused the dates that were asked for", () => {
+    expect(periodRefused(422, dates)).toBe(true);
+    expect(periodRefused(409, dates)).toBe(false);
+    expect(periodRefused(403, dates)).toBe(false);
+    expect(periodRefused(undefined, dates)).toBe(false);
+    expect(periodRefused(422, { start: "", end: "" })).toBe(false);
+  });
+  it("starts again from the first page only when a later page read again is gone", () => {
+    expect(pageExpired(409, "page-two", true)).toBe(true);
+    // The user asked for this page: the server's message is shown.
+    expect(pageExpired(409, "page-two", false)).toBe(false);
+    // The first page has nothing to fall back to.
+    expect(pageExpired(409, "", true)).toBe(false);
+    expect(pageExpired(422, "page-two", true)).toBe(false);
+    expect(pageExpired(undefined, "page-two", true)).toBe(false);
   });
 });
 

@@ -200,7 +200,14 @@ export const wholeTaskKey = (lessonKey: string, part = 0) =>
   workKey(lessonKey) + (part ? "#" + part : "");
 // The moment a work was sent, in the school's time zone.
 export const sentLabel = (iso: string) =>
-  new Date(iso).toLocaleString("ru-RU", { timeZone: "Asia/Qyzylorda" });
+  new Date(iso).toLocaleString("ru-RU", {
+    timeZone: "Asia/Qyzylorda",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
 // What is committed to the queue: the tabs, the search and the period.
 export type QueueFields = QueueFilters;
@@ -246,6 +253,17 @@ export function periodButtonLabel(
     return `${asked.start ? dateLabel(asked.start) : "…"}–${asked.end ? dateLabel(asked.end) : "…"}`;
   return meta ? periodLabel(meta) : "";
 }
+// The server answers 422 to a period it will not show; any other failure says nothing about the dates.
+export const periodRefused = (
+  status: number | undefined,
+  asked: Pick<QueueFields, "start" | "end">,
+) => status === 422 && !!(asked.start || asked.end);
+// A later page that is read again (not asked for by the user) and is no longer kept by the server.
+export const pageExpired = (
+  status: number | undefined,
+  cursor: string,
+  reread: boolean,
+) => status === 409 && !!cursor && reread;
 // What the list on the screen stands for: another key means another list, the same key is the same page read again.
 export const listKey = (
   workspace: string,

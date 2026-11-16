@@ -11,6 +11,7 @@ import HomeworkGradeForm, {
   type GradingEvidence,
 } from "./HomeworkGradeForm";
 import { requestId } from "./dutySchedule";
+import { dateLabel } from "./homeworkQueue";
 import {
   acceptable,
   bulkItems,
@@ -308,7 +309,7 @@ function StudentWork({
       </p>
       <p>
         {work.dueDate
-          ? `Срок: ${work.dueDate}, до конца дня по времени школы (Кызылорда). ${work.latePolicy === "block" ? "После срока приём закрывается." : "Поздние отправки принимаются с отметкой."}`
+          ? `Срок: ${dateLabel(work.dueDate)}, до конца дня по времени школы (Кызылорда). ${work.latePolicy === "block" ? "После срока приём закрывается." : "Поздние отправки принимаются с отметкой."}`
           : "Срок не указан."}
       </p>
       <HomeworkDeadlinePanel
@@ -377,7 +378,11 @@ function StudentWork({
               <summary>Условия на момент отправки</summary>
               <p className="journal-text">{work.submitted.homework}</p>
               <p>
-                Срок: {work.submitted.dueDate || "не указан"}.{" "}
+                Срок:{" "}
+                {work.submitted.dueDate
+                  ? dateLabel(work.submitted.dueDate)
+                  : "не указан"}
+                .{" "}
                 {work.submitted.latePolicy === "block"
                   ? "После срока приём закрыт."
                   : "Поздние отправки разрешены."}
@@ -633,7 +638,11 @@ function StudentWork({
                     {h.submitted.homework}
                   </p>
                   <p>
-                    Срок: {h.submitted.dueDate || "не указан"}.{" "}
+                    Срок:{" "}
+                    {h.submitted.dueDate
+                      ? dateLabel(h.submitted.dueDate)
+                      : "не указан"}
+                    .{" "}
                     {h.submitted.latePolicy === "block"
                       ? "После срока приём закрыт."
                       : "Поздние отправки разрешены."}

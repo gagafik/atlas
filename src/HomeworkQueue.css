@@ -34,8 +34,13 @@
 .homework-queue-search {
   display: flex;
   gap: 6px;
-  flex: 1 1 220px;
+  flex: 1 1 140px;
   min-width: 0;
+}
+.homework-queue-toolbar > .homework-queue-refresh {
+  padding: 6px 10px;
+  font-size: 15px;
+  line-height: 1;
 }
 .homework-queue-search input {
   flex: 1 1 auto;
@@ -102,7 +107,15 @@
 }
 /* On a narrow toolbar the panel opens inside the flow instead of floating over the page. */
 @container homework-queue-toolbar (max-width: 619px) {
+  /* The search and the refresh button share a line; the period takes the next one. */
+  .homework-queue-search {
+    order: 1;
+  }
+  .homework-queue-toolbar > .homework-queue-refresh {
+    order: 2;
+  }
   .homework-queue-period {
+    order: 3;
     flex: 1 1 100%;
   }
   .homework-queue-period-panel {
@@ -157,6 +170,45 @@
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* Here the work is already opened by its row and closed by «← К списку»: the panel's own fold button has nothing to do. */
+.homework-queue-work .homework-panel {
+  margin: 0;
+}
+.homework-queue-work .homework-panel > button[aria-expanded] {
+  display: none;
+}
+/* The class of a whole task: short rows in two columns, so the chosen pupil's work under them stays on the screen. */
+.homework-queue-work .homework-roster {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
+  margin: 0 0 12px;
+}
+.homework-queue-work .homework-roster > p,
+.homework-queue-work .homework-roster > .homework-bulk {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.homework-queue-work .homework-roster > .homework-bulk {
+  margin-top: 8px;
+}
+.homework-queue-work .homework-roster button:not(.primary) {
+  justify-content: flex-start;
+  min-height: 30px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: var(--weight-regular);
+}
+.homework-queue-work .homework-roster button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  font-weight: var(--weight-semibold);
+}
+@media (max-width: 700px) {
+  .homework-queue-work .homework-roster {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* The list: a compact table in a box of its own. The box scrolls sideways inside itself when a row is wider than the
@@ -255,6 +307,10 @@
 }
 .homework-queue-state {
   min-width: 150px;
+}
+/* Room for the state and one more chip on a line: a row of the family list keeps its two lines. */
+.homework-queue-family .homework-queue-state {
+  min-width: 216px;
 }
 .homework-queue-staff .homework-queue-state {
   width: 100%;
