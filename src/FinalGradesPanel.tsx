@@ -12,6 +12,7 @@ import GradebookPreparationPanel from "./GradebookPreparationPanel";
 import { PERSONAL_PRINT, printNode } from "./printReport";
 import ReportCardSteps from "./ReportCardSteps";
 import { ReportExtras } from "./ReportCards";
+import { cardCsvRows } from "./reportCardsView";
 import { csvCell } from "./utils";
 import AssessmentCategoriesEditor from "./AssessmentCategoriesEditor";
 import CategoryBadge from "./CategoryBadge";
@@ -1399,37 +1400,7 @@ export default function FinalGradesPanel({
                       <button
                         disabled={!report.items.length}
                         onClick={() =>
-                          download(
-                            [
-                              [
-                                "Ученик",
-                                "Класс",
-                                "Период",
-                                "Предмет",
-                                "Итог",
-                                "Комментарий",
-                                "Шкала",
-                                "Редакция шкалы",
-                                "Закрытие",
-                                "Источник актуален",
-                                "Опубликовано",
-                              ],
-                              ...report.items.map((r) => [
-                                r.student.name,
-                                r.student.className,
-                                r.period,
-                                r.subject,
-                                finalLabel(r),
-                                r.comment,
-                                r.scale.name,
-                                r.scale.version,
-                                r.closureVersion,
-                                r.current ? "Да" : "Нет",
-                                r.publishedAt,
-                              ]),
-                            ],
-                            "Табель.csv",
-                          )
+                          download(cardCsvRows(report.items), "Табель.csv")
                         }
                       >
                         Скачать табель CSV

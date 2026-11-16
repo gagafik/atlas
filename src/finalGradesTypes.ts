@@ -175,3 +175,37 @@ export type ClassReport = {
   pupils: Card[];
   preview: boolean;
 };
+export type Cell = {
+  classId: string;
+  subjectId: string;
+  total: number;
+  draft: number;
+  submitted: number;
+  approved: number;
+  published: number;
+  proposed: number;
+  unassigned: number;
+  // Drafts whose teacher account is no longer valid.
+  unavailable: number;
+};
+export type Matrix = {
+  book: Book;
+  // Pupils: distinct pupils of the class among the rows the viewer can see.
+  classes: (Named & { pupils?: number })[];
+  subjects: Named[];
+  cells: Cell[];
+};
+// A background run that prepares the statement of a closed period.
+export type Job = {
+  id: string;
+  periodId: string;
+  periodName: string;
+  closureVersion: number;
+  status: string;
+  phase: string;
+  completed: number;
+  total: number;
+  attempts: number;
+  message: string;
+  bookId: string;
+};

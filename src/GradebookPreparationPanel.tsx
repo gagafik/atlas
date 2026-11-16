@@ -1,21 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { startPolling } from "./polling";
+import type { Job } from "./finalGradesTypes";
 
 type Period = { id: string; name: string; version: number; status: string };
-type Job = {
-  id: string;
-  periodId: string;
-  periodName: string;
-  closureVersion: number;
-  status: string;
-  phase: string;
-  completed: number;
-  total: number;
-  attempts: number;
-  message: string;
-  bookId: string;
-};
 const active = (job: Job) =>
   ["queued", "running", "cancelling"].includes(job.status);
 const statuses: Record<string, string> = {

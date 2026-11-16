@@ -2,27 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import FinalGradesTable from "./FinalGradesTable";
 import { cellKey, chunked, eligibleFor, visibleSelection } from "./finalGrades";
-import type { Book, Named, Scale } from "./finalGradesTypes";
+import type { Book, Cell, Matrix, Named, Scale } from "./finalGradesTypes";
 
-type Cell = {
-  classId: string;
-  subjectId: string;
-  total: number;
-  draft: number;
-  submitted: number;
-  approved: number;
-  published: number;
-  proposed: number;
-  unassigned: number;
-  // Drafts whose teacher account is no longer valid.
-  unavailable: number;
-};
-type Matrix = {
-  book: Book;
-  classes: Named[];
-  subjects: Named[];
-  cells: Cell[];
-};
 type Handle = { id: string; version: number; status: string };
 
 const ACTIONS: Record<string, string> = {
