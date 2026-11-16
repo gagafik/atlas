@@ -13,6 +13,7 @@ import {
   type JournalEntry,
   type PupilRecord,
 } from "./journal";
+import { absenceOptions } from "./lessonEditorModel";
 import "./LessonPupilCards.css";
 
 // Choosable marks. «Не отмечено» and the old «Уважительная причина» only show as a chip while a record holds them:
@@ -48,17 +49,8 @@ export default function LessonPupilCards({
       {lesson.students.map((s) => {
         const record = content.records.find((p) => p.studentId === s.id)!;
         const share = lateShare(record.lateMinutes, lesson.start, lesson.end);
-        const codes = [...(entry.absenceCodes ?? [])];
         // A retired type stays selectable on the marks that already hold it, so a correction does not drop it.
-        if (
-          record.absenceCode &&
-          !codes.some((c) => c.id === record.absenceCode)
-        )
-          codes.push({
-            id: record.absenceCode,
-            name: record.absenceCode,
-            active: false,
-          });
+        const codes = absenceOptions(entry.absenceCodes, record.absenceCode);
         const comments = [
           record.comment,
           ...record.grades.map((g) => g.comment),
@@ -130,14 +122,12 @@ export default function LessonPupilCards({
                     }
                   >
                     <option value="">Без типа</option>
-                    {codes
-                      .filter((c) => c.active || c.id === record.absenceCode)
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                          {c.active ? "" : " (отключён)"}
-                        </option>
-                      ))}
+                    {codes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.active ? "" : " (отключён)"}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <small>

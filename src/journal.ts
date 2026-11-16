@@ -75,6 +75,14 @@ export interface JournalDocument {
   lesson: JournalLesson;
   content: JournalContent;
 }
+// One saved revision of a lesson record (journal/history); the document comes with a single revision asked for by number.
+export interface JournalHistory {
+  version: number;
+  updated: string;
+  actor: string;
+  action: string;
+  document?: JournalDocument;
+}
 export interface JournalEntry {
   lessonKey: string;
   version: number;
