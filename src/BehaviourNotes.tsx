@@ -109,7 +109,9 @@ export default function BehaviourNotes({
     [boardKind, setBoardKind] = useState<Kind>("praise"),
     [history, setHistory] = useState<{ id: string; items: History } | null>(
       null,
-    );
+    ),
+    // The record whose line is open under its row.
+    [openId, setOpenId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     classId: "",
     studentId: "",
@@ -285,6 +287,7 @@ export default function BehaviourNotes({
   }
   useEffect(() => {
     setHistory(null);
+    setOpenId(null);
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, filters]);
@@ -428,6 +431,7 @@ export default function BehaviourNotes({
     await run(async () => {
       const result = await api(`behaviour/notes/${note.id}/history`, workspace);
       setHistory({ id: note.id, items: result.items });
+      setOpenId(note.id);
     }, "");
   }
   async function loadSummary() {
@@ -462,6 +466,7 @@ export default function BehaviourNotes({
     setTab(view);
     setLetterView(null);
     setHistory(null);
+    setOpenId(null);
     void run(() => load(view), "");
   }
   function updateCategory(i: number, change: Partial<Category>) {
@@ -540,8 +545,11 @@ export default function BehaviourNotes({
     >
       <header>
         <div>
-          <h2 id="behaviour-title">Похвалы, замечания и меры</h2>
-          <p>Записи учителей, классных руководителей и администрации</p>
+          <h2 id="behaviour-title">Официальные письма</h2>
+          <p>
+            Похвалы, замечания и меры · Записи учителей, классных руководителей
+            и администрации
+          </p>
         </div>
         <button
           disabled={busy}
@@ -634,7 +642,7 @@ export default function BehaviourNotes({
         )}
 
         {options && !staff && options.students.length > 0 && (
-          <section>
+          <div className="bn-family">
             <label>
               Ученик
               <select
@@ -655,7 +663,7 @@ export default function BehaviourNotes({
               <span className="bn-praise">Похвал: {totals.praise}</span>
               <span className="bn-remark">Замечаний: {totals.remark}</span>
             </p>
-          </section>
+          </div>
         )}
         {options?.commission?.family && !staff && filters.studentId && (
           <CommissionExams
@@ -682,7 +690,7 @@ export default function BehaviourNotes({
         )}
 
         {options && staff && tab === "notes" && (
-          <section aria-label="Фильтры" className="bn-controls">
+          <div className="bn-toolbar" role="group" aria-label="Фильтры">
             {periodFilters}
             <label>
               Ученик
@@ -736,7 +744,7 @@ export default function BehaviourNotes({
             <a href={exportHref} download>
               Скачать CSV
             </a>
-          </section>
+          </div>
         )}
 
         {options && (tab === "notes" || tab === "queue" || !staff) && (
@@ -744,6 +752,8 @@ export default function BehaviourNotes({
             notes={notes}
             staff={staff}
             canAcknowledge={options.canAcknowledge}
+            openId={openId}
+            onToggle={(id) => setOpenId((now) => (now === id ? null : id))}
             history={history}
             empty={
               tab === "queue" ? "Мер на согласовании нет." : "Записей пока нет."
