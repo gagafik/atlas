@@ -189,7 +189,7 @@ export default function BehaviourNoteForm({
             })
           )}
         </div>
-        {total > shown.length && (
+        {shown.length > 0 && total > shown.length && (
           <p className="bn-pick-more">
             Показаны первые {shown.length} из {total}. Уточните поиск.
           </p>

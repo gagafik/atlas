@@ -111,12 +111,18 @@ describe("BehaviourNotesTable for the staff", () => {
     const first = note({ id: "n1" });
     const second = note({ id: "n2" });
     const seen = calls();
-    const ui = table([first, second], seen);
-    for (const b of buttonsOf(ui).filter(
-      (b) => textOf(b.props.children) === "История",
-    ))
-      b.props.onClick!();
+    // The button is in the line that opens under a row.
+    for (const opened of [first, second])
+      buttonNamed(
+        table([first, second], seen, { openId: opened.id }),
+        "История",
+      )!.props.onClick!();
     expect(seen.historyOf).toEqual([first, second]);
+  });
+  it("keeps editing and the history out of a row that is not opened", () => {
+    const ui = table([note({ canChange: true })], calls());
+    for (const name of ["Изменить", "Отозвать", "История"])
+      expect(buttonNamed(ui, name)).toBeUndefined();
   });
   it("opens a row from its details button", () => {
     const seen = calls();
@@ -129,6 +135,7 @@ describe("BehaviourNotesTable for the staff", () => {
     const ui = table(
       [note({ canChange: true, requireAck: true, acknowledged: true })],
       seen,
+      { openId: "n1" },
     );
     expect(buttonNamed(ui, "Изменить")!.props.disabled).toBe(true);
   });
@@ -176,6 +183,7 @@ describe("BehaviourNotesTable for the family", () => {
     const ui = table([waiting], calls(), {
       staff: false,
       canAcknowledge: true,
+      openId: waiting.id,
     });
     for (const name of ["Изменить", "Отозвать", "История"])
       expect(buttonNamed(ui, name)).toBeUndefined();

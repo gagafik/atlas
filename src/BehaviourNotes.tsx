@@ -824,7 +824,12 @@ export default function BehaviourNotes({
                 <button
                   ref={newButton}
                   className="primary"
-                  onClick={() => setFormOpen(true)}
+                  onClick={() => {
+                    // A message about the list does not belong to a new, empty record.
+                    setError("");
+                    setNotice("");
+                    setFormOpen(true);
+                  }}
                 >
                   ＋ Новая запись
                 </button>

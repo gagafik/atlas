@@ -30,13 +30,22 @@ function chipLabel(chip: NoteChip, note: Note) {
     case "letter":
       return `Письмо № ${note.letterNumber}`;
     case "ackDone":
-      return `Ознакомлен(а) ${stamp(note.acknowledgedAt)}`;
+      return "Ознакомлен(а)";
     default:
-      return "Ожидает подтверждения родителя";
+      return "Ждёт подтверждения";
   }
+}
+// What a short mark stands for; the same words are in the line that opens under the row.
+function chipHint(chip: NoteChip, note: Note) {
+  if (chip.title) return chip.title;
+  if (chip.key === "ackDone")
+    return `Родитель ознакомился ${stamp(note.acknowledgedAt)}`;
+  if (chip.key === "ackWait") return "Ожидает подтверждения родителя";
+  return undefined;
 }
 
 // The records of the dialog as a compact table: one row per record, the rest of it in a line that opens under the row.
+// A row holds only what waits for a decision and «Подробнее»; editing, withdrawing and the history are in the opened line.
 // It has no state: what the buttons do is decided by the callbacks, which row is open by `openId`.
 export default function BehaviourNotesTable({
   notes,
@@ -136,7 +145,7 @@ export default function BehaviourNotesTable({
                               key={chip.key}
                               className="bn-state"
                               data-state={chip.key}
-                              title={chip.title || undefined}
+                              title={chipHint(chip, n)}
                             >
                               {chipLabel(chip, n)}
                             </span>
@@ -177,31 +186,6 @@ export default function BehaviourNotesTable({
                               Письмо-решение
                             </button>
                           )}
-                          {can.edit && (
-                            <>
-                              <button
-                                aria-label={`Изменить: ${about}`}
-                                disabled={can.edit === "off"}
-                                onClick={() => onEdit(n)}
-                              >
-                                Изменить
-                              </button>
-                              <button
-                                aria-label={`Отозвать: ${about}`}
-                                onClick={() => onWithdraw(n)}
-                              >
-                                Отозвать
-                              </button>
-                            </>
-                          )}
-                          {can.history && (
-                            <button
-                              aria-label={`История: ${about}`}
-                              onClick={() => onHistory(n)}
-                            >
-                              История
-                            </button>
-                          )}
                           <button
                             aria-label={`Подробнее: ${about}`}
                             aria-expanded={open}
@@ -233,6 +217,35 @@ export default function BehaviourNotesTable({
                             {n.status === "withdrawn" &&
                               ` · Отозвана: ${n.withdrawReason || ""}`}
                           </p>
+                          {(can.edit || can.history) && (
+                            <div className="bn-detail-actions">
+                              {can.edit && (
+                                <>
+                                  <button
+                                    aria-label={`Изменить: ${about}`}
+                                    disabled={can.edit === "off"}
+                                    onClick={() => onEdit(n)}
+                                  >
+                                    Изменить
+                                  </button>
+                                  <button
+                                    aria-label={`Отозвать: ${about}`}
+                                    onClick={() => onWithdraw(n)}
+                                  >
+                                    Отозвать
+                                  </button>
+                                </>
+                              )}
+                              {can.history && (
+                                <button
+                                  aria-label={`История: ${about}`}
+                                  onClick={() => onHistory(n)}
+                                >
+                                  История
+                                </button>
+                              )}
+                            </div>
+                          )}
                           {history?.id === n.id && (
                             <ol className="bn-history">
                               {history.items.map((h) => (

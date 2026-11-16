@@ -201,7 +201,10 @@
   color: var(--text);
 }
 .behaviour .bn-toolbar select {
-  max-width: 190px;
+  max-width: 150px;
+}
+.behaviour .bn-toolbar input[type="date"] {
+  width: 128px;
 }
 .bn-toolbar > a {
   margin-left: auto;
@@ -226,7 +229,8 @@
     max-width: none;
     width: 100%;
   }
-  .behaviour .bn-toolbar input {
+  .behaviour .bn-toolbar input,
+  .behaviour .bn-toolbar input[type="date"] {
     width: 100%;
   }
   .bn-toolbar > a {
@@ -419,7 +423,8 @@
   white-space: nowrap;
 }
 .bn-c-kind {
-  min-width: 140px;
+  min-width: 190px;
+  max-width: 240px;
 }
 /* The text is cut to one line by the cell; the whole text is in the title and in the line under the row. */
 .bn-c-text {
@@ -431,17 +436,20 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.bn-c-state {
-  min-width: 150px;
-}
 .bn-chips,
-.bn-row-actions {
+.bn-row-actions,
+.bn-detail-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
+/* The buttons of a row stay on one line: a row is as tall as its text. */
 .bn-row-actions {
+  flex-wrap: nowrap;
   justify-content: flex-end;
+}
+.bn-detail-actions {
+  margin: 6px 0 2px;
 }
 .bn-kind,
 .bn-state {
@@ -511,16 +519,14 @@
       "date pupil"
       "kind state"
       "text text"
-      "author author"
-      "actions actions";
+      "author actions";
   }
   .bn-notes-family tr.bn-notes-row {
     grid-template-areas:
       "date kind"
       "state state"
       "text text"
-      "author author"
-      "actions actions";
+      "author actions";
   }
   .bn-notes tr.bn-notes-row > td {
     padding: 2px 0;
@@ -578,7 +584,8 @@
     grid-area: actions;
   }
   .bn-row-actions {
-    justify-content: flex-start;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .bn-notes .bn-detail-row > td {
     padding: 6px 8px;
