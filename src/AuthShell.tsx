@@ -122,9 +122,13 @@ export default function AuthShell() {
         }
       | undefined
     >();
-  // «Воспитательная мера» of the launcher: the form opens on a measure, for pupils chosen in it.
-  useLaunch(["measure"], () =>
-    setBehaviourPrefill({ studentIds: [], measure: true }),
+  // «Новая заметка» and «Воспитательная мера» of the launcher: the form opens (the latter on a measure), for pupils chosen in it.
+  useLaunch(["note", "measure"], (intent) =>
+    setBehaviourPrefill(
+      intent === "measure"
+        ? { studentIds: [], measure: true }
+        : { studentIds: [] },
+    ),
   );
   // The section of the records a notification leads to («commission»).
   const [behaviourSection, setBehaviourSection] = useState<string>();

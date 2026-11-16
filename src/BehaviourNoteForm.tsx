@@ -1,4 +1,10 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   addPupils,
   kindLabels,
@@ -20,6 +26,8 @@ export default function BehaviourNoteForm({
   course,
   forCourse,
   setForCourse,
+  error,
+  notice,
   onSubmit,
   onBack,
 }: {
@@ -33,12 +41,27 @@ export default function BehaviourNoteForm({
   course: { id: string; name: string } | null;
   forCourse: boolean;
   setForCourse: (value: boolean) => void;
-  onSubmit: (categoryId?: string, text?: string) => void;
+  // The refusal or the result of the last request is shown by the buttons: the dialog scrolls, the top of it is out of view.
+  error: string;
+  notice: string;
+  // A quick mark keeps the form open for the next one.
+  onSubmit: (categoryId?: string, text?: string, quick?: boolean) => void;
   // Back to the list; the dialog asks first when the form holds something.
   onBack: () => void;
 }) {
   const [search, setSearch] = useState("");
-  const { shown, hint } = pickerPupils(
+  const heading = useRef<HTMLHeadingElement>(null),
+    messages = useRef<HTMLDivElement>(null);
+  // The form takes the focus when it opens, on its heading, so that a screen reader says what has opened.
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true });
+    heading.current?.scrollIntoView?.({ block: "start" });
+  }, []);
+  useEffect(() => {
+    if (error || notice)
+      messages.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error, notice]);
+  const { shown, hint, total } = pickerPupils(
     options.students,
     form.classId,
     search,
@@ -64,7 +87,9 @@ export default function BehaviourNoteForm({
         <button type="button" onClick={onBack}>
           ← К записям
         </button>
-        <h3>Новая запись</h3>
+        <h3 ref={heading} tabIndex={-1}>
+          Новая запись
+        </h3>
       </div>
       <fieldset className="bn-pick">
         <legend>
@@ -164,6 +189,11 @@ export default function BehaviourNoteForm({
             })
           )}
         </div>
+        {total > shown.length && (
+          <p className="bn-pick-more">
+            Показаны первые {shown.length} из {total}. Уточните поиск.
+          </p>
+        )}
       </fieldset>
       {quick.length > 0 && (
         <div className="bn-quick" aria-label="Быстрые отметки">
@@ -175,7 +205,7 @@ export default function BehaviourNoteForm({
               disabled={
                 !form.students.length || form.students.length > PUPIL_LIMIT
               }
-              onClick={() => onSubmit(c.id, "")}
+              onClick={() => onSubmit(c.id, "", true)}
             >
               {c.kind === "praise" ? "＋ " : "− "}
               {c.title}
@@ -261,6 +291,10 @@ export default function BehaviourNoteForm({
           onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))}
         />
       </label>
+      <div ref={messages}>
+        {error && <p role="alert">{error}</p>}
+        {notice && <p role="status">{notice}</p>}
+      </div>
       <div className="bn-form-actions">
         <button
           className="primary"

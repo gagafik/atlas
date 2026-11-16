@@ -128,7 +128,8 @@ export default function ClassStaffWorkspace({
                 onClick={() =>
                   window.dispatchEvent(
                     new CustomEvent("atlas-open-behaviour", {
-                      detail: { workspace },
+                      // The button is for writing: the form of a new record opens at once.
+                      detail: { workspace, prefill: { studentIds: [] } },
                     }),
                   )
                 }

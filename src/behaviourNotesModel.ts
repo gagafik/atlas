@@ -126,23 +126,32 @@ export function dayLabel(day: string) {
   return `${date}.${month}.${year}`;
 }
 
+// The picker shows at most this many pupils at a time; a longer match asks the user to narrow the search.
+export const PICKER_CAP = 60;
+
+// Case and «ё» do not matter in a search: people type «Артем» for «Артём».
+const fold = (text: string) =>
+  text.toLocaleLowerCase("ru").replaceAll("ё", "е");
+
 // The pupils the picker offers: those of the chosen class, narrowed by a part of the name. With nothing chosen and
-// more pupils than the limit the picker shows a hint instead of everybody.
+// more pupils than the limit the picker shows a hint instead of everybody; a long match is cut to `cap` and `total`
+// tells how many there were.
 export function pickerPupils(
   students: Student[],
   classId: string,
   search: string,
   limit: number,
+  cap = PICKER_CAP,
 ) {
-  const needle = search.trim().toLocaleLowerCase("ru");
+  const needle = fold(search.trim());
   if (!classId && !needle && students.length > limit)
-    return { shown: [] as Student[], hint: true };
-  const shown = students.filter(
+    return { shown: [] as Student[], hint: true, total: students.length };
+  const found = students.filter(
     (s) =>
       (!classId || s.classId === classId) &&
-      (!needle || s.name.toLocaleLowerCase("ru").includes(needle)),
+      (!needle || fold(s.name).includes(needle)),
   );
-  return { shown, hint: false };
+  return { shown: found.slice(0, cap), hint: false, total: found.length };
 }
 
 // A pupil is taken off the chosen ones, or put on them while there is room.
@@ -207,6 +216,40 @@ export function noteActions(
   };
 }
 
-// The form holds something that would be lost on leaving.
-export const formDirty = (form: { text: string; students: string[] }) =>
-  Boolean(form.text.trim() || form.students.length);
+export type FormBase = Pick<
+  NoteForm,
+  "categoryId" | "day" | "visible" | "printed"
+>;
+
+// The form of a new record as it is when it is opened on request: nothing chosen or typed, the defaults of the account.
+export function freshForm(form: NoteForm, options: Options): NoteForm {
+  const first = options.categories.find(
+    (c) => c.active && options.myLevels.includes(c.level),
+  );
+  return {
+    ...form,
+    text: "",
+    students: [],
+    classId: "",
+    visible: true,
+    day: options.today,
+    categoryId: first?.id ?? "",
+    printed: first?.report ?? false,
+  };
+}
+
+// The form holds something that would be lost on leaving: a text, pupils, or a choice that differs from the one the form
+// was opened with (`base`).
+export const formDirty = (
+  form: Pick<NoteForm, "text" | "students"> & Partial<FormBase>,
+  base?: FormBase | null,
+) =>
+  Boolean(
+    form.text.trim() ||
+    form.students.length ||
+    (base &&
+      (form.categoryId !== base.categoryId ||
+        form.day !== base.day ||
+        form.visible !== base.visible ||
+        form.printed !== base.printed)),
+  );

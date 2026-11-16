@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 export type LaunchIntent =
   | "compose"
   | "newWork"
+  | "note"
   | "measure"
   | "todayLesson"
   | "homework"

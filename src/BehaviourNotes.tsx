@@ -6,9 +6,11 @@ import CommissionExams from "./CommissionExams";
 import {
   dayLabel,
   formDirty,
+  freshForm,
   stamp,
   statusLabels,
   type Category,
+  type FormBase,
   type History,
   type Kind,
   type Level,
@@ -140,7 +142,8 @@ export default function BehaviourNotes({
     // The prefill is applied once, when the options first arrive.
     prefilled = useRef(false),
     tabOpened = useRef(false),
-    formBox = useRef<HTMLElement>(null),
+    // The choices the form was opened with: a change of them counts as unsaved.
+    formBase = useRef<FormBase | null>(null),
     newButton = useRef<HTMLButtonElement>(null);
   // The form of a new record is opened on request; a course table or the launcher opens it at once.
   const [formOpen, setFormOpen] = useState(Boolean(prefill));
@@ -164,15 +167,19 @@ export default function BehaviourNotes({
   const showForm = Boolean(
     formOpen && staff && tab === "notes" && options?.canWrite,
   );
-  const dirty = showForm && formDirty(form);
-  // The form takes the focus when it opens; the button that opened it gets it back when it closes.
+  // The form takes the focus when it opens (it does so itself); the button that opened it gets it back when it closes.
   const formShown = useRef(false);
   useEffect(() => {
     if (showForm) {
-      formBox.current?.focus({ preventScroll: true });
-      formBox.current?.scrollIntoView({ block: "start" });
+      formBase.current ??= {
+        categoryId: form.categoryId,
+        day: form.day,
+        visible: form.visible,
+        printed: form.printed,
+      };
     } else if (formShown.current) newButton.current?.focus();
     formShown.current = showForm;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showForm]);
   const usable = (options?.categories || []).filter(
     (c) => c.active && options?.myLevels.includes(c.level),
@@ -335,7 +342,10 @@ export default function BehaviourNotes({
       setError("Изменение сохранено, но список не обновился: " + e.message);
     }
   }
+  // The form holds something that would be lost, whether it is on show or not (a failed reload hides it, not its content).
+  const formUnsaved = () => formDirty(form, formBase.current);
   function leave() {
+    const dirty = formUnsaved();
     return (
       (!dirty && !commissionDirty) ||
       window.confirm(
@@ -345,13 +355,27 @@ export default function BehaviourNotes({
       )
     );
   }
+  // The form of the next «Новая запись» opens as a new one: nothing chosen, the defaults of the account.
+  function resetForm() {
+    formBase.current = null;
+    setForCourse(true);
+    setForm((f) =>
+      options
+        ? freshForm(f, options)
+        : { ...f, text: "", students: [], classId: "" },
+    );
+  }
   // Back to the list: the form is emptied, after a question when it holds something.
   function closeForm() {
-    if (formDirty(form) && !window.confirm(UNSAVED_RECORD)) return;
-    setForm((f) => ({ ...f, text: "", students: [], classId: "" }));
+    if (formUnsaved() && !window.confirm(UNSAVED_RECORD)) return;
+    resetForm();
     setFormOpen(false);
   }
-  async function submit(categoryId = form.categoryId, text = form.text) {
+  async function submit(
+    categoryId = form.categoryId,
+    text = form.text,
+    quick = false,
+  ) {
     const body = {
       studentIds: form.students,
       categoryId,
@@ -376,7 +400,11 @@ export default function BehaviourNotes({
       setForm((f) => ({ ...f, text: "", students: [] }));
       await refreshAfterChange();
     }, "");
-    if (status) setFormOpen(false);
+    // A quick mark leaves the form open for the next pupil; a saved record sends the user back to the list.
+    if (status && !quick) {
+      resetForm();
+      setFormOpen(false);
+    }
     if (status)
       setNotice(
         status === "pending"
@@ -489,7 +517,7 @@ export default function BehaviourNotes({
   function open(view: string) {
     if (view !== tab && !leave()) return;
     if (view !== tab) {
-      setForm((f) => ({ ...f, text: "", students: [], classId: "" }));
+      resetForm();
       setFormOpen(false);
     }
     setTab(view);
@@ -618,8 +646,8 @@ export default function BehaviourNotes({
           </div>
         </section>
       )}
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {error && !showForm && <p role="alert">{error}</p>}
+      {notice && !showForm && <p role="status">{notice}</p>}
       {busy && <p role="status">Загрузка…</p>}
       <fieldset disabled={busy}>
         <div className="bn-controls">
@@ -629,7 +657,19 @@ export default function BehaviourNotes({
               value={workspace}
               onChange={(e) => {
                 if (!leave()) return;
-                setForm((f) => ({ ...f, students: [], text: "", classId: "" }));
+                // The other workspace has its own categories and day: the form is filled again from its options.
+                formBase.current = null;
+                setForCourse(true);
+                setForm((f) => ({
+                  ...f,
+                  students: [],
+                  text: "",
+                  classId: "",
+                  categoryId: "",
+                  day: "",
+                  visible: true,
+                  printed: false,
+                }));
                 setFormOpen(false);
                 setFilters({
                   classId: "",
@@ -706,20 +746,22 @@ export default function BehaviourNotes({
         )}
 
         {showForm && options && (
-          <section ref={formBox} tabIndex={-1} className="bn-form-box">
-            <BehaviourNoteForm
-              options={options}
-              form={form}
-              setForm={setForm}
-              usable={usable}
-              quick={quick}
-              course={course}
-              forCourse={forCourse}
-              setForCourse={setForCourse}
-              onSubmit={(categoryId, text) => void submit(categoryId, text)}
-              onBack={closeForm}
-            />
-          </section>
+          <BehaviourNoteForm
+            options={options}
+            form={form}
+            setForm={setForm}
+            usable={usable}
+            quick={quick}
+            course={course}
+            forCourse={forCourse}
+            setForCourse={setForCourse}
+            error={error}
+            notice={notice}
+            onSubmit={(categoryId, text, isQuick) =>
+              void submit(categoryId, text, isQuick)
+            }
+            onBack={closeForm}
+          />
         )}
 
         <div className="bn-browse" hidden={showForm}>

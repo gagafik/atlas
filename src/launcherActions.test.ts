@@ -116,6 +116,8 @@ describe("what the launcher lists", () => {
     );
     expect(byId.get("compose")).toBe("compose");
     expect(byId.get("newTest")).toBe("newTest");
+    // «Новая заметка» opens the form of a note, not just the dialog of the records.
+    expect(byId.get("note")).toBe("note");
     expect(byId.get("dated")).toBeUndefined();
     // The class workplace holds the absence notes among other sections: the action asks for them to be open.
     expect(byId.get("absences")).toBe("absences");
@@ -166,7 +168,11 @@ describe("typing in the launcher", () => {
 
   it("does not take the middle of a word for the word", () => {
     // «дом» begins «Домашнее задание», but it only sits inside «ведомость», by which another action is known.
-    const own = (id: string, label: string, words?: string): LauncherAction => ({
+    const own = (
+      id: string,
+      label: string,
+      words?: string,
+    ): LauncherAction => ({
       id,
       label,
       category: "journal",

@@ -3,12 +3,16 @@ import {
   addPupils,
   dayLabel,
   formDirty,
+  freshForm,
   noteActions,
   noteChips,
+  PICKER_CAP,
   pickerPupils,
   PUPIL_LIMIT,
   togglePupil,
   type Note,
+  type NoteForm,
+  type Options,
   type Student,
 } from "./behaviourNotesModel";
 
@@ -20,8 +24,8 @@ const pupil = (id: string, name: string, classId: string): Student => ({
 });
 const pupils = [
   pupil("s1", "Примеров Данияр", "c7a"),
-  pupil("s2", "Образцова Алия", "c7a"),
-  pupil("s3", "Тестов Руслан", "c8b"),
+  pupil("s2", "Примерова Алина", "c7a"),
+  pupil("s3", "Вымыслов Артём", "c8b"),
 ];
 const many = (count: number) =>
   Array.from({ length: count }, (_, i) => pupil(`p${i}`, `Ученик ${i}`, "c7a"));
@@ -34,7 +38,7 @@ const note = (over: Partial<Note> = {}): Note => ({
   categoryId: "c1",
   category: "Опоздание",
   text: "",
-  author: "Образцова Алия",
+  author: "Примерова Алина",
   level: "teacher",
   levelTitle: "Учитель",
   studentId: "s1",
@@ -65,6 +69,25 @@ describe("pickerPupils", () => {
     expect(
       pickerPupils(pupils, "", "  ова ", PUPIL_LIMIT).shown.map((s) => s.id),
     ).toEqual(["s2"]);
+  });
+
+  it("does not tell «е» from «ё» in a search", () => {
+    expect(
+      pickerPupils(pupils, "", "артем", PUPIL_LIMIT).shown.map((s) => s.id),
+    ).toEqual(["s3"]);
+    expect(
+      pickerPupils(pupils, "", "АРТЁМ", PUPIL_LIMIT).shown.map((s) => s.id),
+    ).toEqual(["s3"]);
+  });
+
+  it("cuts a long match and says how long it was", () => {
+    const all = many(PICKER_CAP + 25);
+    const { shown, total, hint } = pickerPupils(all, "", "у", PUPIL_LIMIT);
+    expect(hint).toBe(false);
+    expect(shown).toHaveLength(PICKER_CAP);
+    expect(total).toBe(all.length);
+    const short = pickerPupils(pupils, "", "ов", PUPIL_LIMIT);
+    expect(short.shown).toHaveLength(short.total);
   });
 
   it("narrows by class and search together", () => {
@@ -143,8 +166,8 @@ describe("noteChips", () => {
   });
 
   it("names the one who approved", () => {
-    const chips = noteChips(note({ approvedBy: "Образцова Алия" }), false);
-    expect(chips).toEqual([{ key: "approved", title: "Образцова Алия" }]);
+    const chips = noteChips(note({ approvedBy: "Примерова Алина" }), false);
+    expect(chips).toEqual([{ key: "approved", title: "Примерова Алина" }]);
   });
 
   it("asks for acknowledgement only of published records that need it", () => {
@@ -227,15 +250,75 @@ describe("noteActions", () => {
   });
 });
 
+const form = (over: Partial<NoteForm> = {}): NoteForm => ({
+  categoryId: "c1",
+  day: "2026-11-16",
+  text: "",
+  classId: "",
+  visible: true,
+  printed: false,
+  students: [],
+  ...over,
+});
+
 describe("formDirty", () => {
   it("is clean when there is neither text nor pupils", () => {
-    expect(formDirty({ text: "", students: [] })).toBe(false);
-    expect(formDirty({ text: "   \n", students: [] })).toBe(false);
+    expect(formDirty(form())).toBe(false);
+    expect(formDirty(form({ text: "   " }))).toBe(false);
   });
 
   it("is dirty with a text or a pupil", () => {
-    expect(formDirty({ text: "Опоздал", students: [] })).toBe(true);
-    expect(formDirty({ text: "", students: ["s1"] })).toBe(true);
+    expect(formDirty(form({ text: "Опоздал" }))).toBe(true);
+    expect(formDirty(form({ students: ["s1"] }))).toBe(true);
+  });
+
+  it("is dirty when a choice differs from the one the form was opened with", () => {
+    const base = form();
+    expect(formDirty(form(), base)).toBe(false);
+    expect(formDirty(form({ visible: false }), base)).toBe(true);
+    expect(formDirty(form({ printed: true }), base)).toBe(true);
+    expect(formDirty(form({ day: "2026-11-02" }), base)).toBe(true);
+    expect(formDirty(form({ categoryId: "c2" }), base)).toBe(true);
+    // Without a base only the text and the pupils count.
+    expect(formDirty(form({ visible: false }))).toBe(false);
+  });
+});
+
+describe("freshForm", () => {
+  const options = {
+    today: "2026-11-17",
+    myLevels: ["teacher"],
+    categories: [
+      { id: "c0", level: "director", active: true, report: true },
+      { id: "c1", level: "teacher", active: false, report: true },
+      { id: "c2", level: "teacher", active: true, report: true },
+    ],
+  } as unknown as Options;
+
+  it("gives back the defaults of the account, whatever the last attempt left", () => {
+    const left = form({
+      categoryId: "c9",
+      day: "2026-10-01",
+      visible: false,
+      printed: false,
+      text: "Опоздал",
+      classId: "c7a",
+      students: ["s1"],
+    });
+    expect(freshForm(left, options)).toEqual({
+      categoryId: "c2",
+      day: "2026-11-17",
+      visible: true,
+      printed: true,
+      text: "",
+      classId: "",
+      students: [],
+    });
+  });
+
+  it("is not dirty once it is the form the dialog opened with", () => {
+    const fresh = freshForm(form({ text: "x", visible: false }), options);
+    expect(formDirty(fresh, fresh)).toBe(false);
   });
 });
 

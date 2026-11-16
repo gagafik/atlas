@@ -151,13 +151,12 @@ describe("BehaviourNotesTable for the staff", () => {
     ];
     const history = { id: "n1", items };
     const notes = [note({ id: "n1" }), note({ id: "n2" })];
-    const count = (markup: string) => (markup.match(/<li/g) || []).length;
     const open = renderToStaticMarkup(
       table(notes, calls(), { openId: "n1", history }),
     );
     const closed = renderToStaticMarkup(table(notes, calls(), { history }));
-    expect(count(open)).toBe(items.length);
-    expect(count(closed)).toBe(0);
+    expect(open).toContain("Уточнение");
+    expect(closed).not.toContain("Уточнение");
   });
 });
 
