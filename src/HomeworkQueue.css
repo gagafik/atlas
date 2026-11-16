@@ -1,0 +1,148 @@
+/* «Домашние задания»: one toolbar (tabs, search, period, refresh), a short note, and the opened work in place of the list. */
+.homework-queue-browse[hidden] {
+  display: none;
+}
+.homework-queue-browse {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.homework-queue-browse:focus,
+.homework-queue-work:focus {
+  outline: none;
+}
+.homework-queue-toolbar {
+  container: homework-queue-toolbar / inline-size;
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+.homework-queue-toolbar > button,
+.homework-queue-search button,
+.homework-queue-period > summary {
+  min-height: 35px;
+  padding: 6px 12px;
+}
+.homework-queue-search {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.homework-queue-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 35px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+}
+.homework-queue-period {
+  position: relative;
+}
+.homework-queue-period > summary {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  cursor: pointer;
+  list-style: none;
+  border: var(--line-width) solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+.homework-queue-period > summary::-webkit-details-marker {
+  display: none;
+}
+.homework-queue-period > summary::after {
+  content: "▾";
+  margin-left: 8px;
+  font-size: 10px;
+}
+.homework-queue-period > summary:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.homework-queue-period > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.homework-queue-period-panel {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+}
+.homework-queue-period-panel .field {
+  margin: 0;
+}
+.homework-queue-period-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* On a narrow toolbar the panel opens inside the flow instead of floating over the page. */
+@container homework-queue-toolbar (max-width: 619px) {
+  .homework-queue-period {
+    flex: 1 1 100%;
+  }
+  .homework-queue-period-panel {
+    position: static;
+    width: auto;
+    max-width: none;
+    margin-top: 6px;
+    box-shadow: none;
+  }
+}
+.homework-queue-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.homework-queue-count {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.homework-queue-rules {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.homework-queue-rules > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-weight: var(--weight-semibold);
+}
+.homework-queue-rules p {
+  margin: 6px 0 0;
+}
+.homework-queue-work {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.homework-queue-work-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.homework-queue-work-head h3 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

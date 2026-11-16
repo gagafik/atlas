@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
+  dateLabel,
   isPast,
+  itemAction,
+  itemChips,
+  manyPupils,
+  periodLabel,
   queueParams,
   queueSections,
+  queueTabs,
+  shortDate,
   submissionTag,
+  taskGroups,
   type QueueItem,
 } from "./homeworkQueue";
 
@@ -168,5 +176,137 @@ describe("homework submission tag", () => {
     expect(submissionTag(item({ dueDate: "2026-09-01" }), TODAY, labels)).toBe(
       "N",
     );
+  });
+});
+
+describe("homework queue tabs", () => {
+  const every = ["all", "todo", "submitted", "returned", "accepted", "overdue"];
+  it("lists every status the server knows once, for each role", () => {
+    for (const staff of [true, false]) {
+      const filters = queueTabs(staff).map((tab) => tab.filter);
+      expect([...filters].sort()).toEqual([...every].sort());
+      for (const tab of queueTabs(staff)) expect(tab.label).not.toBe("");
+    }
+  });
+  it("starts with the status the server opens each role on", () => {
+    expect(queueTabs(true)[0].filter).toBe("submitted");
+    expect(queueTabs(false)[0].filter).toBe("todo");
+  });
+});
+
+describe("homework queue dates and period", () => {
+  it("turns an ISO date into day.month.year and day.month", () => {
+    expect(dateLabel("2026-09-01")).toBe("01.09.2026");
+    expect(shortDate("2026-09-01")).toBe("01.09");
+  });
+  const year = { yearStart: "2026-09-01", yearEnd: "2027-05-25" };
+  it("tells the default window, the whole year and other dates apart", () => {
+    const upcoming = periodLabel({
+      ...year,
+      window: "upcoming",
+      start: "2026-09-01",
+      end: "2026-09-24",
+    });
+    const whole = periodLabel({
+      ...year,
+      window: "range",
+      start: year.yearStart,
+      end: year.yearEnd,
+    });
+    const dates = periodLabel({
+      ...year,
+      window: "range",
+      start: "2026-10-05",
+      end: "2026-10-18",
+    });
+    expect(new Set([upcoming, whole, dates]).size).toBe(3);
+    expect(dates).toContain(dateLabel("2026-10-05"));
+    expect(dates).toContain(dateLabel("2026-10-18"));
+  });
+  it("is dates, not the year, when only one end matches the year", () => {
+    const label = periodLabel({
+      ...year,
+      window: "range",
+      start: year.yearStart,
+      end: "2026-12-31",
+    });
+    expect(label).toContain(dateLabel("2026-12-31"));
+  });
+});
+
+describe("homework task groups", () => {
+  const row = (lessonKey: string, studentId: string) => ({
+    lessonKey,
+    studentId,
+  });
+  it("joins neighbours with one key and keeps the order", () => {
+    const groups = taskGroups([row("a", "s1"), row("a", "s2"), row("b", "s1")]);
+    expect(groups.map((g) => g.lessonKey)).toEqual(["a", "b"]);
+    expect(groups[0].items.map((r) => r.studentId)).toEqual(["s1", "s2"]);
+  });
+  it("starts a new group when a key comes back after another one", () => {
+    const groups = taskGroups([row("a", "s1"), row("b", "s1"), row("a", "s2")]);
+    expect(groups.map((g) => g.lessonKey)).toEqual(["a", "b", "a"]);
+  });
+  it("gives no groups for no rows", () => {
+    expect(taskGroups([])).toEqual([]);
+  });
+});
+
+describe("homework row chips and action", () => {
+  const plain = {
+    submission: "online" as const,
+    overdue: false,
+    deadlineClosed: false,
+    late: false,
+    readOnly: false,
+  };
+  it("has no chips when nothing is raised", () => {
+    expect(itemChips(plain)).toEqual([]);
+  });
+  it("adds each raised flag once", () => {
+    const flags = [
+      { submission: "offline" as const },
+      { overdue: true },
+      { deadlineClosed: true },
+      { late: true },
+      { readOnly: true },
+    ];
+    const keys = flags.map((flag) => itemChips({ ...plain, ...flag }));
+    for (const one of keys) expect(one).toHaveLength(1);
+    expect(new Set(keys.flat()).size).toBe(flags.length);
+  });
+  it("keeps one order whichever flags are raised together", () => {
+    const all = itemChips({
+      submission: "offline",
+      overdue: true,
+      deadlineClosed: true,
+      late: true,
+      readOnly: true,
+    });
+    const some = itemChips({ ...plain, late: true, overdue: true });
+    expect(all.filter((key) => some.includes(key))).toEqual(some);
+  });
+  it("prefers review over submitting over reading a task", () => {
+    const base = { canReview: false, canSubmit: false };
+    const action = (
+      over: object,
+      submission: "online" | "offline" = "online",
+    ) => itemAction({ ...base, submission, ...over });
+    const review = action({ canReview: true, canSubmit: true });
+    const submit = action({ canSubmit: true }, "offline");
+    const task = action({}, "offline");
+    const work = action({});
+    expect(new Set([review, submit, task, work]).size).toBe(4);
+    expect(action({ canReview: true }, "offline")).toBe(review);
+  });
+});
+
+describe("homework many pupils", () => {
+  it("is true only for two different pupils", () => {
+    expect(manyPupils([])).toBe(false);
+    expect(manyPupils([{ studentId: "s1" }])).toBe(false);
+    expect(manyPupils([{ studentId: "s1" }, { studentId: "s1" }])).toBe(false);
+    expect(manyPupils([{ studentId: "s1" }, { studentId: "s2" }])).toBe(true);
   });
 });
