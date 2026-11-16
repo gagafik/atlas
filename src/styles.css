@@ -4651,89 +4651,6 @@ main {
   background: var(--surface);
   padding: 22px;
 }
-.journal-editor header {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 14px;
-}
-.journal-editor h2 {
-  margin: 0;
-}
-.journal-editor header > span {
-  font-size: 13px;
-  color: var(--accent-strong);
-}
-.journal-content-fields {
-  border: 0;
-  padding: 0;
-  margin: 0;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-}
-.journal-content-fields > .field textarea {
-  min-height: 84px;
-  resize: vertical;
-}
-.journal-assessments {
-  background: var(--surface-alt);
-  border-radius: var(--radius);
-  padding: 16px;
-}
-.journal-assessments h3,
-.journal-content-fields h3 {
-  margin: 0;
-}
-.journal-assessment {
-  display: grid;
-  grid-template-columns: minmax(100px, 2fr) repeat(3, minmax(48px, 1fr));
-  gap: 12px;
-  padding: 14px 0;
-  border-top: 1px solid var(--line);
-  align-items: end;
-}
-.journal-assessment button {
-  grid-column: 1/-1;
-  justify-self: start;
-}
-.journal-pupils {
-  display: grid;
-  gap: 16px;
-}
-.journal-pupil {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 16px;
-}
-.journal-pupil h4 {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin: 0 0 15px;
-  font-size: 16px;
-}
-.journal-pupil h4 small {
-  color: var(--text-muted);
-  font-weight: 400;
-}
-.journal-pupil-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.journal-pupil-fields > .field {
-  flex: 1;
-  min-width: 170px;
-}
-.journal-grade {
-  display: grid;
-  grid-template-columns: minmax(130px, 1fr) minmax(180px, 2fr);
-  gap: 12px;
-  margin-top: 14px;
-}
 .journal-savebar {
   position: sticky;
   bottom: 0;
@@ -4806,20 +4723,8 @@ main {
   .journal-editor {
     padding: 15px;
   }
-  .journal-assessment,
-  .journal-grade {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .journal-assessments,
-  .journal-pupil {
-    padding: 12px;
-  }
   .journal-lessons {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .journal-pupil-fields > .field {
-    min-width: 0;
-    flex-basis: 100%;
   }
   .journal-savebar {
     position: static;
@@ -5190,13 +5095,6 @@ main {
 }
 .homework-bulk textarea {
   max-width: 100%;
-}
-.journal-due-next {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin: -8px 0 17px;
 }
 .homework-parallel {
   margin: 18px 0;
@@ -5952,10 +5850,6 @@ main {
 }
 .category-picks legend {
   font-size: 0.9em;
-}
-.journal-assessment .category-note {
-  grid-column: 1 / -1;
-  margin: 0;
 }
 .category-row input[type="color"] {
   min-width: 48px;

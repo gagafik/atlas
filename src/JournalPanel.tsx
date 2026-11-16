@@ -1,18 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import HomeworkPanel from "./HomeworkPanel";
-import HomeworkParallelPanel from "./HomeworkParallelPanel";
+import LessonEditor from "./LessonEditor";
+import { updateRecord } from "./lessonEditorModel";
 import { nextLessonText, whileCurrent, type NextLesson } from "./homeworkBulk";
-import LessonMaterials from "./LessonMaterials";
-import LessonTopic, { SavedPlanTopic } from "./LessonTopic";
-import AssignmentFilesPanel, {
-  SavedMaterialLinks,
-} from "./AssignmentFilesPanel";
 import AbsencePanel from "./AbsencePanel";
 import FamilyJournal from "./FamilyJournal";
-import PublishedRows from "./PublishedRows";
 import { useLessonMarks } from "./LessonMarks";
-import LessonPupilCards from "./LessonPupilCards";
 import AttendancePanel from "./AttendancePanel";
 import AttendanceGridPanel from "./AttendanceGridPanel";
 import JournalCoveragePanel from "./JournalCoveragePanel";
@@ -36,36 +29,20 @@ import { dayProfile, slotsFor } from "./bells";
 import { dayText, shiftDate, weekdayName } from "./pupilJournal";
 import { useCoverageDays, type CoverageScope } from "./useCoverageDays";
 import { useLaunch, type LaunchIntent } from "./launch";
+import { useAssessmentCategories } from "./assessmentCategories";
 import {
-  WEIGHT_PRESETS,
-  bookingDefault,
-  categoryOf,
-  presetOf,
-  useAssessmentCategories,
-  type CategoryConfig,
-} from "./assessmentCategories";
-import {
-  absenceCodeNames,
   attendanceProblem,
   lessonOfNow,
-  attendanceText,
-  gradeLabel,
-  journalCsv,
-  documentRows,
-  numberField,
-  numberValue,
   contentProblem,
-  withKind,
   hasEarlierRevisions,
   journalPanels,
   noAbsentees,
-  withNoAbsentees,
   type Assessment,
   type DayLesson,
   type Grade,
   type JournalContent,
-  type JournalDocument,
   type JournalEntry,
+  type JournalHistory,
   type JournalOptions,
   type JournalPanelName,
   type JournalView,
@@ -82,13 +59,6 @@ const PUPIL_TABS: [PupilTab, string][] = [
 ];
 const clampDay = (day: string, first: string, last: string) =>
   day < first ? first : day > last ? last : day;
-interface History {
-  version: number;
-  updated: string;
-  actor: string;
-  action: string;
-  document?: JournalDocument;
-}
 
 // Set by an opened notification: one pupil's day and lesson, the report card of a period, or the absence notes.
 export type JournalFocus =
@@ -106,6 +76,19 @@ export type JournalFocus =
       lessonKey?: never;
       finalsPeriodId?: never;
     };
+
+// Brings a part of the opened lesson into view; a folded block (a <details>) is opened first, so «Из плана» in the day
+// table lands on the open picker. The text of the topic and the homework have ids of their own and open nothing.
+function reveal(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const fold =
+    target instanceof HTMLDetailsElement
+      ? target
+      : target.querySelector<HTMLDetailsElement>("details[data-reveal]");
+  if (fold) fold.open = true;
+  target.scrollIntoView({ block: "start" });
+}
 
 export default function JournalPanel({
   workspace,
@@ -170,9 +153,9 @@ export default function JournalPanel({
   );
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  const [history, setHistory] = useState<History[]>([]),
+  const [history, setHistory] = useState<JournalHistory[]>([]),
     [historyMore, setHistoryMore] = useState(false),
-    [historical, setHistorical] = useState<History | null>(null);
+    [historical, setHistorical] = useState<JournalHistory | null>(null);
   const [error, setError] = useState(""),
     [message, setMessage] = useState(""),
     [loading, setLoading] = useState(false),
@@ -325,7 +308,7 @@ export default function JournalPanel({
   function pupil(id: string, update: (p: PupilRecord) => PupilRecord) {
     content((c) => ({
       ...c,
-      records: c.records.map((p) => (p.studentId === id ? update(p) : p)),
+      records: updateRecord(c.records, id, update),
     }));
   }
   function grade(id: string, a: Assessment, update: Partial<Grade>) {
@@ -395,8 +378,9 @@ export default function JournalPanel({
       saveLock.current = false;
     }
   }
+  // Resolves to false when the revisions could not be read.
   async function historyPage(before?: number) {
-    if (!entry) return;
+    if (!entry) return true;
     setBusy(true);
     setError("");
     try {
@@ -406,11 +390,78 @@ export default function JournalPanel({
       );
       setHistory((rows) => (before ? [...rows, ...r] : r));
       setHistoryMore(hasEarlierRevisions(r));
+      return true;
+    } catch (e: any) {
+      setError(e.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  // The lesson changed in a way the day list must show: it is read again.
+  function refreshDay() {
+    setEpoch((n) => n + 1);
+  }
+  // A homework mark was published under the lesson: the list is read again, and the lesson too unless it holds unsaved fields.
+  function homeworkGraded() {
+    if (!entry) return;
+    setEpoch((n) => n + 1);
+    if (dirtyRef.current) {
+      setMessage(
+        "Оценка опубликована. Ваши несохранённые поля оставлены на экране; перед сохранением откройте актуальную редакцию журнала.",
+      );
+    } else {
+      void openEntry(entry.lessonKey).then(() =>
+        setMessage("Оценка опубликована, журнал обновлён."),
+      );
+    }
+  }
+  // The files of the homework are being sent: saving waits until the upload ends.
+  function uploading(value: boolean) {
+    saveLock.current = value;
+    setBusy(value);
+  }
+  async function withdraw() {
+    if (!entry) return;
+    if (
+      !window.confirm(
+        "Скрыть эту запись от учеников и родителей? История и черновик сохранятся.",
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("journal/withdraw", workspace, "POST", {
+        lessonKey: entry.lessonKey,
+        version: entry.version,
+      });
+      await openEntry(entry.lessonKey);
+      setEpoch((n) => n + 1);
+      setMessage("Запись скрыта от учеников и родителей.");
     } catch (e: any) {
       setError(e.message);
     } finally {
       setBusy(false);
     }
+  }
+  async function showVersion(version: number) {
+    if (!entry) return;
+    setBusy(true);
+    try {
+      const r = await api(
+        `journal/history?${new URLSearchParams({ lessonKey: entry.lessonKey, version: String(version) })}`,
+        workspace,
+      );
+      setHistorical(r[0] || null);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function closeVersion() {
+    setHistorical(null);
   }
   const editable = !!entry?.writable && !entry.needsSync && !busy;
   // A held lesson where nobody is missing is one click: «Отсутствующих нет» marks the unmarked present and saves for the family.
@@ -466,11 +517,10 @@ export default function JournalPanel({
     setDay(date);
     void openEntry(key, false, date);
   }
-  // A lesson of the day grid: the editor opens under its row (again to close it); `target` is the place of the editor to scroll to.
+  // A lesson of the day grid: the lesson opens in place of the day; `target` is the place of the editor to scroll to.
   function openFromGrid(key: string, target = "") {
     if (entry?.lessonKey === key) {
-      if (target)
-        document.getElementById(target)?.scrollIntoView({ block: "start" });
+      if (target) reveal(target);
       else if (canLeave()) clearEditor();
       return;
     }
@@ -562,738 +612,48 @@ export default function JournalPanel({
         );
     }
   }
-  // The editor of the open lesson; the day grid shows it right under the row of the lesson.
+  // The editor of the open lesson; it is shown in place of the day, at the full width of the panel.
   function editor() {
     if (!entry) return null;
     return (
-      <section
-        className="journal-editor"
-        ref={editorPanel}
-        tabIndex={-1}
-        aria-label="Редактор журнала урока"
-      >
-        <header>
-          <div>
-            <h2>
-              {entry.document.lesson.subject} · {entry.document.lesson.group}
-            </h2>
-            <p>
-              {entry.document.lesson.date} · {entry.document.lesson.start}–
-              {entry.document.lesson.end} · {entry.document.lesson.teachers}
-            </p>
-          </div>
-          <span>
-            {dirty
-              ? "Есть несохранённые поля"
-              : entry.version
-                ? `Редакция ${entry.version}`
-                : "Новая запись"}
-          </span>
-        </header>
-        <p className="info-line">
-          {entry.attendanceDefaulted
-            ? "Все отмечены присутствующими по умолчанию. Семья увидит отметки после сохранения."
-            : entry.hasPublished &&
-                entry.lessonBegun &&
-                entry.publishedVersion === entry.version
-              ? "Семья видит эту редакцию; каждое сохранение сразу видно семье."
-              : entry.hasPublished
-                ? `Ученики видят редакцию ${entry.publishedVersion}. Изменения черновика появятся после публикации.`
-                : "Запись ещё не видна ученикам."}
-          {entry.updated &&
-            ` Последнее изменение: ${entry.actor}, ${new Date(entry.updated).toLocaleString("ru-RU")}.`}
-        </p>
-        {!entry.document.lesson.rosterComplete && (
-          <p className="error-banner">
-            Состав группы не подтверждён полностью. Здесь показаны только
-            внесённые ученики.
-          </p>
-        )}
-        {!entry.writable && (
-          <p className="info-line">
-            {entry.periodLocks?.length
-              ? `Период закрыт: ${entry.periodLocks.map((p) => p.name).join(", ")}. Для исправления администратор должен открыть все закрытые периоды с указанием причины.`
-              : "Запись доступна только для просмотра: урок отменён, удалён или назначен другому преподавателю."}
-          </p>
-        )}
-        {entry.futureLesson && (
-          <p className="info-line">
-            Урок ещё не прошёл. Тему, домашнее задание и материалы можно
-            опубликовать заранее; посещаемость и оценки публикуются в день
-            урока.
-          </p>
-        )}
-        {entry.rosterFrozen && entry.hasPublished && (
-          <p className="info-line">
-            Состав, время и учителя урока зафиксированы при публикации:
-            последующие изменения расписания и составов их не меняют.
-          </p>
-        )}
-        {entry.needsSync && entry.writable && (
-          <div className="info-line">
-            <p>
-              Расписание или состав группы изменились. Просмотрите обновление
-              перед редактированием. Прежние ученики и их оценки сохранятся;
-              новые ученики появятся без отметок.
-              {entry.currentDate !== entry.document.lesson.date &&
-                ` Текущая дата урока: ${entry.currentDate}.`}
-            </p>
-            <button
-              disabled={busy}
-              onClick={() => void openEntry(entry.lessonKey, true)}
-            >
-              Обновить состав и время
-            </button>
-          </div>
-        )}
-        {syncRoster && (
-          <p className="info-line">
-            Обновлённый состав показан для проверки. Он сохранится вместе с
-            записью.
-          </p>
-        )}
-        <fieldset disabled={!editable} className="journal-content-fields">
-          <label className="field">
-            <span>Тема урока</span>
-            <textarea
-              maxLength={2000}
-              value={entry.document.content.topic}
-              onChange={(e) =>
-                content((c) => ({ ...c, topic: e.target.value }))
-              }
-            />
-          </label>
-          <div id="journal-lesson-topic">
-            <LessonTopic
-              workspace={workspace}
-              lessonKey={entry.lessonKey}
-              day={entry.document.lesson.date}
-              value={entry.document.content.curriculum}
-              materials={entry.document.content.materials || []}
-              disabled={!editable}
-              onChange={(curriculum, materials) =>
-                content((c) => ({
-                  ...c,
-                  curriculum,
-                  materials: materials ?? c.materials,
-                  topic:
-                    curriculum &&
-                    (curriculum.planId !== c.curriculum?.planId ||
-                      curriculum.version !== c.curriculum?.version ||
-                      curriculum.topicId !== c.curriculum?.topicId)
-                      ? curriculum.title
-                      : c.topic,
-                }))
-              }
-            />
-          </div>
-          <label className="field" id="journal-homework">
-            <span>Домашнее задание</span>
-            <textarea
-              maxLength={4000}
-              value={entry.document.content.homework}
-              onChange={(e) =>
-                content((c) => ({
-                  ...c,
-                  homework: e.target.value,
-                  dueDate: e.target.value ? c.dueDate : null,
-                  homeworkFiles: e.target.value ? c.homeworkFiles : [],
-                  homeworkLatePolicy: e.target.value
-                    ? c.homeworkLatePolicy
-                    : "allow",
-                  homeworkSubmission: e.target.value
-                    ? c.homeworkSubmission
-                    : "online",
-                }))
-              }
-            />
-          </label>
-          <label className="field">
-            <span>Срок домашнего задания</span>
-            <input
-              type="date"
-              disabled={!entry.document.content.homework}
-              value={entry.document.content.dueDate || ""}
-              onChange={(e) =>
-                content((c) => ({
-                  ...c,
-                  dueDate: e.target.value || null,
-                  homeworkLatePolicy: e.target.value
-                    ? c.homeworkLatePolicy
-                    : "allow",
-                }))
-              }
-            />
-          </label>
-          <div className="journal-due-next">
-            <button
-              type="button"
-              disabled={!entry.document.content.homework || dueBusy}
-              onClick={() => void dueNextLesson()}
-            >
-              К следующему уроку
-            </button>
-            {dueNote && <small role="status">{dueNote}</small>}
-          </div>
-          <label className="field">
-            <span>Сдача работы</span>
-            <select
-              disabled={!entry.document.content.homework}
-              value={entry.document.content.homeworkSubmission || "online"}
-              onChange={(e) =>
-                content((c) => ({
-                  ...c,
-                  homeworkSubmission: e.target.value as "online" | "offline",
-                  homeworkLatePolicy:
-                    e.target.value === "offline"
-                      ? "allow"
-                      : c.homeworkLatePolicy,
-                }))
-              }
-            >
-              <option value="online">Ученики отправляют ответ в Атласе</option>
-              <option value="offline">
-                Без онлайн-сдачи (показывают на уроке)
-              </option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Приём после срока</span>
-            <select
-              disabled={
-                !entry.document.content.dueDate ||
-                entry.document.content.homeworkSubmission === "offline"
-              }
-              value={entry.document.content.homeworkLatePolicy || "allow"}
-              onChange={(e) =>
-                content((c) => ({
-                  ...c,
-                  homeworkLatePolicy: e.target.value as "allow" | "block",
-                }))
-              }
-            >
-              <option value="allow">Разрешать с отметкой об опоздании</option>
-              <option value="block">Закрывать приём после срока</option>
-            </select>
-            <small>
-              Срок заканчивается в 23:59 по времени школы (Кызылорда). При
-              закрытом приёме для повторной сдачи после возврата тоже
-              потребуется продление срока.
-            </small>
-          </label>
-          <LessonMaterials
-            key={workspace + entry.lessonKey + entry.version}
-            items={entry.document.content.materials || []}
-            workspace={workspace}
-            lessonKey={entry.lessonKey}
-            disabled={!editable}
-            onChange={(materials) => content((c) => ({ ...c, materials }))}
-          />
-          <AssignmentFilesPanel
-            key={workspace + entry.lessonKey}
-            entry={entry}
-            workspace={workspace}
-            disabled={!editable}
-            change={(ids) => content((c) => ({ ...c, homeworkFiles: ids }))}
-            onUploading={(value) => {
-              saveLock.current = value;
-              setBusy(value);
-            }}
-          />
-          <div className="journal-assessments">
-            <h3>Проверочные работы</h3>
-            <p>
-              Баллы — от 0 до выбранного максимума. Текстовые оценки (A*, зачёт
-              и другие) не входят в средний процент. Вес 0 исключает работу из
-              расчёта; итог периода считается по долям категорий школы.
-            </p>
-            {!!entry.bookings?.length && (
-              <div className="info-line">
-                <strong>По календарю контрольных:</strong>
-                {entry.bookings.map((b) => (
-                  <p key={b.id}>
-                    {b.short} «{b.topic}»{" "}
-                    <button
-                      type="button"
-                      disabled={
-                        !editable ||
-                        entry.document.content.assessments.length >= 10 ||
-                        entry.document.content.assessments.some(
-                          (x) => x.bookingId === b.id,
-                        )
-                      }
-                      onClick={() =>
-                        content((c) => ({
-                          ...c,
-                          assessments: [...c.assessments, bookingDefault(b)],
-                        }))
-                      }
-                    >
-                      Добавить работу из календаря
-                    </button>
-                  </p>
-                ))}
-              </div>
-            )}
-            {entry.document.content.assessments.map((a) => (
-              <div key={a.id} className="journal-assessment">
-                <label className="field">
-                  <span>Название работы</span>
-                  <input
-                    maxLength={100}
-                    value={a.name}
-                    onChange={(e) =>
-                      content((c) => ({
-                        ...c,
-                        assessments: c.assessments.map((x) =>
-                          x.id === a.id ? { ...x, name: e.target.value } : x,
-                        ),
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Формат</span>
-                  <select
-                    value={a.kind}
-                    disabled={entry.document.content.records.some((p) =>
-                      p.grades.some(
-                        (g) =>
-                          g.assessmentId === a.id &&
-                          (g.score !== null || g.label),
-                      ),
-                    )}
-                    onChange={(e) =>
-                      content((c) => ({
-                        ...c,
-                        assessments: c.assessments.map((x) =>
-                          x.id === a.id
-                            ? withKind(x, e.target.value as Assessment["kind"])
-                            : x,
-                        ),
-                      }))
-                    }
-                  >
-                    <option value="points">Баллы</option>
-                    <option value="label">Текстовая оценка</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Категория</span>
-                  <select
-                    value={categoryOf(a, categories).id}
-                    onChange={(e) =>
-                      patchWork(a.id, { category: e.target.value })
-                    }
-                  >
-                    {(categories?.categories ?? [])
-                      .filter(
-                        (k) =>
-                          k.active || k.id === categoryOf(a, categories).id,
-                      )
-                      .map((k) => (
-                        <option key={k.id} value={k.id}>
-                          {k.name}
-                          {k.active ? "" : " (отключена)"}
-                        </option>
-                      ))}
-                    {!categories?.categories.some(
-                      (k) => k.id === categoryOf(a, categories).id,
-                    ) && (
-                      <option value={categoryOf(a, categories).id}>
-                        {categoryOf(a, categories).name}
-                      </option>
-                    )}
-                  </select>
-                </label>
-                {a.bookingId &&
-                  entry.bookings?.some((b) => b.id === a.bookingId) && (
-                    <p className="muted category-note">
-                      Из календаря:{" "}
-                      {entry.bookings.find((b) => b.id === a.bookingId)?.short}
-                    </p>
-                  )}
-                {a.kind === "points" && (
-                  <>
-                    <label className="field">
-                      <span>Максимум баллов</span>
-                      <input
-                        type="number"
-                        min="0.01"
-                        max="10000"
-                        step="0.01"
-                        value={numberValue(a.maxScore)}
-                        onChange={(e) =>
-                          content((c) => ({
-                            ...c,
-                            assessments: c.assessments.map((x) =>
-                              x.id === a.id
-                                ? {
-                                    ...x,
-                                    maxScore: numberField(e.target.value),
-                                  }
-                                : x,
-                            ),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Вес работы</span>
-                      <select
-                        value={
-                          customWeights.has(a.id)
-                            ? "custom"
-                            : String(presetOf(a.weight))
-                        }
-                        onChange={(e) => {
-                          const custom = e.target.value === "custom";
-                          setCustomWeights((s) => {
-                            const next = new Set(s);
-                            if (custom) next.add(a.id);
-                            else next.delete(a.id);
-                            return next;
-                          });
-                          if (!custom)
-                            patchWork(a.id, {
-                              weight: Number(e.target.value),
-                            });
-                        }}
-                      >
-                        {WEIGHT_PRESETS.map((w) => (
-                          <option key={w.value} value={w.value}>
-                            {w.label}
-                          </option>
-                        ))}
-                        <option value="custom">Свой</option>
-                      </select>
-                    </label>
-                    {(customWeights.has(a.id) ||
-                      presetOf(a.weight) === "custom") && (
-                      <label className="field">
-                        <span>Свой вес (от 0 до 100)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          value={numberValue(a.weight)}
-                          onChange={(e) =>
-                            patchWork(a.id, {
-                              weight: numberField(e.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                    )}
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      entry.document.content.records.some((p) =>
-                        p.grades.some(
-                          (g) =>
-                            g.assessmentId === a.id &&
-                            (g.score !== null || g.label || g.comment),
-                        ),
-                      ) &&
-                      !window.confirm(
-                        "Удалить работу и её оценки из текущей редакции? Сохранённые редакции останутся в истории.",
-                      )
-                    )
-                      return;
-                    content((c) => ({
-                      ...c,
-                      assessments: c.assessments.filter((x) => x.id !== a.id),
-                      records: c.records.map((p) => ({
-                        ...p,
-                        grades: p.grades.filter((g) => g.assessmentId !== a.id),
-                      })),
-                    }));
-                  }}
-                >
-                  Удалить работу
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              disabled={entry.document.content.assessments.length >= 10}
-              onClick={() =>
-                content((c) => ({
-                  ...c,
-                  assessments: [
-                    ...c.assessments,
-                    {
-                      id: crypto.randomUUID(),
-                      name: `Работа ${c.assessments.length + 1}`,
-                      kind: "points",
-                      maxScore: 10,
-                      weight: 1,
-                      category: categories?.defaultCategory || "fo",
-                    },
-                  ],
-                }))
-              }
-            >
-              Добавить работу
-            </button>
-          </div>
-          <h3 id="journal-pupil-cards">Ученики и посещаемость</h3>
-          <p>
-            Комментарии к ученику и оценкам будут видны этому ученику и его
-            родителю после публикации.
-          </p>
-          {nobodyAbsent ? (
-            <div className="lesson-quick">
-              <button
-                type="button"
-                className="primary"
-                disabled={!editable}
-                onClick={() =>
-                  void save(
-                    true,
-                    withNoAbsentees(
-                      entry.document.content,
-                      entry.document.lesson.students,
-                      entry.attendanceApprovals,
-                    ),
-                  )
-                }
-              >
-                Отсутствующих нет
-              </button>
-              <small>
-                Отметит присутствующими всех, кто не отмечен, и сразу сохранит
-                урок для семьи.
-              </small>
-            </div>
-          ) : (
-            <button
-              type="button"
-              disabled={!!entry.futureLesson}
-              onClick={() =>
-                content((c) =>
-                  withNoAbsentees(
-                    c,
-                    entry.document.lesson.students,
-                    entry.attendanceApprovals,
-                  ),
-                )
-              }
-            >
-              Неотмеченные присутствуют
-            </button>
-          )}
-          <LessonPupilCards
-            entry={entry}
-            categories={categories}
-            lessonMarks={lessonMarks}
-            onPupil={pupil}
-            onGrade={grade}
-          />
-        </fieldset>
-        <div className="dated-toolbar journal-savebar">
-          {entry.lessonBegun ? (
-            <>
-              <button
-                className="primary"
-                disabled={!editable}
-                onClick={() => void save(true)}
-              >
-                Сохранить
-              </button>
-              {!entry.hasPublished && (
-                <button disabled={!editable} onClick={() => void save(false)}>
-                  Сохранить без показа семье
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              <button
-                className="primary"
-                disabled={!editable}
-                onClick={() => void save(false)}
-              >
-                Сохранить черновик
-              </button>
-              <button disabled={!editable} onClick={() => void save(true)}>
-                Показать семье заранее
-              </button>
-            </>
-          )}
-          {entry.canWithdraw && (
-            <button
-              disabled={busy || dirty}
-              onClick={async () => {
-                if (
-                  !window.confirm(
-                    "Скрыть эту запись от учеников и родителей? История и черновик сохранятся.",
-                  )
-                )
-                  return;
-                setBusy(true);
-                setError("");
-                try {
-                  await api("journal/withdraw", workspace, "POST", {
-                    lessonKey: entry.lessonKey,
-                    version: entry.version,
-                  });
-                  await openEntry(entry.lessonKey);
-                  setEpoch((n) => n + 1);
-                  setMessage("Запись скрыта от учеников и родителей.");
-                } catch (e: any) {
-                  setError(e.message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Скрыть от учеников
-            </button>
-          )}
-          <button
-            onClick={() =>
-              journalCsv(
-                documentRows(
-                  entry.document,
-                  entry.lessonKey,
-                  entry.version,
-                  entry.attendanceApprovals,
-                ),
-                undefined,
-                categories,
-                absenceCodeNames(entry.absenceCodes),
-              )
-            }
-          >
-            CSV текущих полей
-          </button>
-          <button
-            disabled={!entry.version || busy}
-            onClick={() => void historyPage()}
-          >
-            История записи
-          </button>
-        </div>
-        {!!history.length && (
-          <section className="journal-history">
-            <h3>Сохранённые редакции</h3>
-            {history.map((h) => (
-              <div key={h.version}>
-                <span>
-                  № {h.version} · {new Date(h.updated).toLocaleString("ru-RU")}{" "}
-                  · {h.actor} ·{" "}
-                  {h.action === "journal.published"
-                    ? "Опубликовано"
-                    : h.action === "journal.withdrawn"
-                      ? "Скрыто"
-                      : "Черновик"}
-                </span>
-                <button
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      const r = await api(
-                        `journal/history?${new URLSearchParams({ lessonKey: entry.lessonKey, version: String(h.version) })}`,
-                        workspace,
-                      );
-                      setHistorical(r[0] || null);
-                    } catch (e: any) {
-                      setError(e.message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Посмотреть редакцию {h.version}
-                </button>
-              </div>
-            ))}
-            {historyMore && (
-              <button
-                disabled={busy}
-                onClick={() => void historyPage(history.at(-1)!.version)}
-              >
-                Более ранние редакции
-              </button>
-            )}
-          </section>
-        )}
-        {entry.hasPublished &&
-          entry.publishedVersion === entry.version &&
-          entry.document.content.homework.trim() && (
-            <HomeworkParallelPanel
-              key={workspace + entry.lessonKey + entry.version}
-              workspace={workspace}
-              entry={entry}
-              disabled={dirty || busy}
-              onPublished={() => setEpoch((n) => n + 1)}
-            />
-          )}
-        {!!entry.version && (
-          <HomeworkPanel
-            key={workspace + entry.lessonKey + entry.publishedVersion}
-            workspace={workspace}
-            lessonKey={entry.lessonKey}
-            onGraded={() => {
-              setEpoch((n) => n + 1);
-              if (dirtyRef.current) {
-                setMessage(
-                  "Оценка опубликована. Ваши несохранённые поля оставлены на экране; перед сохранением откройте актуальную редакцию журнала.",
-                );
-              } else {
-                void openEntry(entry.lessonKey).then(() =>
-                  setMessage("Оценка опубликована, журнал обновлён."),
-                );
-              }
-            }}
-          />
-        )}
-        {historical?.document && (
-          <section className="journal-history-preview">
-            <h3>Редакция {historical.version} · только просмотр</h3>
-            <p>
-              Поздняя сдача:{" "}
-              {historical.document.content.homeworkLatePolicy === "block"
-                ? "приём закрывается после срока"
-                : "разрешена с отметкой"}
-              .
-            </p>
-            {historical.document.content.homeworkSubmission === "offline" && (
-              <p>Сдача: без онлайн-сдачи.</p>
-            )}
-            <SavedPlanTopic value={historical.document.content.curriculum} />
-            <LessonMaterials
-              items={historical.document.content.materials || []}
-              workspace={workspace}
-              lessonKey={entry.lessonKey}
-            />
-            <SavedMaterialLinks
-              ids={historical.document.content.homeworkFiles || []}
-              workspace={workspace}
-              lessonKey={entry.lessonKey}
-              day={historical.document.lesson.date}
-            />
-            <button onClick={() => setHistorical(null)}>
-              Закрыть редакцию
-            </button>
-            <PublishedRows
-              rows={documentRows(
-                historical.document,
-                entry.lessonKey,
-                historical.version,
-              )}
-              categories={categories}
-              codeNames={absenceCodeNames(entry.absenceCodes)}
-            />
-          </section>
-        )}
-      </section>
+      <LessonEditor
+        workspace={workspace}
+        entry={entry}
+        panelRef={editorPanel}
+        dirty={dirty}
+        busy={busy}
+        editable={editable}
+        syncRoster={syncRoster}
+        categories={categories}
+        lessonMarks={lessonMarks}
+        customWeights={customWeights}
+        setCustomWeights={setCustomWeights}
+        dueNote={dueNote}
+        dueBusy={dueBusy}
+        nobodyAbsent={nobodyAbsent}
+        history={history}
+        historyMore={historyMore}
+        historical={historical}
+        actions={{
+          content,
+          patchWork,
+          pupil,
+          grade,
+          save,
+          openEntry,
+          historyPage,
+          dueNextLesson,
+          withdraw,
+          showVersion,
+          closeVersion,
+          uploading,
+          refreshDay,
+          homeworkGraded,
+          close: () => {
+            if (canLeave()) clearEditor();
+          },
+        }}
+      />
     );
   }
   const panels = options ? journalPanels(options) : [];
@@ -1337,7 +697,7 @@ export default function JournalPanel({
   const profile = dayProfile(lessons, options?.profiles);
   const slots = profile && day ? slotsFor(profile, day) : [];
   const rows = lessonRows(shown, slots);
-  // A lesson opened from another screen (or from the search) puts the administrator into its class, so the editor sits in a row.
+  // A lesson opened from another screen (or from the search) puts the administrator into its class, so «← Журнал дня» lands there.
   const openKey = entry?.lessonKey;
   const moveTo =
     admin && ready
@@ -1349,21 +709,24 @@ export default function JournalPanel({
   useEffect(() => {
     if (moveTo) setClassFilter(moveTo);
   }, [moveTo]);
-  // A lesson of another day opens before the list of that day is read; the editor mounts with the list, and only then can it take the focus.
-  // The administrator's editor mounts once, in the row of its class, so the focus waits until he has been taken there.
+  // The opened lesson takes the place of the day: it is brought to the top and takes the focus once, when it opens; a
+  // place named by the day table (the pupils, the topic of the plan) is shown after that.
+  const shownLesson = useRef("");
   useEffect(() => {
-    if (!entry || !editorPanel.current || moveTo) return;
-    if (coverageOpened.current) {
+    if (!openKey) return void (shownLesson.current = "");
+    if (!editorPanel.current) return;
+    if (shownLesson.current !== openKey) {
+      shownLesson.current = openKey;
       coverageOpened.current = false;
       editorPanel.current.focus({ preventScroll: true });
       editorPanel.current.scrollIntoView({ block: "start" });
     }
-    if (aim.current?.key === entry.lessonKey) {
+    if (aim.current?.key === openKey) {
       const id = aim.current.id;
       aim.current = null;
-      document.getElementById(id)?.scrollIntoView({ block: "start" });
+      reveal(id);
     }
-  }, [entry, ready, moveTo]);
+  }, [openKey, entry]);
   // The calendar colours the days of the own lessons; the administrator sees one class at a time.
   const coverage: CoverageScope | null = !options?.staff
     ? null
@@ -1405,7 +768,7 @@ export default function JournalPanel({
     if (lesson)
       openFromGrid(
         lesson.lessonKey,
-        aimed === "homework" ? "journal-homework" : "journal-lesson-topic",
+        aimed === "homework" ? "journal-homework" : "journal-lesson-topic-text",
       );
   }, [aimed, options, single, mode, day, ready, loading]);
   // Another class (or all classes) in place; a lesson open in the editor is left first.
@@ -1505,8 +868,9 @@ export default function JournalPanel({
               Обновить журнал
             </button>
           </div>
+          {mode === "day" && editor()}
           {mode === "day" ? (
-            <div className="teacher-day-layout">
+            <div className="teacher-day-layout" hidden={!!entry}>
               <div className="teacher-day-main">
                 <header className="teacher-day-head">
                   <h2>{title}</h2>
@@ -1619,12 +983,10 @@ export default function JournalPanel({
                     label={`Уроки ${dayText(day)}`}
                     showClass={!classFilter}
                     now={readAt}
-                    selectedKey={entry?.lessonKey}
                     busy={busy}
                     onOpen={(key) => openFromGrid(key)}
                     onPupils={(key) => openFromGrid(key, "journal-pupil-cards")}
                     onPlan={(key) => openFromGrid(key, "journal-lesson-topic")}
-                    renderEditor={editor}
                   />
                 )}
                 {found.more > 0 && (
@@ -1633,11 +995,6 @@ export default function JournalPanel({
                     : уточните запрос или выберите класс.
                   </p>
                 )}
-                {ready &&
-                  entry &&
-                  !moveTo &&
-                  !rows.some((r) => r.lesson.lessonKey === entry.lessonKey) &&
-                  editor()}
               </div>
               <aside className="teacher-day-side">
                 <MonthCalendar

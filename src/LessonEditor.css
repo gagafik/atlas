@@ -1,0 +1,382 @@
+/* The opened lesson: «Урок» on the left (what a teacher fills every lesson), «Ученики» on the right. The editor is a
+   container of its own: two columns when it is at least 960 px wide, one column (the lesson first) below that. Every
+   rule sits under .journal-editor. */
+section.journal-editor {
+  container: lesson-editor / inline-size;
+  min-width: 0;
+  padding: 12px 14px;
+}
+/* The lesson takes the focus when it opens, so the keyboard starts in it; a ring around the whole screen says nothing. */
+section.journal-editor:focus {
+  outline: none;
+}
+.journal-editor [id^="journal-"] {
+  scroll-margin-top: 72px;
+}
+
+/* The frame: the way back, the title, one line with the date and the teacher. */
+.journal-editor .lesson-editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 6px;
+}
+.journal-editor .lesson-editor-head h2 {
+  margin: 0;
+  font-size: 18px;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+.journal-editor .lesson-editor-line {
+  flex: 1 1 200px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.journal-editor .lesson-editor-back {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+/* The notes under the title: one short line each. */
+.journal-editor .lesson-editor-notes {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+.journal-editor .lesson-editor-notes .info-line,
+.journal-editor .lesson-editor-notes .error-banner {
+  margin: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.journal-editor .lesson-editor-notes .info-line {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.journal-editor .lesson-editor-notes .info-line > p {
+  flex: 1 1 240px;
+  margin: 0;
+}
+.journal-editor .lesson-editor-notes .info-line button {
+  flex: none;
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+/* The lesson, the pupils and what is read after them, one under another: the pupils table needs the whole width, or its
+   last columns hide behind a sideways scroll. */
+.journal-editor .lesson-editor-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px 16px;
+  align-items: start;
+}
+/* The fields of the lesson are panes, two in a row where there is room: the topic beside the homework, the materials
+   beside the works. */
+.journal-editor .lesson-editor-pane {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+@container lesson-editor (min-width: 760px) {
+  .journal-editor .lesson-editor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 20px;
+  }
+}
+.journal-editor .lesson-editor-after:empty {
+  display: none;
+}
+.journal-editor .lesson-editor-col {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+.journal-editor .lesson-editor-title,
+.journal-editor .lesson-pupils-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.journal-editor .lesson-pupils-block {
+  margin-top: 0;
+}
+.journal-editor .lesson-editor-fields {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.journal-editor .lesson-editor-fields .field {
+  margin: 0;
+  gap: 3px;
+}
+.journal-editor .lesson-editor-fields .field textarea {
+  min-height: 0;
+  resize: vertical;
+}
+
+/* A row: a title with its count, the buttons and a short hint that wraps under them. */
+.journal-editor .lesson-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  font-size: 13px;
+}
+.journal-editor .lesson-row > strong {
+  font-weight: var(--weight-bold);
+}
+.journal-editor .lesson-row button,
+.journal-editor .lesson-file-button,
+.journal-editor .lesson-material-list button {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.journal-editor .lesson-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.journal-editor .lesson-row > .lesson-hint {
+  flex: 1 1 200px;
+}
+.journal-editor .lesson-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.journal-editor .lesson-inline-field > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: var(--weight-bold);
+}
+.journal-editor .lesson-inline-field input,
+.journal-editor .lesson-inline-field select {
+  width: auto;
+  min-height: 28px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.journal-editor .lesson-inline-field input[type="number"] {
+  width: 64px;
+}
+
+/* The topic of the plan: one row, the picker opens under it. */
+.journal-editor .lesson-topic {
+  min-width: 0;
+}
+.journal-editor .lesson-topic-picker > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-height: 28px;
+  font-size: 13px;
+  cursor: pointer;
+  list-style: none;
+}
+.journal-editor .lesson-topic-picker > summary::-webkit-details-marker {
+  display: none;
+}
+.journal-editor .lesson-topic-picker > summary::before {
+  content: "▸";
+  color: var(--text-muted);
+}
+.journal-editor .lesson-topic-picker[open] > summary::before {
+  content: "▾";
+}
+.journal-editor .lesson-topic-open {
+  margin-left: auto;
+  color: var(--primary);
+  font-size: 12px;
+  text-decoration: underline;
+}
+.journal-editor .lesson-topic-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+.journal-editor .lesson-topic-body p,
+.journal-editor .lesson-topic-body h4 {
+  margin: 0;
+}
+.journal-editor .lesson-topic-plan {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Homework settings: one row under the task. */
+.journal-editor .lesson-hw {
+  display: grid;
+  gap: 4px;
+}
+.journal-editor .lesson-hw .lesson-row {
+  gap: 6px 12px;
+}
+
+/* Materials and files: a row; the list only when there is something in it. */
+.journal-editor .lesson-materials.lesson-materials-editor {
+  margin: 0;
+}
+.journal-editor .lesson-materials-editor .teaching-library-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+.journal-editor .lesson-material-list {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.journal-editor .lesson-material-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.journal-editor .lesson-material-list > li > details {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 13px;
+}
+.journal-editor .lesson-material-list summary {
+  cursor: pointer;
+}
+.journal-editor .assignment-materials {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.journal-editor .assignment-materials p,
+.journal-editor .assignment-materials ul {
+  margin: 0;
+  font-size: 12px;
+}
+.journal-editor .assignment-materials > details {
+  font-size: 12px;
+}
+.journal-editor .lesson-file-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: var(--line-width) solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.journal-editor .lesson-file-button:hover:not(.is-disabled) {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.journal-editor .lesson-file-button:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.journal-editor .lesson-file-button input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.journal-editor .lesson-file-button.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.journal-editor .lesson-file-button.is-disabled input {
+  cursor: not-allowed;
+}
+
+/* The works: one row each, the fields open in place. */
+.journal-editor .lesson-assessments {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.journal-editor .lesson-work {
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+.journal-editor .lesson-work-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.journal-editor .lesson-work-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 10px;
+  padding: 6px 0 2px;
+}
+.journal-editor .lesson-work-form .field {
+  margin: 0;
+}
+
+/* Under the columns' fields: the folds that only show information. */
+.journal-editor .lesson-editor-fold,
+.journal-editor details.journal-history {
+  margin: 0;
+  font-size: 13px;
+}
+.journal-editor .lesson-editor-fold > summary,
+.journal-editor details.journal-history > summary {
+  min-height: 28px;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.journal-editor details.journal-history > div {
+  padding: 6px 0;
+  font-size: 12px;
+}
+.journal-editor .homework-work,
+.journal-editor .homework-parallel {
+  margin: 0;
+}
+
+/* The bar with the state and the buttons stays at the bottom of the screen while the lesson is long. */
+.journal-editor .journal-savebar {
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 12px;
+}
+.journal-editor .journal-savebar button {
+  min-height: 30px;
+  padding: 3px 12px;
+  font-size: 13px;
+}
+.journal-editor .lesson-editor-state {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+}
+.journal-editor .lesson-editor-state[data-state="unsaved"] {
+  color: var(--warning);
+}
+.journal-editor .lesson-editor-state[data-state="published"] {
+  color: var(--success);
+}
+@media (max-width: 700px) {
+  section.journal-editor {
+    padding: 10px;
+  }
+}
