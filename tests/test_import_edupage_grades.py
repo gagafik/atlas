@@ -25,13 +25,15 @@ class Wire:
     """The importer's HTTP object over a TestClient. before_put runs before the first PUT goes through (a colleague saving in between)."""
 
     def __init__(self, session):
-        self.session, self.verbs, self.before_put = session, [], None
+        self.session, self.verbs, self.before_put, self.drop_at = session, [], None, None
 
     def call(self, method, path, params=None, body=None):
         self.verbs.append(method)
         if method == 'PUT' and self.before_put:
             action, self.before_put = self.before_put, None
             action()
+        if method == 'PUT' and self.drop_at == self.verbs.count('PUT'):
+            raise importer.Stop('connection', 0, 'cut')  # The connection drops before this save goes through.
         response = self.session.request(method, path, params=params, json=body, headers=importer.HEADERS)
         try:
             return response.status_code, response.json()
@@ -45,7 +47,7 @@ class Journals:
     def __init__(self, state):
         classes = {c.id: c.name for c in state.classes}
         self.people = {'e' + s.id: (classes[s.classId], s.name) for s in state.students}
-        self.columns, self.marks, self.subjects = {}, [], {}
+        self.columns, self.marks, self.subjects, self.ended = {}, [], {}, set()
         self.categories = {FORMATIVE: 'k1', SECTION: 'k2', TERM: 'k3'}
 
     def stranger(self, klass, name=OUTSIDER):
@@ -68,7 +70,7 @@ class Journals:
                                udalostid=uid, data=text, datum=stamp, datum_vytvorenia=stamp, stav='o'))
 
     def document(self, klass):
-        pupils = {sid: dict(p_priezvisko=name.split()[0], p_meno=' '.join(name.split()[1:]), p_koniec_studia='')
+        pupils = {sid: dict(p_priezvisko=name.split()[0], p_meno=' '.join(name.split()[1:]), p_koniec_studia='31.08.2026' if sid in self.ended else '')
                   for sid, (c, name) in self.people.items() if c == klass}
         pupils['0'] = dict(p_priezvisko='1 служебная строка', p_meno='', p_koniec_studia='')
         here = {uid: raw for uid, (raw, classes) in self.columns.items() if klass in classes}
@@ -121,6 +123,31 @@ class School:
     def grade(self, subject, day, work, pupil='s1'):
         records = {r['studentId']: r for r in self.entry(subject, day)['document']['content']['records']}
         return next((g for g in records[pupil]['grades'] if g['assessmentId'] == work), None) if pupil in records else None
+
+    def colleague(self):
+        """Another administrator: what it saves is not the importer's work."""
+        if not hasattr(self, 'other'):
+            create(self.client, 'admin', name='Коллега по журналу', login='colleague')
+            self.other = signed('colleague')
+        return self.other
+
+    def edit(self, subject, day, change, publish=False):
+        """A colleague changes the lesson content by hand and saves it."""
+        rows = self.colleague().get('/api/journal/day', params=dict(workspace='demo', day=day)).json()['lessons']
+        key = next(r['lessonKey'] for r in rows if r['lesson']['subject'] == subject and not r['archived'])
+        entry = self.colleague().get('/api/journal/entry', params=dict(workspace='demo', lessonKey=key, day=day)).json()
+        change(entry['document']['content'])
+        payload = dict(lessonKey=key, day=day, revision=entry['revision'], version=entry['version'], content=entry['document']['content'], publish=publish)
+        response = self.colleague().put('/api/journal/entry?workspace=demo', json=payload)
+        assert response.status_code == 200, response.text
+
+    def seen_by(self, pupil='s1'):
+        """The marks a family sees: {work id: score} of the published rows."""
+        if not hasattr(self, 'family'):
+            create(self.client, 'student')
+            self.family = signed('student')
+        rows = self.family.get('/api/journal/report', params=dict(workspace='demo', studentId=pupil, start='2026-08-01', end='2026-10-01')).json()['rows']
+        return {g['assessmentId']: g['score'] for row in rows for g in row['record']['grades']}
 
     def save(self, entry, publish=False):
         payload = dict(lessonKey=entry['lessonKey'], day=entry['document']['lesson']['date'], revision=entry['revision'], version=entry['version'],
@@ -559,4 +586,221 @@ def test_the_report_holds_no_names_titles_or_marks(school, capsys):
     for secret in [*names, 'особоеназвание', 'оченьособыйкомментарий', '7,77', '3,33', '12,34']:
         assert secret not in text
     assert json.loads((school.tmp / 'report.json').read_text(encoding='utf8'))['marks']['written'] == 2
+
+
+# ----------------------------------------------------------------------------- what a repeated run must leave alone
+
+def grades_of(school, prefix, day=D1, pupil='s1'):
+    """The scores of a pupil on every work of one EduPage column in a lesson: {work id: score}."""
+    found = {w: school.grade(ENGLISH, day, w, pupil) for w in school.works(ENGLISH, day) if w.startswith(prefix)}
+    return {w: g['score'] for w, g in found.items() if g}
+
+
+def test_two_edupage_records_of_one_pupil_import_neither_mark(school):
+    journals = english_marks(school, ['a'], text='7')
+    journals.people['e-dup'] = journals.people['es1']
+    journals.mark('a', '-dup', '3')
+    report = school.run(journals, '--apply')
+    assert not school.works(ENGLISH, D1)
+    assert report['pupilsWithoutMatch'] == {'10A': dict(none=0, ambiguous=2)}
+
+
+def test_a_record_with_an_end_of_study_gives_way_to_the_live_one(school):
+    journals = english_marks(school, ['a'], text='7')
+    journals.people['e-dup'] = journals.people['es1']
+    journals.ended.add('e-dup')
+    journals.mark('a', '-dup', '3')
+    report = school.run(journals, '--apply')
+    assert school.grade(ENGLISH, D1, 'ep-a', 's1')['score'] == 7
+    assert report['pupilsWithoutMatch'] == {'10A': dict(none=0, ambiguous=1)}
+
+
+def test_a_deleted_attempt_never_makes_atlas_hold_a_mark_twice(school):
+    journals = school.journals()
+    journals.column('t', maximum='20', every='0')
+    for text, hour in [('5', '09'), ('12', '10'), ('15', '11')]:
+        journals.mark('t', 's1', text, f'2026-09-14 {hour}:00:00')
+    school.run(journals, '--apply')
+    journals.marks[0]['stav'] = 'x'  # EduPage dropped the first attempt.
+    report = school.run(journals, '--apply')
+    assert sorted(grades_of(school, 'ep-t').values()) == [5, 12, 15]
+    assert report['marks']['attemptsKept'] == 1 and 'PUT' not in school.wire.verbs
+
+
+def test_a_deleted_attempt_of_two_does_not_double_the_remaining_mark(school):
+    journals = school.journals()
+    journals.column('t', every='0')
+    journals.mark('t', 's1', '3', '2026-09-14 09:00:00')
+    journals.mark('t', 's1', '8', '2026-09-14 10:00:00')
+    school.run(journals, '--apply')
+    journals.marks[0]['stav'] = 'x'
+    school.run(journals, '--apply')
+    assert sorted(grades_of(school, 'ep-t').values()) == [3, 8]
+
+
+def test_an_attempt_work_never_takes_the_id_of_another_column(school):
+    journals = school.journals()
+    journals.column('x', title='Первая', every='0')
+    journals.mark('x', 's1', '3', '2026-09-14 09:00:00')
+    journals.mark('x', 's1', '4', '2026-09-14 10:00:00')
+    journals.column('x-2', title='Вторая')
+    journals.mark('x-2', 's1', '9')
+    journals.mark('x-2', 's2', '8')
+    school.run(journals, '--apply')
+    works = school.works(ENGLISH, D1)
+    assert (school.grade(ENGLISH, D1, 'ep-x-2', 's1')['score'], school.grade(ENGLISH, D1, 'ep-x-2', 's2')['score']) == (9, 8)
+    second = [w for w, a in works.items() if a['name'].startswith('Первая') and a['name'].endswith('попытка 2')]
+    assert len(second) == 1 and school.grade(ENGLISH, D1, second[0], 's1')['score'] == 4
+    again = school.run(journals, '--apply')
+    assert again['lessons']['toSave'] == 0 and again['works']['new'] == 0
+
+
+def test_a_lowered_maximum_and_a_dropped_mark_do_not_block_the_lesson(school):
+    journals = school.journals()
+    journals.column('a', maximum='20')
+    journals.mark('a', 's1', '15')
+    journals.mark('a', 's2', '18')
+    journals.column('b')
+    journals.mark('b', 's1', '5')
+    school.run(journals, '--apply')
+    journals = school.journals()
+    journals.column('a', maximum='10')
+    journals.mark('a', 's1', '15')
+    journals.column('b')
+    journals.mark('b', 's1', '6')
+    report = school.run(journals, '--apply')
+    assert not report['lessons']['refused']
+    assert school.grade(ENGLISH, D1, 'ep-b')['score'] == 6
+    kept = school.grade(ENGLISH, D1, 'ep-a', 's2')
+    assert kept['score'] == 10 and '18' in kept['comment']
+    assert school.works(ENGLISH, D1)['ep-a']['maxScore'] == 10
+
+
+def test_a_negative_weight_becomes_no_weight(school):
+    journals = school.journals()
+    journals.column('h', weight='-20')
+    journals.mark('h', 's1', '5')
+    school.run(journals, '--apply')
+    assert school.works(ENGLISH, D1)['ep-h']['weight'] == 0
+
+
+def test_a_teachers_correction_survives_a_run_on_an_unchanged_source(school):
+    journals = english_marks(school, ['a'])
+    school.run(journals, '--apply')
+    school.edit(ENGLISH, D1, lambda c: next(r for r in c['records'] if r['studentId'] == 's1')['grades'][0].update(score=3), publish=True)
+    version = school.entry(ENGLISH, D1)['version']
+    report = school.run(journals, '--apply')
+    assert school.grade(ENGLISH, D1, 'ep-a')['score'] == 3 and school.seen_by() == {'ep-a': 3}
+    assert 'PUT' not in school.wire.verbs and school.entry(ENGLISH, D1)['version'] == version
+    assert report['keptAsInAtlas']['editedMarks'] == 1
+
+
+def test_a_changed_mark_still_arrives_when_a_colleague_touched_something_else(school):
+    school.run(english_marks(school, ['a']), '--apply')
+    school.edit(ENGLISH, D1, lambda c: c.update(topic='Тема коллеги'))
+    report = school.run(english_marks(school, ['a'], text='9'), '--apply')
+    assert school.grade(ENGLISH, D1, 'ep-a')['score'] == 9 and report['keptAsInAtlas']['editedMarks'] == 0
+    assert school.entry(ENGLISH, D1)['document']['content']['topic'] == 'Тема коллеги'
+
+
+def test_a_teachers_correction_wins_when_edupage_changed_too(school):
+    school.run(english_marks(school, ['a']), '--apply')
+    school.edit(ENGLISH, D1, lambda c: next(r for r in c['records'] if r['studentId'] == 's1')['grades'][0].update(score=3))
+    report = school.run(english_marks(school, ['a'], text='9'), '--apply')
+    assert school.grade(ENGLISH, D1, 'ep-a')['score'] == 3 and report['keptAsInAtlas']['editedMarks'] == 1
+
+
+def test_a_teachers_edit_of_the_work_itself_is_kept(school):
+    journals = english_marks(school, ['a'])
+    school.run(journals, '--apply')
+    school.edit(ENGLISH, D1, lambda c: c['assessments'][0].update(weight=3, name='Своё название'))
+    report = school.run(journals, '--apply')
+    work = school.works(ENGLISH, D1)['ep-a']
+    assert (work['weight'], work['name']) == (3, 'Своё название') and 'PUT' not in school.wire.verbs
+    assert report['keptAsInAtlas']['editedWorks'] == 1
+
+
+def test_a_mark_the_teacher_removed_does_not_come_back(school):
+    journals = english_marks(school, ['a'])
+    journals.mark('a', 's2', '6')
+    school.run(journals, '--apply')
+    school.edit(ENGLISH, D1, lambda c: next(r for r in c['records'] if r['studentId'] == 's2').update(grades=[]))
+    report = school.run(journals, '--apply')
+    assert school.grade(ENGLISH, D1, 'ep-a', 's2') is None and 'PUT' not in school.wire.verbs
+    assert report['keptAsInAtlas']['editedMarks'] == 1
+
+
+def test_a_work_the_teacher_deleted_is_not_created_again(school):
+    journals = english_marks(school, ['a', 'b'])
+    school.run(journals, '--apply')
+
+    def delete(content):
+        content['assessments'] = [a for a in content['assessments'] if a['id'] != 'ep-a']
+        for record in content['records']:
+            record['grades'] = [g for g in record['grades'] if g['assessmentId'] != 'ep-a']
+
+    school.edit(ENGLISH, D1, delete, publish=True)
+    report = school.run(journals, '--apply')
+    assert list(school.works(ENGLISH, D1)) == ['ep-b'] and 'PUT' not in school.wire.verbs
+    assert report['keptAsInAtlas']['removedWorks'] == 1 and report['works']['new'] == 0
+
+
+def test_a_new_column_still_lands_in_a_lesson_with_history(school):
+    school.run(english_marks(school, ['a']), '--apply')
+    school.edit(ENGLISH, D1, lambda c: c.update(topic='Тема'))
+    school.run(english_marks(school, ['a', 'b']), '--apply')
+    assert set(school.works(ENGLISH, D1)) == {'ep-a', 'ep-b'}
+
+
+def test_a_large_publication_waits_for_an_explicit_yes(school, monkeypatch):
+    monkeypatch.setattr(importer, 'PUBLISH_LIMIT', 1)
+    journals = school.journals()
+    for uid, day in [('a', D1), ('b', D0)]:
+        journals.column(uid)
+        journals.mark(uid, 's1', '5', day)
+    report = school.run(journals, '--apply')
+    assert report['aborted']['step'] == 'publish' and school.code != 0
+    assert 'PUT' not in school.wire.verbs and report['lessons']['toPublish'] == 2 and not school.works(ENGLISH, D1)
+    drafts = school.run(journals, '--apply', '--draft')
+    assert drafts['lessons']['saved'] == 2 and school.seen_by() == {}
+    again = school.run(journals, '--apply', '--publish')
+    assert again['lessons']['saved'] == 2 and set(school.seen_by()) == {'ep-a', 'ep-b'}
+
+
+def test_marks_saved_as_a_draft_can_be_published_later_in_a_lesson_the_teacher_published(school):
+    entry = school.entry(ENGLISH, D1)
+    entry['document']['content']['topic'] = 'Опубликованная тема'
+    school.save(entry, publish=True)
+    journals = english_marks(school, ['a'])
+    school.run(journals, '--apply', '--draft')
+    assert school.seen_by() == {}
+    report = school.run(journals, '--apply')
+    assert school.seen_by() == {'ep-a': 8} and report['lessons']['saved'] == 1 and report['lessons']['keptAsDraft'] == 0
+
+
+def test_a_draft_with_the_teachers_own_changes_is_not_published_with_the_marks(school):
+    entry = school.entry(ENGLISH, D1)
+    entry['document']['content']['topic'] = 'Опубликованная тема'
+    school.save(entry, publish=True)
+    journals = english_marks(school, ['a'])
+    school.run(journals, '--apply', '--draft')
+    school.edit(ENGLISH, D1, lambda c: c.update(topic='Тема ещё не для семей'))
+    report = school.run(journals, '--apply')
+    assert school.seen_by() == {} and report['lessons']['keptAsDraft'] == 1
+
+
+def test_a_run_cut_short_still_reports_what_it_saved(school):
+    journals = school.journals()
+    for uid, day in [('a', D1), ('b', D0)]:
+        journals.column(uid)
+        journals.mark(uid, 's1', '5', day)
+    journals.write(school.tmp / 'source')
+    (school.tmp / 'account.txt').write_text(f'admin\n{PASSWORD}\n', encoding='utf8')
+    wire = Wire(TestClient(api.app, headers=HEADERS))
+    wire.drop_at = 2
+    importer.main([str(school.tmp / 'source'), '--workspace', 'demo', '--account', str(school.tmp / 'account.txt'), '--report', str(school.tmp / 'cut.json'), '--apply'], http=wire, minute='23:59')
+    report = json.loads((school.tmp / 'cut.json').read_text(encoding='utf8'))
+    assert report['aborted']['step'] == 'connection' and report['lessons']['saved'] == 1
+    assert school.run(journals, '--apply')['lessons']['saved'] == 1 and school.run(journals, '--apply')['lessons']['toSave'] == 0
+    assert set(school.works(ENGLISH, D1)) == {'ep-a'} and set(school.works(ENGLISH, D0)) == {'ep-b'}
 
