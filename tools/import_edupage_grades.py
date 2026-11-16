@@ -13,12 +13,14 @@ administrator account of its own. More than PUBLISH_LIMIT lessons are published 
 
 Make a backup first (python -m tools.backup_school). The report holds counts only: no names of pupils
 or teachers, no marks, no column titles. See GRADES_IMPORT.md.
+While it works the tool prints short progress lines (counts only) to stderr; the report goes to stdout and --report.
 
 The module has three parts: reading the files (Source), planning (Planner turns the journals and what
 Atlas returned into one change per lesson and a report; it only reads) and the HTTP part (Http, Atlas,
-save, main).
+save, main). The connection is one kept-alive http.client connection; see Http.
 """
 import argparse
+import base64
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -26,13 +28,16 @@ from datetime import date, datetime, timedelta
 import getpass
 import gzip
 from http.cookiejar import CookieJar
+from http import client as httpclient
 import hashlib
+import ipaddress
 import json
 from pathlib import Path
 import re
+import ssl
 import sys
 import time
-from urllib import error, parse, request as urlrequest
+from urllib import parse, request as urlrequest
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,12 +52,35 @@ PREFIX = 'ep-'
 MAX_WORKS, NAME_LIMIT, LABEL_LIMIT, COMMENT_LIMIT, ID_LIMIT = 10, 100, 30, 1000, 80
 WEIGHT_UNIT = 20  # The EduPage weight "20" is one times.
 SEARCH_DAYS = 7
-RETRIES = 4  # Tries of one request when the connection drops.
+RETRIES = 5  # Tries of one request when the connection drops or stalls.
+TIMEOUT = 30  # Seconds the server may take to connect or to answer; a dead connection is dropped after this and the request sent again.
 ENOUGH = 0.8  # The share of a column's pupils a group must hold when no group holds them all.
 PUBLISH_LIMIT = 20  # More lessons than this are published only when the operator says so (--publish): every family gets a notice per lesson.
 MARKED = ('score', 'label', 'comment')
 NUMBER = re.compile(r'\s*(-?\d+(?:[.,]\d+)?)')
 UNRESOLVED = ['noSubject', 'noPupilMatch', 'noGroup', 'noDate', 'noLesson']
+
+
+STEPS = dict(planning='Планирование: колонок', placing='Размещение: колонок', checking='Сверка уроков', saving='Сохранение: уроков')
+
+
+class Progress:
+    """Short lines on stderr while the run works (it takes minutes): counts only, never a name, a title or a mark.
+
+    A line is printed when a step starts, when it ends and at most every few seconds between. The report on stdout is not touched."""
+
+    def __init__(self, every=3.0):
+        self.every, self.step, self.last = every, None, 0.0
+
+    def __call__(self, step, done, total):
+        moment = time.monotonic()
+        if step != self.step or done >= total or moment - self.last >= self.every:
+            print(f'{STEPS[step]} {done} из {total}', file=sys.stderr, flush=True)
+            self.step, self.last = step, moment
+
+
+def quiet(step, done, total):
+    pass
 
 
 class Stop(Exception):
@@ -257,30 +285,99 @@ def reason_of(data):
     return fit(str(detail or ''), 300)
 
 
-class Http:
-    """The real server: JSON over urllib with the session cookie. The tests use a TestClient wrapper with the same call()."""
+def is_loopback(host):
+    """Whether a host name or address is this machine."""
+    if host == 'localhost' or host.endswith('.localhost'):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
-    def __init__(self, base):
-        self.base = base.rstrip('/')
-        self.opener = urlrequest.build_opener(urlrequest.HTTPCookieProcessor(CookieJar()))
+
+def proxy_for(scheme, host):
+    """The system proxy (environment, on Windows also the registry) for a host as (host, port, Proxy-Authorization or None); none for this machine."""
+    if is_loopback(host):
+        return None
+    found = urlrequest.getproxies().get(scheme)
+    if not found or urlrequest.proxy_bypass(host):
+        return None
+    parts = parse.urlsplit(found if '://' in found else 'http://' + found)
+    if not parts.hostname:
+        return None
+    login = f'{parse.unquote(parts.username)}:{parse.unquote(parts.password or "")}' if parts.username else None
+    return parts.hostname, parts.port or 80, ('Basic ' + base64.b64encode(login.encode('utf8')).decode('ascii')) if login else None
+
+
+class Http:
+    """The real server: JSON over one kept-alive connection (http.client) with the session cookie.
+
+    A connection is opened once and reused: a fresh connection per request (urllib sends "Connection: close") is reset by the server of
+    a Windows machine every third time. A request that fails on a dropped or timed-out connection is sent again on a new one. The
+    tests use a TestClient wrapper with the same call()."""
+
+    def __init__(self, base, timeout=TIMEOUT, context=None):
+        parts = parse.urlsplit(base.strip())
+        if parts.scheme not in ('http', 'https') or not parts.hostname:
+            raise Stop('url', 0, 'адрес сервера должен быть вида http://адрес:порт или https://адрес')
+        self.scheme, self.host, self.timeout, self.context = parts.scheme, parts.hostname, timeout, context
+        self.port = parts.port or (443 if self.scheme == 'https' else 80)
+        self.prefix = parts.path.rstrip('/')
+        self.origin = f'{self.scheme}://{parts.netloc.rpartition("@")[2]}'
+        self.jar, self.conn, self.proxy = CookieJar(), None, None
+
+    def open(self):
+        self.proxy = proxy_for(self.scheme, self.host)
+        where = (self.proxy[0], self.proxy[1]) if self.proxy else (self.host, self.port)
+        if self.scheme == 'https':
+            conn = httpclient.HTTPSConnection(*where, timeout=self.timeout, context=self.context)
+            if self.proxy:
+                conn.set_tunnel(self.host, self.port, {'Proxy-Authorization': self.proxy[2]} if self.proxy[2] else None)
+        else:
+            conn = httpclient.HTTPConnection(*where, timeout=self.timeout)
+        return conn
+
+    def close(self):
+        conn, self.conn = self.conn, None
+        if conn:
+            conn.close()
+
+    def exchange(self, method, target, data):
+        """One request and its whole answer on the open connection (opened first when there is none): (status, body)."""
+        if self.conn is None:
+            self.conn = self.open()
+        carrier = urlrequest.Request(self.origin + target)  # Only carries the cookies in and out of the jar.
+        self.jar.add_cookie_header(carrier)
+        headers = HEADERS | {'Accept': 'application/json'} | ({'Content-Type': 'application/json'} if data is not None else {})
+        if carrier.has_header('Cookie'):
+            headers['Cookie'] = carrier.get_header('Cookie')
+        if self.proxy and self.scheme == 'http':
+            target = self.origin + target  # A proxy takes the whole address.
+            if self.proxy[2]:
+                headers['Proxy-Authorization'] = self.proxy[2]
+        self.conn.request(method, target, body=data, headers=headers)
+        response = self.conn.getresponse()
+        raw = response.read()
+        self.jar.extract_cookies(response, carrier)
+        return response.status, raw
 
     def call(self, method, path, params=None, body=None):
-        url = self.base + path + ('?' + parse.urlencode(params) if params else '')
+        target = self.prefix + path + ('?' + parse.urlencode(params) if params else '')
         data = json.dumps(body).encode('utf8') if body is not None else None
-        request = urlrequest.Request(url, data=data, method=method, headers=HEADERS | ({'Content-Type': 'application/json'} if data else {}))
-        # A dropped connection is tried again. A repeated PUT that had gone through meets the newer version and is read again.
+        # A dropped connection is tried again at once on a new one; a repeated PUT that had gone through meets the newer version
+        # and is read again.
         for attempt in range(RETRIES):
             try:
-                with self.opener.open(request, timeout=120) as response:
-                    status, raw = response.status, response.read()
+                status, raw = self.exchange(method, target, data)
                 break
-            except error.HTTPError as exc:
-                status, raw = exc.code, exc.read()
-                break
-            except OSError as exc:
+            except ssl.SSLCertVerificationError as exc:
+                self.close()
+                raise Stop('connection', 0, f'сертификат сервера не принят: {exc.verify_message or exc}') from None
+            except (OSError, httpclient.HTTPException) as exc:
+                self.close()
                 if attempt == RETRIES - 1:
                     raise Stop('connection', 0, f'нет связи с сервером: {exc}') from None
-                time.sleep(0.5)
+                time.sleep(0.5 * attempt)
         try:
             return status, json.loads(raw)
         except ValueError:
@@ -638,8 +735,8 @@ class Rules:
 
 
 class Planner:
-    def __init__(self, atlas, source, rules, publish, minute, me=None):
-        self.atlas, self.source, self.rules, self.publish, self.minute, self.me = atlas, source, rules, publish, minute, me
+    def __init__(self, atlas, source, rules, publish, minute, me=None, progress=quiet):
+        self.atlas, self.source, self.rules, self.publish, self.minute, self.me, self.progress = atlas, source, rules, publish, minute, me, progress
         self.lessons, self.matches, self.planned, self.sizes = {}, {}, set(), {}
         self.unresolved = defaultdict(lambda: defaultdict(int))
         self.report = dict(
@@ -904,22 +1001,33 @@ class Planner:
 
     def run(self):
         self.load()
-        prepared = [p for p in (self.prepare(c) for c in self.source.columns.values()) if p]
-        for p in sorted(prepared, key=lambda p: (p.day, p.column.uid)):
-            if p.column.every:
-                self.guard_attempts(p)
-            placed = [self.place(p, work) for work in p.works]
-            if all(placed):
-                self.report['columns']['planned'] += 1
-                continue
-            self.unresolve(p.column, 'noLesson')
-            self.counts['leftOut']['noLesson'] += sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
+        columns, prepared = list(self.source.columns.values()), []
+        for n, column in enumerate(columns, 1):
+            found = self.prepare(column)
+            if found:
+                prepared.append(found)
+            self.progress('planning', n, len(columns))
+        for n, p in enumerate(sorted(prepared, key=lambda p: (p.day, p.column.uid)), 1):
+            self.settle(p)
+            self.progress('placing', n, len(prepared))
         self.finish()
         return self.report
 
+    def settle(self, p):
+        """Put the works of a prepared column in their lessons; a column some of whose works have no lesson is counted as unresolved."""
+        if p.column.every:
+            self.guard_attempts(p)
+        placed = [self.place(p, work) for work in p.works]
+        if all(placed):
+            self.report['columns']['planned'] += 1
+            return
+        self.unresolve(p.column, 'noLesson')
+        self.counts['leftOut']['noLesson'] += sum(len(w.grades) for w, ok in zip(p.works, placed) if not ok)
+
     def finish(self):
         report, lessons = self.report, self.report['lessons']
-        for plan in self.lessons.values():
+        for n, plan in enumerate(self.lessons.values(), 1):
+            self.progress('checking', n, len(self.lessons))
             entry = self.atlas.entry(plan.key, plan.day)
             plan.merged = merged = merge_in(self.atlas, entry, plan, self.publish, self.me)
             if merged.problem:  # Nothing of this lesson goes in, so none of it is counted as written.
@@ -985,14 +1093,14 @@ def save(atlas, plan, publish, me=None):
                 raise
 
 
-def run(http, workspace, source, rules=None, apply=False, publish=True, minute=None, me=None, confirmed=False):
+def run(http, workspace, source, rules=None, apply=False, publish=True, minute=None, me=None, confirmed=False, progress=quiet):
     """Plan the import and, with apply, save it. The result is the report: counts only.
 
     me is the name the importer is signed in under: the saves under another name are the teachers'. A run that publishes more than
     PUBLISH_LIMIT lessons writes nothing unless confirmed."""
     atlas = Atlas(http, workspace)
     minute = minute or datetime.now(ZoneInfo('Asia/Qyzylorda')).strftime('%H:%M')
-    planner = Planner(atlas, source, rules or Rules(), publish, minute, me)
+    planner = Planner(atlas, source, rules or Rules(), publish, minute, me, progress)
     stopped, planned = None, False
     try:
         report = planner.run()
@@ -1002,14 +1110,14 @@ def run(http, workspace, source, rules=None, apply=False, publish=True, minute=N
             if lessons['toPublish'] > PUBLISH_LIMIT and not confirmed:
                 raise Stop('publish', 0, f'будет опубликовано уроков: {lessons["toPublish"]}, и каждая семья получит уведомления; '
                                          'запустите с --draft, чтобы сохранить оценки неопубликованными, или с --publish, чтобы опубликовать')
-            for plan in sorted(planner.lessons.values(), key=lambda p: (p.day, p.key)):
-                if plan.merged.problem or not (plan.merged.changed or plan.merged.publish):
-                    continue
+            todo = [p for p in sorted(planner.lessons.values(), key=lambda p: (p.day, p.key)) if not p.merged.problem and (p.merged.changed or p.merged.publish)]
+            for n, plan in enumerate(todo, 1):
                 try:
                     save(atlas, plan, publish, me)
                     lessons['saved'] += 1
                 except Refused as exc:
                     lessons['refused'].append(planner.refusal(atlas.entry(plan.key, plan.day), exc.status, exc.reason))
+                progress('saving', n, len(todo))
     except Stop as stop:
         stopped = dict(step=stop.step, status=stop.status, reason=stop.reason)
     except Refused as exc:  # A read the plan needs, refused while planning.
@@ -1055,14 +1163,15 @@ def main(argv=None, http=None, minute=None):
     publishing.add_argument('--publish', action='store_true', help=f'publish even when more than {PUBLISH_LIMIT} lessons are published: every family gets notices')
     parser.add_argument('--report', help='write the report as JSON to this file')
     args = parser.parse_args(argv)
-    http, signed = http or Http(args.url), False
+    signed = False
     try:
+        http = http or Http(args.url)
         source = load_sources(args.source)
         if not source.files:
             raise Stop('files', 0, 'не найдено ни одного читаемого файла журнала')
         rules = Rules.read(args.rules)
         me, signed = sign_in(http, lambda: credentials(args.account))
-        report = run(http, args.workspace, source, rules, args.apply, not args.draft, minute, me, args.publish)
+        report = run(http, args.workspace, source, rules, args.apply, not args.draft, minute, me, args.publish, Progress())
     except Stop as stop:
         report = dict(aborted=dict(step=stop.step, status=stop.status, reason=stop.reason))
     finally:

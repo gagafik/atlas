@@ -2,9 +2,15 @@
 
 The class journals are built here from the demo pupils in the format the importer reads; the importer
 talks to the application through a TestClient, exactly as it talks to a server over HTTP."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import gzip
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
+import socket
+import ssl
+import threading
+import time
 from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
@@ -902,3 +908,180 @@ def test_attempt_works_never_depend_on_which_columns_exist_in_the_source(school)
     assert len(school.works(ENGLISH, D1)) == 9 and all(len(w) <= importer.ID_LIMIT for w in school.works(ENGLISH, D1))
     again = school.run(journals, '--apply')
     assert again['lessons']['toSave'] == 0 and again['works']['new'] == 0 and again['goneFromEdupage'] == 0 and 'PUT' not in school.wire.verbs
+
+
+# ----------------------------------------------------------------------------- the real HTTP class against a small local server
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'  # Connections stay open between requests.
+
+    def log_message(self, *args):
+        pass
+
+    def answer(self):
+        stub = self.server.stub
+        length = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(length) if length else b''
+        with stub.lock:
+            stub.seen.append(dict(method=self.command, target=self.path, headers={k.lower(): v for k, v in self.headers.items()}, port=self.client_address[1]))
+            action = stub.script.get(len(stub.seen))
+        if action == 'drop':  # Close the connection without an answer.
+            self.close_connection = True
+            return
+        if action:  # Answer late.
+            time.sleep(action)
+        payload = json.dumps(dict(echo=json.loads(body) if body else None, cookie=self.headers.get('Cookie'))).encode()
+        self.send_response(404 if self.path.startswith('/missing') else 200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(payload)))
+        if self.path.startswith('/login'):
+            self.send_header('Set-Cookie', 'session=abc123; Path=/; HttpOnly')
+        self.end_headers()
+        self.wfile.write(payload)
+
+    do_GET = do_PUT = do_POST = answer
+
+
+class Stub:
+    """A local HTTP/1.1 server on a free port (not the Atlas app): remembers every request; script maps the number of a request to 'drop' or to a delay."""
+
+    def __init__(self, tls=None):
+        self.seen, self.script, self.lock = [], {}, threading.Lock()
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server.daemon_threads, self.server.stub = True, self
+        if tls:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(*tls)
+            self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def stub():
+    found = []
+
+    def start(**options):
+        found.append(Stub(**options))
+        return found[-1]
+
+    yield start
+    for one in found:
+        one.close()
+
+
+def test_http_keeps_one_connection_the_cookie_and_the_request_header(stub):
+    server = stub()
+    http = importer.Http(f'http://127.0.0.1:{server.port}')
+    assert http.call('POST', '/login', None, dict(login='x'))[0] == 200
+    status, data = http.call('GET', '/api/ping', dict(workspace='demo', day='2026-09-14'))
+    assert status == 200 and data['cookie'] == 'session=abc123'
+    status, data = http.call('PUT', '/api/ping', None, dict(version=3, text='Привет'))
+    assert (status, data['echo']) == (200, dict(version=3, text='Привет')) and data['cookie'] == 'session=abc123'
+    assert http.call('GET', '/missing')[0] == 404
+    assert [r['target'] for r in server.seen] == ['/login', '/api/ping?workspace=demo&day=2026-09-14', '/api/ping', '/missing']
+    assert len({r['port'] for r in server.seen}) == 1
+    assert all(r['headers'].get('x-atlas-request') == importer.HEADERS['X-Atlas-Request'] and r['headers'].get('connection', '').lower() != 'close' for r in server.seen)
+
+
+@pytest.mark.parametrize('method', ['GET', 'PUT'])
+def test_http_asks_again_when_the_server_closed_the_connection(stub, method):
+    server = stub()
+    http = importer.Http(f'http://127.0.0.1:{server.port}')
+    assert http.call('POST', '/login')[0] == 200
+    server.script[2] = 'drop'  # The next request meets a closed connection.
+    status, data = http.call(method, '/api/ping', None, dict(n=1) if method == 'PUT' else None)
+    assert status == 200 and data['cookie'] == 'session=abc123' and (data['echo'] == dict(n=1)) == (method == 'PUT')
+    assert len(server.seen) == 3 and server.seen[1]['port'] != server.seen[2]['port']
+
+
+def test_http_does_not_wait_for_a_stalled_answer(stub):
+    server = stub()
+    http = importer.Http(f'http://127.0.0.1:{server.port}', timeout=0.4)
+    assert http.call('GET', '/login')[0] == 200
+    server.script[2] = 5
+    started = time.monotonic()
+    assert http.call('GET', '/api/ping')[0] == 200
+    assert time.monotonic() - started < 4 and len(server.seen) == 3
+
+
+def test_http_reports_a_server_that_is_not_there(monkeypatch):
+    monkeypatch.setattr(importer.time, 'sleep', lambda seconds: None)
+    with socket.socket() as free:
+        free.bind(('127.0.0.1', 0))
+        port = free.getsockname()[1]
+    with pytest.raises(importer.Stop) as stopped:
+        importer.Http(f'http://127.0.0.1:{port}').call('GET', '/api/ping')
+    assert stopped.value.step == 'connection'
+
+
+def certificate(folder):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'atlas test')])
+    start = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(start - timedelta(days=1)).not_valid_after(start + timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    (folder / 'cert.pem').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (folder / 'key.pem').write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return str(folder / 'cert.pem'), str(folder / 'key.pem')
+
+
+def test_http_works_over_https_and_keeps_the_connection(stub, tmp_path):
+    cert, key = certificate(tmp_path)
+    server = stub(tls=(cert, key))
+    http = importer.Http(f'https://127.0.0.1:{server.port}', context=ssl.create_default_context(cafile=cert))
+    assert http.call('POST', '/login', None, dict(login='x'))[0] == 200
+    status, data = http.call('PUT', '/api/ping', None, dict(n=2))
+    assert (status, data['echo'], data['cookie']) == (200, dict(n=2), 'session=abc123')
+    assert len({r['port'] for r in server.seen}) == 1
+
+
+def test_http_refuses_a_certificate_it_does_not_trust(stub, tmp_path, monkeypatch):
+    monkeypatch.setattr(importer.time, 'sleep', lambda seconds: None)
+    server = stub(tls=certificate(tmp_path))
+    with pytest.raises(importer.Stop) as stopped:
+        importer.Http(f'https://127.0.0.1:{server.port}', context=ssl.create_default_context()).call('GET', '/api/ping')
+    assert stopped.value.step == 'connection' and not server.seen
+
+
+def system_proxy(monkeypatch, port):
+    for name in ['NO_PROXY', 'no_proxy', 'HTTPS_PROXY', 'https_proxy']:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('http_proxy', f'http://127.0.0.1:{port}')
+
+
+def test_a_system_proxy_is_not_used_for_a_loopback_address(stub, monkeypatch):
+    server, proxy = stub(), stub()
+    system_proxy(monkeypatch, proxy.port)
+    assert importer.Http(f'http://127.0.0.1:{server.port}').call('GET', '/api/ping')[0] == 200
+    assert len(server.seen) == 1 and not proxy.seen
+
+
+def test_a_system_proxy_is_used_for_another_host(stub, monkeypatch):
+    proxy = stub()
+    system_proxy(monkeypatch, proxy.port)
+    status, data = importer.Http('http://atlas.invalid:8123/prefix').call('GET', '/api/ping', dict(workspace='demo'))
+    assert status == 200 and [r['target'] for r in proxy.seen] == ['http://atlas.invalid:8123/prefix/api/ping?workspace=demo']
+
+
+def test_progress_goes_to_stderr_as_counts_and_the_report_stays_on_stdout(school, capsys):
+    journals = school.journals()
+    journals.column('x', title='особоеназвание')
+    journals.mark('x', 's1', 'оченьособыйкомментарий')
+    report = school.run(journals, '--apply')
+    out, err = capsys.readouterr()
+    assert json.loads(out) == report == json.loads((school.tmp / 'report.json').read_text(encoding='utf8'))
+    assert err.strip() and all(any(ch.isdigit() for ch in line) for line in err.splitlines())
+    names = [name for _, name in journals.people.values()] + [part for _, name in journals.people.values() for part in name.split() if len(part) > 3]
+    assert not [secret for secret in [*names, 'особоеназвание', 'оченьособыйкомментарий', 'ep-x', ENGLISH] if secret in err]
