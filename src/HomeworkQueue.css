@@ -193,6 +193,9 @@
 .homework-queue-work .homework-roster > .homework-bulk {
   margin-top: 8px;
 }
+.homework-queue-work .homework-bulk > button {
+  justify-self: start;
+}
 .homework-queue-work .homework-roster button:not(.primary) {
   justify-content: flex-start;
   min-height: 30px;
@@ -310,7 +313,7 @@
 }
 /* Room for the state and one more chip on a line: a row of the family list keeps its two lines. */
 .homework-queue-family .homework-queue-state {
-  min-width: 216px;
+  min-width: 244px;
 }
 .homework-queue-staff .homework-queue-state {
   width: 100%;
@@ -390,6 +393,12 @@
   }
   .homework-queue-table thead {
     display: none;
+  }
+  .homework-queue-table caption {
+    display: block;
+  }
+  .homework-queue-family .homework-queue-state {
+    min-width: 0;
   }
   .homework-queue-task-head {
     flex-wrap: wrap;
