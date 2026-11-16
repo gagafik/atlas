@@ -40,4 +40,5 @@ if ($Demo) {
     exit $LASTEXITCODE
 }
 Write-Host 'Atlas: http://127.0.0.1:8000'
+Write-Host 'No sign-in here. Accounts for every role on the invented school: ./start.ps1 -Demo'
 & $pythonExecutable -m uvicorn backend.api:app --host 127.0.0.1 --port 8000
