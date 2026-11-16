@@ -64,17 +64,30 @@ section.journal-editor {
   font-size: 12px;
 }
 
-/* The two columns. */
+/* The lesson, the pupils and what is read after them, one under another: the pupils table needs the whole width, or its
+   last columns hide behind a sideways scroll. */
 .journal-editor .lesson-editor-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px 16px;
   align-items: start;
 }
-@container lesson-editor (min-width: 960px) {
-  .journal-editor .lesson-editor-body {
-    grid-template-columns: minmax(320px, 2fr) minmax(600px, 3fr);
+/* The fields of the lesson are panes, two in a row where there is room: the topic beside the homework, the materials
+   beside the works. */
+.journal-editor .lesson-editor-pane {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+@container lesson-editor (min-width: 760px) {
+  .journal-editor .lesson-editor-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 20px;
   }
+}
+.journal-editor .lesson-editor-after:empty {
+  display: none;
 }
 .journal-editor .lesson-editor-col {
   display: grid;

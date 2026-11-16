@@ -517,7 +517,7 @@ export default function JournalPanel({
     setDay(date);
     void openEntry(key, false, date);
   }
-  // A lesson of the day grid: the editor opens under its row (again to close it); `target` is the place of the editor to scroll to.
+  // A lesson of the day grid: the lesson opens in place of the day; `target` is the place of the editor to scroll to.
   function openFromGrid(key: string, target = "") {
     if (entry?.lessonKey === key) {
       if (target) reveal(target);
@@ -612,7 +612,7 @@ export default function JournalPanel({
         );
     }
   }
-  // The editor of the open lesson; the day grid shows it right under the row of the lesson.
+  // The editor of the open lesson; it is shown in place of the day, at the full width of the panel.
   function editor() {
     if (!entry) return null;
     return (
@@ -697,7 +697,7 @@ export default function JournalPanel({
   const profile = dayProfile(lessons, options?.profiles);
   const slots = profile && day ? slotsFor(profile, day) : [];
   const rows = lessonRows(shown, slots);
-  // A lesson opened from another screen (or from the search) puts the administrator into its class, so the editor sits in a row.
+  // A lesson opened from another screen (or from the search) puts the administrator into its class, so «← Журнал дня» lands there.
   const openKey = entry?.lessonKey;
   const moveTo =
     admin && ready
@@ -709,21 +709,24 @@ export default function JournalPanel({
   useEffect(() => {
     if (moveTo) setClassFilter(moveTo);
   }, [moveTo]);
-  // A lesson of another day opens before the list of that day is read; the editor mounts with the list, and only then can it take the focus.
-  // The administrator's editor mounts once, in the row of its class, so the focus waits until he has been taken there.
+  // The opened lesson takes the place of the day: it is brought to the top and takes the focus once, when it opens; a
+  // place named by the day table (the pupils, the topic of the plan) is shown after that.
+  const shownLesson = useRef("");
   useEffect(() => {
-    if (!entry || !editorPanel.current || moveTo) return;
-    if (coverageOpened.current) {
+    if (!openKey) return void (shownLesson.current = "");
+    if (!editorPanel.current) return;
+    if (shownLesson.current !== openKey) {
+      shownLesson.current = openKey;
       coverageOpened.current = false;
       editorPanel.current.focus({ preventScroll: true });
       editorPanel.current.scrollIntoView({ block: "start" });
     }
-    if (aim.current?.key === entry.lessonKey) {
+    if (aim.current?.key === openKey) {
       const id = aim.current.id;
       aim.current = null;
       reveal(id);
     }
-  }, [entry, ready, moveTo]);
+  }, [openKey, entry]);
   // The calendar colours the days of the own lessons; the administrator sees one class at a time.
   const coverage: CoverageScope | null = !options?.staff
     ? null
@@ -865,10 +868,9 @@ export default function JournalPanel({
               Обновить журнал
             </button>
           </div>
+          {mode === "day" && editor()}
           {mode === "day" ? (
-            <div
-              className={`teacher-day-layout${entry ? " teacher-day-editing" : ""}`}
-            >
+            <div className="teacher-day-layout" hidden={!!entry}>
               <div className="teacher-day-main">
                 <header className="teacher-day-head">
                   <h2>{title}</h2>
@@ -981,12 +983,10 @@ export default function JournalPanel({
                     label={`Уроки ${dayText(day)}`}
                     showClass={!classFilter}
                     now={readAt}
-                    selectedKey={entry?.lessonKey}
                     busy={busy}
                     onOpen={(key) => openFromGrid(key)}
                     onPupils={(key) => openFromGrid(key, "journal-pupil-cards")}
                     onPlan={(key) => openFromGrid(key, "journal-lesson-topic")}
-                    renderEditor={editor}
                   />
                 )}
                 {found.more > 0 && (
@@ -995,11 +995,6 @@ export default function JournalPanel({
                     : уточните запрос или выберите класс.
                   </p>
                 )}
-                {ready &&
-                  entry &&
-                  !moveTo &&
-                  !rows.some((r) => r.lesson.lessonKey === entry.lessonKey) &&
-                  editor()}
               </div>
               <aside className="teacher-day-side">
                 <MonthCalendar

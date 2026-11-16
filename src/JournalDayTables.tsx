@@ -1,4 +1,3 @@
-import { Fragment, type ReactNode } from "react";
 import {
   classLabel,
   groupLabel,
@@ -82,20 +81,18 @@ export function ClassesTable({
 }
 
 /**
- * The lessons of a day as a compact table, one row per lesson in time order. The lesson editor opens in a row of its own
- * under the row of its lesson (again to close it).
+ * The lessons of a day as a compact table, one row per lesson in time order. «Открыть» shows the lesson in place of the
+ * day: the panel does that.
  */
 export function LessonsTable({
   rows,
   label,
   showClass,
   now,
-  selectedKey,
   busy,
   onOpen,
   onPupils,
   onPlan,
-  renderEditor,
 }: {
   rows: LessonRow[];
   label: string;
@@ -103,18 +100,14 @@ export function LessonsTable({
   showClass: boolean;
   // The moment the day is read at: a lesson that has not ended is not yet «не заполнено».
   now: ClockNow;
-  // The lesson open in the editor.
-  selectedKey?: string;
   busy: boolean;
   onOpen: (key: string) => void;
   // Open the lesson scrolled to the pupil cards, and to the choice of the topic from the course plan.
   onPupils: (key: string) => void;
   onPlan: (key: string) => void;
-  renderEditor: (key: string) => ReactNode;
 }) {
   // A column of groups only where some lesson has a group other than its whole class.
   const showGroup = rows.some((r) => groupLabel(r.lesson));
-  const columns = 8 + (showClass ? 1 : 0) + (showGroup ? 1 : 0);
   return (
     <div className="journal-lessons-box">
       <table className="journal-lessons-table" aria-label={label}>
@@ -137,97 +130,86 @@ export function LessonsTable({
         </thead>
         <tbody>
           {rows.map(({ lesson: l, number }) => {
-            const open = l.lessonKey === selectedKey,
-              fill = rowFill(l, now),
+            const fill = rowFill(l, now),
               topic = l.topic.trim();
             return (
-              <Fragment key={l.lessonKey}>
-                <tr
-                  className={[
-                    fill === "cancelled" && "journal-lesson-cancelled",
-                    open && "journal-lesson-open",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  <td data-label="№" className="journal-col-extra">
-                    {number || "—"}
+              <tr
+                key={l.lessonKey}
+                className={
+                  fill === "cancelled" ? "journal-lesson-cancelled" : undefined
+                }
+              >
+                <td data-label="№" className="journal-col-extra">
+                  {number || "—"}
+                </td>
+                <td data-label="Время" className="journal-lesson-time">
+                  {l.lesson.start}–{l.lesson.end}
+                </td>
+                {showClass && (
+                  <td data-label="Класс">
+                    <strong>{classLabel(l)}</strong>
                   </td>
-                  <td data-label="Время" className="journal-lesson-time">
-                    {l.lesson.start}–{l.lesson.end}
-                  </td>
-                  {showClass && (
-                    <td data-label="Класс">
-                      <strong>{classLabel(l)}</strong>
-                    </td>
-                  )}
-                  <td className="journal-lesson-subject">{l.lesson.subject}</td>
-                  {showGroup && (
-                    <td data-label="Группа">{groupLabel(l) || "—"}</td>
-                  )}
-                  <td data-label="Учитель">{l.lesson.teachers || "—"}</td>
-                  <td data-label="Кабинет" className="journal-col-extra">
-                    {l.lesson.rooms || "—"}
-                  </td>
-                  <td data-label="Тема" className="journal-col-extra">
-                    <span
-                      className={
-                        topic
-                          ? "journal-lesson-topic"
-                          : "journal-lesson-topic journal-lesson-no-topic"
-                      }
-                      title={topic || undefined}
-                    >
-                      {topic || "Тема не заполнена"}
-                    </span>
-                  </td>
-                  <td data-label="Посещаемость">
-                    <button
-                      type="button"
-                      className="journal-row-button"
-                      disabled={busy}
-                      title="Открыть урок на списке учеников"
-                      onClick={() => onPupils(l.lessonKey)}
-                    >
-                      {lessonAttendance(l)}
-                    </button>
-                  </td>
-                  <td
-                    data-label="Состояние"
-                    className={`journal-lesson-state journal-lesson-state-${fill}`}
-                  >
-                    {rowState(l, now)}
-                  </td>
-                  <td className="journal-lesson-actions">
-                    <button
-                      type="button"
-                      className="journal-row-button"
-                      disabled={busy}
-                      aria-pressed={open}
-                      aria-label={`Открыть урок · ${l.lesson.start}–${l.lesson.end} · ${l.lesson.subject} ${l.lesson.group}`}
-                      onClick={() => onOpen(l.lessonKey)}
-                    >
-                      Открыть
-                    </button>
-                    {fill !== "cancelled" && fill !== "archived" && (
-                      <button
-                        type="button"
-                        className="journal-row-button"
-                        disabled={busy}
-                        aria-label={`Выбрать тему из плана · ${l.lesson.start}–${l.lesson.end} · ${l.lesson.subject} ${l.lesson.group}`}
-                        onClick={() => onPlan(l.lessonKey)}
-                      >
-                        Из плана
-                      </button>
-                    )}
-                  </td>
-                </tr>
-                {open && (
-                  <tr className="journal-lessons-editor">
-                    <td colSpan={columns}>{renderEditor(l.lessonKey)}</td>
-                  </tr>
                 )}
-              </Fragment>
+                <td className="journal-lesson-subject">{l.lesson.subject}</td>
+                {showGroup && (
+                  <td data-label="Группа">{groupLabel(l) || "—"}</td>
+                )}
+                <td data-label="Учитель">{l.lesson.teachers || "—"}</td>
+                <td data-label="Кабинет" className="journal-col-extra">
+                  {l.lesson.rooms || "—"}
+                </td>
+                <td data-label="Тема" className="journal-col-extra">
+                  <span
+                    className={
+                      topic
+                        ? "journal-lesson-topic"
+                        : "journal-lesson-topic journal-lesson-no-topic"
+                    }
+                    title={topic || undefined}
+                  >
+                    {topic || "Тема не заполнена"}
+                  </span>
+                </td>
+                <td data-label="Посещаемость">
+                  <button
+                    type="button"
+                    className="journal-row-button"
+                    disabled={busy}
+                    title="Открыть урок на списке учеников"
+                    onClick={() => onPupils(l.lessonKey)}
+                  >
+                    {lessonAttendance(l)}
+                  </button>
+                </td>
+                <td
+                  data-label="Состояние"
+                  className={`journal-lesson-state journal-lesson-state-${fill}`}
+                >
+                  {rowState(l, now)}
+                </td>
+                <td className="journal-lesson-actions">
+                  <button
+                    type="button"
+                    className="journal-row-button"
+                    disabled={busy}
+                    aria-label={`Открыть урок · ${l.lesson.start}–${l.lesson.end} · ${l.lesson.subject} ${l.lesson.group}`}
+                    onClick={() => onOpen(l.lessonKey)}
+                  >
+                    Открыть
+                  </button>
+                  {fill !== "cancelled" && fill !== "archived" && (
+                    <button
+                      type="button"
+                      className="journal-row-button"
+                      disabled={busy}
+                      aria-label={`Выбрать тему из плана · ${l.lesson.start}–${l.lesson.end} · ${l.lesson.subject} ${l.lesson.group}`}
+                      onClick={() => onPlan(l.lessonKey)}
+                    >
+                      Из плана
+                    </button>
+                  )}
+                </td>
+              </tr>
             );
           })}
         </tbody>

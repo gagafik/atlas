@@ -133,7 +133,7 @@
 
 /* The fields a mark needs. */
 .lesson-pupil-details {
-  min-width: 150px;
+  min-width: 130px;
 }
 .lesson-pupil-details > * + * {
   margin-left: 6px;
@@ -146,7 +146,7 @@
   line-height: 16px;
 }
 .lesson-pupil-details select {
-  max-width: 150px;
+  max-width: 130px;
 }
 .lesson-pupil-details input[type="number"] {
   width: 60px;
@@ -204,7 +204,7 @@
 
 /* Marks and comments. */
 .lesson-pupil-marks {
-  min-width: 120px;
+  min-width: 102px;
 }
 .lesson-pupil-marks > * + * {
   margin-left: 4px;
@@ -337,8 +337,13 @@
   .lesson-pupil-table td.lesson-pupil-details:empty {
     display: none;
   }
+  /* The praise button and the comment button share the last line. */
+  .lesson-pupil-table tr.lesson-pupil-row > td.lesson-pupil-marks {
+    flex: 1 1 0;
+    min-width: 0;
+  }
   .lesson-pupil-table tr.lesson-pupil-row > .lesson-pupil-comment {
-    flex: 1 1 100%;
+    flex: none;
   }
   .lesson-pupil-table tr.lesson-pupil-more > td {
     padding: 6px 8px 8px;

@@ -55,7 +55,7 @@
 /* The compact type is the type of the data cells only: the lesson editor in the row under a lesson keeps the panel's own. */
 .journal-classes-table,
 .journal-lessons-table > thead > tr > th,
-.journal-lessons-table > tbody > tr:not(.journal-lessons-editor) > td {
+.journal-lessons-table > tbody > tr > td {
   font-size: 12px;
   line-height: 16px;
 }
@@ -133,10 +133,7 @@
 .journal-lessons-table > tbody > tr:last-child > td {
   border-bottom: 0;
 }
-.journal-lessons-table
-  > tbody
-  > tr:not(.journal-lessons-editor)
-  > td:first-child {
+.journal-lessons-table > tbody > tr > td:first-child {
   font-weight: var(--weight-bold);
 }
 .journal-lesson-time {
@@ -161,9 +158,6 @@
 .journal-lesson-cancelled td {
   color: var(--text-muted);
 }
-.journal-lesson-open > td {
-  background: var(--accent-tint);
-}
 .journal-lesson-state-published {
   color: var(--success);
 }
@@ -179,16 +173,7 @@
 .journal-lesson-actions .journal-row-button + .journal-row-button {
   margin-left: 4px;
 }
-/* The editor opens in a row of its own under the row of its lesson, as wide as the table. */
-.journal-lessons-table > tbody > tr.journal-lessons-editor > td {
-  padding: 8px;
-  background: var(--surface-alt);
-  overflow-wrap: normal;
-}
-.journal-lessons-editor .journal-editor {
-  margin: 0;
-}
-.journal-lessons-table > tbody > tr:not(.journal-lessons-editor) > td {
+.journal-lessons-table > tbody > tr > td {
   overflow-wrap: break-word;
 }
 /* Medium (a small laptop, a tablet on its side): still a table, without the number, the room and the topic, which the lesson shows. */
@@ -247,14 +232,6 @@
   .journal-lessons-table > tbody > tr > td.journal-lesson-actions {
     justify-content: flex-start;
     padding-top: 4px;
-  }
-  .journal-lessons-table > tbody > tr.journal-lessons-editor {
-    padding: 6px 0;
-  }
-  .journal-lessons-table > tbody > tr.journal-lessons-editor > td {
-    display: block;
-    text-align: left;
-    padding: 0;
   }
   .journal-lesson-topic {
     -webkit-line-clamp: 3;
@@ -327,11 +304,9 @@
 }
 
 /* While a lesson is open the table takes the whole width (the editor has two columns): the calendar moves under it. */
-.teacher-day-layout.teacher-day-editing {
-  grid-template-columns: minmax(0, 1fr);
-}
-.teacher-day-layout.teacher-day-editing .month-calendar {
-  max-width: 360px;
+/* An opened lesson takes the place of the day. */
+.teacher-day-layout[hidden] {
+  display: none;
 }
 @media (max-width: 1100px) {
   .teacher-day-layout {
