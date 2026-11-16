@@ -1,4 +1,9 @@
-/* «Домашние задания»: one toolbar (tabs, search, period, refresh), a short note, and the opened work in place of the list. */
+/* «Домашние задания»: one toolbar (tabs, search, period, refresh), a short note, the list as a table, and the opened work in place of the list. */
+.homework-queue {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
 .homework-queue-browse[hidden] {
   display: none;
 }
@@ -113,9 +118,14 @@
   line-height: 1.7;
 }
 .homework-queue-count {
-  margin: 0;
   color: var(--text-muted);
   font-size: 11px;
+}
+.homework-queue-paging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
 }
 .homework-queue-rules {
   color: var(--text-muted);
@@ -145,4 +155,268 @@
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* The list: a compact table in a box of its own. The box scrolls sideways inside itself when a row is wider than the
+   screen; under 620 px of its own width a row becomes a block and the page never scrolls sideways. */
+.homework-queue-list {
+  container: homework-queue-list / inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.homework-queue-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.homework-queue-table caption {
+  padding: 4px 8px;
+  background: var(--surface-sunken);
+  font-weight: var(--weight-bold);
+  text-align: left;
+}
+.homework-queue-table th,
+.homework-queue-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.homework-queue-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+.homework-queue-table tbody:last-child tr:last-child > td {
+  border-bottom: 0;
+}
+.homework-queue-row:hover > td,
+.homework-queue-row:focus-within > td {
+  background: var(--accent-tint);
+}
+.homework-queue-table small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+.homework-queue-table button {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+}
+.homework-queue-section-row > th,
+.homework-queue-task-row > th {
+  background: var(--surface-alt);
+  text-align: left;
+}
+.homework-queue-section-row > th {
+  font-weight: var(--weight-bold);
+}
+.homework-queue-due,
+.homework-queue-pupil,
+.homework-queue-sent,
+.homework-queue-action {
+  white-space: nowrap;
+}
+.homework-queue-mark {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.homework-queue-subject {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.homework-queue-subject small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The task's text is cut to one line by the cell; the whole text is in the title. */
+.homework-queue-text {
+  width: 100%;
+  min-width: 140px;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.homework-queue-state {
+  min-width: 150px;
+}
+.homework-queue-staff .homework-queue-state {
+  width: 100%;
+}
+.homework-queue-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.homework-queue-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.homework-queue-chip-main {
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+}
+.homework-queue-chip-main[data-status="accepted"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.homework-queue-chip-main[data-status="returned"],
+.homework-queue-chip-main[data-status="changed"] {
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+.homework-queue-chip-main[data-status="not_submitted"] {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+/* The head of a task in the staff list: the title, the dates, one line of the text, the button for the whole task. */
+.homework-queue-task-row > th {
+  max-width: 0;
+  overflow: hidden;
+}
+.homework-queue-task-head {
+  display: flex;
+  align-items: center;
+  gap: 4px 14px;
+  min-width: 0;
+  font-weight: var(--weight-regular);
+}
+.homework-queue-task-head > span {
+  flex: none;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.homework-queue-task-head .homework-queue-task-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.homework-queue-task-head > button {
+  flex: none;
+}
+
+@container homework-queue-list (max-width: 619px) {
+  .homework-queue-list {
+    overflow-x: visible;
+  }
+  .homework-queue-table,
+  .homework-queue-table tbody,
+  .homework-queue-table .homework-queue-section-row,
+  .homework-queue-table .homework-queue-section-row > th,
+  .homework-queue-table .homework-queue-task-row,
+  .homework-queue-table .homework-queue-task-row > th {
+    display: block;
+    max-width: none;
+  }
+  .homework-queue-table thead {
+    display: none;
+  }
+  .homework-queue-task-head {
+    flex-wrap: wrap;
+  }
+  .homework-queue-task-head .homework-queue-task-text {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .homework-queue-task-head > button {
+    order: 2;
+    margin-left: auto;
+  }
+  .homework-queue-table tr.homework-queue-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .homework-queue-table tbody:last-child tr.homework-queue-row:last-child {
+    border-bottom: 0;
+  }
+  .homework-queue-table tr.homework-queue-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    min-width: 0;
+    max-width: none;
+    width: auto;
+  }
+  .homework-queue-family .homework-queue-row {
+    grid-template-areas:
+      "pupil pupil"
+      "subject due"
+      "text text"
+      "state action";
+  }
+  .homework-queue-staff .homework-queue-row {
+    grid-template-areas:
+      "pupil sent"
+      "state action";
+  }
+  .homework-queue-pupil {
+    grid-area: pupil;
+    font-weight: var(--weight-semibold);
+  }
+  .homework-queue-subject {
+    grid-area: subject;
+    font-weight: var(--weight-semibold);
+  }
+  .homework-queue-due {
+    grid-area: due;
+    text-align: right;
+  }
+  .homework-queue-due small {
+    display: inline;
+    margin-left: 6px;
+  }
+  .homework-queue-due::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .homework-queue-text {
+    grid-area: text;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+  }
+  .homework-queue-state {
+    grid-area: state;
+  }
+  .homework-queue-action {
+    grid-area: action;
+  }
+  .homework-queue-sent {
+    grid-area: sent;
+    text-align: right;
+    color: var(--text-muted);
+  }
+  .homework-queue-sent::before {
+    content: attr(data-label) ": ";
+    font-size: 11px;
+  }
 }

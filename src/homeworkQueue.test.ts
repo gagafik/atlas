@@ -12,6 +12,7 @@ import {
   shortDate,
   submissionTag,
   taskGroups,
+  workKey,
   type QueueItem,
 } from "./homeworkQueue";
 
@@ -299,6 +300,18 @@ describe("homework row chips and action", () => {
     const work = action({});
     expect(new Set([review, submit, task, work]).size).toBe(4);
     expect(action({ canReview: true }, "offline")).toBe(review);
+  });
+});
+
+describe("homework open key", () => {
+  it("tells one pupil's work from the whole task and from another pupil", () => {
+    const keys = [
+      workKey("t1", "s1"),
+      workKey("t1", "s2"),
+      workKey("t1"),
+      workKey("t2"),
+    ];
+    expect(new Set(keys).size).toBe(4);
   });
 });
 

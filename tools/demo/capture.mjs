@@ -150,6 +150,13 @@ async function sweep(context, recorder, role, log) {
       await get(`/api/journal/homework/${item.lessonKey}?studentId=${item.studentId}`);
       homework += 1;
     }
+    // The staff list also opens a whole task (no pupil): the roster of the class, once for each task.
+    if (entry.b.staff) {
+      for (const lessonKey of new Set(entry.b.items.slice(0, 120).map((item) => item.lessonKey))) {
+        await get(`/api/journal/homework/${lessonKey}`);
+        homework += 1;
+      }
+    }
   }
   log(`  homework opened from queues: ${homework}`);
   log(`  replayed ${replayer.stats.requests} requests, kept ${replayer.stats.stored}`);

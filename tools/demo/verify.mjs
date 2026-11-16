@@ -157,10 +157,12 @@ async function childSwitcher(page, kit, problems) {
     // The lists of the family hold the child on show only: the queue of homework and the tests assigned.
     const first = child.split(",")[0];
     await kit.menu("Домашние задания");
+    await kit.click(/^Период/, { optional: true });
     await kit.click("Весь учебный год", { optional: true });
-    const works = await page.locator(".homework-queue-card > div > p").allInnerTexts();
-    if (!works.length) fail(`the homework list of ${child} is empty`);
-    else if (works.some((text) => !text.startsWith(first))) fail(`the homework list shows another child than ${child}`);
+    // A page of one pupil names them in the caption and has no column of pupils; a page of several has the column.
+    const pupils = await page.locator(".homework-queue-row").evaluateAll((rows) => rows.map((row) => row.dataset.student || ""));
+    if (!pupils.length) fail(`the homework list of ${child} is empty`);
+    else if (pupils.some((text) => !text.startsWith(first))) fail(`the homework list shows another child than ${child}`);
     if (await kit.menu("Контрольные и тесты", { optional: true })) {
       const tests = await page.locator(".quiz-card > p:first-of-type").allInnerTexts();
       if (tests.some((text) => !text.includes(first))) fail(`the tests list shows another child than ${child}`);

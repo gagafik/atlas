@@ -177,3 +177,9 @@ export function itemAction(
 // A parent without a chosen child sees several pupils on one page and needs a column for them.
 export const manyPupils = (items: { studentId: string }[]) =>
   new Set(items.map((item) => item.studentId)).size > 1;
+// The name of an open button: one pupil's work, or the whole task (no pupil) of the staff list.
+export const workKey = (lessonKey: string, studentId?: string) =>
+  lessonKey + ":" + (studentId ?? "*");
+// The moment a work was sent, in the school's time zone.
+export const sentLabel = (iso: string) =>
+  new Date(iso).toLocaleString("ru-RU", { timeZone: "Asia/Qyzylorda" });

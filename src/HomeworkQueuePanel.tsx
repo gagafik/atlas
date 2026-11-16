@@ -2,43 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import HomeworkPanel from "./HomeworkPanel";
 import { canLeaveHomework } from "./homeworkNavigation";
+import HomeworkQueueTable, { type OpenedWork } from "./HomeworkQueueTable";
 import {
-  dateLabel,
   periodLabel,
   queueParams,
-  queueSections,
   queueTabs,
-  submissionTag,
   type QueueMeta,
   type QueueResult,
-  type QueueRow,
 } from "./homeworkQueue";
 import "./HomeworkQueue.css";
 
-const labels: Record<string, string> = {
-  not_submitted: "Не отправлено",
-  submitted: "На проверке",
-  returned: "На доработке",
-  accepted: "Принято",
-};
-const sectionTitles = {
-  past: "Прошедшие сроки",
-  next: "Ближайшие две недели",
-  all: "",
-};
 const initial = { start: "", end: "", filter: "", history: false, search: "" };
 type Fields = typeof initial;
-// The work opened in place of the list; rowKey names the row's button so that the focus can go back to it.
-interface Opened {
-  lessonKey: string;
-  studentId?: string;
-  subject: string;
-  group: string;
-  student?: string;
-  rowKey: string;
-}
-const rowKey = (item: QueueRow) => item.lessonKey + ":" + item.studentId;
-const heading = (o: Opened) =>
+const heading = (o: OpenedWork) =>
   [o.subject, o.group, o.student ?? "всё задание"].join(" · ");
 
 export default function HomeworkQueuePanel({
@@ -58,7 +34,7 @@ export default function HomeworkQueuePanel({
   const [cursor, setCursor] = useState(""),
     [epoch, setEpoch] = useState(0),
     [busy, setBusy] = useState(true);
-  const [opened, setOpened] = useState<Opened | null>(null);
+  const [opened, setOpened] = useState<OpenedWork | null>(null);
   const [searchText, setSearchText] = useState("");
   const [periodOpen, setPeriodOpen] = useState(false);
   const [period, setPeriod] = useState({ start: "", end: "", history: false });
@@ -139,7 +115,7 @@ export default function HomeworkQueuePanel({
     setOpened(null);
     setPeriodOpen(false);
   }
-  function open(row: Opened) {
+  function open(row: OpenedWork) {
     if (!canLeaveHomework()) return;
     listScroll.current = window.scrollY;
     returnTo.current = row.rowKey;
@@ -333,106 +309,24 @@ export default function HomeworkQueuePanel({
             {error}
           </p>
         )}
-        {busy && <p role="status">Загружаем работы…</p>}
-        {result && (
-          <>
-            <p className="homework-queue-count" role="status">
-              На этой странице: {result.items.length}.
-            </p>
-            {!result.items.length && (
-              <p className="info-line">
-                Работ по этим условиям на этой странице нет.{" "}
-                {result.nextCursor
-                  ? "Продолжите просмотр следующей страницы."
-                  : "Попробуйте другой статус, период или включите прежние уроки."}
-              </p>
-            )}
-            {queueSections(result.items, result.schoolToday, result.window).map(
-              (section) => (
-                <section key={section.key} className="homework-queue-section">
-                  {sectionTitles[section.key] && (
-                    <h3>{sectionTitles[section.key]}</h3>
-                  )}
-                  <div className="homework-queue-list">
-                    {section.items.map((item) => (
-                      <article
-                        className="homework-queue-card"
-                        key={rowKey(item)}
-                      >
-                        <div>
-                          <h3>{item.subject}</h3>
-                          <p>
-                            {item.student} · {item.group}
-                          </p>
-                        </div>
-                        <p className="homework-queue-preview">
-                          {item.preview}
-                          {item.preview.length === 240 ? "…" : ""}
-                        </p>
-                        <div className="homework-queue-tags">
-                          <span>
-                            {submissionTag(item, result.schoolToday, labels)}
-                          </span>
-                          {item.submission === "offline" && (
-                            <span>Без онлайн-сдачи</span>
-                          )}
-                          {item.overdue && <span>Срок прошёл</span>}
-                          {item.deadlineClosed && <span>Приём закрыт</span>}
-                          {item.late && <span>Отправлено после срока</span>}
-                          {item.readOnly && (
-                            <span>Прежний урок · только просмотр</span>
-                          )}
-                        </div>
-                        <p>
-                          Срок:{" "}
-                          <strong>
-                            {item.dueDate
-                              ? dateLabel(item.dueDate)
-                              : "не указан"}
-                            {item.extended ? " · индивидуальный" : ""}
-                          </strong>{" "}
-                          · урок {dateLabel(item.lessonDate)}
-                        </p>
-                        {item.submittedAt && (
-                          <small>
-                            Отправлено:{" "}
-                            {new Date(item.submittedAt).toLocaleString(
-                              "ru-RU",
-                              { timeZone: "Asia/Qyzylorda" },
-                            )}
-                          </small>
-                        )}
-                        <button
-                          data-row={rowKey(item)}
-                          disabled={activity.busy}
-                          onClick={() =>
-                            open({
-                              lessonKey: item.lessonKey,
-                              studentId: item.studentId,
-                              subject: item.subject,
-                              group: item.group,
-                              student: item.student,
-                              rowKey: rowKey(item),
-                            })
-                          }
-                        >
-                          {item.canReview
-                            ? "Проверить работу"
-                            : item.canSubmit
-                              ? "Выполнить задание"
-                              : item.submission === "offline"
-                                ? "Посмотреть задание"
-                                : "Посмотреть работу"}
-                        </button>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ),
-            )}
-          </>
+        {busy && !result && <p role="status">Загружаем работы…</p>}
+        {result && !result.items.length && (
+          <p className="info-line">
+            Работ по этим условиям на этой странице нет.{" "}
+            {result.nextCursor
+              ? "Продолжите просмотр следующей страницы."
+              : "Попробуйте другой статус, период или включите прежние уроки."}
+          </p>
         )}
-        <div className="dated-toolbar">
+        {result && result.items.length > 0 && (
+          <HomeworkQueueTable
+            result={result}
+            child={child}
+            busy={activity.busy}
+            onOpen={open}
+          />
+        )}
+        <div className="homework-queue-paging">
           {cursor && (
             <button
               disabled={busy || activity.busy}
@@ -448,6 +342,11 @@ export default function HomeworkQueuePanel({
             >
               Следующие работы
             </button>
+          )}
+          {result && (
+            <span className="homework-queue-count" role="status">
+              На этой странице: {result.items.length}.
+            </span>
           )}
         </div>
       </div>

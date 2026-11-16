@@ -327,15 +327,21 @@ async function attendanceSummary(kit) {
   await kit.snap("attendance");
 }
 
-// The family's homework: the queue of the next two weeks, the whole year, every filter.
-async function homeworkQueue(kit, { filterLabel }) {
+// The status tabs of the homework queue: a click applies at once, so each one is shown in turn.
+const STAFF_TABS = ["На проверке", "На доработке", "Принято", "Не сдано", "Просрочено", "Все"];
+const FAMILY_TABS = ["Нужно сдать", "На проверке", "На доработке", "Принято", "Просрочено", "Все"];
+async function eachTab(kit, labels) {
+  for (const label of labels) await kit.click(label);
+  await kit.click(labels[0]);
+}
+
+// The homework queue: the period panel with the whole year, and, when asked, every status tab.
+async function homeworkQueue(kit, { tabs } = {}) {
   await kit.path("Домашние задания");
+  await kit.click(/^Период/);
   await kit.click("Весь учебный год", { optional: true });
   await kit.snap("homework-year");
-  if (filterLabel) {
-    await kit.eachOption(filterLabel, () => kit.click("Применить фильтры"), { max: 6 });
-    await kit.choose(filterLabel, 0);
-  }
+  if (tabs) await eachTab(kit, tabs);
 }
 
 // The second child of a parent: the whole portal follows the child chosen in the account menu, so the start page, the
@@ -485,10 +491,10 @@ export const journeys = {
     await kit.path("Сетка посещаемости");
     await kit.path("Периоды журнала");
     await kit.path("Домашние задания");
-    await kit.click("Проверить работу");
+    await kit.click(/^Проверить работу/);
     await kit.snap("homework-review");
-    await kit.close();
-    await kit.eachOption("Статус работы", () => kit.click("Применить фильтры"), { max: 6 });
+    await kit.click("← К списку");
+    await eachTab(kit, STAFF_TABS);
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
     await kit.snap("test-results");
@@ -518,9 +524,9 @@ export const journeys = {
     await kit.close();
     await familyScreens(kit, { notes: true });
     await homeworkQueue(kit, {});
-    await kit.click("Посмотреть работу");
+    await kit.click(/^Посмотреть работу/);
     await kit.snap("homework");
-    await kit.close();
+    await kit.click("← К списку");
     await kit.path("Расписание");
     await kit.choose("Режим просмотра", "Неделя");
     await kit.snap("timetable");
@@ -557,9 +563,9 @@ export const journeys = {
     await kit.choose("Режим просмотра", "Неделя");
     await kit.snap("timetable");
     await homeworkQueue(kit, {});
-    await kit.click("Выполнить задание");
+    await kit.click(/^Выполнить задание/);
     await kit.snap("homework");
-    await kit.close();
+    await kit.click("← К списку");
     await familyScreens(kit, { notes: false });
     await kit.path("Контрольные и тесты");
     await kit.click("Открыть тест");
@@ -649,7 +655,7 @@ export const tours = {
     await everyCourse(kit, 20);
     await everyThread(kit, "Входящие");
     await kit.path("Домашние задания");
-    await kit.eachButton("Проверить работу", () => kit.close(), { max: 12 });
+    await kit.eachButton(/^Проверить работу/, () => kit.click("← К списку"), { max: 12 });
     await kit.path("Посещаемость учащихся", "Отсутствия и объяснительные");
     await kit.click("Сводная посещаемость");
     await kit.path("События");
@@ -666,7 +672,7 @@ export const tours = {
     await kit.home();
     await kit.otherChild();
     await homeworkQueue(kit, {});
-    await kit.eachButton("Посмотреть работу", () => kit.close(), { max: 40 });
+    await kit.eachButton(/^Посмотреть работу/, () => kit.click("← К списку"), { max: 40 });
     await everyThread(kit, "Входящие");
     await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });
@@ -676,7 +682,7 @@ export const tours = {
     await familyDays(kit);
     await familyPeriods(kit);
     await homeworkQueue(kit, {});
-    await kit.eachButton(/Выполнить задание|Посмотреть работу/, () => kit.close(), { max: 40 });
+    await kit.eachButton(/^(Выполнить задание|Посмотреть работу)/, () => kit.click("← К списку"), { max: 40 });
     await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });
   },
