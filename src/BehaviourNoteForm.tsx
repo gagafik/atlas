@@ -1,7 +1,10 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import {
+  addPupils,
   kindLabels,
+  pickerPupils,
   PUPIL_LIMIT,
+  togglePupil,
   type Category,
   type NoteForm,
   type Options,
@@ -18,6 +21,7 @@ export default function BehaviourNoteForm({
   forCourse,
   setForCourse,
   onSubmit,
+  onBack,
 }: {
   options: Options;
   form: NoteForm;
@@ -30,51 +34,136 @@ export default function BehaviourNoteForm({
   forCourse: boolean;
   setForCourse: (value: boolean) => void;
   onSubmit: (categoryId?: string, text?: string) => void;
+  // Back to the list; the dialog asks first when the form holds something.
+  onBack: () => void;
 }) {
-  const visiblePupils = form.classId
-    ? options.students.filter((s) => s.classId === form.classId)
-    : options.students;
+  const [search, setSearch] = useState("");
+  const { shown, hint } = pickerPupils(
+    options.students,
+    form.classId,
+    search,
+    PUPIL_LIMIT,
+  );
+  const chosen = form.students
+    .map((id) => options.students.find((s) => s.id === id))
+    .filter((s) => s !== undefined);
+  const full = form.students.length >= PUPIL_LIMIT;
+  const wholeClass =
+    form.classId && !search.trim()
+      ? addPupils(
+          form.students,
+          options.students
+            .filter((s) => s.classId === form.classId)
+            .map((s) => s.id),
+          PUPIL_LIMIT,
+        )
+      : null;
   return (
-    <section className="bn-form" aria-label="Новая запись">
-      <h3>Новая запись</h3>
-      <fieldset className="bn-pupils">
+    <section className="bn-form bn-note-form" aria-label="Новая запись">
+      <div className="bn-form-head">
+        <button type="button" onClick={onBack}>
+          ← К записям
+        </button>
+        <h3>Новая запись</h3>
+      </div>
+      <fieldset className="bn-pick">
         <legend>
           Ученики (выбрано {form.students.length}, не больше {PUPIL_LIMIT})
         </legend>
-        <label className="bn-wide-row">
-          Класс
-          <select
-            value={form.classId}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, classId: e.target.value }))
-            }
-          >
-            <option value="">Все мои ученики</option>
-            {options.classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
+        {chosen.length > 0 && (
+          <ul className="bn-chosen" aria-label="Выбранные ученики">
+            {chosen.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="bn-chosen-chip"
+                  aria-label={`Убрать: ${s.name}${s.className ? `, ${s.className}` : ""}`}
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      students: togglePupil(f.students, s.id, PUPIL_LIMIT),
+                    }))
+                  }
+                >
+                  {s.name}
+                  {s.className ? ` · ${s.className}` : ""} ×
+                </button>
+              </li>
             ))}
-          </select>
-        </label>
-        {visiblePupils.map((s) => (
-          <label key={s.id}>
-            <input
-              type="checkbox"
-              checked={form.students.includes(s.id)}
+          </ul>
+        )}
+        <div className="bn-pick-tools">
+          <label>
+            Класс
+            <select
+              value={form.classId}
               onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  students: e.target.checked
-                    ? [...f.students, s.id]
-                    : f.students.filter((id) => id !== s.id),
-                }))
+                setForm((f) => ({ ...f, classId: e.target.value }))
               }
-            />
-            {s.name}
-            {s.className ? ` · ${s.className}` : ""}
+            >
+              <option value="">Все мои ученики</option>
+              {options.classes.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
           </label>
-        ))}
+          <label>
+            Найти ученика
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          {form.classId && (
+            <button
+              type="button"
+              disabled={!wholeClass}
+              onClick={() =>
+                wholeClass && setForm((f) => ({ ...f, students: wholeClass }))
+              }
+            >
+              Выбрать весь класс
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={!form.students.length}
+            onClick={() => setForm((f) => ({ ...f, students: [] }))}
+          >
+            Снять выбор
+          </button>
+        </div>
+        <div className="bn-picker">
+          {hint ? (
+            <p>Выберите класс или найдите ученика</p>
+          ) : shown.length === 0 ? (
+            <p>Никого не найдено</p>
+          ) : (
+            shown.map((s) => {
+              const on = form.students.includes(s.id);
+              return (
+                <label key={s.id}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!on && full}
+                    onChange={() =>
+                      setForm((f) => ({
+                        ...f,
+                        students: togglePupil(f.students, s.id, PUPIL_LIMIT),
+                      }))
+                    }
+                  />
+                  {s.name}
+                  {s.className ? ` · ${s.className}` : ""}
+                </label>
+              );
+            })
+          )}
+        </div>
       </fieldset>
       {quick.length > 0 && (
         <div className="bn-quick" aria-label="Быстрые отметки">
@@ -94,7 +183,7 @@ export default function BehaviourNoteForm({
           ))}
         </div>
       )}
-      <div className="bn-controls">
+      <div className="bn-form-grid">
         <label>
           Категория
           <select
@@ -172,17 +261,23 @@ export default function BehaviourNoteForm({
           onChange={(e) => setForm((f) => ({ ...f, text: e.target.value }))}
         />
       </label>
-      <button
-        disabled={
-          !form.students.length ||
-          form.students.length > PUPIL_LIMIT ||
-          !form.categoryId ||
-          !form.day
-        }
-        onClick={() => onSubmit()}
-      >
-        Сохранить
-      </button>
+      <div className="bn-form-actions">
+        <button
+          className="primary"
+          disabled={
+            !form.students.length ||
+            form.students.length > PUPIL_LIMIT ||
+            !form.categoryId ||
+            !form.day
+          }
+          onClick={() => onSubmit()}
+        >
+          Сохранить
+        </button>
+        <button type="button" onClick={onBack}>
+          Отмена
+        </button>
+      </div>
     </section>
   );
 }
