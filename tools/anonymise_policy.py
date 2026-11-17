@@ -62,7 +62,7 @@ TABLES = {
                             published_document='json:journal', published_version=K, published_at=K),
     'journal_members': dict(workspace=K, lesson_key=K, student_id=K, name=PERSON, kind=K),
     'journal_attendance': dict(workspace=K, lesson_key=K, student_id=K, attendance=K, late_minutes=K, day=K, start=K, end=K,
-                               subject_id=K, left_at=K, absence_code=K),
+                               subject_id=K, left_at=K, absence_code=TEXT),
     'journal_attendance_lessons': dict(workspace=K, lesson_key=K, day=K, start=K, end=K, subject_id=K, subject=TEXT, group_name=TEXT,
                                        teachers=NAMES, version=K, published_at=K),
     'journal_attendance_epoch': dict(workspace=K, version=K),
@@ -80,9 +80,9 @@ TABLES = {
     'assessment_category_config': dict(workspace=K, version=K, document='json:settings'),
     'grading_scales': dict(workspace=K, id=K, version=K, document='json:settings'),
     'grading_scale_versions': dict(workspace=K, id=K, version=K, document='json:settings', actor=PERSON, created=K),
-    # `assigned` is the id of an account of the school; the accounts themselves are not copied.
+    # `assigned` is the id of an account of the school: not copied; the accounts step assigns the rows of the copy's teacher.
     'grading_books': dict(workspace=K, id=K, period_id=K, closure_version=K, created=K, source_kind=K),
-    'grading_rows': dict(workspace=K, id=K, book_id=K, student_id=K, subject_id=K, class_id=K, assigned=K, version=K, status=K,
+    'grading_rows': dict(workspace=K, id=K, book_id=K, student_id=K, subject_id=K, class_id=K, assigned=DROP, version=K, status=K,
                          source='json:grading', proposal='json:grading'),
     'grading_facts': dict(id=K, workspace=K, lesson_key=K, version=K, student_id=K, subject_id=K, day=K, start=K,
                           summary='json:grading', works='json:grading'),
@@ -97,7 +97,10 @@ TABLES = {
 }
 
 # Tables the second step (accounts of the copy) fills through the application; the gate lets them hold rows.
-ACCOUNT_TABLES = frozenset()
+ACCOUNT_TABLES = frozenset({'accounts', 'family_links'})
+# Tables that the accounts step empties again: sessions of the sign-in checks and the journals the application writes while it makes accounts.
+# Anything else that is filled and not listed fails the gate.
+ACCOUNT_CLEARED = ('sessions', 'audit', 'login_journal', 'notifications', 'family_history')
 
 # Documents that hold the lists of teachers and pupils of a school: their names are the core of the registry.
 STATE_DOCUMENTS = [('workspaces', 'document'), ('history', 'document'), ('redo_history', 'document'), ('variants', 'document'),

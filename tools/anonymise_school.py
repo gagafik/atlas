@@ -22,13 +22,14 @@ import re
 import secrets
 import shutil
 import sqlite3
+import string
 import subprocess
 import sys
 import tempfile
 import unicodedata
 
 from tools import anonymise_names as invented
-from tools.anonymise_policy import ACCOUNT_TABLES, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, NAME_TABLES, POLICY, \
+from tools.anonymise_policy import ACCOUNT_CLEARED, ACCOUNT_TABLES, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, NAME_TABLES, POLICY, \
     STATE_DOCUMENTS, STUDENT_ID_COLUMNS, TEACHER_ID_COLUMNS, Policy
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +45,11 @@ PHONE = re.compile(r'(?<!\w)(?<!\d[.,])\+?[\d(][\d\s\-()]{8,}(?!\w)')
 OPAQUE = re.compile(r'[a-z]{1,4}\d{1,9}(?:-\d{1,6}){0,3}|[a-z]{1,12}(?:-[a-z]{1,4})?-[0-9a-f]{8,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
                     r'|[0-9a-f]{16,64}|asc-(?:[a-z]{1,4})-(?=[0-9a-z*_.-]*\d)[0-9a-z*_.-]{1,40}')
 CHUNK = 500
+STOP = 'Остановлено: '
+CHILD_MARK = ' [шаг]'
+HEADERS = {'X-Atlas-Request': '1'}
+ROLES = {'admin': 'admin', 'teacher': 'teacher', 'parent': 'parent', 'pupil': 'student'}
+LOGINS = {role: f'copy-{role}' for role in ROLES}
 
 
 class Refused(Exception):
@@ -379,13 +385,17 @@ def child_schema(path):
         db.execute('PRAGMA journal_mode=DELETE')
 
 
-def run_child(kind, database):
+def run_child(kind, database, **paths):
     environment = {**os.environ, 'TIMETABLE_DB': str(database), 'PYTHONUTF8': '1', 'ATLAS_WEB_PUSH_ENABLED': '0', 'ATLAS_BACKUP_DIR': ''}
-    done = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'tools.anonymise_school', '--child', kind, '--database', str(database)],
-                          cwd=ROOT, env=environment, capture_output=True)
+    command = [sys.executable, '-X', 'utf8', '-m', 'tools.anonymise_school', '--child', kind, '--database', str(database)]
+    for name, value in paths.items():
+        command += [f'--{name}', str(value)]
+    done = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True)
     if done.returncode:
-        # The child output may hold anything: only the code is shown.
-        raise Refused(f'Шаг «{kind}» завершился с ошибкой (код {done.returncode}).')
+        # The child output may hold anything: only the code is shown, and the child's own stop message (written by this tool, without values).
+        lines = done.stderr.decode('utf-8', 'replace').splitlines() if done.returncode == 2 else []
+        reason = next((l for l in reversed(lines) if l.startswith(STOP) and l.endswith(CHILD_MARK)), '')
+        raise Refused(f'Шаг «{kind}» завершился с ошибкой (код {done.returncode}).' + (' ' + reason[len(STOP):-len(CHILD_MARK)] if reason else ''))
 
 
 def check_rules(policy, fresh, src):
@@ -440,15 +450,139 @@ def check_projections(src, out):
         raise Refused('База сделана другой версией Атласа: откройте её в текущей версии один раз и повторите.')
 
 
-def create_accounts(output, report, pseudonyms):
-    """SEAM of the second step: the accounts of the copy (an administrator, a teacher, a pupil, a parent).
+# ---- the accounts of the copy
 
-    Called after the rows are copied and before the gate, on the finished-but-ungated output. The step runs the application in a
-    CHILD process with TIMETABLE_DB set to `output / DATABASE` (run_child shows how; child_guard makes the child refuse any other
-    database) and never in this process, which works with the source. Names of accounts come from `pseudonyms.issue(real name)` so that
-    a person has one invented name everywhere. The tables it fills go into policy.ACCOUNT_TABLES, so that the gate lets them hold rows
-    (and still reads every value of them); logins and passwords go to accounts.json, never to the console. Nothing here yet.
-    """
+def choose_people(path):
+    """Who gets an account, read from the finished copy (its names are already invented): the school with the most lessons, the teacher with
+    the most lessons, a pupil of the class with the most marks. Ids and invented names only."""
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        states = {name: json.loads(document) for name, document in db.execute('SELECT id,document FROM workspaces ORDER BY id')}
+        if not states:
+            raise Refused('В копии нет школы: аккаунты создавать не для чего.')
+        workspace = max(states, key=lambda w: (len(states[w].get('placements', [])), w))
+        state = states[workspace]
+        marks = Counter(student for (student,) in db.execute('SELECT student_id FROM grade_events WHERE workspace=? AND hidden=0', (workspace,)))
+    workloads = {w['id']: w for w in state.get('workloads', [])}
+    lessons = Counter()
+    for placement in state.get('placements', []):
+        w = workloads.get(placement.get('workloadId'))
+        for teacher in ([w.get('teacherId'), *w.get('additionalTeacherIds', [])] if w else []):
+            if teacher:
+                lessons[teacher] += 1
+    teachers = {t['id']: t for t in state.get('teachers', [])}
+    teacher = min((t for t in lessons if t in teachers), key=lambda t: (-lessons[t], t), default=None)
+    pupils = [s for s in state.get('students', []) if s.get('active', True)]
+    if not teacher or not pupils:
+        raise Refused('В копии нет учителя с уроками или ученика: аккаунты создавать не для чего.')
+    size, total = Counter(s['classId'] for s in pupils), Counter()
+    for s in pupils:
+        total[s['classId']] += marks[s['id']]
+    school_class = min(size, key=lambda c: (-total[c], -size[c], c))
+    pupil = min((s for s in pupils if s['classId'] == school_class), key=lambda s: (-marks[s['id']], s['id']))
+    groups = {g['id']: g for g in state.get('groups', [])}
+    pairs = sorted({(c, w['subjectId']) for w in workloads.values() if teacher in [w.get('teacherId'), *w.get('additionalTeacherIds', [])]
+                    for c in groups.get(w.get('groupId'), {}).get('classIds', [])})
+    return dict(workspace=workspace, workspaces=sorted(states), teacher=dict(id=teacher, name=teachers[teacher]['name']), pupil=dict(id=pupil['id'], name=pupil['name']),
+                teaching=pairs)
+
+
+def new_password():
+    """20 letters and digits: no dash, so that the gate never takes a password for a phone number."""
+    while True:
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
+        if not contact(password):
+            return password
+
+
+def child_accounts(path, plan_file, result_file):
+    """In a child process whose TIMETABLE_DB is the copy: the application itself makes the accounts, the way the first start of a school does."""
+    child_guard(path)
+    plan = json.loads(Path(plan_file).read_text(encoding='utf-8'))
+    from fastapi.testclient import TestClient
+    from backend import api
+    space = plan['workspace']
+
+    def call(client, method, url, label, **options):
+        # Only the label and the code are ever shown: an answer of the application may quote a value.
+        answer = client.request(method, url, **options)
+        if answer.status_code != 200:
+            raise Refused(f'Аккаунты, {label}: ответ {answer.status_code}.')
+        return answer.json() if answer.content else None
+
+    admin = TestClient(api.app, headers=HEADERS)
+    passwords = {role: new_password() for role in ROLES}
+    people = dict(admin=plan['adminName'], teacher=plan['teacher']['name'], parent=plan['parentName'], pupil=plan['pupil']['name'])
+    call(admin, 'POST', '/api/auth/setup', 'первый вход', json=dict(name=people['admin'], login=LOGINS['admin'], password=passwords['admin']))
+    created = {}
+    for role, view, ids in [('teacher', 'teacher', [plan['teacher']['id']]), ('pupil', 'student', [plan['pupil']['id']]), ('parent', 'student', [plan['pupil']['id']])]:
+        made = call(admin, 'POST', '/api/access/users', f'создание ({role})', json=dict(
+            name=people[role], login=LOGINS[role], role=ROLES[role], workspaces=[space], password=passwords[role], grants=[dict(workspace=space, view=view, entityIds=ids)]))
+        created[role] = made['id']
+    # The school records who the guardian is, so that the family screens show a verified relationship.
+    where = f'/api/access/families/{created["parent"]}/{plan["pupil"]["id"]}'
+    link = call(admin, 'GET', where, 'связь семьи', params=dict(workspace=space))
+    call(admin, 'PUT', where, 'связь семьи (запись)', params=dict(workspace=space), json=dict(
+        version=link['version'], accountVersion=link['accountVersion'], relationship='guardian', verified=True,
+        evidence='Учётная запись обезличенной копии', status='active', reason='Обезличенная копия'))
+    with api.connect() as db:
+        # The final grades of the teacher's classes and subjects are the ones the teacher's own screen shows.
+        for school_class, subject in plan['teaching']:
+            db.execute('UPDATE grading_rows SET assigned=? WHERE workspace=? AND class_id=? AND subject_id=?', (created['teacher'], space, school_class, subject))
+    # Every account signs in once; the sessions made here are not kept.
+    for role in ROLES:
+        client = TestClient(api.app, headers=HEADERS)
+        call(client, 'POST', '/api/auth/login', f'вход ({role})', json=dict(login=LOGINS[role], password=passwords[role]))
+        status = call(client, 'GET', '/api/auth/status', f'состояние ({role})')
+        if (status.get('user') or {}).get('role') != ROLES[role]:
+            raise Refused(f'Аккаунты, роль {role}: вход под другой ролью.')
+        client.close()
+    admin.close()
+    with api.connect() as db:
+        for table in ACCOUNT_CLEARED:
+            db.execute(f'DELETE FROM {quote(table)}')
+    about = 'Учётные записи обезличенной копии. Пароли случайные и действуют только в этой копии. Не публикуйте этот файл.'
+    names = dict(admin='администратор', teacher='учитель', parent='родитель', pupil='ученик')
+    Path(result_file).write_text(json.dumps(dict(about=about, workspace=space, accounts=[dict(role=names[role], login=LOGINS[role], password=passwords[role], name=people[role])
+                                                                                       for role in ROLES]), ensure_ascii=False, indent=1), encoding='utf-8')
+
+
+README = """Обезличенная копия школьной базы «Атлас»
+
+Что это. Копия настоящей школы с вымышленными именами всех людей: классы, расписание, журнал,
+оценки и посещаемость. В ней нет контактов, переписки, заметок о детях, файлов, историй изменений
+и настоящих учётных записей. Копия обезличена, но не анонимна: тот, кто знает школу, может узнать
+ученика по классу, расписанию и оценкам. Текст, который прошёл проверку, писали учителя, и его
+никто не читал глазами.
+
+Как открыть. Нужны Git, Python 3.12 и Node.js 22 и клон репозитория https://github.com/gagafik/atlas
+(подробно: CONTRIBUTING.md). Положите timetable.db в надёжное место вне клона и укажите её серверу.
+
+  Windows (PowerShell, в каталоге клона):
+    $env:TIMETABLE_DB = 'C:\\путь\\к\\копии\\timetable.db'
+    ./start.ps1
+
+  Linux/macOS (в каталоге клона, после установки из CONTRIBUTING.md):
+    TIMETABLE_DB=/путь/к/копии/timetable.db python -m uvicorn backend.api:app --host 127.0.0.1 --port 8000
+
+Откройте http://127.0.0.1:8000. Вход под четырьмя ролями (логины и пароли лежат в accounts.json):
+администратор copy-admin, учитель copy-teacher, родитель copy-parent, ученик copy-pupil.
+Изменения записываются в этот файл. Чтобы начать заново, возьмите файл из переданной папки ещё раз.
+
+Чего нельзя. Не добавляйте копию и accounts.json в Git, PR, Docker-образ, журналы CI и публичные
+хранилища. Передавайте их только лично и удалите, когда они больше не нужны.
+Что оставлено и что убрано: ANONYMISED_COPY.md в репозитории и report.json рядом с этим файлом.
+"""
+
+
+def create_accounts(output, report, pseudonyms, work):
+    """Four accounts, made by the application in a child process that works only on the copy; then README.txt."""
+    plan = choose_people(output / DATABASE)
+    plan.update(adminName='Администратор копии', parentName=pseudonyms.issue('\x00parent of ' + plan['pupil']['id']))
+    plan_file = work / 'accounts-plan.json'
+    plan_file.write_text(json.dumps(plan, ensure_ascii=False), encoding='utf-8')
+    run_child('accounts', output / DATABASE, plan=plan_file, result=output / 'accounts.json')
+    (output / 'README.txt').write_text(README, encoding='utf-8')
+    report['accounts'] = dict(roles=list(ROLES), logins=list(LOGINS.values()))
 
 
 def finish(path):
@@ -604,7 +738,7 @@ def run(source, output, policy=POLICY, log=print):
                 out.commit()
             report['notCopied'] = {t: n for t in source_tables(src) if t not in policy.tables
                                    if (n := src.execute(f'SELECT count(*) FROM {quote(t)}').fetchone()[0])}
-        create_accounts(output, report, pseudonyms)
+        create_accounts(output, report, pseudonyms, work)
         finish(target)
         report['hiddenCells'] = dict(sorted(transformer.hidden.items()))
         report['pseudonymsIssued'] = len(pseudonyms.used)
@@ -632,6 +766,8 @@ def describe(report):
     lines.append('Текст скрыт в ячейках:' + ('' if report['hiddenCells'] else ' нигде'))
     lines += [f'  {c}: {n}' for c, n in report['hiddenCells'].items()]
     lines.append(f'Вымышленных имён выдано: {report["pseudonymsIssued"]}')
+    lines.append('Учётные записи для входа (администратор, учитель, родитель, ученик): accounts.json в папке результата; пароли только там.')
+    lines.append('Как открыть копию: README.txt в папке результата.')
     lines.append(f'Проверка пройдена: ячеек {report["gate"]["cellsChecked"]}, находок 0')
     return '\n'.join(lines)
 
@@ -640,11 +776,13 @@ def main(argv=None, policy=POLICY):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--database', type=Path, required=True, help='the school database (only read)')
     parser.add_argument('--output', type=Path, help='a NEW directory outside the repository')
-    parser.add_argument('--child', choices=['schema'], help=argparse.SUPPRESS)
+    parser.add_argument('--child', choices=['schema', 'accounts'], help=argparse.SUPPRESS)
+    parser.add_argument('--plan', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--result', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         if args.child:
-            child_schema(args.database)
+            child_schema(args.database) if args.child == 'schema' else child_accounts(args.database, args.plan, args.result)
             return 0
         if not args.output:
             parser.error('--output is required')
@@ -654,7 +792,7 @@ def main(argv=None, policy=POLICY):
         print('Копия обезличена, но не анонимна: передавайте её только лично и никогда не публикуйте.')
         return 0
     except Refused as stop:
-        print(f'Остановлено: {stop}', file=sys.stderr)
+        print(f'{STOP}{stop}{CHILD_MARK if args.child else ""}', file=sys.stderr)
         return 2
     except GateFailed as failed:
         print('Проверка не пройдена, результат удалён. Найдено (таблица, столбец, вид: число):', file=sys.stderr)

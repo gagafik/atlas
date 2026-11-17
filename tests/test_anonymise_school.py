@@ -1,6 +1,8 @@
 """The pseudonymised copy of a school: a school with canary names is built through the application in a temporary database,
 the tool runs on it, and what is left in the copy is looked at from outside (raw bytes, the application on the copy)."""
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -17,9 +19,11 @@ from fastapi.testclient import TestClient
 from backend import api
 from backend.models import Placement, TeacherAbsence
 from test_access import HEADERS, PASSWORD, create, enable, signed
+from test_final_grades import prepare, scale
 from test_journal import DAY, entry, lesson, write
+from test_journal_periods import close, period
 from tools import anonymise_school as tool
-from tools.anonymise_policy import POLICY
+from tools.anonymise_policy import ACCOUNT_TABLES, POLICY
 from tools import anonymise_names
 
 # Distinctive invented names: none of these words may be found in any file of the copy.
@@ -49,7 +53,51 @@ def numbers(client):
                 marks += 1
                 marks_sum += grade['score'] or 0
     return dict(classes=len(state['classes']), pupils=len(state['students']), teachers=len(state['teachers']), placements=len(state['placements']),
-                lessons=len(day), marks=marks, marksSum=marks_sum, present=present)
+                lessons=len(day), marks=marks, marksSum=marks_sum, present=present, **final_grades(client))
+
+
+def final_grades(client):
+    """The closed period of the school: how many books and rows of final grades the administrator sees."""
+    books = client.get('/api/final-grades/options?workspace=demo').json()['books']
+    return dict(books=len(books), finalRows=sum(client.get(f'/api/final-grades/books/{b["id"]}?workspace=demo').json()['total'] for b in books))
+
+
+PERIOD = dict(workspace='demo', start='2026-08-01', end='2026-09-30')
+
+
+def pupil_view(client, student):
+    """What a pupil's screens read: the published marks and the attendance of the period."""
+    answer = client.get('/api/journal/pupil-period', params=dict(PERIOD, studentId=student))
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    return dict(marks=len(body['marks']), marksSum=sum(m['score'] or 0 for m in body['marks']), attendance=len(body['attendance']))
+
+
+def signed_in(login, password):
+    client = TestClient(api.app, headers=HEADERS)
+    answer = client.post('/api/auth/login', json=dict(login=login, password=password))
+    assert answer.status_code == 200, answer.status_code
+    return client
+
+
+def walkthrough(accounts):
+    """Each of the four accounts of a copy signs in and reads its own start screens; the figures are returned.
+    Runs in a process that was started with TIMETABLE_DB of the copy, the way a colleague's server is."""
+    passwords = {a['login']: a['password'] for a in accounts}
+    admin, teacher = signed_in('copy-admin', passwords['copy-admin']), signed_in('copy-teacher', passwords['copy-teacher'])
+    pupil, parent = signed_in('copy-pupil', passwords['copy-pupil']), signed_in('copy-parent', passwords['copy-parent'])
+    own = pupil.get('/api/portal/options').json()[0]['records']
+    student = next(r['id'] for r in own if r['view'] == 'student')
+    other = next(s['id'] for s in admin.get('/api/state?workspace=demo').json()['students'] if s['id'] != student)
+    day = lambda client: sorted(r['lessonKey'] for r in client.get('/api/journal/day?workspace=demo&day=' + DAY).json()['lessons'])
+    family = parent.get('/api/portal/family').json()['items']
+    schedule = pupil.get('/api/portal/schedule', params=dict(workspace='demo', view='student', entityId=student)).json()
+    return dict(numbers=numbers(admin), student=student, pupil=pupil_view(pupil, student), parent=pupil_view(parent, student),
+                teacherDay=day(teacher), adminDay=day(admin), family=[(i['studentId'], i['verified'], i['status']) for i in family],
+                scheduleRows=len(schedule['rows']), pupilOther=pupil.get('/api/journal/pupil-period', params=dict(PERIOD, studentId=other)).status_code,
+                parentOther=parent.get('/api/journal/pupil-period', params=dict(PERIOD, studentId=other)).status_code,
+                adminsUsers=sorted(u['login'] for u in admin.get('/api/access/users').json()), teacherUsers=teacher.get('/api/access/users').status_code,
+                finals=final_grades(teacher))
 
 
 @pytest.fixture(scope='module')
@@ -92,6 +140,14 @@ def school(tmp_path_factory):
     for number, row in enumerate(content['records']):
         row.update(attendance='present', grades=[dict(assessmentId='quiz', score=5 - number, label='', comment='')])
     assert write(client, math, publish=True).status_code == 200
+    # A closed period with its book of final grades: rows are assigned to a teacher account of the school, which the copy does not have.
+    patch.setattr('backend.journal_periods.now', lambda: datetime(2026, 10, 14, 10, tzinfo=timezone.utc))
+    patch.setattr('backend.journal_coverage.now', lambda: datetime(2026, 10, 14, 10, tzinfo=timezone.utc))
+    closed = close(client, period(client))
+    book = prepare(client, closed)
+    scale(client)
+    api.shutdown_gradebook_jobs()
+    assert client.get(f'/api/final-grades/books/{book["id"]}?workspace=demo').json()['total'] >= 2
     # Things that must never reach the copy: a message with contacts, an absence notice, a note about a child.
     teacher = next(u for u in client.get('/api/access/users').json() if u['login'] == 'aglaya')
     mother = signed('pelagea')
@@ -108,7 +164,7 @@ def school(tmp_path_factory):
     with sqlite3.connect(api.DB) as db:
         db.execute('DELETE FROM history')
     counts = numbers(client)
-    assert counts['lessons'] == 2 and counts['marks'] == 4 and counts['pupils'] == 4
+    assert counts['lessons'] == 2 and counts['marks'] == 4 and counts['pupils'] == 4 and counts['books'] == 1 and counts['finalRows'] >= 2
     client.close()
     yield School(api.DB, counts)
     patch.undo()
@@ -149,7 +205,9 @@ def test_a_successful_run_leaves_the_source_untouched_and_prints_only_counts(cop
     assert all(isinstance(n, int) for n in report['hiddenCells'].values())
     # Tables that were left out show up as counts only.
     assert report['notCopied']['accounts'] == 4 and 'message_posts' in report['notCopied'] and 'accounts' not in report['tables']
-    assert set(p.name for p in copy['output'].iterdir()) == {'timetable.db', 'report.json'}
+    assert set(p.name for p in copy['output'].iterdir()) == {'timetable.db', 'report.json', 'accounts.json', 'README.txt'}
+    assert report['accounts']['logins'] == ['copy-admin', 'copy-teacher', 'copy-parent', 'copy-pupil']
+    assert all(a['password'] not in copy['console'] and a['login'] not in copy['console'] for a in accounts_of(copy))
 
 
 def test_no_file_of_the_copy_holds_a_canary_in_its_raw_bytes(copy):
@@ -162,10 +220,22 @@ def test_no_file_of_the_copy_holds_a_canary_in_its_raw_bytes(copy):
     assert '@example' not in raw and 'Позвонить' not in raw and 'Квадратные уравнения' in raw
 
 
-def test_the_application_serves_the_copy_with_the_same_numbers(school, copy, monkeypatch):
+def served(copy, folder):
+    """A working copy of the copy's database: signing in writes sessions, so the delivered file itself stays as the tool made it."""
+    target = folder / 'served.db'
+    shutil.copyfile(copy['output'] / 'timetable.db', target)
+    return target
+
+
+def accounts_of(copy):
+    return json.loads((copy['output'] / 'accounts.json').read_text(encoding='utf-8'))['accounts']
+
+
+def test_the_application_serves_the_copy_with_the_same_numbers(school, copy, monkeypatch, tmp_path):
     assert copy['code'] == 0
-    monkeypatch.setattr(api, 'DB', copy['output'] / 'timetable.db')
-    client = TestClient(api.app, headers=HEADERS)
+    monkeypatch.setattr(api, 'DB', served(copy, tmp_path))
+    admin = next(a for a in accounts_of(copy) if a['login'] == 'copy-admin')
+    client = signed_in(admin['login'], admin['password'])
     assert numbers(client) == school.counts
     state = client.get('/api/state?workspace=demo').json()
     names = {s['name'] for s in state['students']} | {t['name'] for t in state['teachers']}
@@ -181,10 +251,34 @@ def test_the_application_serves_the_copy_with_the_same_numbers(school, copy, mon
     client.close()
 
 
-def test_a_harmless_topic_survives_and_a_topic_naming_a_pupil_is_hidden(copy, monkeypatch):
+def test_each_of_the_four_accounts_signs_in_to_a_server_started_on_the_copy(school, copy, tmp_path):
+    """A separate process with TIMETABLE_DB of the copy, as a colleague starts the application; the source is read for comparison."""
     assert copy['code'] == 0
-    monkeypatch.setattr(api, 'DB', copy['output'] / 'timetable.db')
-    client = TestClient(api.app, headers=HEADERS)
+    accounts = accounts_of(copy)
+    assert sorted(a['login'] for a in accounts) == ['copy-admin', 'copy-parent', 'copy-pupil', 'copy-teacher'] and all(len(a['password']) >= 16 for a in accounts)
+    done = subprocess.run([sys.executable, '-X', 'utf8', str(Path(__file__)), str(copy['output'] / 'accounts.json')], cwd=tool.ROOT, capture_output=True,
+                          env={**os.environ, 'PYTHONUTF8': '1', 'PYTHONPATH': str(tool.ROOT), 'TIMETABLE_DB': str(served(copy, tmp_path)), 'ATLAS_WEB_PUSH_ENABLED': '0'})
+    assert done.returncode == 0, done.stderr.decode('utf-8', 'replace')[-1500:]
+    seen = json.loads(done.stdout.decode('utf-8'))
+    assert seen['numbers'] == school.counts
+    # The pupil and the parent read the same marks and attendance of the pupil as the school's own administrator does in the source.
+    source = signed_in('admin', PASSWORD)
+    assert seen['pupil'] == seen['parent'] == pupil_view(source, seen['student']) and seen['pupil']['marks'] >= 2
+    assert seen['family'] == [[seen['student'], True, 'active']]
+    # The teacher sees lessons of their own, the family sees nobody else's pupil, and only the administrator manages accounts.
+    assert seen['teacherDay'] and set(seen['teacherDay']) <= set(seen['adminDay'])
+    # Final grades: the rows of the teacher's own classes and subjects are assigned to the copy's teacher account.
+    assert seen['finals']['books'] == 1 and 1 <= seen['finals']['finalRows'] <= school.counts['finalRows']
+    assert seen['pupilOther'] == seen['parentOther'] == 403 and seen['teacherUsers'] == 403
+    assert seen['adminsUsers'] == ['copy-admin', 'copy-parent', 'copy-pupil', 'copy-teacher'] and seen['scheduleRows']
+    source.close()
+
+
+def test_a_harmless_topic_survives_and_a_topic_naming_a_pupil_is_hidden(copy, monkeypatch, tmp_path):
+    assert copy['code'] == 0
+    monkeypatch.setattr(api, 'DB', served(copy, tmp_path))
+    admin = next(a for a in accounts_of(copy) if a['login'] == 'copy-admin')
+    client = signed_in(admin['login'], admin['password'])
     topics, homework = {}, {}
     for item in client.get('/api/journal/day?workspace=demo&day=' + DAY).json()['lessons']:
         content = client.get('/api/journal/entry', params=dict(workspace='demo', lessonKey=item['lessonKey'], day=DAY)).json()['document']['content']
@@ -199,8 +293,11 @@ def test_what_the_policy_does_not_name_is_not_copied(copy):
     with sqlite3.connect(copy['output'] / 'timetable.db') as db:
         tables = [name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
         filled = {t for t in tables if db.execute(f'SELECT 1 FROM "{t}" LIMIT 1').fetchone()}
-        assert filled and filled <= set(POLICY.tables)
-        assert not filled & {'accounts', 'sessions', 'audit', 'message_posts', 'absence_notices', 'behaviour_notes', 'family_links', 'journal_history', 'history', 'homework_submissions'}
+        assert filled and filled <= set(POLICY.tables) | ACCOUNT_TABLES
+        # The four accounts and their family link are all that the school's own accounts, messages, notes and histories are replaced by.
+        assert filled & ACCOUNT_TABLES == {'accounts', 'family_links'} and db.execute('SELECT count(*) FROM accounts').fetchone()[0] == 4
+        assert not filled & {'sessions', 'audit', 'login_journal', 'notifications', 'message_posts', 'absence_notices', 'behaviour_notes', 'family_history', 'journal_history',
+                             'history', 'homework_submissions'}
         assert db.execute('PRAGMA freelist_count').fetchone()[0] == 0
 
 
@@ -223,6 +320,13 @@ def test_a_policy_that_wrongly_keeps_a_name_makes_the_gate_remove_the_output(sch
     code, shown = attempt(school.source, output, capsys, POLICY.with_rule('journal_members', 'name', 'keep'))
     assert code == 3 and 'journal_members.name' in shown and not output.exists() and leaks(shown) == []
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_table_filled_by_the_accounts_step_that_is_not_allow_listed_fails_the_gate(school, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(tool, 'ACCOUNT_TABLES', frozenset({'accounts'}))
+    output = tmp_path / 'result'
+    code, shown = attempt(school.source, output, capsys)
+    assert code == 3 and 'family_links.(table): not allow-listed' in shown and not output.exists() and leaks(shown) == []
 
 
 def test_a_contact_that_is_kept_by_mistake_fails_the_gate(school, tmp_path, capsys):
@@ -280,6 +384,27 @@ def test_every_column_of_every_allow_listed_table_has_a_rule_and_every_rule_name
         tool.check_rules(POLICY.with_rule('grade_events', 'no_such_column', 'keep'), columns, {})
 
 
+def test_accounts_go_to_the_busiest_teacher_and_a_pupil_of_the_class_with_the_most_marks(tmp_path):
+    state = dict(teachers=[dict(id='t1', name='Первый Учитель'), dict(id='t2', name='Второй Учитель')], students=[
+        dict(id='s1', name='Ученик Один', classId='c1'), dict(id='s2', name='Ученик Два', classId='c1'), dict(id='s3', name='Ученик Три', classId='c2'),
+        dict(id='s4', name='Ученик Четыре', classId='c2'), dict(id='s5', name='Ушедший Ученик', classId='c2', active=False)],
+        groups=[dict(id='g1', classIds=['c1']), dict(id='g2', classIds=['c2'])],
+        workloads=[dict(id='w1', groupId='g1', subjectId='math', teacherId='t1'), dict(id='w2', groupId='g2', subjectId='art', teacherId='t2', additionalTeacherIds=['t1'])],
+        placements=[dict(workloadId='w1'), dict(workloadId='w2'), dict(workloadId='w2')])
+    path = tmp_path / 'copy.db'
+    with closing(sqlite3.connect(path)) as db:
+        db.execute('CREATE TABLE workspaces(id TEXT, document TEXT)')
+        db.execute('CREATE TABLE grade_events(workspace TEXT, student_id TEXT, hidden INTEGER)')
+        db.execute('INSERT INTO workspaces VALUES (?,?)', ('school', json.dumps(state, ensure_ascii=False)))
+        # c1 has 3 marks (one hidden), c2 has 4: the pupil of c2 with most marks is s4, and s5 has left.
+        db.executemany('INSERT INTO grade_events VALUES (?,?,?)', [('school', s, h) for s, h in
+                       [('s1', 0), ('s1', 0), ('s2', 1), ('s3', 0), ('s4', 0), ('s4', 0), ('s4', 0), ('s5', 0), ('s5', 0), ('s5', 0)]])
+        db.commit()
+    plan = tool.choose_people(path)
+    assert plan['workspace'] == 'school' and plan['teacher']['id'] == 't1' and plan['pupil']['id'] == 's4'
+    assert plan['teaching'] == [('c1', 'math'), ('c2', 'art')]
+
+
 def test_a_child_process_works_only_on_the_database_it_was_made_for(tmp_path, monkeypatch):
     monkeypatch.setenv('TIMETABLE_DB', str(tmp_path / 'other.db'))
     with pytest.raises(tool.Refused):
@@ -308,3 +433,8 @@ def test_names_are_found_as_whole_words_in_any_case_and_texts_with_contacts_are_
     assert tool.has_phone('звоните +7 701 234 56 78') and tool.has_phone('87012345678') and not tool.has_phone('2026-10-05 10:00:00 и 57.77777777777777')
     assert tool.has_email('a.b@example.org') and not tool.has_email('вопрос @ ответ')
     assert tool.mask('Иван-12') == 'aaaa-99'
+
+
+if __name__ == '__main__':
+    # The process of a colleague's server on a copy: python tests/test_anonymise_school.py accounts.json
+    print(json.dumps(walkthrough(json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))['accounts']), ensure_ascii=False))
