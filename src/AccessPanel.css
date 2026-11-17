@@ -9,8 +9,7 @@
   justify-self: start;
 }
 /* The tab bodies are grids or sections; the hidden attribute must still win. */
-.access-tab[hidden],
-.access-audit[hidden] {
+.access-tab[hidden] {
   display: none;
 }
 .family-panel-bare {
@@ -294,4 +293,118 @@
   justify-content: space-between;
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
+}
+
+/* «Журнал действий»: one row of search, reload and the explanatory line; the table is paged. */
+.access-audit-toolbar {
+  container: access-audit-toolbar / inline-size;
+}
+.access-audit-note {
+  flex: 1 1 280px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+@container access-audit-toolbar (max-width: 619px) {
+  .access-audit-note {
+    flex-basis: 100%;
+  }
+}
+.access-audit-list {
+  container: access-audit-list / inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.access-audit-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.access-audit-table th,
+.access-audit-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.access-audit-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+.access-audit-table tbody > tr:last-child > td {
+  border-bottom: 0;
+}
+.access-audit-table tbody > tr:hover > td {
+  background: var(--accent-tint);
+}
+.access-audit-table th:nth-child(1) {
+  width: 17%;
+}
+.access-audit-table th:nth-child(2) {
+  width: 20%;
+}
+.access-audit-table th:nth-child(3) {
+  width: 25%;
+}
+.access-audit-table th:nth-child(4) {
+  width: 38%;
+}
+.access-a-when {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.access-a-who {
+  font-weight: var(--weight-semibold);
+}
+@container access-audit-list (max-width: 619px) {
+  .access-audit-table,
+  .access-audit-table tbody {
+    display: block;
+  }
+  .access-audit-table thead {
+    display: none;
+  }
+  .access-audit-table tr.access-audit-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "who when"
+      "action action"
+      "details details";
+    column-gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .access-audit-table tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .access-audit-table tr.access-audit-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+  }
+  .access-a-who {
+    grid-area: who;
+  }
+  .access-a-when {
+    grid-area: when;
+    text-align: right;
+  }
+  .access-a-action {
+    grid-area: action;
+  }
+  .access-a-details {
+    grid-area: details;
+    color: var(--text-muted);
+  }
 }

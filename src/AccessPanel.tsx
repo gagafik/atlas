@@ -5,6 +5,7 @@ import FamilyPanel from "./FamilyPanel";
 import ClassStaffPanel from "./ClassStaffPanel";
 import AccessUserForm from "./AccessUserForm";
 import AccessUsersTable from "./AccessUsersTable";
+import AccessAuditTable from "./AccessAuditTable";
 import "./classStaff.css";
 import "./AccessPanel.css";
 import type { State } from "./types";
@@ -16,11 +17,11 @@ import {
   type AccessView,
 } from "./auth";
 import {
+  AUDIT_PAGE,
   USERS_PAGE,
   accessTabs,
   accountFormDirty,
-  auditAction,
-  auditDetails,
+  auditMatches,
   blankForm,
   filterAccounts,
   pageOf,
@@ -74,6 +75,8 @@ export default function AccessPanel({
     [stateFilter, setStateFilter] = useState<StateFilter>("all"),
     [shown, setShown] = useState(USERS_PAGE),
     [highlightId, setHighlightId] = useState<string | null>(null);
+  const [auditQuery, setAuditQuery] = useState(""),
+    [auditShown, setAuditShown] = useState(AUDIT_PAGE);
   // The button that gets the focus when the list comes back, and the accounts as the last reload brought them.
   const returnFocus = useRef<string | null>(null),
     loaded = useRef<Account[]>([]);
@@ -162,7 +165,11 @@ export default function AccessPanel({
       state: stateFilter,
       query,
     }),
-    page = pageOf(filtered, shown);
+    page = pageOf(filtered, shown),
+    auditPage = pageOf(
+      audit.filter((a) => auditMatches(a, auditQuery)),
+      auditShown,
+    );
   const resetShown = () => {
     setShown(USERS_PAGE);
     setHighlightId(null);
@@ -563,40 +570,63 @@ export default function AccessPanel({
               />
             )}
           </div>
-          <section className="access-audit access-tab" hidden={tab !== "audit"}>
-            <h3>Журнал действий</h3>
-            <p className="muted">
-              Сохранения расписания, отмена/повтор и управление доступом.
-              Последние 10 000 записей хранятся отдельно от школьного
-              расписания.
-            </p>
-            {audit.map((a) => (
-              <article key={a.id}>
-                <strong>{a.actorName}</strong>
-                <span>{new Date(a.created).toLocaleString("ru")}</span>
-                <p>
-                  {auditAction(a)}
-                  {auditDetails(a) ? " · " + auditDetails(a) : ""}
-                </p>
-              </article>
-            ))}
-            {!!audit.length && (
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const next = await api(
-                      `access/audit?before=${audit[audit.length - 1].id}`,
-                      workspace,
-                    );
-                    setAudit([...audit, ...next]);
-                    if (!next.length) setNotice("Более ранних записей нет.");
-                  })
-                }
-              >
-                Показать более ранние
+          <section
+            className="access-tab dated-panel"
+            hidden={tab !== "audit"}
+            aria-label="Журнал действий"
+          >
+            <div className="access-toolbar access-audit-toolbar">
+              <label>
+                <span>Поиск в журнале</span>
+                <input
+                  value={auditQuery}
+                  onChange={(e) => {
+                    setAuditQuery(e.target.value);
+                    setAuditShown(AUDIT_PAGE);
+                  }}
+                  placeholder="Кто или что сделал"
+                />
+              </label>
+              <button disabled={busy} onClick={() => void run(reload)}>
+                Обновить
               </button>
-            )}
+              <p className="muted access-audit-note">
+                Сохранения расписания, отмена/повтор и управление доступом.
+                Последние 10 000 записей хранятся отдельно от школьного
+                расписания.
+              </p>
+            </div>
+            <AccessAuditTable rows={auditPage.rows}>
+              <div className="access-more">
+                <span>
+                  Показано {auditPage.shown} из {auditPage.total} загруженных
+                </span>
+                {auditPage.more && (
+                  <button onClick={() => setAuditShown((n) => n + AUDIT_PAGE)}>
+                    Показать ещё
+                  </button>
+                )}
+                {!auditPage.more && !!audit.length && (
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const next = await api(
+                          `access/audit?before=${audit[audit.length - 1].id}`,
+                          workspace,
+                        );
+                        setAudit([...audit, ...next]);
+                        setAuditShown((n) => n + AUDIT_PAGE);
+                        if (!next.length)
+                          setNotice("Более ранних записей нет.");
+                      })
+                    }
+                  >
+                    Показать более ранние
+                  </button>
+                )}
+              </div>
+            </AccessAuditTable>
           </section>
         </>
       )}
