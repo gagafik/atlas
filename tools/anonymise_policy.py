@@ -9,16 +9,16 @@ without a rule stops the tool before it writes anything. Rules:
   person  a person's name: its pseudonym; an unknown name gets a generic invented one
   text    free text, kept only if it holds no real-name token, otherwise hidden
   names   text in which known full names are replaced by their pseudonyms first
+  persons a comma-separated list of people ("A, B"): known names and any other name become pseudonyms
   number  like keep, for a technical number that may hold 10 or more digits (the gate does not take it for a phone)
-  hash    a value that only has to stay equal to itself: salted digest of a random per-run salt
   json:X  a JSON document walked leaf by leaf with the profile X (see PROFILES)
 """
 from dataclasses import dataclass, field, replace
 
 HIDDEN = '(текст скрыт)'
 
-KEEP, DROP, PERSON, TEXT, NAMES, HASH, NUMBER = 'keep', 'drop', 'person', 'text', 'names', 'hash', 'number'
-SIMPLE = {KEEP, DROP, PERSON, TEXT, NAMES, HASH, NUMBER}
+KEEP, DROP, PERSON, TEXT, NAMES, PERSONS, NUMBER = 'keep', 'drop', 'person', 'text', 'names', 'persons', 'number'
+SIMPLE = {KEEP, DROP, PERSON, TEXT, NAMES, PERSONS, NUMBER}
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,9 @@ class Profile:
     drop: dict = field(default_factory=dict)
     const: dict = field(default_factory=dict)
     people: frozenset = frozenset()
+    lists: frozenset = frozenset()  # leaves that are a comma-separated list of people ("Иванов И., Петров П.") or a list of such strings
     text: frozenset = frozenset()  # leaves that are free text: hidden whole when they hold a real name, never rewritten
+    plain: frozenset = frozenset()  # leaf keys whose strings are kept as they are (ids, enums); the gate still reads them
 
 
 PROFILES = {
@@ -40,12 +42,12 @@ PROFILES = {
     # A journal document: a comment on a pupil is a note about a child; files and materials are not copied.
     'journal': Profile(
         drop={'comment': '', 'homeworkFiles': [], 'materials': [], 'curriculum': None, 'bookingId': None},
-        people=frozenset({'lesson.students.name'}), text=frozenset({'content.topic', 'content.homework'})),
-    'coverage': Profile(),
-    'event': Profile(drop={'comment': ''}),
+        people=frozenset({'lesson.students.name'}), lists=frozenset({'lesson.teachers'}), text=frozenset({'content.topic', 'content.homework'})),
+    'coverage': Profile(lists=frozenset({'teachers'})),
+    'event': Profile(drop={'comment': ''}, lists=frozenset({'teachers'})),
     'grading': Profile(
         drop={'comment': '', 'explanation': '', 'reason': ''},
-        people=frozenset({'student.name', 'teachers.name', 'author', 'approval.actor', 'actor'})),
+        people=frozenset({'student.name', 'teachers.name', 'author', 'approval.actor', 'actor'}), lists=frozenset({'teachers'})),
     'settings': Profile(),
 }
 
@@ -64,7 +66,7 @@ TABLES = {
     'journal_attendance': dict(workspace=K, lesson_key=K, student_id=K, attendance=K, late_minutes=K, day=K, start=K, end=K,
                                subject_id=K, left_at=K, absence_code=TEXT),
     'journal_attendance_lessons': dict(workspace=K, lesson_key=K, day=K, start=K, end=K, subject_id=K, subject=TEXT, group_name=TEXT,
-                                       teachers=NAMES, version=K, published_at=K),
+                                       teachers=PERSONS, version=K, published_at=K),
     'journal_attendance_epoch': dict(workspace=K, version=K),
     'journal_periods': dict(workspace=K, id=K, name=TEXT, start_day=K, end_day=K, kind=K, version=K, status=K, ever_closed=K, updated=K),
     'journal_period_closures': dict(workspace=K, period_id=K, version=K, created=K, actor=PERSON, reason=TEXT, school_revision=K,
@@ -89,9 +91,10 @@ TABLES = {
     'grading_projected': dict(workspace=K, lesson_key=K, version=K, format=K),
     'final_results': dict(workspace=K, period_id=K, student_id=K, subject_id=K, row_id=K, version=K, document='json:grading'),
     'grading_report_settings': dict(workspace=K, period_id=K, class_id=K, version=K, document='json:settings'),
-    # Homework tasks only: no answers, files or histories. `assignment` is a digest of the task; equal tasks keep equal digests.
+    # Homework tasks only: no answers, files or histories. `assignment` is not copied: the accounts step lets the application rebuild the
+    # tasks from the copied journal, which also writes the digest the pupils' answers are compared with.
     'homework_queue_tasks': dict(workspace=K, lesson_key=K, sort_date=K, lesson_date=K, due_date=K, subject=TEXT, group_name=TEXT,
-                                 preview=TEXT, assignment=HASH, source_kind=K, source_id=K, draft_teachers=K, late_policy=K,
+                                 preview=TEXT, assignment=DROP, source_kind=K, source_id=K, draft_teachers=K, late_policy=K,
                                  group_id=K, subject_id=K, submission=K),
     'homework_queue_versions': dict(workspace=K, version=K),
 }
@@ -114,6 +117,9 @@ TEACHER_ID_COLUMNS = [('journal_coverage_teachers', 'teacher_id')]
 # Columns of ANY source table that hold a person's name, copied or not. `name` only counts in these tables.
 NAME_TABLES = {'accounts', 'journal_members', 'quiz_members', 'meeting_hosts', 'school_form_recipients', 'presence'}
 NAME_COLUMNS = {'actor', 'author'}
+# Columns (of any table) and JSON keys that hold a comma-separated list of names: each piece is a name.
+NAME_LIST_COLUMNS = {'teachers'}
+NAME_LIST_KEYS = {'teachers', 'students', 'pupils', 'parents', 'guardians', 'invitees', 'recipients', 'hosts', 'members'}
 NAME_SUFFIXES = ('actor_name', 'author_name', 'student_name', 'account_name', 'user_name', 'parent_name', 'teacher_name', 'host_name',
                  'creator_name', 'guardian_name', 'pupil_name', 'owner_name', 'sender_name', 'signer_name', 'reviewer_name', 'member_name')
 # Inside JSON documents of any table: a `name` under one of these keys, and these keys themselves, are people.
@@ -122,13 +128,19 @@ NAME_PARENT_KEYS = {'student', 'students', 'teacher', 'teachers', 'parent', 'par
 NAME_LEAF_KEYS = {'author', 'actor', 'actorName', 'authorName', 'studentName', 'parentName', 'teacherName', 'guardianName', 'fullName',
                   'userName', 'hostName', 'creatorName'}
 # System actors are not people: their words are not names to look for.
-IGNORED_NAMES = {'система', 'локальный пользователь', 'администратор'}
+IGNORED_NAMES = {'система', 'локальный пользователь', 'администратор', 'не указан', 'без учителя'}
+# The application's own placeholder people (the demo workspace, the aSc import) are not real names either: their words ("учитель", "ученик")
+# are ordinary words. The demo ones are read from backend.seed by the tool.
+PLACEHOLDER_PATTERNS = (r'Учитель aSc \S+', r'Синтетический ученик \d+.*', r'Ученик \d+ \(пример\)')
+# Keys of JSON leaves that are ids or enum values of the application: kept as they are (the gate still looks at them).
+PLAIN_KEYS = {'id', 'kind', 'status', 'effect', 'day', 'mode', 'type', 'format', 'scope', 'level', 'attendance', 'unit', 'state', 'category'}
 
 
 @dataclass(frozen=True)
 class Policy:
     tables: dict = field(default_factory=lambda: {t: dict(c) for t, c in TABLES.items()})
     profiles: dict = field(default_factory=lambda: dict(PROFILES))
+    account_tables: frozenset = ACCOUNT_TABLES
 
     def rule(self, table, column):
         return self.tables.get(table, {}).get(column)

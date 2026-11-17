@@ -14,7 +14,6 @@ Console output and report.json hold counts, never a name or a text value.
 import argparse
 from collections import Counter
 from contextlib import closing
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,17 +25,29 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 
 from tools import anonymise_names as invented
-from tools.anonymise_policy import ACCOUNT_CLEARED, ACCOUNT_TABLES, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, NAME_TABLES, POLICY, \
-    STATE_DOCUMENTS, STUDENT_ID_COLUMNS, TEACHER_ID_COLUMNS, Policy
+from tools.anonymise_policy import ACCOUNT_CLEARED, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_LIST_COLUMNS, NAME_LIST_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, \
+    NAME_TABLES, PLACEHOLDER_PATTERNS, PLAIN_KEYS, POLICY, STATE_DOCUMENTS, STUDENT_ID_COLUMNS, TEACHER_ID_COLUMNS
 
 ROOT = Path(__file__).resolve().parent.parent
 DATABASE = 'timetable.db'
 UNVERIFIED = 'НЕ-ПЕРЕДАВАТЬ-не-проверено.txt'
 LETTERS = re.compile(r'[^\W\d_]+')
-VOWELS = 'аяйьыиеоуюэ'
+VOWELS = 'аяйьыиеоуюэіәөұү'
+# Case endings of the language: after a short stem only these count as the same name in another case ("Анну", "Кимом").
+ENDINGS = {'а', 'я', 'у', 'ю', 'ы', 'и', 'е', 'о', 'ой', 'ей', 'ом', 'ем', 'ём', 'ою', 'ею', 'ам', 'ям', 'ов', 'ев', 'ах', 'ях', 'ами', 'ями', 'ие', 'ий', 'ых', 'ым'}
+CYR = dict(zip('абвгдежзийклмнопрстуфхцчшщъыьэюяәіғқңөұүһ', ['a', 'b', 'v', 'g', 'd', 'e', 'zh', 'z', 'i', 'i', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 't', 'u', 'f', 'kh', 'ts', 'ch',
+                                                         'sh', 'shch', '', 'y', '', 'e', 'iu', 'ia', 'a', 'i', 'g', 'k', 'n', 'o', 'u', 'u', 'h']))
+# The spellings of one Cyrillic name in Latin letters differ (y/i, kh/h, ts/c, yu/iu/u...): both sides are brought to one skeleton.
+DIGRAPHS = [('shch', 'S'), ('sch', 'S'), ('sh', 'S'), ('zh', 'Z'), ('ch', 'C'), ('kh', 'h'), ('ts', 'T'), ('tz', 'T'), ('yu', 'u'), ('iu', 'u'), ('ju', 'u'), ('ya', 'a'),
+            ('ia', 'a'), ('ja', 'a'), ('yo', 'o'), ('io', 'o'), ('jo', 'o'), ('ye', 'e'), ('je', 'e'), ('y', 'i'), ('j', 'i'), ('w', 'v'), ('q', 'k'), ('x', 'ks'), ('c', 'k')]
+REPEAT = re.compile(r'(.)\1+')
+HEXRUN = re.compile(r'(?<![0-9a-f])[0-9a-f]{8,64}(?![0-9a-f])')
+HASHED = re.compile(r'(?:[a-z]{1,12}(?:-[a-z]{1,4})?-)?([0-9a-f]{8,64})')
+PLACEHOLDERS = [re.compile(p) for p in PLACEHOLDER_PATTERNS]
 EMAIL = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 STAMP = re.compile(r'\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?')
 # The digits after a decimal point are a number, not a phone: `57.77777777777`.
@@ -85,7 +96,10 @@ def has_email(text):
 
 
 def has_phone(text):
-    """A run of 10 digits or more, spaces, dashes and brackets allowed inside it; dates and times do not count."""
+    """A run of 10 digits or more, spaces, dashes and brackets allowed inside it; dates and times do not count.
+    An id of the application (a uuid, a hash) is no phone number even when a run of its digits looks like one."""
+    if OPAQUE.fullmatch(text) and any(c.isalpha() for c in text):
+        return False
     return sum(c.isdigit() for c in text) >= 10 and any(sum(c.isdigit() for c in m.group()) >= 10 for m in PHONE.finditer(STAMP.sub(' ', text)))
 
 
@@ -130,43 +144,132 @@ class NameIndex:
         return parts or [(text, False)]
 
 
+def skeleton(word):
+    """A Latin word brought to the skeleton shared by the common spellings of a Cyrillic name."""
+    s = word.replace("'", '')
+    for a, b in DIGRAPHS:
+        s = s.replace(a, b)
+    return REPEAT.sub(r'\1', s)
+
+
+def cyrillic_skeletons(word):
+    """The skeletons of a Cyrillic word: ё is written as e or as yo."""
+    variants = ['']
+    for c in word:
+        options = ['e', 'io'] if c == 'ё' else [CYR.get(c, c if c.isascii() else '')]
+        variants = [v + o for v in variants for o in options][:16]
+    return {skeleton(v) for v in variants}
+
+
+class Words:
+    """Tokens (whole words) and stems (a token without its last vowel) of real names, in one script."""
+
+    def __init__(self, short_stems, vowels):
+        self.tokens, self.stems, self.short, self.vowels = set(), set(), short_stems, vowels
+
+    def add(self, word):
+        self.tokens.add(word)
+        stem = word[:-1] if word[-1] in self.vowels else word
+        if len(stem) >= (2 if self.short else 4) and len(word) >= (3 if self.short else 5):
+            self.stems.add(stem)
+
+    def match(self, word):
+        """The word is a token, or a token with another ending: after a long stem anything of up to 4 letters, after a short one a case ending."""
+        if word in self.tokens:
+            return True
+        n = len(word)
+        return any(word[:k] in self.stems and (k >= (5 if self.short else 4) or word[k:] in ENDINGS) for k in range(max(2, n - 4), n))
+
+
+def placeholder(value):
+    """The application's own stand-ins for people (the demo workspace, the aSc import): ordinary words, not names of the school."""
+    return value in demo_names() or any(p.fullmatch(value) for p in PLACEHOLDERS)
+
+
+def demo_names(cache=[]):
+    if not cache:
+        from backend.seed import initial_state
+        state = initial_state('demo')
+        cache.append({p.name for p in [*state.teachers, *state.students]})
+    return cache[0]
+
+
 class Registry:
-    """The real names of the school: full names to replace and the words (tokens) that must not survive anywhere."""
+    """The real names of the school: full names to replace and the words (tokens) that must not survive anywhere, in the script they are
+    written in and, for the other script, as a skeleton of the transliteration."""
 
     def __init__(self):
-        self.names, self.tokens, self.stems = set(), set(), set()
-        self.index = NameIndex()
+        self.names = set()
+        self.index, self.short = NameIndex(), NameIndex()
+        self.cyr, self.lat = Words(True, VOWELS), Words(False, 'aeiouy')
+        self.from_cyr, self.from_lat = Words(False, 'aeiou'), Words(False, 'aeiou')
         self.words = {}
+
+    @property
+    def tokens(self):
+        return self.cyr.tokens
 
     def add(self, value):
         if not isinstance(value, str):
             return
         value = value.strip()
-        if not value or fold(value) in IGNORED_NAMES:
+        if not value or fold(value) in IGNORED_NAMES or placeholder(value):
             return
-        words = {fold(w) for w in LETTERS.findall(norm(value))}
-        for word in words:
+        lower = [w.casefold() for w in LETTERS.findall(norm(value))]
+        words = [w.replace('ё', 'е') for w in lower]
+        for word, original in zip(words, lower):
             if len(word) >= 3:
-                self.tokens.add(word)
-                if len(word) >= 5:
-                    self.stems.add(word[:-1] if word[-1] in VOWELS else word)
+                if word.isascii():
+                    self.lat.add(word)
+                    if len(skeleton(word)) >= 3:
+                        self.from_lat.add(skeleton(word))
+                else:
+                    self.cyr.add(word)
+                    for s in cyrillic_skeletons(original):
+                        if len(s) >= 3:
+                            self.from_cyr.add(s)
         if any(len(w) >= 3 for w in words) and len(value) >= 5:
             self.names.add(value)
             self.index.add(value)
+        elif len(words) >= 2:
+            # A name made of short words only ("Ли Е.В."): no token can stand for it, so the exact name is looked for.
+            self.names.add(value)
+            self.index.add(value)
+            self.short.add(fold(value))
+
+    def add_list(self, value):
+        """A text that holds names separated by commas."""
+        if isinstance(value, str):
+            for piece in value.split(','):
+                self.add(piece)
+
+    def has_short(self, text):
+        return any(is_name for _, is_name in self.short.split(fold(text))) if self.short.first else False
 
     def hit(self, text):
-        """Whether the text holds a real-name token as a whole word (or with an ending of the language: a name in another case)."""
+        """Whether the text holds a real-name token as a whole word (or with an ending of the language: a name in another case; or the same
+        name in the other script)."""
         for word in LETTERS.findall(norm(text)):
             known = self.words.get(word)
             if known is None:
-                f = fold(word)
-                n = len(f)
-                known = n >= 3 and (f in self.tokens or any(f[:k] in self.stems for k in range(max(4, n - 4), n)))
+                known = self.known(word.casefold())
                 if len(self.words) < 500000:
                     self.words[word] = known
             if known:
                 return True
         return False
+
+    def known(self, lower):
+        f = lower.replace('ё', 'е')
+        if len(f) < 3:
+            return False
+        if f.isascii():
+            return self.lat.match(f) or self.from_cyr.match(skeleton(f))
+        found = cyrillic_skeletons(lower)
+        if self.cyr.match(f):
+            return True
+        mixed = any(c.isascii() for c in f)
+        return any(self.from_lat.match(s) or mixed and self.from_cyr.match(s) for s in found)
 
 
 class Pseudonyms:
@@ -182,7 +285,7 @@ class Pseudonyms:
         female = invented.is_female(real)
         for _ in range(200000):
             name = invented.invent(female)
-            if name not in self.used and name not in self.registry.names and fold(name.split()[0]) not in self.registry.tokens:
+            if name not in self.used and name not in self.registry.names and not self.registry.hit(name.split()[0]):
                 break
         else:
             raise Refused('Запас вымышленных имён исчерпан.')
@@ -191,13 +294,33 @@ class Pseudonyms:
         return name
 
 
+class Ids:
+    """Ids of people that were made from personal data (a hash of a name or of an external id, as the import tools do) can be guessed by anyone
+    who has a list of candidates. Every such id gets a random one of the same shape, for this run only; the real ones are looked for by the gate."""
+
+    def __init__(self, ids=()):
+        self.real, self.map = {m.group(1) for i in ids if (m := HASHED.fullmatch(i))}, {}
+        taken = set(self.real)
+        for tail in sorted(self.real):
+            fresh = tail
+            while fresh in taken:
+                fresh = ''.join(secrets.choice('0123456789abcdef') for _ in tail)
+            taken.add(fresh)
+            self.map[tail] = fresh
+
+    def sub(self, text):
+        return HEXRUN.sub(lambda m: self.map.get(m.group(), m.group()), text) if self.real and isinstance(text, str) else text
+
+    def found(self, text):
+        return bool(self.real) and any(m.group() in self.real for m in HEXRUN.finditer(text))
+
+
 class Transformer:
     """The column rules applied to one value; counts what was hidden, per table.column."""
 
-    def __init__(self, registry, pseudonyms, policy):
-        self.registry, self.pseudonyms, self.policy = registry, pseudonyms, policy
+    def __init__(self, registry, pseudonyms, policy, ids=None):
+        self.registry, self.pseudonyms, self.policy, self.ids = registry, pseudonyms, policy, ids or Ids()
         self.hidden = Counter()
-        self.salt = secrets.token_bytes(16)
         self.memo = {}
 
     def person(self, value):
@@ -227,19 +350,38 @@ class Transformer:
             self.hidden[where] += 1
         return known[0]
 
-    def value(self, rule, value, where, column_empty):
-        if value is None or rule in ('keep', 'number'):
+    def persons(self, value):
+        """A list of people ("A, B"): known names by their pseudonyms, any other name by a generic invented one (a person who has left the
+        school is in no list of the state, but still in the lessons they taught)."""
+        if not isinstance(value, str) or not value.strip():
             return value
+        out = []
+        for part, is_name in self.registry.index.split(value):
+            if is_name:
+                out.append(self.pseudonyms.issue(part))
+            else:
+                out.append(re.sub(r'[^,\s][^,]*', lambda m: self.one(m.group()), part))
+        return ''.join(out)
+
+    def one(self, piece):
+        core = piece.rstrip()
+        return piece if fold(core) in IGNORED_NAMES else self.person(core) + piece[len(core):]
+
+    def value(self, rule, value, where, column_empty):
+        if value is None or rule == 'number':
+            return value
+        if rule == 'keep':
+            return self.ids.sub(value)
         if rule == 'drop':
             return column_empty
         if rule == 'person':
             return self.person(value)
         if rule == 'text':
-            return self.text(value, where)
+            return self.ids.sub(self.text(value, where))
         if rule == 'names':
-            return self.names(value, where)
-        if rule == 'hash':
-            return hashlib.sha256(self.salt + str(value).encode('utf-8')).hexdigest() if isinstance(value, str) else value
+            return self.ids.sub(self.names(value, where))
+        if rule == 'persons':
+            return self.ids.sub(self.persons(value))
         return self.document(value, self.policy.profile(rule), where)
 
     def document(self, raw, profile, where):
@@ -258,21 +400,27 @@ class Transformer:
                 here = path + (key,)
                 dotted = '.'.join(here)
                 if key in profile.drop:
-                    result[key] = profile.drop[key]
+                    result[self.ids.sub(key)] = profile.drop[key]
                 elif dotted in profile.const:
-                    result[key] = profile.const[dotted]
+                    result[self.ids.sub(key)] = profile.const[dotted]
                 else:
-                    result[key] = self.walk(child, here, profile, where)
+                    result[self.ids.sub(key)] = self.walk(child, here, profile, where)
             return result
         if isinstance(node, list):
             return [self.walk(child, path, profile, where) for child in node]
         if isinstance(node, str):
             dotted = '.'.join(path)
+            key = path[-1] if path else ''
             if dotted in profile.people:
                 return self.person(node)
+            if dotted in profile.lists:
+                return self.ids.sub(self.persons(node))
             if dotted in profile.text:
-                return self.text(node, where)
-            return self.names(node, where)
+                return self.ids.sub(self.text(node, where))
+            # Ids and enum values of the application are never rewritten as names: the copy would not open. The gate still reads them.
+            if key in PLAIN_KEYS or key in profile.plain or key.endswith(('Id', 'Ids')):
+                return self.ids.sub(node)
+            return self.ids.sub(self.names(node, where))
         return node
 
 
@@ -288,21 +436,28 @@ def source_tables(db):
 
 def is_name_column(table, column):
     c = column.lower()
-    return c in NAME_COLUMNS or c.endswith(NAME_SUFFIXES) or (c == 'name' and table in NAME_TABLES)
+    return c in NAME_COLUMNS or c in NAME_LIST_COLUMNS or c.endswith(NAME_SUFFIXES) or (c == 'name' and table in NAME_TABLES)
 
 
 def collect_names(node, found, parent=''):
-    """Names of people in a JSON document: a `name` under a key that holds people, and the keys that are names themselves."""
+    """Names of people in a JSON document: a `name` under a key that holds people, the keys that are names themselves, and the names that
+    stand as plain strings in a list or as a comma-separated list ("teachers": "A, B"). `parent` is the key (or column) the node sits under."""
     if isinstance(node, dict):
         for key, child in node.items():
             if isinstance(child, str):
                 if (key == 'name' and parent in NAME_PARENT_KEYS) or key in NAME_LEAF_KEYS:
-                    found.append(child)
+                    found.add(child)
+                elif key in NAME_LIST_KEYS and not OPAQUE.fullmatch(child):
+                    found.update(p.strip() for p in child.split(','))
             else:
                 collect_names(child, found, key if isinstance(child, (dict, list)) else parent)
     elif isinstance(node, list):
         for child in node:
-            collect_names(child, found, parent)
+            if isinstance(child, str):
+                if parent in NAME_PARENT_KEYS and not OPAQUE.fullmatch(child):
+                    found.update(p.strip() for p in child.split(','))
+            else:
+                collect_names(child, found, parent)
 
 
 def documents(db, table, column):
@@ -317,16 +472,21 @@ def documents(db, table, column):
 
 def build_registry(src):
     registry = Registry()
-    names = []
     for table in source_tables(src):
         columns = table_columns(src, table)
         for column in columns:
             if is_name_column(table, column):
-                names += [v for (v,) in src.execute(f'SELECT DISTINCT {quote(column)} FROM {quote(table)}')]
+                for (value,) in src.execute(f'SELECT DISTINCT {quote(column)} FROM {quote(table)}'):
+                    registry.add_list(value) if column.lower() in NAME_LIST_COLUMNS else registry.add(value)
+            found = set()
             for document in documents(src, table, column):
-                collect_names(document, names)
-    for name in names:
-        registry.add(name)
+                collect_names(document, found, column.lower())
+                if len(found) > 20000:
+                    for name in found:
+                        registry.add(name)
+                    found.clear()
+            for name in found:
+                registry.add(name)
     return registry
 
 
@@ -351,7 +511,8 @@ def walk_ids(node, kind, found):
 
 
 def check_ids(src):
-    """Person ids are kept as they are, so they must be opaque. Anything else stops the tool, shown only as a shape."""
+    """Person ids are kept as they are (those made from personal data are replaced, see Ids), so they must be opaque. Anything else stops the
+    tool, shown only as a shape. Returns the ids."""
     tables = set(source_tables(src))
     ids = set(state_ids(src, 'students')) | set(state_ids(src, 'teachers'))
     for table, column in STUDENT_ID_COLUMNS + TEACHER_ID_COLUMNS:
@@ -361,6 +522,7 @@ def check_ids(src):
     if bad:
         shapes = '; '.join(f'{shape} x{count}' for shape, count in sorted(bad.items()))
         raise Refused(f'Идентификаторы людей не непрозрачны (буква = a, цифра = 9): {shapes}. Копия не создана.')
+    return ids
 
 
 # ---- the schema of the copy, made by the application itself
@@ -540,9 +702,13 @@ def child_accounts(path, plan_file, result_file):
     with api.connect() as db:
         for table in ACCOUNT_CLEARED:
             db.execute(f'DELETE FROM {quote(table)}')
+        # The application makes the homework tasks again from the copied journal: the digest each task carries is the one that the
+        # answers of the copy's pupils are compared with, and no hand-made digest can match it.
+        from backend import homework_queue_projection
+        db.execute("DELETE FROM journal_projection_versions WHERE name='homework_queue'")
+        homework_queue_projection.tables(db)
     about = 'Учётные записи обезличенной копии. Пароли случайные и действуют только в этой копии. Не публикуйте этот файл.'
-    names = dict(admin='администратор', teacher='учитель', parent='родитель', pupil='ученик')
-    Path(result_file).write_text(json.dumps(dict(about=about, workspace=space, accounts=[dict(role=names[role], login=LOGINS[role], password=passwords[role], name=people[role])
+    Path(result_file).write_text(json.dumps(dict(about=about, workspace=space, accounts=[dict(role=role, login=LOGINS[role], password=passwords[role], name=people[role])
                                                                                        for role in ROLES]), ensure_ascii=False, indent=1), encoding='utf-8')
 
 
@@ -605,32 +771,37 @@ def strings_of(node, out):
         out.append(node)
 
 
-def decoded(text):
-    """The text of a cell; the strings of a JSON document, one after another."""
+def leaves(text):
+    """The text of a cell; the strings (and keys) of a JSON document, one by one."""
     if text[:1] in ('{', '['):
         try:
             node = json.loads(text)
         except ValueError:
-            return text
+            return [text]
         found = []
         strings_of(node, found)
-        return '\x00'.join(found)
-    return text
+        return found
+    return [text]
 
 
 class Gate:
-    def __init__(self, registry, pseudonyms):
-        self.registry, self.issued = registry, NameIndex(pseudonyms.used)
+    def __init__(self, registry, pseudonyms, ids):
+        self.registry, self.issued, self.ids = registry, NameIndex(pseudonyms.used), ids
         self.cache, self.cells = {}, 0
 
     def kinds(self, text, technical):
-        """What is wrong with a text: real-name tokens, an e-mail address, a phone-like run of digits."""
+        """What is wrong with a text: real-name tokens, an e-mail address, a phone-like run of digits, an id of a real person."""
         key = (text, technical)
         known = self.cache.get(key)
         if known is None:
-            rest = '\x00'.join(p for p, is_name in self.issued.split(decoded(text)) if not is_name)
-            known = tuple(kind for kind, bad in [('name', self.registry.hit(rest)), ('email', has_email(rest)),
-                                                 ('phone', not technical and has_phone(rest))] if bad)
+            found = set()
+            for leaf in leaves(text):
+                rest = '\x00'.join(p for p, is_name in self.issued.split(leaf) if not is_name)
+                for kind, bad in [('name', self.registry.hit(rest) or self.registry.has_short(rest)), ('email', has_email(rest)),
+                                  ('phone', not technical and has_phone(rest)), ('id', self.ids.found(leaf))]:
+                    if bad:
+                        found.add(kind)
+            known = tuple(sorted(found))
             if len(text) <= 300 and len(self.cache) < 300000:
                 self.cache[key] = known
         return known
@@ -641,7 +812,7 @@ class Gate:
                 findings[('(file)', 'free pages', 'leftover')] += 1
             for table in source_tables(db):
                 columns = table_columns(db, table)
-                allowed = table in policy.tables or table in ACCOUNT_TABLES
+                allowed = table in policy.tables or table in policy.account_tables
                 if not allowed and db.execute(f'SELECT 1 FROM {quote(table)} LIMIT 1').fetchone():
                     findings[(table, '(table)', 'not allow-listed')] += 1
                     continue
@@ -665,8 +836,8 @@ class Gate:
             findings[(path.name, '(file)', kind)] += 1
 
 
-def run_gate(output, registry, pseudonyms, policy):
-    gate, findings = Gate(registry, pseudonyms), Counter()
+def run_gate(output, registry, pseudonyms, policy, ids):
+    gate, findings = Gate(registry, pseudonyms, ids), Counter()
     gate.database(output / DATABASE, policy, findings)
     for path in sorted(output.iterdir()):
         if path.name in (DATABASE, 'README.txt', UNVERIFIED):
@@ -707,8 +878,37 @@ def snapshot(source, target):
         raise Refused('Источник не удалось прочитать как базу SQLite.') from None
 
 
+LEFT = []  # folders that could not be removed after a failure (a file held open by another program, for instance)
+
+
+def erase(folder):
+    """Removes a folder. The marker goes last: a folder that could not be emptied still says that it must not be shared."""
+    for _ in range(6):
+        if not folder.exists():
+            return
+        failed = False
+        for path in sorted(folder.rglob('*'), key=lambda p: -len(p.parts)):
+            if path.name == UNVERIFIED and path.parent == folder:
+                continue
+            try:
+                path.rmdir() if path.is_dir() and not path.is_symlink() else path.unlink()
+            except OSError:
+                failed = True
+        if not failed:
+            try:
+                (folder / UNVERIFIED).unlink(missing_ok=True)
+                folder.rmdir()
+            except OSError:
+                failed = True
+        if not failed:
+            return
+        time.sleep(0.5)
+    LEFT.append(folder)
+
+
 def run(source, output, policy=POLICY, log=print):
-    source, output = Path(source), Path(output)
+    # Absolute paths: the child processes start in the repository and must mean the same files.
+    source, output = Path(source).resolve(), Path(output).resolve()
     check_paths(source, output)
     work = Path(tempfile.mkdtemp(prefix='atlas-anonymise-'))
     created = False
@@ -718,7 +918,7 @@ def run(source, output, policy=POLICY, log=print):
         with closing(sqlite3.connect(snap.as_uri() + '?mode=ro', uri=True)) as src:
             src.execute('PRAGMA query_only=ON')
             registry = build_registry(src)
-            check_ids(src)
+            ids = Ids(check_ids(src))
             run_child('schema', fresh)
             check_rules(policy, columns_of(fresh, policy.tables), {t: table_columns(src, t) for t in source_tables(src) if t in policy.tables})
             output.mkdir(parents=True, exist_ok=False)
@@ -728,7 +928,7 @@ def run(source, output, policy=POLICY, log=print):
             target = output / DATABASE
             shutil.copyfile(fresh, target)
             pseudonyms = Pseudonyms(registry)
-            transformer = Transformer(registry, pseudonyms, policy)
+            transformer = Transformer(registry, pseudonyms, policy, ids)
             report = dict(format=1, tables={}, missingInSource=[], notCopied={}, hiddenCells={})
             with closing(sqlite3.connect(target)) as out:
                 out.execute('PRAGMA journal_mode=MEMORY')
@@ -743,17 +943,17 @@ def run(source, output, policy=POLICY, log=print):
         report['hiddenCells'] = dict(sorted(transformer.hidden.items()))
         report['pseudonymsIssued'] = len(pseudonyms.used)
         (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
-        cells = run_gate(output, registry, pseudonyms, policy)
+        cells = run_gate(output, registry, pseudonyms, policy, ids)
         (output / UNVERIFIED).unlink()
         report['gate'] = dict(cellsChecked=cells, findings=0)
         (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
         return report
     except BaseException:
         if created:
-            shutil.rmtree(output, ignore_errors=True)
+            erase(output)
         raise
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        erase(work)
 
 
 def describe(report):
@@ -772,14 +972,12 @@ def describe(report):
     return '\n'.join(lines)
 
 
-def main(argv=None, policy=POLICY):
-    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--database', type=Path, required=True, help='the school database (only read)')
-    parser.add_argument('--output', type=Path, help='a NEW directory outside the repository')
-    parser.add_argument('--child', choices=['schema', 'accounts'], help=argparse.SUPPRESS)
-    parser.add_argument('--plan', type=Path, help=argparse.SUPPRESS)
-    parser.add_argument('--result', type=Path, help=argparse.SUPPRESS)
-    args = parser.parse_args(argv)
+def leftovers():
+    """Folders of earlier runs that were stopped hard: each holds a full snapshot of a school database."""
+    return sorted(Path(tempfile.gettempdir()).glob('atlas-anonymise-*'))
+
+
+def attempt(args, parser, policy):
     try:
         if args.child:
             child_schema(args.database) if args.child == 'schema' else child_accounts(args.database, args.plan, args.result)
@@ -795,14 +993,35 @@ def main(argv=None, policy=POLICY):
         print(f'{STOP}{stop}{CHILD_MARK if args.child else ""}', file=sys.stderr)
         return 2
     except GateFailed as failed:
-        print('Проверка не пройдена, результат удалён. Найдено (таблица, столбец, вид: число):', file=sys.stderr)
+        print('Проверка не пройдена. Найдено (таблица, столбец, вид: число):', file=sys.stderr)
         for (table, column, kind), count in sorted(failed.findings.items()):
             print(f'  {table}.{column}: {kind} x{count}', file=sys.stderr)
+        print('Результат удалён.' if not LEFT else 'Результат удалить не удалось, см. ниже.', file=sys.stderr)
         return 3
     except Exception as error:
         # Never the message: it may quote a value of the school.
-        print(f'Остановлено: непредвиденная ошибка ({type(error).__name__}). Результат удалён.', file=sys.stderr)
+        print(f'Остановлено: непредвиденная ошибка ({type(error).__name__}).' + (' Результат удалён.' if not LEFT else ''), file=sys.stderr)
         return 4
+
+
+def main(argv=None, policy=POLICY):
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('--database', type=Path, required=True, help='the school database (only read)')
+    parser.add_argument('--output', type=Path, help='a NEW directory outside the repository')
+    parser.add_argument('--child', choices=['schema', 'accounts'], help=argparse.SUPPRESS)
+    parser.add_argument('--plan', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--result', type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    LEFT.clear()
+    if not args.child and (old := leftovers()):
+        print('Внимание: в папке временных файлов остались папки прерванных запусков, в каждой полный снимок школьной базы. Удалите их вручную: '
+              + ', '.join(map(str, old)), file=sys.stderr)
+    code = attempt(args, parser, policy)
+    if LEFT:
+        print('ВНИМАНИЕ: не удалось удалить: ' + ', '.join(map(str, LEFT)) + '. В них могут быть настоящие данные школы или непроверенная копия. '
+              'Закройте программы, которые держат файлы, удалите эти папки вручную и никому их не передавайте.', file=sys.stderr)
+        return 5
+    return code
 
 
 if __name__ == '__main__':

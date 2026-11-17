@@ -37,7 +37,7 @@ SQLite и OR-Tools. Цель — функции aSc Timetables и EduPage. Ст�
 
 Если человеку передали обезличенную копию школы (папка с `timetable.db`, `accounts.json` и
 `README.txt`, см. `ANONYMISED_COPY.md`), откройте её так: положите `timetable.db` вне клона, задайте
-`$env:TIMETABLE_DB = '<путь>	imetable.db'` и запустите `./start.ps1` (Linux/macOS:
+`$env:TIMETABLE_DB = '<путь>\timetable.db'` и запустите `./start.ps1` (Linux/macOS:
 `TIMETABLE_DB=<путь> python -m uvicorn backend.api:app --host 127.0.0.1 --port 8000`), вход
 берите из `accounts.json`. Копия обезличена, но не анонимна: не добавляйте её файлы и пароли в Git, PR, образы и журналы CI.
 
