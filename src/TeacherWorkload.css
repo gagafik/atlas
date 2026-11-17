@@ -59,6 +59,10 @@
   flex-wrap: wrap;
   margin: 14px 0;
 }
+/* The body of the dialog is the container of the narrow-screen rules: the dialog itself is not. */
+.workload-body {
+  container: workload / inline-size;
+}
 .workload-controls label {
   flex: 1 1 150px;
 }
@@ -81,82 +85,343 @@
   background: var(--danger-tint);
   color: var(--danger);
 }
+.workload-help {
+  margin: 0 0 12px;
+}
+.workload-help summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+}
+.workload-help p {
+  margin: 8px 0 0;
+}
+/* The head of the report: the heading with the way back on the left, the export and print on the right. */
+.workload-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+.workload-head .workload-actions {
+  margin: 0;
+  align-items: center;
+}
+.workload-actions label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workload-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.workload-title h3 {
+  margin: 0;
+  min-width: 0;
+}
+.workload-title h3:focus {
+  outline: 0;
+}
+.workload-tabs {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+.teacher-workload .segmented button {
+  min-height: 32px;
+  font-size: 13px;
+}
+.teacher-workload .segmented button span {
+  font-size: 11px;
+}
+.workload-lessons-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.workload-lessons-bar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.workload-lessons-bar select {
+  min-height: 32px;
+  padding: 4px 8px;
+}
+.workload-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.teacher-workload .workload-chip,
+.teacher-workload .workload-row-btn {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.teacher-workload .workload-chip {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+.teacher-workload .workload-chip.selected {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--text-on-primary);
+}
+.workload-teacher {
+  margin: 0 0 12px;
+}
+/* The figures: one row of eight cells when the body is wide, four columns in the middle, two on a phone. */
 .workload-figures {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px 16px;
-  margin: 12px 0;
-  padding: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 8px 0;
+  padding: 10px 12px;
   background: var(--accent-tint);
   border-radius: var(--radius);
 }
 .workload-figures dt {
   font-size: 12px;
+  line-height: 15px;
   color: var(--text-muted);
 }
 .workload-figures dd {
   margin: 0;
-  font-weight: 700;
-  font-size: 20px;
+  font-weight: var(--weight-bold);
+  font-size: 18px;
+  line-height: 24px;
 }
 .workload-figures small {
   display: block;
-  font-weight: 400;
+  font-size: 12px;
+  line-height: 15px;
+  font-weight: var(--weight-regular);
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
-.workload-table {
-  overflow-x: auto;
-  margin: 12px 0;
+@container workload (min-width: 520px) {
+  .workload-figures {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
-.workload-table table {
+@container workload (min-width: 900px) {
+  .workload-figures {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+/* A name keeps to one line where there is room: the column headings wrap instead. */
+@container workload (min-width: 620px) {
+  .workload-table tbody th,
+  .teacher-workload .workload-table .workload-name {
+    white-space: nowrap;
+  }
+}
+/* position: a visually hidden header label inside must stay in this scroll box, not widen the dialog. */
+.workload-table,
+.workload-lessons {
+  position: relative;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.workload-table table,
+.workload-lessons table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
 }
 .workload-table th,
-.workload-table td {
-  padding: 8px 10px;
+.workload-table td,
+.workload-lessons th,
+.workload-lessons td {
+  padding: 6px 10px;
   text-align: left;
   border-bottom: 1px solid var(--line);
-  vertical-align: top;
+  vertical-align: middle;
 }
-.workload-table thead th {
+.workload-table thead th,
+.workload-lessons thead th {
   font-size: 13px;
+  line-height: 18px;
   color: var(--text-muted);
+  background: var(--surface-sunken);
+  vertical-align: bottom;
 }
 .workload-table tfoot th,
 .workload-table tfoot td {
-  font-weight: 700;
+  font-weight: var(--weight-bold);
 }
-.workload-name {
+/* The first column stays in view while the numbers scroll. */
+.workload-table th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.workload-table thead th:first-child {
+  background: var(--surface-sunken);
+}
+.workload-table tbody tr:hover > * {
+  background: var(--accent-tint);
+}
+.workload-c-actions {
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+}
+.teacher-workload .workload-name {
   border: 0;
   background: none;
   padding: 0;
   min-height: 0;
   font: inherit;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   color: var(--accent-strong);
   text-align: left;
   text-decoration: underline;
 }
-.workload-lessons {
-  display: grid;
-  gap: 12px;
-  margin: 12px 0;
+.workload-lessons tbody tr:hover > td {
+  background: var(--accent-tint);
 }
-.workload-lessons ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.workload-lessons tr.workload-day-start > td {
+  border-top: var(--line-width-strong) solid var(--line-strong);
 }
-.workload-lessons li {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+.workload-c-date,
+.workload-c-time,
+.workload-c-outcome {
+  white-space: nowrap;
+}
+.workload-c-date {
+  font-weight: var(--weight-semibold);
+}
+.workload-c-subject,
+.workload-c-notes {
   overflow-wrap: anywhere;
 }
-.workload-lessons small {
-  display: block;
+.workload-c-notes {
+  font-size: 13px;
   color: var(--text-muted);
+}
+.workload-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 16px;
+  vertical-align: middle;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.workload-badge[data-tone="positive"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.workload-badge[data-tone="neutral"] {
+  background: var(--info-tint);
+  color: var(--info);
+}
+.workload-badge[data-tone="danger"] {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+/* Which week and filter the printed rows are: the sheet shows the line, the screen has the select and the chips. */
+.workload-printonly {
+  display: none;
+}
+.workload-more {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+/* Under 620 px of its own width a lesson row becomes a block; the numeric tables scroll inside their wrapper. */
+@container workload (max-width: 619px) {
+  .workload-lessons table,
+  .workload-lessons tbody {
+    display: block;
+  }
+  .workload-lessons thead {
+    display: none;
+  }
+  .workload-lessons tr.workload-lesson {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "date time outcome"
+      "group group subject"
+      "notes notes notes";
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .workload-lessons tr.workload-day-start {
+    border-top: var(--line-width-strong) solid var(--line-strong);
+  }
+  .workload-lessons tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .workload-lessons tr.workload-lesson > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+  }
+  .workload-c-date {
+    grid-area: date;
+  }
+  .workload-c-outcome {
+    grid-area: outcome;
+    text-align: right;
+  }
+  .workload-c-time {
+    grid-area: time;
+  }
+  .workload-c-group {
+    grid-area: group;
+    font-weight: var(--weight-semibold);
+    overflow-wrap: anywhere;
+  }
+  .workload-c-subject {
+    grid-area: subject;
+  }
+  .workload-c-notes {
+    grid-area: notes;
+  }
+  .workload-c-notes:empty {
+    display: none;
+  }
+  .workload-lessons-bar,
+  .workload-lessons-bar label {
+    width: 100%;
+  }
+  .workload-lessons-bar label {
+    display: grid;
+  }
+  .workload-lessons-bar select,
+  .teacher-workload .workload-chip,
+  .teacher-workload .workload-row-btn,
+  .teacher-workload .segmented button,
+  .teacher-workload .workload-name {
+    min-height: 40px;
+  }
 }
 .teacher-workload :focus-visible {
   outline: 3px solid var(--focus);
@@ -180,8 +445,5 @@
   .workload-presets,
   .workload-actions > * {
     flex: 1 1 140px;
-  }
-  .workload-figures {
-    padding: 12px;
   }
 }

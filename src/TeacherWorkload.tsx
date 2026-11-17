@@ -3,123 +3,41 @@ import { api } from "./api";
 import type { Account } from "./auth";
 import { printNode } from "./printReport";
 import {
-  KINDS,
-  OUTCOMES,
+  LessonsTable,
+  LESSON_PAGE,
+  TeachersTable,
+  WeeksTable,
+  WorkloadFiguresStrip,
+  workloadLessonsId,
+  workloadNameId,
+} from "./WorkloadTables";
+import {
+  LESSON_FILTERS,
   clip,
-  hours,
+  dayLabel,
+  lessonCounts,
+  lessonSelection,
   monthOf,
+  reportWeeks,
   validPeriod,
+  weekLabel,
   weekOf,
   within,
-  type WorkloadFigures,
-  type WorkloadLesson,
+  type LessonFilter,
   type WorkloadOptions,
   type WorkloadReport,
   type WorkloadTeacher,
+  type WorkloadWeek,
 } from "./workloadReport";
 import "./TeacherWorkload.css";
 
 const WORKLOAD_PRINT =
-  "body{font:14px sans-serif;padding:24px;color:#111}h3,h4,p{margin:8px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:4px 8px;text-align:left}button{border:0;background:none;font:inherit;padding:0}dl{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px}dt{font-size:12px;color:#555}dd{margin:0;font-weight:bold}small{display:block;font-weight:normal}";
+  "body{font:14px sans-serif;padding:24px;color:#111}h3,h4,p{margin:8px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:4px 8px;text-align:left}thead{display:table-header-group}tr{break-inside:avoid}button{border:0;background:none;font:inherit;padding:0}dl{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 16px}dt{font-size:12px;color:#555}dd{margin:0;font-weight:bold}small{display:block;font-weight:normal}.workload-noprint{display:none}";
 const VIEWS = [
   ["teachers", "По учителям"],
   ["weeks", "По неделям"],
   ["lessons", "По урокам"],
 ] as const;
-const dayLabel = (iso: string) =>
-  `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
-const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
-
-function Tiles({ t }: { t: WorkloadFigures }) {
-  return (
-    <dl className="workload-figures">
-      <div>
-        <dt>По расписанию на дату</dt>
-        <dd>{t.plannedToDate}</dd>
-      </div>
-      <div>
-        <dt>Проведено уроков</dt>
-        <dd>{t.taught}</dd>
-        <small>
-          свои {t.own}, замены {t.substitutions}, дополнительные {t.extra}, по
-          журналу вне расписания {t.journalOnly}
-        </small>
-      </div>
-      <div>
-        <dt>Часы по звонкам</dt>
-        <dd>{hours(t.minutes)}</dd>
-        <small>{t.minutes} мин</small>
-      </div>
-      <div>
-        <dt>Разница с расписанием</dt>
-        <dd>{signed(t.delta)}</dd>
-      </div>
-      <div>
-        <dt>Пропущено</dt>
-        <dd>{t.missed}</dd>
-        <small>
-          при отсутствии {t.missedAbsent}, без замены {t.uncovered}, отменено{" "}
-          {t.cancelled}
-        </small>
-      </div>
-      <div>
-        <dt>Предстоит</dt>
-        <dd>{t.upcoming}</dd>
-      </div>
-      <div>
-        <dt>Подтверждено журналом</dt>
-        <dd>{t.confirmed}</dd>
-        <small>расхождений с журналом: {t.differs}</small>
-      </div>
-      <div>
-        <dt>Присоединено к другим урокам</dt>
-        <dd>{t.merged}</dd>
-        <small>часов не добавляет</small>
-      </div>
-    </dl>
-  );
-}
-
-function Lessons({ items }: { items: WorkloadLesson[] }) {
-  const days = items.reduce<[string, WorkloadLesson[]][]>((all, lesson) => {
-    const last = all[all.length - 1];
-    if (last && last[0] === lesson.date) last[1].push(lesson);
-    else all.push([lesson.date, [lesson]]);
-    return all;
-  }, []);
-  return (
-    <div className="workload-lessons">
-      {days.map(([date, lessons]) => (
-        <section key={date}>
-          <h4>{dayLabel(date)}</h4>
-          <ul>
-            {lessons.map((l, i) => (
-              <li key={i}>
-                <strong>
-                  {l.start}–{l.end}
-                </strong>{" "}
-                {l.group} · {l.subject}
-                <small>
-                  {OUTCOMES[l.outcome] ?? l.outcome}
-                  {l.kind && l.outcome === "taught"
-                    ? ` · ${KINDS[l.kind] ?? l.kind}`
-                    : ""}
-                  {l.outcome === "taught" && !l.confirmed
-                    ? " · не подтверждён журналом"
-                    : ""}
-                  {l.differs ? " · расходится с расписанием" : ""}
-                  {l.absent && l.outcome !== "taught"
-                    ? " · учитель отсутствует"
-                    : ""}
-                </small>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-    </div>
-  );
-}
 
 // Lessons taught by date: the timetable of that day, substitutions and cancellations, confirmed by the published journal.
 export default function TeacherWorkload({
@@ -153,11 +71,24 @@ export default function TeacherWorkload({
     [teacherId, setTeacherId] = useState(""),
     [former, setFormer] = useState<{ id: string; name: string } | null>(null),
     [view, setView] = useState<string>("teachers");
+  // The tab of the detailed report, the week and the filter of the lessons tab, and how many rows each teacher shows.
+  const [tab, setTab] = useState<"weeks" | "lessons">("weeks"),
+    [weekStart, setWeekStart] = useState(""),
+    [filter, setFilter] = useState<LessonFilter>("all"),
+    [limits, setLimits] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const dialog = useRef<HTMLDialogElement>(null),
-    printable = useRef<HTMLDivElement>(null);
+    printable = useRef<HTMLDivElement>(null),
+    headingRef = useRef<HTMLHeadingElement>(null),
+    // Where the focus goes when the report that was asked for has loaded: the heading or the id of a button.
+    focusAfter = useRef<string | null>(null),
+    // The «Уроки» tab stays mounted when the week button of the weeks table goes away, so the focus moves there.
+    lessonsTab = useRef<HTMLButtonElement>(null),
+    focusTab = useRef(false),
+    // The lessons block and the index of the first row that «Показать ещё» revealed.
+    focusRow = useRef<{ id: string; index: number } | null>(null);
   const admin = user.role === "admin";
   useEffect(() => {
     dialog.current?.showModal();
@@ -221,6 +152,48 @@ export default function TeacherWorkload({
       live = false;
     };
   }, [options, counted, start, end, teacherId, workspace]);
+  // Another workspace or teacher starts the report over; a new period keeps the tab.
+  useEffect(() => {
+    setTab("weeks");
+    setWeekStart("");
+    setFilter("all");
+  }, [workspace, teacherId]);
+  // A week that the new report does not have returns the select to the whole period; the rows shown start over.
+  useEffect(() => {
+    if (
+      report &&
+      weekStart &&
+      !reportWeeks(report.teachers).some((w) => w.start === weekStart)
+    )
+      setWeekStart("");
+  }, [report, weekStart]);
+  useEffect(() => {
+    setLimits({});
+  }, [report, weekStart, filter]);
+  // After a teacher is opened or closed the focus follows the page, once the new report is there.
+  useEffect(() => {
+    const target = focusAfter.current;
+    if (!target || loading) return;
+    focusAfter.current = null;
+    if (!report) return;
+    // «Все мои» of a teacher has no table of names, so a missing button falls back to the heading.
+    const el = target === "heading" ? null : document.getElementById(target);
+    (el ?? headingRef.current)?.focus();
+  }, [report, loading]);
+  useEffect(() => {
+    if (!focusTab.current || tab !== "lessons") return;
+    focusTab.current = false;
+    lessonsTab.current?.focus();
+  }, [tab]);
+  useEffect(() => {
+    const row = focusRow.current;
+    if (!row) return;
+    focusRow.current = null;
+    document
+      .getElementById(row.id)
+      ?.querySelectorAll<HTMLElement>("tbody tr")
+      [row.index]?.focus();
+  }, [limits]);
   const preset = (range: { start: string; end: string }) => {
     const found = options ? within(range, options) : range;
     if (!found) {
@@ -243,12 +216,34 @@ export default function TeacherWorkload({
   const exportUrl = `/api/staff-time/workload/export?workspace=${encodeURIComponent(workspace)}&start=${start}&end=${end}&teacherId=${encodeURIComponent(teacherId)}&view=${view}`;
   // A teacher who has left the roster still has a row for the periods he taught in; the select offers him while he is open.
   const pick = (t: WorkloadTeacher) => {
+    focusAfter.current = "heading";
     setTeacherId(t.teacherId);
     setFormer(
       options?.teachers.some((x) => x.id === t.teacherId)
         ? null
         : { id: t.teacherId, name: t.name },
     );
+  };
+  const back = () => {
+    focusAfter.current = workloadNameId(teacherId);
+    setTeacherId("");
+    setFormer(null);
+  };
+  const weeks = report ? reportWeeks(report.teachers) : [],
+    week = weeks.find((w) => w.start === weekStart) ?? null,
+    lessonsOf = report?.teachers.flatMap((t) => t.lessons ?? []) ?? [],
+    counts = lessonCounts(lessonsOf, week),
+    selection =
+      detailed && tab === "lessons" ? lessonSelection(week, filter) : "",
+    many = (report?.teachers.length ?? 0) > 1,
+    canBack =
+      !!teacherId &&
+      !!options &&
+      (options.canSeeAll || options.teachers.length > 1);
+  const openWeek = (w: WorkloadWeek) => {
+    focusTab.current = true;
+    setWeekStart(w.start);
+    setTab("lessons");
   };
   return (
     <dialog
@@ -267,269 +262,287 @@ export default function TeacherWorkload({
         </div>
         <button onClick={onClose}>Закрыть</button>
       </header>
-      {error && (
-        <p role="alert" className="workload-error">
-          {error}
-        </p>
-      )}
-      {notice && <p role="status">{notice}</p>}
-      <div className="workload-controls">
-        {spaces.length > 1 && (
-          <label>
-            Пространство
-            <select
-              value={workspace}
-              onChange={(e) => setWorkspace(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s} value={s}>
-                  {s === "school" ? "Школа" : "Демонстрация"}
-                </option>
-              ))}
-            </select>
-          </label>
+      <div className="workload-body">
+        {error && (
+          <p role="alert" className="workload-error">
+            {error}
+          </p>
         )}
-        {options && (options.canSeeAll || options.teachers.length > 1) && (
-          <label>
-            Учитель
-            <select
-              value={teacherId}
-              onChange={(e) => {
-                setTeacherId(e.target.value);
-                if (e.target.value !== former?.id) setFormer(null);
-              }}
-            >
-              <option value="">
-                {options.canSeeAll ? "Все учителя" : "Все мои"}
-              </option>
-              {options.teachers.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-              {former && (
-                <option value={former.id}>{former.name} (вне состава)</option>
-              )}
-            </select>
-          </label>
-        )}
-        {options && !!options.periods.length && (
-          <label>
-            Учебный период
-            <select
-              value={matched}
-              onChange={(e) => {
-                const found = options.periods.find(
-                  (p) => p.id === e.target.value,
-                );
-                if (found) preset(found);
-              }}
-            >
-              <option value="">Свой период</option>
-              {options.periods.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label>
-          С
-          <input
-            type="date"
-            value={start}
-            min={options?.yearStart}
-            max={options?.yearEnd}
-            onChange={(e) => setStart(e.target.value)}
-          />
-        </label>
-        <label>
-          По
-          <input
-            type="date"
-            value={end}
-            min={options?.yearStart}
-            max={options?.yearEnd}
-            onChange={(e) => setEnd(e.target.value)}
-          />
-        </label>
-        <div className="workload-presets">
-          <button
-            disabled={!options}
-            onClick={() => options && preset(weekOf(options.today))}
-          >
-            Эта неделя
-          </button>
-          <button
-            disabled={!options}
-            onClick={() => options && preset(monthOf(options.today))}
-          >
-            Этот месяц
-          </button>
-        </div>
-      </div>
-      <p className="muted">
-        Считается по дате: расписание того дня, замены и отмены. В «проведено»
-        входят только завершившиеся уроки; публикация журнала, сделанная с начала
-        урока, подтверждает его и показывает, кто его провёл (тема, добавленная
-        заранее, не подтверждает). Уроки без такой публикации считаются по
-        расписанию и помечены как неподтверждённые. Урок учителя с внесённым
-        отсутствием и без замены считается «Без замены» и «Пропущено» сразу, как
-        только отсутствие внесено, в том числе на будущие даты, пока не
-        назначена замена.
-      </p>
-      {options && !counted && (
-        <p role="status">
-          Укажите обе даты периода: конец не должен быть раньше начала.
-        </p>
-      )}
-      {loading && <p role="status">Считаю нагрузку…</p>}
-      {report && counted && !loading && (
-        <>
-          <div className="workload-actions">
+        {notice && <p role="status">{notice}</p>}
+        <div className="workload-controls">
+          {spaces.length > 1 && (
             <label>
-              Выгрузка
-              <select value={view} onChange={(e) => setView(e.target.value)}>
-                {VIEWS.map(([id, label]) => (
-                  <option key={id} value={id}>
-                    {label}
+              Пространство
+              <select
+                value={workspace}
+                onChange={(e) => setWorkspace(e.target.value)}
+              >
+                {spaces.map((s) => (
+                  <option key={s} value={s}>
+                    {s === "school" ? "Школа" : "Демонстрация"}
                   </option>
                 ))}
               </select>
             </label>
-            <a href={exportUrl} download>
-              Скачать CSV
-            </a>
+          )}
+          {options && (options.canSeeAll || options.teachers.length > 1) && (
+            <label>
+              Учитель
+              <select
+                value={teacherId}
+                onChange={(e) => {
+                  focusAfter.current = null;
+                  setTeacherId(e.target.value);
+                  if (e.target.value !== former?.id) setFormer(null);
+                }}
+              >
+                <option value="">
+                  {options.canSeeAll ? "Все учителя" : "Все мои"}
+                </option>
+                {options.teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+                {former && (
+                  <option value={former.id}>{former.name} (вне состава)</option>
+                )}
+              </select>
+            </label>
+          )}
+          {options && !!options.periods.length && (
+            <label>
+              Учебный период
+              <select
+                value={matched}
+                onChange={(e) => {
+                  const found = options.periods.find(
+                    (p) => p.id === e.target.value,
+                  );
+                  if (found) preset(found);
+                }}
+              >
+                <option value="">Свой период</option>
+                {options.periods.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            С
+            <input
+              type="date"
+              value={start}
+              min={options?.yearStart}
+              max={options?.yearEnd}
+              onChange={(e) => setStart(e.target.value)}
+            />
+          </label>
+          <label>
+            По
+            <input
+              type="date"
+              value={end}
+              min={options?.yearStart}
+              max={options?.yearEnd}
+              onChange={(e) => setEnd(e.target.value)}
+            />
+          </label>
+          <div className="workload-presets">
             <button
-              onClick={() => {
-                setNotice(
-                  printNode(
-                    printable.current,
-                    `${heading} ${report.start}`,
-                    WORKLOAD_PRINT,
-                  )
-                    ? ""
-                    : "Разрешите открытие окна для печати.",
-                );
-              }}
+              disabled={!options}
+              onClick={() => options && preset(weekOf(options.today))}
             >
-              Печать
+              Эта неделя
+            </button>
+            <button
+              disabled={!options}
+              onClick={() => options && preset(monthOf(options.today))}
+            >
+              Этот месяц
             </button>
           </div>
-          {!report.teachers.length && <p>За период нет уроков и замен.</p>}
+        </div>
+        <details className="workload-help">
+          <summary>Как считается</summary>
+          <p className="muted">
+            Считается по дате: расписание того дня, замены и отмены. В
+            «проведено» входят только завершившиеся уроки; публикация журнала,
+            сделанная с начала урока, подтверждает его и показывает, кто его
+            провёл (тема, добавленная заранее, не подтверждает). Уроки без такой
+            публикации считаются по расписанию и помечены как неподтверждённые.
+            Урок учителя с внесённым отсутствием и без замены считается «Без
+            замены» и «Пропущено» сразу, как только отсутствие внесено, в том
+            числе на будущие даты, пока не назначена замена.
+          </p>
+        </details>
+        {options && !counted && (
+          <p role="status">
+            Укажите обе даты периода: конец не должен быть раньше начала.
+          </p>
+        )}
+        {loading && <p role="status">Считаю нагрузку…</p>}
+        {report && counted && !loading && (
           <div ref={printable}>
-            <h3>
-              {heading} · {dayLabel(report.start)} — {dayLabel(report.end)}
-            </h3>
-            {!detailed && !!report.teachers.length && (
-              <div className="workload-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Учитель</th>
-                      <th>По расписанию на дату</th>
-                      <th>Проведено</th>
-                      <th>Часы</th>
-                      <th>Замены</th>
-                      <th>Пропущено</th>
-                      <th>Без замены</th>
-                      <th>Подтверждено журналом</th>
-                      <th>Предстоит</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.teachers.map((t) => (
-                      <tr key={t.teacherId}>
-                        <th scope="row">
-                          <button
-                            className="workload-name"
-                            onClick={() => pick(t)}
-                          >
-                            {t.name}
-                          </button>
-                        </th>
-                        <td>{t.plannedToDate}</td>
-                        <td>{t.taught}</td>
-                        <td>{hours(t.minutes)}</td>
-                        <td>{t.substitutions}</td>
-                        <td>{t.missed}</td>
-                        <td>{t.uncovered}</td>
-                        <td>{t.confirmed}</td>
-                        <td>{t.upcoming}</td>
-                      </tr>
+            <div className="workload-head">
+              <div className="workload-title">
+                {canBack && (
+                  <button
+                    className="workload-back workload-noprint"
+                    onClick={back}
+                  >
+                    {options?.canSeeAll ? "← Все учителя" : "← Все мои"}
+                  </button>
+                )}
+                <h3 ref={headingRef} tabIndex={-1}>
+                  {heading} · {dayLabel(report.start)} — {dayLabel(report.end)}
+                </h3>
+              </div>
+              <div className="workload-actions workload-noprint">
+                <label>
+                  Выгрузка
+                  <select
+                    value={view}
+                    onChange={(e) => setView(e.target.value)}
+                  >
+                    {VIEWS.map(([id, label]) => (
+                      <option key={id} value={id}>
+                        {label}
+                      </option>
                     ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <th scope="row">Итого</th>
-                      <td>{report.totals.plannedToDate}</td>
-                      <td>{report.totals.taught}</td>
-                      <td>{hours(report.totals.minutes)}</td>
-                      <td>{report.totals.substitutions}</td>
-                      <td>{report.totals.missed}</td>
-                      <td>{report.totals.uncovered}</td>
-                      <td>{report.totals.confirmed}</td>
-                      <td>{report.totals.upcoming}</td>
-                    </tr>
-                  </tfoot>
-                </table>
+                  </select>
+                </label>
+                <a href={exportUrl} download>
+                  Скачать CSV
+                </a>
+                <button
+                  onClick={() => {
+                    setNotice(
+                      printNode(
+                        printable.current,
+                        `${heading} ${report.start}`,
+                        WORKLOAD_PRINT,
+                      )
+                        ? ""
+                        : "Разрешите открытие окна для печати.",
+                    );
+                  }}
+                >
+                  Печать
+                </button>
+              </div>
+            </div>
+            {selection && <p className="workload-printonly">{selection}</p>}
+            {!report.teachers.length && <p>За период нет уроков и замен.</p>}
+            {!detailed && !!report.teachers.length && (
+              <TeachersTable
+                teachers={report.teachers}
+                totals={report.totals}
+                onPick={pick}
+              />
+            )}
+            {detailed && (
+              <div className="workload-tabs workload-noprint">
+                <div className="segmented" role="group" aria-label="Вид отчёта">
+                  <button
+                    type="button"
+                    className={tab === "weeks" ? "selected" : ""}
+                    aria-pressed={tab === "weeks"}
+                    onClick={() => setTab("weeks")}
+                  >
+                    По неделям
+                  </button>
+                  <button
+                    ref={lessonsTab}
+                    type="button"
+                    className={tab === "lessons" ? "selected" : ""}
+                    aria-pressed={tab === "lessons"}
+                    onClick={() => setTab("lessons")}
+                  >
+                    Уроки <span>{lessonsOf.length}</span>
+                  </button>
+                </div>
+                {tab === "lessons" && (
+                  <div className="workload-lessons-bar">
+                    <label>
+                      Неделя
+                      <select
+                        value={weekStart}
+                        onChange={(e) => setWeekStart(e.target.value)}
+                      >
+                        <option value="">Весь период</option>
+                        {weeks.map((w) => (
+                          <option key={w.start} value={w.start}>
+                            {weekLabel(w)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div
+                      className="workload-chips"
+                      role="group"
+                      aria-label="Итог урока"
+                    >
+                      {LESSON_FILTERS.map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={
+                            filter === id
+                              ? "workload-chip selected"
+                              : "workload-chip"
+                          }
+                          aria-pressed={filter === id}
+                          onClick={() => setFilter(id)}
+                        >
+                          {label} {counts[id]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {detailed &&
               report.teachers.map((t) => (
                 <section key={t.teacherId} className="workload-teacher">
-                  {report.teachers.length > 1 && <h4>{t.name}</h4>}
-                  <Tiles t={t} />
-                  <div className="workload-table">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Неделя</th>
-                          <th>По расписанию на дату</th>
-                          <th>Проведено</th>
-                          <th>Часы</th>
-                          <th>Замены</th>
-                          <th>Пропущено</th>
-                          <th>Предстоит</th>
-                          <th>Разница</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {t.weeks!.map((w) => (
-                          <tr key={w.start}>
-                            <th scope="row">
-                              {dayLabel(w.start).slice(0, 5)} –{" "}
-                              {dayLabel(w.end).slice(0, 5)}
-                            </th>
-                            <td>{w.plannedToDate}</td>
-                            <td>{w.taught}</td>
-                            <td>{hours(w.minutes)}</td>
-                            <td>{w.substitutions}</td>
-                            <td>{w.missed}</td>
-                            <td>{w.upcoming}</td>
-                            <td>{signed(w.delta)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {many && <h4>{t.name}</h4>}
+                  <WorkloadFiguresStrip t={t} />
+                  {tab === "weeks" ? (
+                    <WeeksTable
+                      weeks={t.weeks!}
+                      onOpenWeek={openWeek}
+                      label={`Недели: ${t.name}`}
+                    />
+                  ) : (
+                    <LessonsTable
+                      lessons={t.lessons ?? []}
+                      filter={filter}
+                      week={week}
+                      limit={limits[t.teacherId] ?? LESSON_PAGE}
+                      id={workloadLessonsId(t.teacherId)}
+                      label={`Уроки: ${t.name}`}
+                      onMore={(index) => {
+                        focusRow.current = {
+                          id: workloadLessonsId(t.teacherId),
+                          index,
+                        };
+                        setLimits((all) => ({
+                          ...all,
+                          [t.teacherId]:
+                            (all[t.teacherId] ?? LESSON_PAGE) + LESSON_PAGE,
+                        }));
+                      }}
+                    />
+                  )}
                 </section>
               ))}
           </div>
-          {detailed &&
-            report.teachers.map((t) => (
-              <section key={t.teacherId}>
-                {report.teachers.length > 1 && <h4>{t.name}</h4>}
-                {t.lessons?.length ? (
-                  <Lessons items={t.lessons} />
-                ) : (
-                  <p>За период уроков нет.</p>
-                )}
-              </section>
-            ))}
-        </>
-      )}
+        )}
+      </div>
     </dialog>
   );
 }
