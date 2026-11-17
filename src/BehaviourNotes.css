@@ -206,10 +206,10 @@
 .behaviour .bn-toolbar input[type="date"] {
   width: 128px;
 }
-/* The search takes the room that is left and wraps to a row of its own when the others fill the first. */
+/* The search is the last filter: the selects fill the first row, the search starts the second, next to the buttons. */
 .behaviour .bn-toolbar .bn-search {
-  flex: 1 1 180px;
-  max-width: 320px;
+  flex: 1 1 240px;
+  max-width: 420px;
 }
 .behaviour .bn-toolbar .bn-search input {
   width: 100%;

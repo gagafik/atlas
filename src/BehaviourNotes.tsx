@@ -668,7 +668,9 @@ export default function BehaviourNotes({
       {error && !showForm && <p role="alert">{error}</p>}
       {notice && !showForm && <p role="status">{notice}</p>}
       {busy && <p role="status">Загрузка…</p>}
-      <fieldset disabled={acting}>
+      {/* The records list stays usable while it reloads, so the search field keeps its focus. The other tabs load
+          without a guard against an older answer, so their controls wait for the load as they always did. */}
+      <fieldset disabled={acting || (loading && tab !== "notes")}>
         <div className="bn-controls">
           <label>
             Пространство
@@ -818,23 +820,6 @@ export default function BehaviourNotes({
                   <option value="none">Без предмета</option>
                 </select>
               </label>
-              <label className="bn-search">
-                Поиск
-                <input
-                  type="search"
-                  value={search}
-                  maxLength={100}
-                  placeholder="Текст, ученик, автор"
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== "Enter") return;
-                    e.preventDefault();
-                    const text = searchToApply(search, filters.q);
-                    if (text !== null)
-                      setFilters((f) => (f.q === text ? f : { ...f, q: text }));
-                  }}
-                />
-              </label>
               <label>
                 Вид
                 <select
@@ -863,6 +848,23 @@ export default function BehaviourNotes({
                     </option>
                   ))}
                 </select>
+              </label>
+              <label className="bn-search">
+                Поиск
+                <input
+                  type="search"
+                  value={search}
+                  maxLength={100}
+                  placeholder="Текст, ученик, автор"
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    const text = searchToApply(search, filters.q);
+                    if (text !== null)
+                      setFilters((f) => (f.q === text ? f : { ...f, q: text }));
+                  }}
+                />
               </label>
               <a href={exportHref} download>
                 Скачать CSV
