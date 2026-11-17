@@ -1,40 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { State } from "./types";
 import type { Account } from "./auth";
+import FamilyLinksTable, { familyOpenId } from "./FamilyLinksTable";
+import { leaveDecision, type LoadStatus } from "./accessModel";
+import {
+  activities,
+  countLabel,
+  filterLinks,
+  linkCounts,
+  linkFormDirty,
+  linkKey as keyOf,
+  relationships,
+  savedLinkOutcome,
+  type FamilyLink,
+  type LinkFilter,
+} from "./familyLinksModel";
+import "./FamilyPanel.css";
 
-const relationships: Record<string, string> = {
-  unspecified: "Не уточнено",
-  mother: "Мать",
-  father: "Отец",
-  guardian: "Опекун",
-  representative: "Другой представитель",
-};
-const activities: Record<string, string> = {
-  active: "Доступ действует",
-  scheduled: "Доступ ещё не начался",
-  expired: "Срок доступа истёк",
-  revoked: "Доступ отозван",
-};
-type FamilyLink = {
-  parentId: string;
-  studentId: string;
-  studentName: string;
-  parentName: string;
-  version: number;
-  accountVersion: number;
-  relationship: string;
-  verified: boolean;
-  evidence?: string;
-  reason?: string;
-  startDate: string | null;
-  endDate: string | null;
-  status: string;
-  activity: string;
-  legacy: boolean;
-  accountActive: boolean;
-  workspace?: string;
-};
 type History = {
   id: number;
   created: string;
@@ -43,7 +26,6 @@ type History = {
   version: number;
   document: FamilyLink;
 };
-const keyOf = (r: FamilyLink) => `${r.parentId}:${r.studentId}`;
 
 function LinkSummary({ item }: { item: FamilyLink }) {
   return (
@@ -147,34 +129,56 @@ export function FamilyPortal() {
   );
 }
 
+const leaveQuestion =
+  "В связи есть несохранённые изменения. Уйти без сохранения?";
+const linkFilters: { id: LinkFilter; label: string }[] = [
+  { id: "all", label: "Все" },
+  { id: "unclear", label: "Требуют уточнения" },
+  { id: "inactive", label: "Доступ не действует" },
+];
+
+// The administrator's registry of the parent-pupil links: a table; a link and the picker of a new one open in place of it.
 export default function FamilyPanel({
   workspace,
   state,
   users,
   onChanged,
-  bare,
 }: {
   workspace: string;
   state: State;
   users: Account[];
   onChanged: () => Promise<void>;
-  /** Shown open without the fold, for a tab of its own. */
-  bare?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(!!bare),
-    [query, setQuery] = useState(""),
+  const [query, setQuery] = useState(""),
     [items, setItems] = useState<FamilyLink[]>([]),
     [next, setNext] = useState<number | null>(null),
-    [busy, setBusy] = useState(false),
+    [status, setStatus] = useState<LoadStatus>("loading"),
+    [filter, setFilter] = useState<LinkFilter>("all"),
+    // An action of the administrator (open, save, reload) and a search on the way are counted apart: one ending must not
+    // switch the other's «busy» off.
+    [acting, setActing] = useState(false),
+    [searching, setSearching] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [parentSearch, setParentSearch] = useState(""),
     [studentSearch, setStudentSearch] = useState(""),
     [parent, setParent] = useState(""),
-    [student, setStudent] = useState("");
+    [student, setStudent] = useState(""),
+    [picking, setPicking] = useState(false);
   const [form, setForm] = useState<FamilyLink | null>(null),
+    // The link as it was opened or last saved, to tell whether the form holds changes.
+    [base, setBase] = useState<FamilyLink | null>(null),
     [history, setHistory] = useState<History[]>([]),
     [historyNext, setHistoryNext] = useState<number | null>(null);
+  const [highlightKey, setHighlightKey] = useState<string | null>(null),
+    [focusTick, setFocusTick] = useState(0);
+  // The button that gets the focus when the registry comes back; the link saved while the form was open; a failed load.
+  const returnFocus = useRef<string | null>(null),
+    saved = useRef<FamilyLink | null>(null),
+    loadFailed = useRef(false),
+    searchGeneration = useRef(0),
+    heading = useRef<HTMLHeadingElement>(null);
+  const busy = acting || searching;
   const parents = users
     .filter(
       (u) =>
@@ -190,7 +194,7 @@ export default function FamilyPanel({
     )
     .slice(0, 100);
   const run = async (fn: () => Promise<void>) => {
-    setBusy(true);
+    setActing(true);
     setError("");
     setNotice("");
     try {
@@ -198,22 +202,30 @@ export default function FamilyPanel({
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setActing(false);
     }
   };
   const list = async (offset = 0) => {
+    const generation = searchGeneration.current;
     const r = await api(
       `access/families?${new URLSearchParams({ q: query, offset: String(offset) })}`,
       workspace,
     );
+    // The search was changed while this page was on its way: it belongs to the old query and must not join the new rows.
+    if (generation !== searchGeneration.current) return;
     setItems((old) => (offset ? [...old, ...r.items] : r.items));
     setNext(r.nextOffset);
+    setStatus("ready");
+    loadFailed.current = false;
   };
-  const open = async (p: string, s: string) => {
+  // The heading takes the focus when a link opens; after a save the form stays and so do the focus and the scroll.
+  const open = async (p: string, s: string, moveFocus = true) => {
     const r = await api(`access/families/${p}/${s}`, workspace);
     setForm(r);
+    setBase(r);
     setHistory([]);
     setHistoryNext(null);
+    if (moveFocus) setFocusTick((n) => n + 1);
   };
   const changes = async (before?: number) => {
     if (!form) return;
@@ -225,156 +237,348 @@ export default function FamilyPanel({
     setHistoryNext(r.nextBefore);
   };
   useEffect(() => {
-    if (!expanded) return;
     let live = true;
-    setBusy(true);
+    searchGeneration.current += 1;
+    setSearching(true);
+    // The line of the previous answer does not describe the one that is on its way.
+    setStatus("loading");
     const timer = setTimeout(() => {
       api(`access/families?${new URLSearchParams({ q: query })}`, workspace)
         .then((r) => {
           if (live) {
             setItems(r.items);
             setNext(r.nextOffset);
+            setStatus("ready");
+            // The line about a load that failed goes away with the load that succeeded.
+            if (loadFailed.current) setError("");
+            loadFailed.current = false;
           }
         })
         .catch((e) => {
-          if (live) setError(e.message);
+          if (live) {
+            // Rows of another search are not the answer to this one.
+            setItems([]);
+            setNext(null);
+            setStatus("failed");
+            loadFailed.current = true;
+            setError(e.message);
+          }
         })
         .finally(() => {
-          if (live) setBusy(false);
+          if (live) setSearching(false);
         });
     }, 250);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [expanded, query, workspace]);
-  const body = expanded && (
+  }, [query, workspace]);
+  // The page asks before the link with changes is lost by leaving the screen, the workspace or the program.
+  const dirty = linkFormDirty(form, base);
+  useEffect(() => {
+    if (!dirty) return;
+    const leave = (e: Event) => {
+      if (!window.confirm(leaveQuestion)) e.preventDefault();
+    };
+    const unload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("atlas-homework-leave", leave);
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      window.removeEventListener("atlas-homework-leave", leave);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, [dirty]);
+  // A form or the picker opens: its heading takes the focus, so that a screen reader says what has opened.
+  useEffect(() => {
+    if (!focusTick) return;
+    heading.current?.focus({ preventScroll: true });
+    heading.current?.scrollIntoView?.({ block: "start" });
+  }, [focusTick]);
+  const view = form ? "form" : picking ? "pick" : "list";
+  // The registry comes back: the button of the link that was open (or the add button) gets the focus.
+  useEffect(() => {
+    if (view !== "list" || busy || !returnFocus.current) return;
+    const el =
+      document.getElementById(returnFocus.current) ??
+      document.getElementById("family-add");
+    returnFocus.current = null;
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [view, busy]);
+  // Leaving the open link: nothing while it saves, one question when it holds changes.
+  function leaveForm() {
+    const decision = leaveDecision(dirty, busy);
+    return (
+      decision === "go" || (decision === "ask" && window.confirm(leaveQuestion))
+    );
+  }
+  function discardForm() {
+    setForm(null);
+    setBase(null);
+    setHistory([]);
+    setHistoryNext(null);
+  }
+  function openLink(item: FamilyLink) {
+    if (!leaveForm()) return;
+    if (saved.current && keyOf(saved.current) !== keyOf(item))
+      saved.current = null;
+    setHighlightKey(null);
+    returnFocus.current = familyOpenId(item);
+    void run(() => open(item.parentId, item.studentId));
+  }
+  function openPicker() {
+    if (!leaveForm()) return;
+    discardForm();
+    saved.current = null;
+    setHighlightKey(null);
+    setError("");
+    setNotice("");
+    returnFocus.current = "family-add";
+    setPicking(true);
+    setFocusTick((n) => n + 1);
+  }
+  // Back to the registry: the saved link is marked when the registry shows it, and the notice says so when it does not.
+  function backToRegistry() {
+    if (!leaveForm()) return;
+    setError("");
+    setNotice("");
+    const link = saved.current;
+    saved.current = null;
+    discardForm();
+    setPicking(false);
+    if (!link) return;
+    const where = savedLinkOutcome(items, filter, keyOf(link));
+    if (where === "visible") {
+      setHighlightKey(keyOf(link));
+      returnFocus.current = familyOpenId(link);
+    } else
+      setNotice(
+        where === "filtered"
+          ? "Связь сохранена. Выбранный фильтр её не показывает: выберите «Все»."
+          : "Связь сохранена. Поиск или загруженные страницы реестра её не показывают.",
+      );
+  }
+  const filterCounts = linkCounts(items),
+    rows = filterLinks(items, filter);
+  const messages = (
     <>
-      <p>
-        Одна связь относится к одному аккаунту родителя и одному ученику.
-        Нескольким представителям выдаются отдельные аккаунты; один родитель
-        может иметь нескольких детей.
-      </p>
-      <p>
-        Старые назначения действуют до изменения школой и отмечены как требующие
-        уточнения. Подтверждение означает проверку сотрудником школы; система не
-        проверяет документы автоматически.
-      </p>
       {error && (
-        <p role="alert" className="error-banner">
+        <p role="alert" className="error-banner family-message">
           {error}
         </p>
       )}
-      {notice && <p role="status">{notice}</p>}
-      <label className="field">
-        <span>Найти родителя или ученика в реестре</span>
-        <input
-          type="search"
-          value={query}
-          maxLength={100}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      <button
-        disabled={busy}
-        onClick={() =>
-          void run(async () => {
-            await list();
-            await onChanged();
-          })
-        }
-      >
-        Обновить реестр
-      </button>
-      {items.map((item) => (
-        <article className="family-card" key={keyOf(item)}>
-          <strong>
-            {item.parentName} → {item.studentName}
-          </strong>
-          <p>
-            {activities[item.activity]} ·{" "}
-            {item.verified ? "Проверено школой" : "Требует уточнения"}
-            {!item.accountActive ? " · аккаунт неактивен" : ""}
-          </p>
-          <button
-            disabled={busy}
-            onClick={() => void run(() => open(item.parentId, item.studentId))}
-          >
-            Открыть связь
-          </button>
-        </article>
-      ))}
-      {!busy && !items.length && <p>Связи не найдены.</p>}
-      {next !== null && (
-        <button disabled={busy} onClick={() => void run(() => list(next))}>
-          Следующие связи
-        </button>
+      {notice && (
+        <p role="status" className="info-line family-message">
+          {notice}
+        </p>
       )}
-      <details>
-        <summary>Назначить ребёнка или открыть конкретную связь</summary>
-        <fieldset className="access-fields" disabled={busy}>
-          <label className="field">
-            <span>Поиск аккаунта родителя</span>
+    </>
+  );
+  return (
+    <section className="family-links">
+      {/* While a link is open the messages are next to its buttons; the notice is repeated here, as before. */}
+      {view === "list" && error && (
+        <p role="alert" className="error-banner family-message">
+          {error}
+        </p>
+      )}
+      {notice && (
+        <p
+          role={view === "list" ? "status" : undefined}
+          className="info-line family-message"
+        >
+          {notice}
+        </p>
+      )}
+      <div className="family-browse" hidden={view !== "list"}>
+        <div className="family-toolbar">
+          <label>
+            <span>Найти родителя или ученика в реестре</span>
             <input
-              value={parentSearch}
+              type="search"
+              value={query}
+              maxLength={100}
               onChange={(e) => {
-                setParentSearch(e.target.value);
-                setParent("");
+                setQuery(e.target.value);
+                setHighlightKey(null);
               }}
             />
           </label>
-          <label className="field">
-            <span>Аккаунт родителя</span>
-            <select value={parent} onChange={(e) => setParent(e.target.value)}>
-              <option value="">Выберите родителя</option>
-              {parents.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.login}
-                  {!p.active ? " · отключён" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Поиск ученика</span>
-            <input
-              value={studentSearch}
-              onChange={(e) => {
-                setStudentSearch(e.target.value);
-                setStudent("");
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>Ученик</span>
-            <select
-              value={student}
-              onChange={(e) => setStudent(e.target.value)}
-            >
-              <option value="">Выберите ученика</option>
-              {pupils.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                  {!s.active ? " · неактивен" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>
-            Показаны первые 100 совпадений. Уточните поиск, если нужной записи
-            нет.
-          </p>
-          <button
-            disabled={!parent || !student}
-            onClick={() => void run(() => open(parent, student))}
+          <div
+            className="segmented"
+            role="group"
+            aria-label="Состояние связи"
+            title="Считаются только загруженные связи"
           >
-            Подготовить связь
+            {linkFilters.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={filter === f.id ? "selected" : ""}
+                aria-pressed={filter === f.id}
+                onClick={() => {
+                  setFilter(f.id);
+                  setHighlightKey(null);
+                }}
+              >
+                {f.label}{" "}
+                <span>{countLabel(filterCounts[f.id], next !== null)}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            className="family-reload"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await list();
+                await onChanged();
+              })
+            }
+          >
+            Обновить реестр
           </button>
-        </fieldset>
-      </details>
+          <button
+            id="family-add"
+            className="primary"
+            disabled={busy}
+            onClick={openPicker}
+          >
+            ＋ Назначить ребёнка
+          </button>
+        </div>
+        <details className="family-help">
+          <summary>Как устроены связи</summary>
+          <p>
+            Одна связь относится к одному аккаунту родителя и одному ученику.
+            Нескольким представителям выдаются отдельные аккаунты; один родитель
+            может иметь нескольких детей.
+          </p>
+          <p>
+            Старые назначения действуют до изменения школой и отмечены как
+            требующие уточнения. Подтверждение означает проверку сотрудником
+            школы; система не проверяет документы автоматически.
+          </p>
+        </details>
+        <FamilyLinksTable
+          rows={rows}
+          loaded={items.length}
+          more={next !== null}
+          status={status}
+          busy={busy}
+          highlightKey={highlightKey}
+          onOpen={openLink}
+        >
+          {(!!items.length || next !== null) && (
+            <div className="family-more">
+              <span>
+                Показано {rows.length}
+                {rows.length !== items.length
+                  ? ` из ${items.length} загруженных`
+                  : ""}
+              </span>
+              {next !== null && (
+                <button
+                  disabled={busy}
+                  onClick={() => void run(() => list(next))}
+                >
+                  Следующие связи
+                </button>
+              )}
+            </div>
+          )}
+        </FamilyLinksTable>
+      </div>
+      {view === "pick" && (
+        <div className="dated-form family-form">
+          <div className="family-form-head">
+            <button type="button" disabled={busy} onClick={backToRegistry}>
+              ← К реестру
+            </button>
+            <h3 ref={heading} tabIndex={-1}>
+              Назначить ребёнка или открыть связь
+            </h3>
+          </div>
+          <fieldset className="access-fields" disabled={busy}>
+            <div className="dated-fields">
+              <label className="field">
+                <span>Поиск аккаунта родителя</span>
+                <input
+                  value={parentSearch}
+                  onChange={(e) => {
+                    setParentSearch(e.target.value);
+                    setParent("");
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>Аккаунт родителя</span>
+                <select
+                  value={parent}
+                  onChange={(e) => setParent(e.target.value)}
+                >
+                  <option value="">Выберите родителя</option>
+                  {parents.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} · {p.login}
+                      {!p.active ? " · отключён" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Поиск ученика</span>
+                <input
+                  value={studentSearch}
+                  onChange={(e) => {
+                    setStudentSearch(e.target.value);
+                    setStudent("");
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>Ученик</span>
+                <select
+                  value={student}
+                  onChange={(e) => setStudent(e.target.value)}
+                >
+                  <option value="">Выберите ученика</option>
+                  {pupils.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                      {!s.active ? " · неактивен" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p>
+              Показаны первые 100 совпадений. Уточните поиск, если нужной записи
+              нет.
+            </p>
+            {messages}
+            <div className="family-form-actions">
+              <button
+                disabled={!parent || !student}
+                onClick={() =>
+                  void run(async () => {
+                    await open(parent, student);
+                    setPicking(false);
+                  })
+                }
+              >
+                Подготовить связь
+              </button>
+            </div>
+          </fieldset>
+        </div>
+      )}
       {form && (
         <form
-          className="family-card"
+          className="dated-form family-form"
           onSubmit={(e) => {
             e.preventDefault();
             if (
@@ -400,7 +604,8 @@ export default function FamilyPanel({
                   status: form.status,
                 },
               );
-              await open(form.parentId, form.studentId);
+              saved.current = form;
+              await open(form.parentId, form.studentId, false);
               await list();
               await onChanged();
               setNotice(
@@ -409,9 +614,14 @@ export default function FamilyPanel({
             });
           }}
         >
-          <h3>
-            {form.parentName} → {form.studentName}
-          </h3>
+          <div className="family-form-head">
+            <button type="button" disabled={busy} onClick={backToRegistry}>
+              ← К реестру
+            </button>
+            <h3 ref={heading} tabIndex={-1}>
+              {form.parentName} → {form.studentName}
+            </h3>
+          </div>
           <fieldset className="access-fields" disabled={busy}>
             <label className="field">
               <span>Отношение к ребёнку</span>
@@ -428,7 +638,7 @@ export default function FamilyPanel({
                 ))}
               </select>
             </label>
-            <label className="inline">
+            <label className="check-line">
               <input
                 type="checkbox"
                 checked={form.verified}
@@ -446,36 +656,38 @@ export default function FamilyPanel({
                 onChange={(e) => setForm({ ...form, evidence: e.target.value })}
               />
             </label>
-            <label className="field">
-              <span>Доступ к кабинету ребёнка</span>
-              <select
-                value={form.status}
-                onChange={(e) => setForm({ ...form, status: e.target.value })}
-              >
-                <option value="active">Разрешён в указанные сроки</option>
-                <option value="revoked">Отозван</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Начало доступа (необязательно)</span>
-              <input
-                type="date"
-                value={form.startDate || ""}
-                onChange={(e) =>
-                  setForm({ ...form, startDate: e.target.value || null })
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Последний день доступа (необязательно)</span>
-              <input
-                type="date"
-                value={form.endDate || ""}
-                onChange={(e) =>
-                  setForm({ ...form, endDate: e.target.value || null })
-                }
-              />
-            </label>
+            <div className="dated-fields">
+              <label className="field">
+                <span>Доступ к кабинету ребёнка</span>
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm({ ...form, status: e.target.value })}
+                >
+                  <option value="active">Разрешён в указанные сроки</option>
+                  <option value="revoked">Отозван</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Начало доступа (необязательно)</span>
+                <input
+                  type="date"
+                  value={form.startDate || ""}
+                  onChange={(e) =>
+                    setForm({ ...form, startDate: e.target.value || null })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Последний день доступа (необязательно)</span>
+                <input
+                  type="date"
+                  value={form.endDate || ""}
+                  onChange={(e) =>
+                    setForm({ ...form, endDate: e.target.value || null })
+                  }
+                />
+              </label>
+            </div>
             <p>
               Asia/Qyzylorda, до конца последнего дня. Срок проверяется при
               каждом запросе, без перезапуска сервера. Разрешение охватывает
@@ -491,16 +703,19 @@ export default function FamilyPanel({
                 onChange={(e) => setForm({ ...form, reason: e.target.value })}
               />
             </label>
-            <button
-              className="primary"
-              type="submit"
-              disabled={!form.reason?.trim()}
-            >
-              Сохранить связь и доступ
-            </button>
-            <button type="button" onClick={() => void run(() => changes())}>
-              История связи
-            </button>
+            {messages}
+            <div className="family-form-actions">
+              <button
+                className="primary"
+                type="submit"
+                disabled={!form.reason?.trim()}
+              >
+                Сохранить связь и доступ
+              </button>
+              <button type="button" onClick={() => void run(() => changes())}>
+                История связи
+              </button>
+            </div>
           </fieldset>
           {history.map((h) => (
             <article className="family-history" key={h.id}>
@@ -543,17 +758,6 @@ export default function FamilyPanel({
           )}
         </form>
       )}
-    </>
-  );
-  if (bare)
-    return <section className="family-panel family-panel-bare">{body}</section>;
-  return (
-    <details
-      className="family-panel"
-      onToggle={(e) => setExpanded(e.currentTarget.open)}
-    >
-      <summary>Семьи и доступ к детям</summary>
-      {body}
-    </details>
+    </section>
   );
 }
