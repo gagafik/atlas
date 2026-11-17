@@ -4,7 +4,12 @@ import { api } from "./api";
 import AbsenceCodesEditor from "./AbsenceCodesEditor";
 import AbsenceNoteView from "./AbsenceNoteView";
 import AbsenceSchoolForm from "./AbsenceSchoolForm";
-import { BulkPreviewTable, ClassesTable, NotesTable } from "./AbsenceTables";
+import {
+  BulkPreviewTable,
+  ClassesTable,
+  LessonsTable,
+  NotesTable,
+} from "./AbsenceTables";
 import {
   type AbsenceCode,
   type PreviewLesson,
@@ -817,7 +822,11 @@ export default function AbsencePanel({
             />
           )}
           {options?.canReview && schoolSeen && (
-            <div ref={schoolBox} hidden={shown !== "school"}>
+            <div
+              className="absence-notes-view"
+              ref={schoolBox}
+              hidden={shown !== "school"}
+            >
               <button
                 type="button"
                 className="absence-notes-back"
@@ -839,7 +848,7 @@ export default function AbsencePanel({
             </div>
           )}
           {shown === "compose" && options?.parent && (
-            <div>
+            <div className="absence-notes-view">
               <button
                 type="button"
                 className="absence-notes-back"
@@ -850,6 +859,7 @@ export default function AbsencePanel({
               <form
                 ref={composeForm}
                 id="absence-compose"
+                className="absence-notes-form absence-notes-compose"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (
@@ -914,7 +924,7 @@ export default function AbsencePanel({
                   )}
                   {/* Notes off for this class: only what writes a new notice is locked. */}
                   <fieldset disabled={locks.write} className="access-fields">
-                    <div className="dated-fields">
+                    <div className="absence-notes-dates">
                       <label className="field">
                         <span>Первый день отсутствия</span>
                         <input
@@ -968,76 +978,104 @@ export default function AbsencePanel({
                         />
                       </label>
                     </div>
-                    <p>
-                      Время школы — Asia/Qyzylorda. Для полных дней оставьте
-                      00:00–23:59. Период непрерывный, до 31 дня; учитываются
-                      только полностью включённые в него уроки. Перенос урока за
-                      пределы периода отменяет применение объяснительной к нему.
-                      Чтобы указать первый и последний урок, покажите уроки в
-                      периоде и нажмите «С этого урока» и «По этот урок».
-                    </p>
-                    {parentCodes.length > 0 && (
+                    <details className="absence-notes-help">
+                      <summary>Как указать период</summary>
+                      <p>
+                        Время школы — Asia/Qyzylorda. Для полных дней оставьте
+                        00:00–23:59. Период непрерывный, до 31 дня; учитываются
+                        только полностью включённые в него уроки. Перенос урока
+                        за пределы периода отменяет применение объяснительной к
+                        нему. Чтобы указать первый и последний урок, покажите
+                        уроки в периоде и нажмите «С этого урока» и «По этот
+                        урок».
+                      </p>
+                    </details>
+                    <div className="absence-notes-pair">
+                      {parentCodes.length > 0 && (
+                        <label className="field">
+                          <span>Тип отсутствия</span>
+                          <select
+                            required
+                            value={codeId}
+                            onChange={(e) => setCodeId(e.target.value)}
+                          >
+                            <option value="">Выберите тип</option>
+                            {parentCodes.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <label className="field">
-                        <span>Тип отсутствия</span>
+                        <span>Предмет</span>
                         <select
-                          required
-                          value={codeId}
-                          onChange={(e) => setCodeId(e.target.value)}
+                          value={subjectId}
+                          onChange={(e) => {
+                            setSubjectId(e.target.value);
+                            setPreview(null);
+                          }}
                         >
-                          <option value="">Выберите тип</option>
-                          {parentCodes.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
+                          <option value="">Все предметы</option>
+                          {options.subjects.map((x) => (
+                            <option key={x.id} value={x.id}>
+                              {x.name}
                             </option>
                           ))}
                         </select>
                       </label>
-                    )}
-                    <label className="field">
-                      <span>Предмет</span>
-                      <select
-                        value={subjectId}
-                        onChange={(e) => {
-                          setSubjectId(e.target.value);
-                          setPreview(null);
-                        }}
-                      >
-                        <option value="">Все предметы</option>
-                        {options.subjects.map((x) => (
-                          <option key={x.id} value={x.id}>
-                            {x.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    </div>
                     <label className="field">
                       <span>Причина отсутствия</span>
                       <textarea
                         required
+                        rows={3}
                         maxLength={4000}
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
                       />
                     </label>
-                    <label className="field">
-                      <span>
-                        Приложить файл (необязательно, до 5 по 10 МиБ)
-                      </span>
-                      <input
-                        type="file"
-                        accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
-                        disabled={!student || files.length >= 5}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          e.target.value = "";
-                          if (f) void run(() => upload(f));
-                        }}
-                      />
-                      {serverBusy && (
-                        <small role="status">Сервер занят, повторяем…</small>
-                      )}
-                    </label>
                   </fieldset>
+                  <div className="absence-notes-filerow">
+                    <fieldset disabled={locks.write} className="access-fields">
+                      <label className="field">
+                        <span>
+                          Приложить файл (необязательно, до 5 по 10 МиБ)
+                        </span>
+                        <input
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+                          disabled={!student || files.length >= 5}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            e.target.value = "";
+                            if (f) void run(() => upload(f));
+                          }}
+                        />
+                        {serverBusy && (
+                          <small role="status">Сервер занят, повторяем…</small>
+                        )}
+                      </label>
+                    </fieldset>
+                    <fieldset disabled={locks.write} className="access-fields">
+                      <button
+                        type="button"
+                        disabled={!student}
+                        onClick={() =>
+                          void run(async () => {
+                            const r = await api(
+                              `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
+                              workspace,
+                            );
+                            setAvailable(r.items);
+                          })
+                        }
+                      >
+                        Найти загрузки этой формы
+                      </button>
+                    </fieldset>
+                  </div>
                   {files.map((f) => (
                     <div className="absence-file" key={f.id}>
                       <a href={fileUrl(f.id)}>{f.filename}</a>
@@ -1059,21 +1097,6 @@ export default function AbsencePanel({
                     </div>
                   ))}
                   <fieldset disabled={locks.write} className="access-fields">
-                    <button
-                      type="button"
-                      disabled={!student}
-                      onClick={() =>
-                        void run(async () => {
-                          const r = await api(
-                            `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
-                            workspace,
-                          );
-                          setAvailable(r.items);
-                        })
-                      }
-                    >
-                      Найти загрузки этой формы
-                    </button>
                     {available
                       .filter((f) => !files.some((x) => x.id === f.id))
                       .map((f) => (
@@ -1089,12 +1112,12 @@ export default function AbsencePanel({
                         </div>
                       ))}
                   </fieldset>
-                  <p>
+                  <p className="muted absence-notes-small">
                     Неотправленный текст не сохраняется после закрытия формы.
                     Неиспользованные файлы очищаются через сутки при следующих
                     загрузках.
                   </p>
-                  <div className="dated-toolbar">
+                  <div className="absence-notes-buttons">
                     <button
                       type="button"
                       disabled={!student || !reason.trim() || locks.write}
@@ -1141,20 +1164,7 @@ export default function AbsencePanel({
                         будет действовать в указанный период и для добавленных
                         позднее уроков.
                       </p>
-                      {preview.map((r, i) => (
-                        <p className="absence-file" key={i}>
-                          {r.date} · {r.start}–{r.end} · {r.subject} · {r.group}
-                          <button
-                            type="button"
-                            onClick={() => edge(r, "start")}
-                          >
-                            С этого урока
-                          </button>
-                          <button type="button" onClick={() => edge(r, "end")}>
-                            По этот урок
-                          </button>
-                        </p>
-                      ))}
+                      <LessonsTable lessons={preview} onEdge={edge} />
                     </div>
                   )}
                 </fieldset>

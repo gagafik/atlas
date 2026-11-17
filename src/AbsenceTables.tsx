@@ -13,7 +13,7 @@ import {
   type ClassSetting,
   type NoteViewer,
 } from "./absenceNotes";
-import { codeName } from "./absenceForm";
+import { codeName, type PreviewLesson } from "./absenceForm";
 
 // The tables of the absence notes screen. They have no state: which notes are picked, which tab and which view is shown
 // is decided by the panel.
@@ -67,7 +67,11 @@ export function NotesTable({
         <thead>
           <tr>
             {pick && (
-              <th scope="col" className="absence-notes-c-pick">
+              <th
+                scope="col"
+                className="absence-notes-c-pick"
+                data-all-label={`Выбрать до ${BULK_LIMIT} загруженных`}
+              >
                 <input
                   type="checkbox"
                   aria-label={`Выбрать до ${BULK_LIMIT} загруженных`}
@@ -263,6 +267,72 @@ export function BulkPreviewTable({
                     {f.filename}
                   </a>
                 ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// The lessons inside a period, one row each; the two buttons set the first or the last lesson of the note.
+// The group column is there only when the lessons carry one (the parent's preview does, the school's does not).
+export function LessonsTable({
+  lessons,
+  onEdge,
+}: {
+  lessons: (PreviewLesson & { group?: string })[];
+  onEdge: (lesson: PreviewLesson, which: "start" | "end") => void;
+}) {
+  if (!lessons.length) return null;
+  const grouped = lessons.some((l) => l.group !== undefined);
+  return (
+    <div className="absence-notes-table absence-notes-t-lessons">
+      <table aria-label="Уроки в периоде">
+        <thead>
+          <tr>
+            <th scope="col">Дата</th>
+            <th scope="col">Время</th>
+            <th scope="col">Предмет</th>
+            {grouped && <th scope="col">Группа</th>}
+            <th scope="col">
+              <span className="sr-only">Действия</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {lessons.map((l, i) => (
+            <tr key={i} className="absence-notes-row">
+              <th scope="row" className="absence-notes-c-period">
+                {l.date}
+              </th>
+              <td className="absence-notes-c-period" data-label="Время">
+                {l.start}–{l.end}
+              </td>
+              <td className="absence-notes-c-subject" data-label="Предмет">
+                {l.subject}
+              </td>
+              {grouped && (
+                <td className="absence-notes-c-group" data-label="Группа">
+                  {l.group}
+                </td>
+              )}
+              <td className="absence-notes-c-actions">
+                <button
+                  type="button"
+                  className="absence-notes-row-btn"
+                  onClick={() => onEdge(l, "start")}
+                >
+                  С этого урока
+                </button>
+                <button
+                  type="button"
+                  className="absence-notes-row-btn"
+                  onClick={() => onEdge(l, "end")}
+                >
+                  По этот урок
+                </button>
               </td>
             </tr>
           ))}

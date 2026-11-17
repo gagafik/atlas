@@ -271,7 +271,7 @@
     background: var(--surface-sunken);
   }
   .absence-notes-table thead th.absence-notes-c-pick::after {
-    content: "Выбрать до 50 загруженных";
+    content: attr(data-all-label);
     font-size: 14px;
     color: var(--text);
   }
@@ -365,5 +365,317 @@
   .absence-notes .absence-notes-bulk button,
   .absence-notes .absence-notes-actions button {
     flex: 1 1 140px;
+  }
+}
+
+/* The forms (school note, the parent's note, the types editor): compact fields, the layout follows the width of the container. */
+.absence-notes-view {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.absence-notes .absence-notes-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+.absence-notes .absence-notes-compose {
+  padding: 0;
+}
+.absence-notes-form fieldset {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.absence-notes-form > button,
+.absence-notes-form fieldset > button {
+  justify-self: start;
+}
+.absence-notes-form h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.absence-notes-form h3:focus {
+  outline: 0;
+}
+.absence-notes-form p {
+  margin: 0;
+  line-height: 1.5;
+}
+.absence-notes .absence-notes-small {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.absence-notes .absence-notes-form .field {
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+}
+.absence-notes .absence-notes-form .field > span {
+  font-size: 12px;
+  line-height: 16px;
+}
+.absence-notes .absence-notes-form .field > small {
+  font-size: 12px;
+  line-height: 16px;
+}
+.absence-notes .absence-notes-form .field input:not([type="checkbox"]),
+.absence-notes .absence-notes-form .field select,
+.absence-notes .absence-notes-form .field textarea {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-form .field textarea {
+  resize: vertical;
+}
+.absence-notes .absence-notes-form button {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.absence-notes .absence-notes-form .absence-file {
+  gap: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-form .absence-card {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+}
+.absence-notes .absence-notes-form .absence-preview {
+  display: grid;
+  gap: 8px;
+}
+
+/* Two columns of the school form: the pupils on the left, the note on the right. */
+.absence-notes-cols,
+.absence-notes-col {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  align-content: start;
+}
+.absence-notes-cols {
+  grid-template-columns: minmax(0, 1fr);
+}
+.absence-notes-pupil-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.absence-notes-pupil-head .field {
+  flex: 1 1 150px;
+}
+.absence-notes .absence-notes-pupils {
+  max-height: 300px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  align-content: start;
+  gap: 2px 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.absence-notes-pupils .absence-file {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.absence-notes-pupils .absence-file input {
+  margin-top: 2px;
+}
+.absence-notes-pupils > p {
+  grid-column: 1 / -1;
+}
+.absence-notes .absence-notes-picked {
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-chips {
+  gap: 4px 6px;
+  max-height: 96px;
+  overflow: auto;
+}
+.absence-notes .absence-notes-chips button {
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: var(--weight-regular);
+}
+
+/* The date and time fields, the type with the subject, the file row. */
+.absence-notes-dates {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px;
+}
+.absence-notes-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px;
+}
+.absence-notes-filerow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.absence-notes-filerow > fieldset {
+  flex: 1 1 280px;
+}
+.absence-notes-filerow > fieldset:last-child {
+  flex: 0 0 auto;
+}
+.absence-notes-filerow input[type="file"] {
+  padding: 3px 8px;
+}
+
+/* The lessons of the preview: one dense table, small buttons side by side. */
+.absence-notes-entries {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+.absence-notes-entry {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.absence-notes-entry:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.absence-notes-t-lessons .absence-notes-c-actions button + button {
+  margin-left: 6px;
+}
+
+/* The types editor: one row per type, the columns line up across the rows. */
+.absence-notes-types {
+  position: relative;
+}
+.absence-notes-codes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.absence-notes-code {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.absence-notes-code .absence-file {
+  min-height: 32px;
+  align-items: center;
+}
+
+@container absence-notes (min-width: 400px) {
+  .absence-notes-dates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container absence-notes (min-width: 620px) {
+  .absence-notes-dates {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .absence-notes-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .absence-notes-codes {
+    grid-template-columns:
+      minmax(180px, 1fr)
+      max-content max-content max-content;
+    align-items: end;
+    gap: 6px 16px;
+  }
+  /* The rows share the grid of the list; only the first row shows the caption of the name column. */
+  .absence-notes-code {
+    display: contents;
+  }
+  .absence-notes-code > :first-child {
+    grid-column: 1;
+  }
+  .absence-notes-code:not(:first-child) > .field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+@container absence-notes (min-width: 900px) {
+  .absence-notes-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .absence-notes-school .absence-notes-dates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* A narrow container: one field per line, buttons 40 px, long names wrap. */
+@container absence-notes (max-width: 619px) {
+  .absence-notes .absence-notes-form button {
+    min-height: 40px;
+    white-space: normal;
+  }
+  .absence-notes .absence-notes-form .field input:not([type="checkbox"]),
+  .absence-notes .absence-notes-form .field select,
+  .absence-notes .absence-notes-form .field textarea {
+    min-height: 40px;
+  }
+  .absence-notes .absence-notes-form .absence-file {
+    min-height: 40px;
+  }
+  .absence-notes .absence-notes-form input[type="checkbox"] {
+    width: 24px;
+    height: 24px;
+  }
+  .absence-notes-form .absence-notes-buttons button {
+    flex: 1 1 140px;
+  }
+  .absence-notes-pupil-head .field,
+  .absence-notes-filerow > fieldset,
+  .absence-notes-filerow > fieldset:last-child {
+    flex: 1 1 100%;
+  }
+  .absence-notes-filerow button {
+    width: 100%;
+  }
+  .absence-notes .absence-notes-chips button {
+    min-height: 40px;
+    text-align: left;
+  }
+  .absence-notes-table .absence-notes-c-actions {
+    text-align: left;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions button {
+    flex: 1 1 0;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions button + button {
+    margin-left: 0;
+  }
+  .absence-notes-code {
+    padding-bottom: 12px;
   }
 }

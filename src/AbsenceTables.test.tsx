@@ -1,6 +1,11 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { BulkPreviewTable, ClassesTable, NotesTable } from "./AbsenceTables";
+import {
+  BulkPreviewTable,
+  ClassesTable,
+  LessonsTable,
+  NotesTable,
+} from "./AbsenceTables";
 import type { AbsenceNote, ClassSetting } from "./absenceNotes";
 
 const note = (over: Partial<AbsenceNote> = {}): AbsenceNote => ({
@@ -273,5 +278,61 @@ describe("BulkPreviewTable", () => {
     expect(text).toContain("Болел");
     expect(text).toContain("справка.pdf");
     expect(find(ui, "a")[0].props.href).toBe("/f/f1");
+  });
+});
+
+describe("LessonsTable", () => {
+  const lesson = (over = {}) => ({
+    date: "2026-10-19",
+    start: "08:30",
+    end: "09:15",
+    subject: "Математика",
+    ...over,
+  });
+  const headers = (ui: ReactNode) =>
+    find(find(ui, "thead")[0]?.props.children, "th").map((h) => textOf(h));
+  it("has one row per lesson with its date, time and subject", () => {
+    const ui = (
+      <LessonsTable
+        lessons={[lesson(), lesson({ date: "2026-10-20" })]}
+        onEdge={() => {}}
+      />
+    );
+    expect(bodyRows(ui)).toHaveLength(2);
+    const text = textOf(ui);
+    expect(text).toContain("2026-10-19");
+    expect(text).toContain("08:30–09:15");
+    expect(text).toContain("Математика");
+  });
+  it("shows the group column only when the lessons have a group", () => {
+    const plain = <LessonsTable lessons={[lesson()]} onEdge={() => {}} />;
+    const grouped = (
+      <LessonsTable lessons={[lesson({ group: "7А" })]} onEdge={() => {}} />
+    );
+    expect(headers(plain)).not.toContain("Группа");
+    expect(headers(grouped)).toContain("Группа");
+    expect(textOf(grouped)).toContain("7А");
+  });
+  it("sets the first or the last lesson from the row buttons", () => {
+    const calls: string[] = [];
+    const ui = (
+      <LessonsTable
+        lessons={[lesson({ date: "2026-10-20" })]}
+        onEdge={(l, which) => calls.push(`${which}:${l.date}`)}
+      />
+    );
+    const buttons = find(ui, "button");
+    expect(buttons.map((b) => textOf(b))).toEqual([
+      "С этого урока",
+      "По этот урок",
+    ]);
+    buttons[0].props.onClick?.();
+    buttons[1].props.onClick?.();
+    expect(calls).toEqual(["start:2026-10-20", "end:2026-10-20"]);
+  });
+  it("shows nothing when there are no lessons", () => {
+    expect(
+      bodyRows(<LessonsTable lessons={[]} onEdge={() => {}} />),
+    ).toHaveLength(0);
   });
 });
