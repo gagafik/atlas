@@ -478,7 +478,7 @@ export const journeys = {
     // Report cards are in the menu only when the teacher has any.
     await kit.home();
     if (await kit.menu("Табели", { optional: true })) await kit.click("Открыть готовую ведомость", { optional: true });
-    await kit.path("Посещаемость учащихся", "Отсутствия и объяснительные");
+    await kit.path("Посещаемость учащихся", "Записки об отсутствии");
     await kit.click("Сводная посещаемость");
     await attendanceSummary(kit);
     await kit.click("Контроль заполнения журналов");
@@ -656,7 +656,7 @@ export const tours = {
     await everyThread(kit, "Входящие");
     await kit.path("Домашние задания");
     await kit.eachButton(/^Проверить работу/, () => kit.click("← К списку"), { max: 12 });
-    await kit.path("Посещаемость учащихся", "Отсутствия и объяснительные");
+    await kit.path("Посещаемость учащихся", "Записки об отсутствии");
     await kit.click("Сводная посещаемость");
     await kit.path("События");
     await kit.eachButton(/^[←→]$/, null, { max: 8 });

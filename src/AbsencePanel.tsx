@@ -2,53 +2,36 @@ import { useEffect, useRef, useState } from "react";
 import { uploadFile } from "./uploads";
 import { api } from "./api";
 import AbsenceCodesEditor from "./AbsenceCodesEditor";
+import AbsenceNoteView from "./AbsenceNoteView";
 import AbsenceSchoolForm from "./AbsenceSchoolForm";
+import { BulkPreviewTable, ClassesTable, NotesTable } from "./AbsenceTables";
 import {
   type AbsenceCode,
   type PreviewLesson,
   type SchoolPupil,
   type Subject,
-  codeName,
   defaultChild,
   formLocks,
   lessonEdge,
   noticeQuery,
   notesOff as closed,
-  sharedDecision,
 } from "./absenceForm";
+import {
+  ACTIONS,
+  BULK_LIMIT,
+  STATUS_LABELS,
+  allPicked,
+  factsLine,
+  filedBy,
+  pickEligible,
+  type AbsenceNote,
+  type ClassSetting,
+  type NoteFile,
+} from "./absenceNotes";
+import "./AbsenceNotes.css";
 
-type FileItem = { id: string; filename: string; size: number };
-type Item = {
-  id: string;
-  studentId: string;
-  studentName: string;
-  version: number;
-  status: string;
-  start: string;
-  end: string;
-  created: string;
-  reason?: string;
-  files?: FileItem[];
-  canReview?: boolean;
-  canWithdraw?: boolean;
-  periodLocks?: string[];
-  origin?: string;
-  codeId?: string | null;
-  subjectId?: string | null;
-  mine?: boolean;
-  authorName?: string;
-  summary?: boolean;
-};
-type ClassSetting = {
-  id: string;
-  name: string;
-  classTeacher: string | null;
-  enabled: boolean;
-  version: number;
-  updated: string | null;
-  actor: string | null;
-  canChange: boolean;
-};
+type FileItem = NoteFile;
+type Item = AbsenceNote;
 type Options = {
   parent: boolean;
   pupil?: boolean;
@@ -87,19 +70,15 @@ type BulkPreview = {
   comment: string;
   items: (Item & { nextStatus: string })[];
 };
-const actions: Record<string, string> = {
-  approve: "Принять",
-  reject: "Отклонить",
-  revoke: "Отменить принятое решение",
-};
-const labels: Record<string, string> = {
-  pending: "На рассмотрении",
-  approved: "Принято",
-  rejected: "Отклонено",
-  withdrawn: "Отозвано родителем",
-  revoked: "Решение отменено школой",
-  submitted: "Отправлено",
-  recorded: "Внесено школой",
+// One view at a time replaces the others in place; the tabs belong to the list view.
+type View = "list" | "note" | "school" | "compose" | "bulk";
+type Tab = "notes" | "classes" | "codes";
+
+// A heading that can take the focus: forms bring their own heading, which gets its tabindex here.
+const headingOf = (box: HTMLElement | null | undefined) => {
+  const heading = box?.querySelector<HTMLElement>("h3");
+  heading?.setAttribute("tabindex", "-1");
+  return heading;
 };
 
 export default function AbsencePanel({
@@ -158,10 +137,27 @@ export default function AbsencePanel({
     [bulkComment, setBulkComment] = useState(""),
     [bulkPreview, setBulkPreview] = useState<BulkPreview | null>(null),
     [bulkRequest, setBulkRequest] = useState(() => crypto.randomUUID());
+  // The compose form starts the panel when asked; the school form and the types editor mount when first shown.
+  const [view, setView] = useState<View>(compose ? "compose" : "list"),
+    [tab, setTab] = useState<Tab>("notes"),
+    [schoolSeen, setSchoolSeen] = useState(false),
+    [codesSeen, setCodesSeen] = useState(false);
   // One request id per class, version and direction, so a repeated click or retry is the same switch.
   const switchIds = useRef<Record<string, string>>({}),
     composeForm = useRef<HTMLFormElement | null>(null),
     composed = useRef(false);
+  // Where the focus goes once the next view is on screen; one shot, so a later render never steals it.
+  const root = useRef<HTMLDivElement | null>(null),
+    schoolBox = useRef<HTMLDivElement | null>(null),
+    noteHeading = useRef<HTMLHeadingElement | null>(null),
+    bulkHeading = useRef<HTMLHeadingElement | null>(null),
+    focusOn = useRef<(() => HTMLElement | null | undefined) | null>(null);
+  useEffect(() => {
+    const find = focusOn.current;
+    if (!find) return;
+    focusOn.current = null;
+    find()?.focus();
+  });
   useEffect(() => {
     if (!compose || !options?.parent || composed.current) return;
     composed.current = true;
@@ -198,8 +194,6 @@ export default function AbsencePanel({
     clearBulkPreview();
     setBulkIds([]);
   };
-  const bulkEligible = (item: Item) =>
-    item.status === (bulkAction === "revoke" ? "approved" : "pending");
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError("");
@@ -233,13 +227,19 @@ export default function AbsencePanel({
     setNext(r.nextBefore);
     if (!before) clearBulk();
   };
-  const open = async (id: string) => {
+  // `enter`: the note replaces the list and takes the focus; a refresh of the open note stays where it is.
+  const open = async (id: string, enter = false) => {
     const r = await api(`journal/absences/${id}`, workspace);
     setSelected(r);
     setHistory([]);
     setHistoryNext(null);
     setComment("");
     setDecisionRequest(crypto.randomUUID());
+    if (enter) showNote();
+  };
+  const showNote = () => {
+    setView("note");
+    focusOn.current = () => noteHeading.current;
   };
   const changes = async (before?: number) => {
     if (!selected) return;
@@ -393,22 +393,6 @@ export default function AbsencePanel({
         : `Электронные записки класса ${c.name} выключены.`,
     );
   };
-  // Category, subject and origin of a note; none of it is private. A note filed by another guardian says so.
-  const meta = (item: Item) =>
-    [
-      `Тип: ${codeName(options?.codes ?? [], item.codeId)}`,
-      item.subjectId
-        ? `Предмет: ${options?.subjects.find((x) => x.id === item.subjectId)?.name ?? item.subjectId}`
-        : "",
-      item.origin === "school"
-        ? "Внесено школой"
-        : options?.parent &&
-            !(item.mine ?? items.find((x) => x.id === item.id)?.mine ?? true)
-          ? "Подано другим представителем"
-          : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
   const fileUrl = (id: string) =>
     `/api/journal/absence-files/${id}?workspace=${encodeURIComponent(workspace)}`;
   const bulkDone = async (count: number) => {
@@ -416,6 +400,8 @@ export default function AbsencePanel({
     setBulkComment("");
     setSelected(null);
     setHistory([]);
+    setView("list");
+    focusOn.current = () => firstAction();
     setNotice(
       `Сохранено решений: ${count}. Они учитываются при следующем просмотре посещаемости.`,
     );
@@ -431,13 +417,17 @@ export default function AbsencePanel({
       comment: bulkComment,
     });
     if (r.status === "applied") await bulkDone(r.count);
-    else setBulkPreview(r);
+    else {
+      setBulkPreview(r);
+      setView("bulk");
+      focusOn.current = () => bulkHeading.current;
+    }
   };
   const applyBulk = async () => {
     if (
       !bulkPreview ||
       !window.confirm(
-        `Применить решение «${actions[bulkPreview.action]}» ко всем ${bulkPreview.items.length} заявлениям из предпросмотра?`,
+        `Применить решение «${ACTIONS[bulkPreview.action]}» ко всем ${bulkPreview.items.length} заявлениям из предпросмотра?`,
       )
     )
       return;
@@ -448,37 +438,95 @@ export default function AbsencePanel({
     );
     await bulkDone(r.count);
   };
+  const byAttr = (attr: string, value: string) =>
+    Array.from(
+      root.current?.querySelectorAll<HTMLElement>(`[${attr}]`) ?? [],
+    ).find((el) => el.getAttribute(attr) === value);
+  const firstAction = () =>
+    root.current?.querySelector<HTMLElement>(".absence-notes-actions button");
+  const tabButton = () =>
+    root.current?.querySelector<HTMLElement>('[data-tab="notes"]');
+  // Back to the list: the focus returns to the button that opened the view, or to the nearest thing that is still there.
+  const goBack = (from: View) => {
+    const id = selected?.id ?? "";
+    focusOn.current = () =>
+      (from === "note"
+        ? byAttr("data-note-open", id)
+        : from === "bulk"
+          ? byAttr("data-focus", "prepare")
+          : byAttr("data-focus", from === "school" ? "school" : "compose")) ??
+      tabButton() ??
+      firstAction();
+    setView("list");
+  };
+  const selectTab = (id: Tab) => {
+    setTab(id);
+    if (id === "codes") setCodesSeen(true);
+    setView("list");
+  };
+  const classSettings = options?.classSettings ?? [];
+  const viewer = { parent: !!options?.parent, reviewer: !!options?.canReview };
+  const tabs: [Tab, string][] = options
+    ? [
+        ["notes", "Записки"],
+        ...(options.classSettings?.length
+          ? [["classes", "Классы"] as [Tab, string]]
+          : []),
+        ...(options.admin
+          ? [["codes", "Типы отсутствия"] as [Tab, string]]
+          : []),
+      ]
+    : [["notes", "Записки"]];
+  const shownTab = tabs.some(([id]) => id === tab) ? tab : "notes";
+  // A view whose data is gone (no open note, no prepared decision) falls back to the list.
+  const shown: View =
+    (view === "note" && !selected) ||
+    (view === "bulk" && !bulkPreview) ||
+    (view === "school" && !options?.canReview) ||
+    (view === "compose" && options && !options.parent)
+      ? "list"
+      : view;
   return (
     <details
       className="absence-panel"
       open={expanded}
       onToggle={(e) => setExpanded(e.currentTarget.open)}
     >
-      <summary>Отсутствия и объяснительные</summary>
+      <summary>Записки об отсутствии</summary>
       {expanded && (
-        <>
-          <p>
-            Родитель сообщает причину, школа рассматривает заявление или вносит
-            записку сама. Причину, файлы и историю видят автор, законные
-            представители с подтверждённой связью в семейном реестре,
-            администратор и назначенные ответственные за класс. Ученик и
-            остальные представители видят только тип, период, предмет и статус
-            записок, внесённых школой, а ученик ещё и записок своей семьи.
-            Предметникам виден только результат в посещаемости.
-          </p>
+        <div className="absence-notes" ref={root}>
           {error && (
             <p className="error-banner" role="alert">
               {error}
             </p>
           )}
           {notice && <p role="status">{notice}</p>}
-          {options?.admin && (
+          <details className="absence-notes-help">
+            <summary>Кто что видит</summary>
             <p>
-              Назначение ответственных: «Пользователи и доступ» → «Права по
-              классам». Рассмотрение объяснительных, сводная посещаемость и
-              контроль журналов выдаются отдельно.
+              Родитель сообщает причину, школа рассматривает заявление или
+              вносит записку сама. Причину, файлы и историю видят автор,
+              законные представители с подтверждённой связью в семейном реестре,
+              администратор и назначенные ответственные за класс. Ученик и
+              остальные представители видят только тип, период, предмет и статус
+              записок, внесённых школой, а ученик ещё и записок своей семьи.
+              Предметникам виден только результат в посещаемости.
             </p>
-          )}
+            {options?.admin && (
+              <p>
+                Назначение ответственных: «Пользователи и доступ» → «Права по
+                классам». Рассмотрение объяснительных, сводная посещаемость и
+                контроль журналов выдаются отдельно.
+              </p>
+            )}
+            {options?.canReview && (
+              <p>
+                Для общего решения выберите до {BULK_LIMIT} заявлений в таблице.
+                Одно объяснение решения сохранится в истории каждого. Родители
+                увидят только своё заявление.
+              </p>
+            )}
+          </details>
           {options &&
             !options.parent &&
             !options.canReview &&
@@ -488,746 +536,680 @@ export default function AbsencePanel({
                 класса.
               </p>
             )}
-          {options?.parent && (
-            <form
-              ref={composeForm}
-              id="absence-compose"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (
-                  !window.confirm(
-                    "Передать школе причину отсутствия и выбранные файлы? После отправки их нельзя заменить; ожидающее заявление можно отозвать.",
-                  )
-                )
-                  return;
-                void run(async () => {
-                  const r = await api(
-                    "journal/absences",
-                    workspace,
-                    "POST",
-                    payload(),
-                  );
-                  setSelected(r);
-                  setHistory([]);
-                  reset();
-                  await list();
-                  setNotice("Заявление отправлено школе.");
-                });
-              }}
-            >
-              <h3>Сообщить об отсутствии</h3>
-              {notesOff && (
-                <p role="status">
-                  Электронные записки для класса выключены. Свяжитесь с классным
-                  руководителем
-                  {child?.classTeacher ? `: ${child.classTeacher}` : ""}.
-                </p>
-              )}
-              <fieldset disabled={locks.pick} className="access-fields">
-                {pinned && !!child && child.id === studentId ? (
-                  <p className="info-line">
-                    Ребёнок: <strong>{child.name}</strong>
-                  </p>
-                ) : (
-                  <label className="field">
-                    <span>Ребёнок</span>
-                    <select
-                      value={student}
-                      onChange={(e) => {
-                        if (
-                          (reason || files.length) &&
-                          !window.confirm(
-                            "Начать форму для другого ребёнка? Неотправленный текст будет очищен.",
-                          )
-                        )
-                          return;
-                        setStudent(e.target.value);
-                        reset();
-                      }}
+          {shown === "list" && (
+            <>
+              {tabs.length > 1 && (
+                <div
+                  className="segmented absence-notes-tabs"
+                  role="group"
+                  aria-label="Разделы записок"
+                >
+                  {tabs.map(([id, name]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      data-tab={id}
+                      className={shownTab === id ? "selected" : ""}
+                      aria-pressed={shownTab === id}
+                      onClick={() => selectTab(id)}
                     >
-                      {options.students.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {/* Notes off for this class: only what writes a new notice is locked. */}
-                <fieldset disabled={locks.write} className="access-fields">
-                  <div className="dated-fields">
-                    <label className="field">
-                      <span>Первый день отсутствия</span>
-                      <input
-                        type="date"
-                        required
-                        min={options.yearStart}
-                        max={options.yearEnd}
-                        value={start}
-                        onChange={(e) => {
-                          setStart(e.target.value);
-                          setPreview(null);
+                      {name} {id === "notes" && <span>{items.length}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {shownTab === "notes" && (
+                <>
+                  <div className="absence-notes-actions">
+                    {options?.canReview && (
+                      <button
+                        className="primary"
+                        data-focus="school"
+                        onClick={() => {
+                          setSchoolSeen(true);
+                          setView("school");
+                          focusOn.current = () => headingOf(schoolBox.current);
                         }}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>С какого времени</span>
-                      <input
-                        type="time"
-                        required
-                        value={from}
-                        onChange={(e) => {
-                          setFrom(e.target.value);
-                          setPreview(null);
-                        }}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Последний день отсутствия</span>
-                      <input
-                        type="date"
-                        required
-                        min={start}
-                        max={options.yearEnd}
-                        value={end}
-                        onChange={(e) => {
-                          setEnd(e.target.value);
-                          setPreview(null);
-                        }}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>До какого времени</span>
-                      <input
-                        type="time"
-                        required
-                        value={to}
-                        onChange={(e) => {
-                          setTo(e.target.value);
-                          setPreview(null);
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <p>
-                    Время школы — Asia/Qyzylorda. Для полных дней оставьте
-                    00:00–23:59. Период непрерывный, до 31 дня; учитываются
-                    только полностью включённые в него уроки. Перенос урока за
-                    пределы периода отменяет применение объяснительной к нему.
-                    Чтобы указать первый и последний урок, покажите уроки в
-                    периоде и нажмите «С этого урока» и «По этот урок».
-                  </p>
-                  {parentCodes.length > 0 && (
-                    <label className="field">
-                      <span>Тип отсутствия</span>
-                      <select
-                        required
-                        value={codeId}
-                        onChange={(e) => setCodeId(e.target.value)}
                       >
-                        <option value="">Выберите тип</option>
-                        {parentCodes.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
+                        Внести записку
+                      </button>
+                    )}
+                    {options?.parent && (
+                      <button
+                        className="primary"
+                        data-focus="compose"
+                        onClick={() => {
+                          setView("compose");
+                          focusOn.current = () =>
+                            headingOf(composeForm.current);
+                        }}
+                      >
+                        {unsent
+                          ? "Продолжить записку"
+                          : "Сообщить об отсутствии"}
+                      </button>
+                    )}
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          setSelected(null);
+                          await loadOptions();
+                          await list();
+                        })
+                      }
+                    >
+                      Обновить
+                    </button>
+                  </div>
+                  <div className="absence-notes-filters">
+                    <label className="absence-notes-field">
+                      <span>Статус</span>
+                      <select
+                        disabled={busy}
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value)}
+                      >
+                        <option value="all">Все</option>
+                        {Object.entries(STATUS_LABELS)
+                          .filter(
+                            ([id]) => !["submitted", "recorded"].includes(id),
+                          )
+                          .map(([id, label]) => (
+                            <option key={id} value={id}>
+                              {label}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    {options?.canReview && (
+                      <>
+                        <label className="absence-notes-field">
+                          <span>Класс</span>
+                          <select
+                            disabled={busy}
+                            value={fClass}
+                            onChange={(e) => setFClass(e.target.value)}
+                          >
+                            <option value="">Все мои классы</option>
+                            {options.classSettings?.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="absence-notes-field">
+                          <span>Период с</span>
+                          <input
+                            type="date"
+                            disabled={busy}
+                            value={fFrom}
+                            onChange={(e) => setFFrom(e.target.value)}
+                          />
+                        </label>
+                        <label className="absence-notes-field">
+                          <span>Период по</span>
+                          <input
+                            type="date"
+                            disabled={busy}
+                            min={fFrom}
+                            value={fTo}
+                            onChange={(e) => setFTo(e.target.value)}
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                  {options?.canReview && (
+                    <fieldset
+                      disabled={busy}
+                      className="access-fields absence-notes-bulk"
+                      aria-label="Общее решение по запискам"
+                    >
+                      <div className="absence-notes-bulk-bar">
+                        <label className="absence-notes-field">
+                          <span>Общее решение</span>
+                          <select
+                            value={bulkAction}
+                            onChange={(e) => {
+                              setBulkAction(e.target.value);
+                              clearBulk();
+                            }}
+                          >
+                            {Object.entries(ACTIONS).map(([id, label]) => (
+                              <option key={id} value={id}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="absence-notes-count">
+                          Выбрано {bulkIds.length} из {BULK_LIMIT}
+                        </span>
+                        <button disabled={!bulkIds.length} onClick={clearBulk}>
+                          Сбросить выбор
+                        </button>
+                      </div>
+                      {bulkIds.length > 0 && (
+                        <div className="absence-notes-bulk-more">
+                          <label className="absence-notes-field">
+                            <span>Объяснение общего решения</span>
+                            <textarea
+                              rows={2}
+                              value={bulkComment}
+                              maxLength={2000}
+                              onChange={(e) => {
+                                setBulkComment(e.target.value);
+                                clearBulkPreview();
+                              }}
+                            />
+                          </label>
+                          <button
+                            data-focus="prepare"
+                            disabled={!bulkComment.trim()}
+                            onClick={() => void run(prepareBulk)}
+                          >
+                            Подготовить предпросмотр
+                          </button>
+                        </div>
+                      )}
+                    </fieldset>
+                  )}
+                  <NotesTable
+                    items={items}
+                    codes={options?.codes ?? []}
+                    subjects={options?.subjects ?? []}
+                    viewer={viewer}
+                    loading={busy}
+                    busy={busy}
+                    pick={
+                      options?.canReview
+                        ? {
+                            ids: bulkIds,
+                            action: bulkAction,
+                            onToggle: (id, checked) => {
+                              setBulkIds((old) =>
+                                checked
+                                  ? [...old, id]
+                                  : old.filter((x) => x !== id),
+                              );
+                              clearBulkPreview();
+                            },
+                            onToggleAll: () => {
+                              if (allPicked(items, bulkIds, bulkAction))
+                                clearBulk();
+                              else {
+                                setBulkIds(pickEligible(items, bulkAction));
+                                clearBulkPreview();
+                              }
+                            },
+                          }
+                        : undefined
+                    }
+                    onOpen={(n) => void run(() => open(n.id, true))}
+                  />
+                  {next !== null && (
+                    <button
+                      disabled={busy}
+                      onClick={() => void run(() => list(next))}
+                    >
+                      Предыдущие записки
+                    </button>
+                  )}
+                </>
+              )}
+              {shownTab === "classes" && classSettings.length > 0 && (
+                <>
+                  <p className="muted">
+                    Классный руководитель или администратор включает и выключает
+                    приём новых заявлений от родителей; поданные заявления и
+                    файлы остаются доступными.
+                  </p>
+                  <ClassesTable
+                    classes={classSettings}
+                    busy={busy}
+                    onSwitch={(c) => void run(() => switchNotes(c))}
+                  />
+                </>
+              )}
+            </>
+          )}
+          {options?.admin && codesSeen && (
+            <div hidden={!(shown === "list" && shownTab === "codes")}>
+              <AbsenceCodesEditor
+                bare
+                workspace={workspace}
+                onSaved={() => void loadOptions()}
+              />
+            </div>
+          )}
+          {shown === "note" && selected && (
+            <AbsenceNoteView
+              note={selected}
+              facts={factsLine(selected, {
+                codes: options?.codes ?? [],
+                subjects: options?.subjects ?? [],
+                filedBy: filedBy(
+                  {
+                    origin: selected.origin,
+                    mine:
+                      selected.mine ??
+                      items.find((x) => x.id === selected.id)?.mine,
+                  },
+                  viewer,
+                ),
+              })}
+              busy={busy}
+              comment={comment}
+              history={history}
+              historyNext={historyNext}
+              headingRef={noteHeading}
+              fileUrl={fileUrl}
+              onBack={() => goBack("note")}
+              onComment={(value) => {
+                setComment(value);
+                setDecisionRequest(crypto.randomUUID());
+              }}
+              onDecide={(action) => void run(() => decide(action))}
+              onRefresh={() => void run(() => open(selected.id))}
+              onHistory={(before) => void run(() => changes(before))}
+            />
+          )}
+          {options?.canReview && schoolSeen && (
+            <div ref={schoolBox} hidden={shown !== "school"}>
+              <button
+                type="button"
+                className="absence-notes-back"
+                onClick={() => goBack("school")}
+              >
+                ← К запискам
+              </button>
+              <AbsenceSchoolForm
+                workspace={workspace}
+                classes={options.classSettings ?? []}
+                pupils={options.schoolPupils ?? []}
+                codes={options.codes}
+                subjects={options.subjects}
+                yearStart={options.yearStart}
+                yearEnd={options.yearEnd}
+                defaultDate={options.defaultDate}
+                onDone={() => void run(list)}
+              />
+            </div>
+          )}
+          {shown === "compose" && options?.parent && (
+            <div>
+              <button
+                type="button"
+                className="absence-notes-back"
+                onClick={() => goBack("compose")}
+              >
+                ← К запискам
+              </button>
+              <form
+                ref={composeForm}
+                id="absence-compose"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (
+                    !window.confirm(
+                      "Передать школе причину отсутствия и выбранные файлы? После отправки их нельзя заменить; ожидающее заявление можно отозвать.",
+                    )
+                  )
+                    return;
+                  void run(async () => {
+                    const r = await api(
+                      "journal/absences",
+                      workspace,
+                      "POST",
+                      payload(),
+                    );
+                    setSelected(r);
+                    setHistory([]);
+                    showNote();
+                    reset();
+                    await list();
+                    setNotice("Заявление отправлено школе.");
+                  });
+                }}
+              >
+                <h3>Сообщить об отсутствии</h3>
+                {notesOff && (
+                  <p role="status">
+                    Электронные записки для класса выключены. Свяжитесь с
+                    классным руководителем
+                    {child?.classTeacher ? `: ${child.classTeacher}` : ""}.
+                  </p>
+                )}
+                <fieldset disabled={locks.pick} className="access-fields">
+                  {pinned && !!child && child.id === studentId ? (
+                    <p className="info-line">
+                      Ребёнок: <strong>{child.name}</strong>
+                    </p>
+                  ) : (
+                    <label className="field">
+                      <span>Ребёнок</span>
+                      <select
+                        value={student}
+                        onChange={(e) => {
+                          if (
+                            (reason || files.length) &&
+                            !window.confirm(
+                              "Начать форму для другого ребёнка? Неотправленный текст будет очищен.",
+                            )
+                          )
+                            return;
+                          setStudent(e.target.value);
+                          reset();
+                        }}
+                      >
+                        {options.students.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
                           </option>
                         ))}
                       </select>
                     </label>
                   )}
-                  <label className="field">
-                    <span>Предмет</span>
-                    <select
-                      value={subjectId}
-                      onChange={(e) => {
-                        setSubjectId(e.target.value);
-                        setPreview(null);
-                      }}
-                    >
-                      <option value="">Все предметы</option>
-                      {options.subjects.map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Причина отсутствия</span>
-                    <textarea
-                      required
-                      maxLength={4000}
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Приложить файл (необязательно, до 5 по 10 МиБ)</span>
-                    <input
-                      type="file"
-                      accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
-                      disabled={!student || files.length >= 5}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        e.target.value = "";
-                        if (f) void run(() => upload(f));
-                      }}
-                    />
-                    {serverBusy && (
-                      <small role="status">Сервер занят, повторяем…</small>
+                  {/* Notes off for this class: only what writes a new notice is locked. */}
+                  <fieldset disabled={locks.write} className="access-fields">
+                    <div className="dated-fields">
+                      <label className="field">
+                        <span>Первый день отсутствия</span>
+                        <input
+                          type="date"
+                          required
+                          min={options.yearStart}
+                          max={options.yearEnd}
+                          value={start}
+                          onChange={(e) => {
+                            setStart(e.target.value);
+                            setPreview(null);
+                          }}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>С какого времени</span>
+                        <input
+                          type="time"
+                          required
+                          value={from}
+                          onChange={(e) => {
+                            setFrom(e.target.value);
+                            setPreview(null);
+                          }}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Последний день отсутствия</span>
+                        <input
+                          type="date"
+                          required
+                          min={start}
+                          max={options.yearEnd}
+                          value={end}
+                          onChange={(e) => {
+                            setEnd(e.target.value);
+                            setPreview(null);
+                          }}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>До какого времени</span>
+                        <input
+                          type="time"
+                          required
+                          value={to}
+                          onChange={(e) => {
+                            setTo(e.target.value);
+                            setPreview(null);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <p>
+                      Время школы — Asia/Qyzylorda. Для полных дней оставьте
+                      00:00–23:59. Период непрерывный, до 31 дня; учитываются
+                      только полностью включённые в него уроки. Перенос урока за
+                      пределы периода отменяет применение объяснительной к нему.
+                      Чтобы указать первый и последний урок, покажите уроки в
+                      периоде и нажмите «С этого урока» и «По этот урок».
+                    </p>
+                    {parentCodes.length > 0 && (
+                      <label className="field">
+                        <span>Тип отсутствия</span>
+                        <select
+                          required
+                          value={codeId}
+                          onChange={(e) => setCodeId(e.target.value)}
+                        >
+                          <option value="">Выберите тип</option>
+                          {parentCodes.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     )}
-                  </label>
-                </fieldset>
-                {files.map((f) => (
-                  <div className="absence-file" key={f.id}>
-                    <a href={fileUrl(f.id)}>{f.filename}</a>
+                    <label className="field">
+                      <span>Предмет</span>
+                      <select
+                        value={subjectId}
+                        onChange={(e) => {
+                          setSubjectId(e.target.value);
+                          setPreview(null);
+                        }}
+                      >
+                        <option value="">Все предметы</option>
+                        {options.subjects.map((x) => (
+                          <option key={x.id} value={x.id}>
+                            {x.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Причина отсутствия</span>
+                      <textarea
+                        required
+                        maxLength={4000}
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>
+                        Приложить файл (необязательно, до 5 по 10 МиБ)
+                      </span>
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg,.txt,.docx,.xlsx,.pptx"
+                        disabled={!student || files.length >= 5}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = "";
+                          if (f) void run(() => upload(f));
+                        }}
+                      />
+                      {serverBusy && (
+                        <small role="status">Сервер занят, повторяем…</small>
+                      )}
+                    </label>
+                  </fieldset>
+                  {files.map((f) => (
+                    <div className="absence-file" key={f.id}>
+                      <a href={fileUrl(f.id)}>{f.filename}</a>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void run(async () => {
+                            await api(
+                              `journal/absence-files/${f.id}`,
+                              workspace,
+                              "DELETE",
+                            );
+                            setFiles((old) => old.filter((x) => x.id !== f.id));
+                          })
+                        }
+                      >
+                        Удалить неотправленный файл
+                      </button>
+                    </div>
+                  ))}
+                  <fieldset disabled={locks.write} className="access-fields">
                     <button
                       type="button"
+                      disabled={!student}
                       onClick={() =>
                         void run(async () => {
-                          await api(
-                            `journal/absence-files/${f.id}`,
+                          const r = await api(
+                            `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
                             workspace,
-                            "DELETE",
                           );
-                          setFiles((old) => old.filter((x) => x.id !== f.id));
+                          setAvailable(r.items);
                         })
                       }
                     >
-                      Удалить неотправленный файл
+                      Найти загрузки этой формы
                     </button>
-                  </div>
-                ))}
-                <fieldset disabled={locks.write} className="access-fields">
-                  <button
-                    type="button"
-                    disabled={!student}
-                    onClick={() =>
-                      void run(async () => {
-                        const r = await api(
-                          `journal/absence-files?${new URLSearchParams({ studentId: student, draftId: requestId })}`,
-                          workspace,
-                        );
-                        setAvailable(r.items);
-                      })
-                    }
-                  >
-                    Найти загрузки этой формы
-                  </button>
-                  {available
-                    .filter((f) => !files.some((x) => x.id === f.id))
-                    .map((f) => (
-                      <div className="absence-file" key={f.id}>
-                        <span>{f.filename}</span>
-                        <button
-                          type="button"
-                          disabled={files.length >= 5}
-                          onClick={() => setFiles((old) => [...old, f])}
-                        >
-                          Приложить найденный файл
-                        </button>
-                      </div>
-                    ))}
-                </fieldset>
-                <p>
-                  Неотправленный текст не сохраняется после закрытия формы.
-                  Неиспользованные файлы очищаются через сутки при следующих
-                  загрузках.
-                </p>
-                <div className="dated-toolbar">
-                  <button
-                    type="button"
-                    disabled={!student || !reason.trim() || locks.write}
-                    onClick={() =>
-                      void run(async () => {
-                        const r = await api(
-                          "journal/absences/preview",
-                          workspace,
-                          "POST",
-                          payload(),
-                        );
-                        setPreview(r.lessons);
-                      })
-                    }
-                  >
-                    Показать уроки в периоде
-                  </button>
-                  <button
-                    className="primary"
-                    type="submit"
-                    disabled={
-                      !student ||
-                      !reason.trim() ||
-                      locks.write ||
-                      (parentCodes.length > 0 && !codeId)
-                    }
-                  >
-                    Отправить объяснительную
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm("Очистить неотправленную форму?"))
-                        reset();
-                    }}
-                  >
-                    Новая форма
-                  </button>
-                </div>
-                {preview && (
-                  <div className="absence-preview">
-                    <p>
-                      Уроков по текущему расписанию: {preview.length}. Решение
-                      будет действовать в указанный период и для добавленных
-                      позднее уроков.
-                    </p>
-                    {preview.map((r, i) => (
-                      <p className="absence-file" key={i}>
-                        {r.date} · {r.start}–{r.end} · {r.subject} · {r.group}
-                        <button type="button" onClick={() => edge(r, "start")}>
-                          С этого урока
-                        </button>
-                        <button type="button" onClick={() => edge(r, "end")}>
-                          По этот урок
-                        </button>
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </fieldset>
-            </form>
-          )}
-          {options?.canReview && (
-            <AbsenceSchoolForm
-              workspace={workspace}
-              classes={options.classSettings ?? []}
-              pupils={options.schoolPupils ?? []}
-              codes={options.codes}
-              subjects={options.subjects}
-              yearStart={options.yearStart}
-              yearEnd={options.yearEnd}
-              defaultDate={options.defaultDate}
-              onDone={() => void run(list)}
-            />
-          )}
-          <div className="dated-toolbar">
-            <label className="field">
-              <span>Статус заявления</span>
-              <select
-                disabled={busy}
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-              >
-                <option value="all">Все</option>
-                {Object.entries(labels)
-                  .filter(([id]) => !["submitted", "recorded"].includes(id))
-                  .map(([id, label]) => (
-                    <option key={id} value={id}>
-                      {label}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {options?.canReview && (
-              <>
-                <label className="field">
-                  <span>Класс</span>
-                  <select
-                    disabled={busy}
-                    value={fClass}
-                    onChange={(e) => setFClass(e.target.value)}
-                  >
-                    <option value="">Все мои классы</option>
-                    {options.classSettings?.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Период с</span>
-                  <input
-                    type="date"
-                    disabled={busy}
-                    value={fFrom}
-                    onChange={(e) => setFFrom(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>Период по</span>
-                  <input
-                    type="date"
-                    disabled={busy}
-                    min={fFrom}
-                    value={fTo}
-                    onChange={(e) => setFTo(e.target.value)}
-                  />
-                </label>
-              </>
-            )}
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  setSelected(null);
-                  await loadOptions();
-                  await list();
-                })
-              }
-            >
-              Обновить заявления
-            </button>
-          </div>
-          {!busy && !items.length && <p>Заявлений не найдено.</p>}
-          {options?.classSettings?.length ? (
-            <section
-              className="absence-card"
-              aria-label="Электронные записки по классам"
-            >
-              <h3>Электронные записки по классам</h3>
-              <p>
-                Классный руководитель или администратор включает и выключает
-                приём новых заявлений от родителей. Уже поданные заявления и
-                файлы остаются доступными.
-              </p>
-              {options.classSettings.map((c) => (
-                <article className="absence-card" key={c.id}>
-                  <strong>{c.name}</strong>
+                    {available
+                      .filter((f) => !files.some((x) => x.id === f.id))
+                      .map((f) => (
+                        <div className="absence-file" key={f.id}>
+                          <span>{f.filename}</span>
+                          <button
+                            type="button"
+                            disabled={files.length >= 5}
+                            onClick={() => setFiles((old) => [...old, f])}
+                          >
+                            Приложить найденный файл
+                          </button>
+                        </div>
+                      ))}
+                  </fieldset>
                   <p>
-                    Классный руководитель: {c.classTeacher || "не назначен"} ·
-                    записки {c.enabled ? "включены" : "выключены"}
-                    {c.updated
-                      ? ` · изменено ${new Date(c.updated).toLocaleString("ru-RU")}${c.actor ? `, ${c.actor}` : ""}`
-                      : ""}
+                    Неотправленный текст не сохраняется после закрытия формы.
+                    Неиспользованные файлы очищаются через сутки при следующих
+                    загрузках.
                   </p>
-                  {c.canChange && (
+                  <div className="dated-toolbar">
                     <button
-                      disabled={busy}
-                      onClick={() => void run(() => switchNotes(c))}
+                      type="button"
+                      disabled={!student || !reason.trim() || locks.write}
+                      onClick={() =>
+                        void run(async () => {
+                          const r = await api(
+                            "journal/absences/preview",
+                            workspace,
+                            "POST",
+                            payload(),
+                          );
+                          setPreview(r.lessons);
+                        })
+                      }
                     >
-                      {c.enabled ? "Выключить" : "Включить"} электронные записки{" "}
-                      {c.name}
+                      Показать уроки в периоде
                     </button>
-                  )}
-                </article>
-              ))}
-            </section>
-          ) : null}
-          {options?.admin && (
-            <AbsenceCodesEditor
-              workspace={workspace}
-              onSaved={() => void loadOptions()}
-            />
-          )}
-          {options?.canReview && (
-            <section
-              className="absence-card"
-              aria-label="Массовое рассмотрение"
-            >
-              <h3>Общее решение по заявлениям</h3>
-              <p>
-                Выберите до 50 заявлений ниже. Одно объяснение решения
-                сохранится в истории каждого. Родители увидят только своё
-                заявление.
-              </p>
-              <fieldset disabled={busy} className="access-fields">
-                <label className="field">
-                  <span>Общее действие</span>
-                  <select
-                    value={bulkAction}
-                    onChange={(e) => {
-                      setBulkAction(e.target.value);
-                      clearBulk();
-                    }}
-                  >
-                    {Object.entries(actions).map(([id, label]) => (
-                      <option key={id} value={id}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Объяснение общего решения</span>
-                  <textarea
-                    value={bulkComment}
-                    maxLength={2000}
-                    onChange={(e) => {
-                      setBulkComment(e.target.value);
-                      clearBulkPreview();
-                    }}
-                  />
-                </label>
-                <p>Выбрано: {bulkIds.length} из 50.</p>
-                <div className="dated-toolbar">
-                  <button
-                    disabled={!items.some(bulkEligible)}
-                    onClick={() => {
-                      setBulkIds(
-                        items
-                          .filter(bulkEligible)
-                          .slice(0, 50)
-                          .map((item) => item.id),
-                      );
-                      clearBulkPreview();
-                    }}
-                  >
-                    Выбрать до 50 загруженных
-                  </button>
-                  <button disabled={!bulkIds.length} onClick={clearBulk}>
-                    Сбросить выбор
-                  </button>
-                  <button
-                    disabled={!bulkIds.length || !bulkComment.trim()}
-                    onClick={() => void run(prepareBulk)}
-                  >
-                    Подготовить предпросмотр
-                  </button>
-                </div>
-              </fieldset>
-              {bulkPreview && (
-                <section
-                  aria-label="Предпросмотр общего решения"
-                  className="absence-card"
-                >
-                  <h3>Проверьте общее решение</h3>
-                  <p>
-                    <strong>
-                      {actions[bulkPreview.action]} · {bulkPreview.items.length}{" "}
-                      заявлений
-                    </strong>
-                  </p>
-                  <p className="journal-text">{bulkPreview.comment}</p>
-                  <p>
-                    {bulkPreview.action === "approve"
-                      ? "Отсутствие на полностью включённых в период уроках будет учитываться как уважительная причина, в том числе в журналах, созданных позже."
-                      : bulkPreview.action === "revoke"
-                        ? "Эти объяснительные перестанут подтверждать уважительную причину. Исходные отметки учителей снова определят посещаемость."
-                        : "Заявления будут отклонены. Посещаемость останется прежней."}{" "}
-                    Оценки, исходные отметки и публикация журналов сохраняются.
-                  </p>
-                  <div className="absence-bulk-preview">
-                    {bulkPreview.items.map((item) => (
-                      <article className="absence-card" key={item.id}>
-                        <strong>
-                          {item.studentName} · {labels[item.status]} →{" "}
-                          {labels[item.nextStatus]}
-                        </strong>
-                        <p>
-                          {item.start.replace("T", " ")} —{" "}
-                          {item.end.replace("T", " ")}
-                        </p>
-                        <p className="journal-text">{item.reason}</p>
-                        {item.files?.map((file) => (
-                          <p key={file.id}>
-                            <a href={fileUrl(file.id)}>{file.filename}</a>
-                          </p>
-                        ))}
-                      </article>
-                    ))}
+                    <button
+                      className="primary"
+                      type="submit"
+                      disabled={
+                        !student ||
+                        !reason.trim() ||
+                        locks.write ||
+                        (parentCodes.length > 0 && !codeId)
+                      }
+                    >
+                      Отправить объяснительную
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm("Очистить неотправленную форму?"))
+                          reset();
+                      }}
+                    >
+                      Новая форма
+                    </button>
                   </div>
-                  <p>
-                    Предпросмотр действителен до{" "}
-                    {new Date(bulkPreview.expires).toLocaleTimeString("ru-RU")}.
-                    Если заявления или доступы изменились, ни одно решение не
-                    сохранится. После ошибки соединения можно повторить
-                    применение: решения не продублируются.
-                  </p>
-                  <button disabled={busy} onClick={() => void run(applyBulk)}>
-                    Применить ко всем ({bulkPreview.items.length})
-                  </button>
-                </section>
-              )}
-            </section>
+                  {preview && (
+                    <div className="absence-preview">
+                      <p>
+                        Уроков по текущему расписанию: {preview.length}. Решение
+                        будет действовать в указанный период и для добавленных
+                        позднее уроков.
+                      </p>
+                      {preview.map((r, i) => (
+                        <p className="absence-file" key={i}>
+                          {r.date} · {r.start}–{r.end} · {r.subject} · {r.group}
+                          <button
+                            type="button"
+                            onClick={() => edge(r, "start")}
+                          >
+                            С этого урока
+                          </button>
+                          <button type="button" onClick={() => edge(r, "end")}>
+                            По этот урок
+                          </button>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </fieldset>
+              </form>
+            </div>
           )}
-          {items.map((item) => (
-            <article className="absence-card" key={item.id}>
-              {options?.canReview && bulkEligible(item) && (
-                <label className="absence-file">
-                  <input
-                    type="checkbox"
-                    checked={bulkIds.includes(item.id)}
-                    disabled={
-                      busy ||
-                      (!bulkIds.includes(item.id) && bulkIds.length >= 50)
-                    }
-                    onChange={(e) => {
-                      setBulkIds((old) =>
-                        e.target.checked
-                          ? [...old, item.id]
-                          : old.filter((id) => id !== item.id),
-                      );
-                      clearBulkPreview();
-                    }}
-                  />
-                  Включить в общее решение: {item.studentName},{" "}
-                  {item.start.replace("T", " ")}
-                </label>
-              )}
-              <strong>
-                {item.studentName} · {labels[item.status]}
-              </strong>
-              <p>
-                {item.start.replace("T", " ")} — {item.end.replace("T", " ")}
-              </p>
-              <p>{meta(item)}</p>
+          {shown === "bulk" && bulkPreview && (
+            <section aria-label="Предпросмотр общего решения">
               <button
-                disabled={busy}
-                onClick={() => void run(() => open(item.id))}
+                type="button"
+                className="absence-notes-back"
+                onClick={() => goBack("bulk")}
               >
-                Открыть заявление
+                ← К запискам
               </button>
-            </article>
-          ))}
-          {next !== null && (
-            <button disabled={busy} onClick={() => void run(() => list(next))}>
-              Предыдущие заявления
-            </button>
-          )}
-          {selected && (
-            <article className="absence-card">
-              <h3>
-                {selected.studentName} · {labels[selected.status]}
+              <h3
+                tabIndex={-1}
+                ref={bulkHeading}
+                className="absence-notes-title"
+              >
+                Проверьте общее решение
               </h3>
               <p>
-                {selected.start.replace("T", " ")} —{" "}
-                {selected.end.replace("T", " ")}
+                <strong>
+                  {ACTIONS[bulkPreview.action]} · {bulkPreview.items.length}{" "}
+                  заявлений
+                </strong>
               </p>
-              <p>{meta(selected)}</p>
-              {selected.summary ? (
-                <>
-                  <p className="info-line">
-                    Причина и файлы доступны взрослым представителям и школе.
-                  </p>
-                  <button
-                    disabled={busy}
-                    onClick={() => void run(() => open(selected.id))}
-                  >
-                    Обновить открытое заявление
-                  </button>
-                </>
-              ) : (
-                <>
-                  {selected.authorName && <p>Автор: {selected.authorName}</p>}
-                  <p className="journal-text">{selected.reason}</p>
-                  {selected.files?.map((f) => (
-                    <p key={f.id}>
-                      <a href={fileUrl(f.id)}>{f.filename}</a> ·{" "}
-                      {Math.ceil(f.size / 1024)} КиБ
-                    </p>
-                  ))}
-                  <p>
-                    Принятие меняет учёт отметки «Отсутствует» на «Уважительная
-                    причина». Оно не ставит отсутствие вместо «Не отмечено»,
-                    «Присутствует» или «Опоздание» и не публикует черновики
-                    журнала. Причина и файлы в журнал не передаются.
-                  </p>
-                  <fieldset disabled={busy} className="access-fields">
-                    {(selected.canWithdraw ||
-                      (selected.canReview &&
-                        ["pending", "approved"].includes(selected.status))) && (
-                      <>
-                        <label className="field">
-                          <span>
-                            {selected.canWithdraw && !selected.canReview
-                              ? "Комментарий (необязательно)"
-                              : "Объяснение решения"}
-                          </span>
-                          <textarea
-                            maxLength={2000}
-                            value={comment}
-                            onChange={(e) => {
-                              setComment(e.target.value);
-                              setDecisionRequest(crypto.randomUUID());
-                            }}
-                          />
-                        </label>
-                        {!!selected.periodLocks?.length &&
-                          selected.canReview && (
-                            <p className="info-line">
-                              Период журнала закрыт:{" "}
-                              {selected.periodLocks.join(", ")}. Принять
-                              объяснительную или отменить решение можно после
-                              того, как администратор откроет период.
-                            </p>
-                          )}
-                        <div className="dated-toolbar">
-                          {selected.canWithdraw && (
-                            <button
-                              onClick={() => void run(() => decide("withdraw"))}
-                            >
-                              Отозвать заявление
-                            </button>
-                          )}
-                          {selected.canReview &&
-                            selected.status === "pending" && (
-                              <>
-                                <button
-                                  disabled={
-                                    !comment.trim() ||
-                                    !!selected.periodLocks?.length
-                                  }
-                                  onClick={() =>
-                                    void run(() => decide("approve"))
-                                  }
-                                >
-                                  Принять объяснительную
-                                </button>
-                                <button
-                                  disabled={!comment.trim()}
-                                  onClick={() =>
-                                    void run(() => decide("reject"))
-                                  }
-                                >
-                                  Отклонить объяснительную
-                                </button>
-                              </>
-                            )}
-                          {selected.canReview &&
-                            selected.status === "approved" && (
-                              <button
-                                disabled={
-                                  !comment.trim() ||
-                                  !!selected.periodLocks?.length
-                                }
-                                onClick={() => void run(() => decide("revoke"))}
-                              >
-                                Отменить принятое решение
-                              </button>
-                            )}
-                        </div>
-                      </>
-                    )}
-                    <button onClick={() => void run(() => open(selected.id))}>
-                      Обновить открытое заявление
-                    </button>
-                    <button onClick={() => void run(() => changes())}>
-                      История заявления
-                    </button>
-                  </fieldset>
-                </>
-              )}
-              {history.map((h) => (
-                <div className="family-history" key={h.id}>
-                  <p>
-                    {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·{" "}
-                    {labels[h.action] || h.action} · редакция {h.version}
-                    {sharedDecision(h) && " · общее решение"}
-                  </p>
-                  {h.comment && <p className="journal-text">{h.comment}</p>}
-                </div>
-              ))}
-              {historyNext !== null && (
-                <button
-                  disabled={busy}
-                  onClick={() => void run(() => changes(historyNext))}
-                >
-                  Предыдущие решения
-                </button>
-              )}
-            </article>
+              <p className="journal-text">{bulkPreview.comment}</p>
+              <p>
+                {bulkPreview.action === "approve"
+                  ? "Отсутствие на полностью включённых в период уроках будет учитываться как уважительная причина, в том числе в журналах, созданных позже."
+                  : bulkPreview.action === "revoke"
+                    ? "Эти объяснительные перестанут подтверждать уважительную причину. Исходные отметки учителей снова определят посещаемость."
+                    : "Заявления будут отклонены. Посещаемость останется прежней."}{" "}
+                Оценки, исходные отметки и публикация журналов сохраняются.
+              </p>
+              <BulkPreviewTable items={bulkPreview.items} fileUrl={fileUrl} />
+              <p>
+                Предпросмотр действителен до{" "}
+                {new Date(bulkPreview.expires).toLocaleTimeString("ru-RU")}.
+                Если заявления или доступы изменились, ни одно решение не
+                сохранится. После ошибки соединения можно повторить применение:
+                решения не продублируются.
+              </p>
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void run(applyBulk)}
+              >
+                Применить ко всем ({bulkPreview.items.length})
+              </button>
+            </section>
           )}
-        </>
+        </div>
       )}
     </details>
   );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { type AbsenceCode, codeSetError } from "./absenceForm";
 
@@ -31,9 +31,12 @@ const changes = (before: AbsenceCode[], after: AbsenceCode[]) =>
 export default function AbsenceCodesEditor({
   workspace,
   onSaved,
+  bare = false,
 }: {
   workspace: string;
   onSaved: () => void;
+  // Without its own section: the host shows it (a tab) and the list loads when it is first shown.
+  bare?: boolean;
 }) {
   const [version, setVersion] = useState(0),
     [saved, setSaved] = useState<AbsenceCode[]>([]),
@@ -100,14 +103,15 @@ export default function AbsenceCodesEditor({
     setNotice("Типы отсутствия сохранены.");
     onSaved();
   };
-  return (
-    <details
-      className="absence-card"
-      onToggle={(e) => {
-        if (e.currentTarget.open && !loaded) void load();
-      }}
-    >
-      <summary>Типы отсутствия</summary>
+  const started = useRef(false);
+  useEffect(() => {
+    if (!bare || started.current) return;
+    started.current = true;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bare]);
+  const body = (
+    <>
       <p>
         Тип выбирают при внесении записки. Тип нельзя удалить: выключите его, и
         прежние записки сохранят название. Переименование меняет название и в
@@ -220,6 +224,18 @@ export default function AbsenceCodesEditor({
           Предыдущие изменения
         </button>
       )}
+    </>
+  );
+  if (bare) return body;
+  return (
+    <details
+      className="absence-card"
+      onToggle={(e) => {
+        if (e.currentTarget.open && !loaded) void load();
+      }}
+    >
+      <summary>Типы отсутствия</summary>
+      {body}
     </details>
   );
 }
