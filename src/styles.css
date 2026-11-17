@@ -5216,10 +5216,6 @@ main {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.family-panel summary {
-  cursor: pointer;
-  font-weight: 600;
-}
 .family-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -5231,9 +5227,6 @@ main {
 .family-history {
   border-top: 1px solid var(--line);
   padding: 8px 0;
-}
-.family-panel fieldset {
-  min-width: 0;
 }
 .absence-panel {
   border: 1px solid var(--line);

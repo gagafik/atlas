@@ -452,7 +452,6 @@ export default function AccessPanel({
                 state={state}
                 users={users}
                 onChanged={reload}
-                bare
               />
             </div>
           )}

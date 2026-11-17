@@ -1,0 +1,319 @@
+/* «Семьи» of «Пользователи и доступ»: the registry as a table; a link and the picker open in place of it. */
+.family-links {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.family-links > * {
+  min-width: 0;
+}
+.family-browse {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+/* The grids above would show a hidden view: the attribute must still win. */
+.family-browse[hidden] {
+  display: none;
+}
+.family-message {
+  margin: 0;
+}
+
+/* One row: search, filter, reload and the primary button; on a phone every part takes the line. */
+.family-toolbar {
+  container: family-toolbar / inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  min-width: 0;
+}
+.family-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+.family-toolbar input {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  width: 260px;
+  max-width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.family-toolbar > button {
+  min-height: 32px;
+  padding: 4px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.family-toolbar > .primary {
+  margin-left: auto;
+}
+@container family-toolbar (max-width: 619px) {
+  .family-toolbar label {
+    flex: 1 1 100%;
+  }
+  .family-toolbar input {
+    width: 100%;
+    max-width: none;
+  }
+  .family-toolbar > button {
+    flex: 1 1 calc(50% - 5px);
+  }
+  .family-toolbar > .primary {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+.family-help summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.family-help p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.family-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* The links: a compact table in a box of its own; under 620 px of its own width a row becomes a block. */
+.family-list {
+  container: family-list / inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.family-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.family-table th,
+.family-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  min-width: 0;
+}
+.family-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+.family-table tbody > tr:last-child > td {
+  border-bottom: 0;
+}
+.family-table tbody > tr:hover > td {
+  background: var(--accent-tint);
+}
+.family-table th:nth-child(1) {
+  width: 18%;
+}
+.family-table th:nth-child(2) {
+  width: 18%;
+}
+.family-table th:nth-child(3) {
+  width: 11%;
+}
+.family-table th:nth-child(4) {
+  width: 14%;
+}
+.family-table th:nth-child(5) {
+  width: 17%;
+}
+.family-table th:nth-child(6) {
+  width: 13%;
+}
+.family-table th:nth-child(7) {
+  width: 9%;
+}
+.family-c-parent,
+.family-c-student,
+.family-c-relation {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.family-c-student {
+  font-weight: var(--weight-semibold);
+}
+.family-c-term {
+  white-space: normal;
+}
+.family-c-actions {
+  text-align: right;
+}
+.family-table button {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+}
+.family-chip {
+  display: inline-block;
+  max-width: 100%;
+  margin: 1px 4px 1px 0;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 14px;
+  vertical-align: middle;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.family-chip[data-tone="ok"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.family-chip[data-tone="warn"] {
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+.family-chip[data-tone="danger"] {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+.family-row-off > td {
+  color: var(--text-muted);
+}
+.family-row-saved > td {
+  background: var(--accent-tint);
+}
+@container family-list (max-width: 619px) {
+  .family-table,
+  .family-table tbody {
+    display: block;
+  }
+  .family-table thead {
+    display: none;
+  }
+  .family-table tr.family-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "parent access"
+      "student relation"
+      "check term"
+      "actions actions";
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .family-table tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .family-table tr.family-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+  }
+  /* A phone has no room to cut and no title to read: the text wraps, so that the whole name can be read. */
+  .family-c-parent,
+  .family-c-student,
+  .family-c-relation {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* The tint of the saved link belongs to the block, the cells above have none. */
+  .family-table tr.family-row.family-row-saved {
+    background: var(--accent-tint);
+  }
+  .family-c-parent {
+    grid-area: parent;
+  }
+  .family-c-access {
+    grid-area: access;
+    text-align: right;
+  }
+  .family-c-student {
+    grid-area: student;
+  }
+  .family-c-relation {
+    grid-area: relation;
+    text-align: right;
+    color: var(--text-muted);
+  }
+  .family-c-check {
+    grid-area: check;
+  }
+  .family-c-term {
+    grid-area: term;
+    text-align: right;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+  }
+  .family-c-actions {
+    grid-area: actions;
+  }
+  .family-c-actions button {
+    width: 100%;
+  }
+}
+
+/* The link and the picker: heading with the way back, the messages next to the buttons. */
+.family-form-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.family-form-head h3 {
+  margin: 0;
+  min-width: 0;
+}
+.family-form-head h3:focus {
+  outline: 0;
+}
+.family-form .check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 17px;
+}
+.family-form .check-line input {
+  width: auto;
+}
+.family-form textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+.family-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.family-form > button {
+  justify-self: start;
+}
