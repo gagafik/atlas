@@ -80,12 +80,6 @@
   border-radius: var(--radius);
   padding: 10px 14px;
 }
-.bn-praise {
-  border-left-color: var(--success);
-}
-.bn-remark {
-  border-left-color: var(--danger);
-}
 .bn-withdrawn {
   color: var(--text-muted);
 }
@@ -144,9 +138,6 @@
   border-color: var(--danger);
   color: var(--danger);
 }
-.behaviour .bn-wide-row {
-  grid-column: 1 / -1;
-}
 .bn-scroll {
   overflow-x: auto;
 }
@@ -181,6 +172,427 @@
 }
 .bn-place-3 {
   background: var(--warning-tint);
+}
+/* The filters of «Записи»: one row of compact fields, two to a line on a phone. */
+.bn-toolbar {
+  container: bn-toolbar / inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  margin: 8px 0;
+  min-width: 0;
+}
+.behaviour .bn-toolbar label {
+  width: auto;
+  min-width: 0;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+.behaviour .bn-toolbar select,
+.behaviour .bn-toolbar input {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.behaviour .bn-toolbar select {
+  max-width: 150px;
+}
+.behaviour .bn-toolbar input[type="date"] {
+  width: 128px;
+}
+.bn-toolbar > a {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.bn-toolbar > button {
+  min-height: 32px;
+  padding: 4px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+@container bn-toolbar (max-width: 619px) {
+  .behaviour .bn-toolbar label {
+    flex: 1 1 calc(50% - 5px);
+    width: calc(50% - 5px);
+  }
+  .behaviour .bn-toolbar select {
+    max-width: none;
+    width: 100%;
+  }
+  .behaviour .bn-toolbar input,
+  .behaviour .bn-toolbar input[type="date"] {
+    width: 100%;
+  }
+  .bn-toolbar > a {
+    margin-left: 0;
+  }
+  .bn-toolbar > button {
+    flex: 1 1 100%;
+  }
+}
+/* «Новая запись»: the form takes the place of the list; the pupils are picked in a box of their own. */
+.bn-form-head h3:focus {
+  outline: 0;
+}
+.bn-pick-more {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.bn-note-form {
+  container: bn-note-form / inline-size;
+}
+.bn-form-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.behaviour .bn-form-head h3 {
+  margin: 0;
+}
+.behaviour .bn-pick {
+  margin: 12px 0 0;
+}
+.bn-pick legend {
+  padding: 0;
+  font-weight: var(--weight-semibold);
+}
+.bn-chosen {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 6px 0;
+  padding: 0;
+}
+.bn-chosen-chip {
+  min-height: 26px;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+  font-size: 12px;
+  line-height: 16px;
+}
+.bn-pick-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  margin: 6px 0;
+}
+.behaviour .bn-pick-tools label {
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.behaviour .bn-pick-tools select,
+.behaviour .bn-pick-tools input {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.bn-pick-tools button {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+.bn-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px;
+  font-size: 13px;
+}
+.behaviour .bn-picker label {
+  flex-direction: row;
+  align-items: center;
+}
+.behaviour .bn-picker p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+}
+.bn-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+.behaviour .bn-form-grid label {
+  display: flex;
+}
+.bn-form-grid select,
+.bn-form-grid input[type="date"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+.bn-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@container bn-note-form (max-width: 559px) {
+  .bn-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The child picker and the two counters of the family on one line. */
+.bn-family {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 24px;
+  margin: 8px 0;
+}
+.behaviour .bn-family p {
+  margin: 0;
+  padding-bottom: 6px;
+}
+/* The records: a compact table in a box of its own. The box scrolls sideways inside itself when a row is wider than
+   the dialog; under 620 px of its own width a row becomes a block and nothing scrolls sideways. */
+.bn-records {
+  container: bn-records / inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.bn-notes {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.bn-notes th,
+.bn-notes td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.bn-notes thead th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+.bn-notes tbody:last-child > tr:last-child > td {
+  border-bottom: 0;
+}
+.bn-notes-row:hover > td {
+  background: var(--accent-tint);
+}
+.bn-notes small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+.bn-notes button {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+}
+.bn-c-date,
+.bn-c-pupil,
+.bn-c-author {
+  white-space: nowrap;
+}
+.bn-c-kind {
+  min-width: 190px;
+  max-width: 240px;
+}
+/* The text is cut to one line by the cell; the whole text is in the title and in the line under the row. */
+.bn-c-text {
+  width: 100%;
+  min-width: 140px;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bn-chips,
+.bn-row-actions,
+.bn-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* The buttons of a row stay on one line: a row is as tall as its text. */
+.bn-row-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.bn-detail-actions {
+  margin: 6px 0 2px;
+}
+.bn-kind,
+.bn-state {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.bn-kind {
+  font-weight: var(--weight-semibold);
+}
+.bn-kind[data-kind="praise"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.bn-kind[data-kind="remark"] {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+.bn-state {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.bn-state[data-state="pending"] {
+  background: var(--warning-tint);
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+.bn-state[data-state="rejected"] {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+.bn-state[data-state="approved"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.bn-detail-row > td {
+  background: var(--surface-alt);
+  white-space: normal;
+}
+.bn-detail-row .bn-history {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+@container bn-records (max-width: 619px) {
+  .bn-notes,
+  .bn-notes tbody,
+  .bn-notes .bn-detail-row,
+  .bn-notes .bn-detail-row > td {
+    display: block;
+  }
+  .bn-notes thead {
+    display: none;
+  }
+  .bn-notes tr.bn-notes-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .bn-notes-staff tr.bn-notes-row {
+    grid-template-areas:
+      "date pupil"
+      "kind state"
+      "text text"
+      "author actions";
+  }
+  .bn-notes-family tr.bn-notes-row {
+    grid-template-areas:
+      "date kind"
+      "state state"
+      "text text"
+      "author actions";
+  }
+  .bn-notes tr.bn-notes-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    min-width: 0;
+    max-width: none;
+    width: auto;
+  }
+  .bn-c-date {
+    grid-area: date;
+    color: var(--text-muted);
+  }
+  .bn-c-pupil {
+    grid-area: pupil;
+    text-align: right;
+    font-weight: var(--weight-semibold);
+  }
+  .bn-c-pupil small {
+    display: inline;
+    margin-left: 6px;
+  }
+  .bn-c-kind {
+    grid-area: kind;
+  }
+  .bn-c-kind small {
+    display: inline;
+    margin-left: 6px;
+  }
+  .bn-notes-family .bn-c-kind {
+    text-align: right;
+  }
+  .bn-c-state {
+    grid-area: state;
+    min-width: 0;
+    text-align: right;
+  }
+  .bn-notes-staff .bn-chips {
+    justify-content: flex-end;
+  }
+  .bn-c-text {
+    grid-area: text;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+  }
+  .bn-c-author {
+    grid-area: author;
+    color: var(--text-muted);
+    white-space: normal;
+  }
+  .bn-c-actions {
+    grid-area: actions;
+  }
+  .bn-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .bn-notes .bn-detail-row > td {
+    padding: 6px 8px;
+  }
+  .bn-notes tbody > tr:last-child {
+    border-bottom: 0;
+  }
 }
 @media (max-width: 600px) {
   .behaviour {

@@ -3,82 +3,27 @@ import { api } from "./api";
 import type { Account } from "./auth";
 import { measureCategory } from "./behaviourMeasure";
 import CommissionExams from "./CommissionExams";
+import {
+  dayLabel,
+  formDirty,
+  freshForm,
+  stamp,
+  statusLabels,
+  type Category,
+  type FormBase,
+  type History,
+  type Kind,
+  type Level,
+  type Note,
+  type NoteForm,
+  type Options,
+  type Status,
+} from "./behaviourNotesModel";
+import BehaviourNoteForm from "./BehaviourNoteForm";
+import BehaviourNotesTable from "./BehaviourNotesTable";
 import Letterhead from "./Letterhead";
 import "./BehaviourNotes.css";
 
-type Kind = "praise" | "remark";
-type Level = "teacher" | "class_teacher" | "director";
-type Category = {
-  id: string;
-  kind: Kind;
-  title: string;
-  active: boolean;
-  level: Level;
-  approval: boolean;
-  quick: boolean;
-  letter: boolean;
-  // Printed in the pupil's report card by default.
-  report: boolean;
-};
-type Student = { id: string; name: string; classId: string; className: string };
-type Options = {
-  admin: boolean;
-  canWrite: boolean;
-  family: boolean;
-  canAcknowledge: boolean;
-  today: string;
-  levels: Record<Level, string>;
-  myLevels: Level[];
-  // The classes the account leads as class teacher: the measures of that level hold for their pupils only.
-  myClassIds: string[];
-  remarkAck: boolean;
-  categories: Category[];
-  pending: number;
-  // The commission exams screen: the server says who may open it (administrator, commission member, family of a decided exam).
-  commission?: { manage: boolean; member: boolean; family: boolean } | null;
-  configVersion: number | null;
-  classes: { id: string; name: string }[];
-  students: Student[];
-};
-type Status = "pending" | "published" | "rejected" | "withdrawn";
-type Note = {
-  id: string;
-  version: number;
-  status: Status;
-  kind: Kind;
-  day: string;
-  categoryId: string;
-  category: string;
-  text: string;
-  author: string;
-  level: Level;
-  levelTitle: string;
-  studentId: string;
-  student: string;
-  className?: string;
-  requireAck: boolean;
-  acknowledged: boolean;
-  acknowledgedAt: string | null;
-  acknowledgedBy: string | null;
-  letter: boolean;
-  letterNumber: string;
-  lesson: string;
-  visible?: boolean;
-  printed?: boolean;
-  approval?: boolean;
-  decision?: string;
-  approvedBy?: string;
-  withdrawReason?: string;
-  canChange?: boolean;
-  canDecide?: boolean;
-};
-type History = {
-  seq: number;
-  actor: string;
-  created: string;
-  action: string;
-  reason: string;
-}[];
 type Summary = {
   studentId: string;
   student: string;
@@ -108,31 +53,6 @@ type Letter = {
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
 };
-const kindLabels: Record<Kind, string> = {
-  praise: "Похвала",
-  remark: "Замечание",
-};
-const statusLabels: Record<Status, string> = {
-  pending: "На согласовании",
-  published: "Действует",
-  rejected: "Отклонена",
-  withdrawn: "Отозвана",
-};
-const actionLabels: Record<string, string> = {
-  created: "Создана",
-  edited: "Изменена",
-  withdrawn: "Отозвана",
-  acknowledged: "Родитель ознакомился",
-  approved: "Утверждена",
-  rejected: "Отклонена",
-};
-const stamp = (value: string | null) =>
-  value
-    ? new Date(value).toLocaleString("ru-RU", {
-        dateStyle: "short",
-        timeStyle: "short",
-      })
-    : "";
 const flagLabels = {
   approval: "Согласование",
   quick: "Быстрая отметка",
@@ -140,9 +60,8 @@ const flagLabels = {
   report: "В табель",
   active: "Действует",
 };
-const dayLabel = (day: string) =>
-  new Date(day + "T00:00").toLocaleDateString("ru-RU");
-
+const UNSAVED_RECORD =
+  "В записи есть несохранённые изменения. Уйти без сохранения?";
 export default function BehaviourNotes({
   user,
   initialWorkspace,
@@ -194,7 +113,9 @@ export default function BehaviourNotes({
     [boardKind, setBoardKind] = useState<Kind>("praise"),
     [history, setHistory] = useState<{ id: string; items: History } | null>(
       null,
-    );
+    ),
+    // The record whose line is open under its row.
+    [openId, setOpenId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     classId: "",
     studentId: "",
@@ -203,14 +124,14 @@ export default function BehaviourNotes({
     start: "",
     end: "",
   });
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<NoteForm>({
     categoryId: "",
     day: "",
     text: "",
     classId: "",
     visible: true,
     printed: false,
-    students: [] as string[],
+    students: [],
   });
   const [letterView, setLetterView] = useState<Letter | null>(null);
   const [categories, setCategories] = useState<Category[]>([]),
@@ -220,7 +141,12 @@ export default function BehaviourNotes({
     request = useRef({ key: "", id: "" }),
     // The prefill is applied once, when the options first arrive.
     prefilled = useRef(false),
-    tabOpened = useRef(false);
+    tabOpened = useRef(false),
+    // The choices the form was opened with: a change of them counts as unsaved.
+    formBase = useRef<FormBase | null>(null),
+    newButton = useRef<HTMLButtonElement>(null);
+  // The form of a new record is opened on request; a course table or the launcher opens it at once.
+  const [formOpen, setFormOpen] = useState(Boolean(prefill));
   const [commissionDirty, setCommissionDirty] = useState(false);
   // The subject of the course the pupils were marked in; the author may let it go for a note that is about something else.
   const course =
@@ -235,9 +161,26 @@ export default function BehaviourNotes({
   const staff = Boolean(options && (options.canWrite || options.admin));
   // A commission member may have no pupils in scope: the modal then holds the commission tab only.
   const commissionTab = Boolean(
-    options?.commission && (options.commission.manage || options.commission.member),
+    options?.commission &&
+    (options.commission.manage || options.commission.member),
   );
-  const dirty = Boolean(form.text.trim() || form.students.length);
+  const showForm = Boolean(
+    formOpen && staff && tab === "notes" && options?.canWrite,
+  );
+  // The form takes the focus when it opens (it does so itself); the button that opened it gets it back when it closes.
+  const formShown = useRef(false);
+  useEffect(() => {
+    if (showForm) {
+      formBase.current ??= {
+        categoryId: form.categoryId,
+        day: form.day,
+        visible: form.visible,
+        printed: form.printed,
+      };
+    } else if (formShown.current) newButton.current?.focus();
+    formShown.current = showForm;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showForm]);
   const usable = (options?.categories || []).filter(
     (c) => c.active && options?.myLevels.includes(c.level),
   );
@@ -369,6 +312,7 @@ export default function BehaviourNotes({
   }
   useEffect(() => {
     setHistory(null);
+    setOpenId(null);
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace, filters]);
@@ -398,17 +342,40 @@ export default function BehaviourNotes({
       setError("Изменение сохранено, но список не обновился: " + e.message);
     }
   }
+  // The form holds something that would be lost, whether it is on show or not (a failed reload hides it, not its content).
+  const formUnsaved = () => formDirty(form, formBase.current);
   function leave() {
+    const dirty = formUnsaved();
     return (
       (!dirty && !commissionDirty) ||
       window.confirm(
         dirty
-          ? "Новая запись не сохранена. Отбросить её и закрыть?"
+          ? UNSAVED_RECORD
           : "Форма экзамена не сохранена. Отбросить её и закрыть?",
       )
     );
   }
-  async function submit(categoryId = form.categoryId, text = form.text) {
+  // The form of the next «Новая запись» opens as a new one: nothing chosen, the defaults of the account.
+  function resetForm() {
+    formBase.current = null;
+    setForCourse(true);
+    setForm((f) =>
+      options
+        ? freshForm(f, options)
+        : { ...f, text: "", students: [], classId: "" },
+    );
+  }
+  // Back to the list: the form is emptied, after a question when it holds something.
+  function closeForm() {
+    if (formUnsaved() && !window.confirm(UNSAVED_RECORD)) return;
+    resetForm();
+    setFormOpen(false);
+  }
+  async function submit(
+    categoryId = form.categoryId,
+    text = form.text,
+    quick = false,
+  ) {
     const body = {
       studentIds: form.students,
       categoryId,
@@ -433,6 +400,11 @@ export default function BehaviourNotes({
       setForm((f) => ({ ...f, text: "", students: [] }));
       await refreshAfterChange();
     }, "");
+    // A quick mark leaves the form open for the next pupil; a saved record sends the user back to the list.
+    if (status && !quick) {
+      resetForm();
+      setFormOpen(false);
+    }
     if (status)
       setNotice(
         status === "pending"
@@ -512,6 +484,7 @@ export default function BehaviourNotes({
     await run(async () => {
       const result = await api(`behaviour/notes/${note.id}/history`, workspace);
       setHistory({ id: note.id, items: result.items });
+      setOpenId(note.id);
     }, "");
   }
   async function loadSummary() {
@@ -543,9 +516,14 @@ export default function BehaviourNotes({
   }
   function open(view: string) {
     if (view !== tab && !leave()) return;
+    if (view !== tab) {
+      resetForm();
+      setFormOpen(false);
+    }
     setTab(view);
     setLetterView(null);
     setHistory(null);
+    setOpenId(null);
     void run(() => load(view), "");
   }
   function updateCategory(i: number, change: Partial<Category>) {
@@ -555,9 +533,6 @@ export default function BehaviourNotes({
   }
 
   const pupils = options?.students || [];
-  const visiblePupils = form.classId
-    ? pupils.filter((s) => s.classId === form.classId)
-    : pupils;
   const exportHref =
     "/api/behaviour/export" +
     query({ workspace }, ["classId", "studentId", "kind", "start", "end"]);
@@ -627,8 +602,11 @@ export default function BehaviourNotes({
     >
       <header>
         <div>
-          <h2 id="behaviour-title">Похвалы, замечания и меры</h2>
-          <p>Записи учителей, классных руководителей и администрации</p>
+          <h2 id="behaviour-title">Официальные письма</h2>
+          <p>
+            Похвалы, замечания и меры · Записи учителей, классных руководителей
+            и администрации
+          </p>
         </div>
         <button
           disabled={busy}
@@ -668,8 +646,8 @@ export default function BehaviourNotes({
           </div>
         </section>
       )}
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {error && !showForm && <p role="alert">{error}</p>}
+      {notice && !showForm && <p role="status">{notice}</p>}
       {busy && <p role="status">Загрузка…</p>}
       <fieldset disabled={busy}>
         <div className="bn-controls">
@@ -679,7 +657,20 @@ export default function BehaviourNotes({
               value={workspace}
               onChange={(e) => {
                 if (!leave()) return;
-                setForm((f) => ({ ...f, students: [], text: "", classId: "" }));
+                // The other workspace has its own categories and day: the form is filled again from its options.
+                formBase.current = null;
+                setForCourse(true);
+                setForm((f) => ({
+                  ...f,
+                  students: [],
+                  text: "",
+                  classId: "",
+                  categoryId: "",
+                  day: "",
+                  visible: true,
+                  printed: false,
+                }));
+                setFormOpen(false);
                 setFilters({
                   classId: "",
                   studentId: "",
@@ -721,7 +712,7 @@ export default function BehaviourNotes({
         )}
 
         {options && !staff && options.students.length > 0 && (
-          <section>
+          <div className="bn-family">
             <label>
               Ученик
               <select
@@ -742,7 +733,7 @@ export default function BehaviourNotes({
               <span className="bn-praise">Похвал: {totals.praise}</span>
               <span className="bn-remark">Замечаний: {totals.remark}</span>
             </p>
-          </section>
+          </div>
         )}
         {options?.commission?.family && !staff && filters.studentId && (
           <CommissionExams
@@ -754,343 +745,130 @@ export default function BehaviourNotes({
           />
         )}
 
-        {options && staff && tab === "notes" && options.canWrite && (
-          <section className="bn-form" aria-label="Новая запись">
-            <h3>Новая запись</h3>
-            <fieldset className="bn-pupils">
-              <legend>
-                Ученики (выбрано {form.students.length}, не больше 40)
-              </legend>
-              <label className="bn-wide-row">
-                Класс
+        {showForm && options && (
+          <BehaviourNoteForm
+            options={options}
+            form={form}
+            setForm={setForm}
+            usable={usable}
+            quick={quick}
+            course={course}
+            forCourse={forCourse}
+            setForCourse={setForCourse}
+            error={error}
+            notice={notice}
+            onSubmit={(categoryId, text, isQuick) =>
+              void submit(categoryId, text, isQuick)
+            }
+            onBack={closeForm}
+          />
+        )}
+
+        <div className="bn-browse" hidden={showForm}>
+          {options && staff && tab === "notes" && (
+            <div className="bn-toolbar" role="group" aria-label="Фильтры">
+              {periodFilters}
+              <label>
+                Ученик
                 <select
-                  value={form.classId}
+                  value={filters.studentId}
                   onChange={(e) =>
-                    setForm((f) => ({ ...f, classId: e.target.value }))
+                    setFilters((f) => ({ ...f, studentId: e.target.value }))
                   }
                 >
-                  <option value="">Все мои ученики</option>
-                  {options.classes.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+                  <option value="">Все</option>
+                  {pupils
+                    .filter(
+                      (s) => !filters.classId || s.classId === filters.classId,
+                    )
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Вид
+                <select
+                  value={filters.kind}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, kind: e.target.value }))
+                  }
+                >
+                  <option value="">Все</option>
+                  <option value="praise">Похвалы</option>
+                  <option value="remark">Замечания</option>
+                </select>
+              </label>
+              <label>
+                Статус
+                <select
+                  value={filters.status}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, status: e.target.value }))
+                  }
+                >
+                  <option value="">Все</option>
+                  {(Object.keys(statusLabels) as Status[]).map((s) => (
+                    <option key={s} value={s}>
+                      {statusLabels[s]}
                     </option>
                   ))}
                 </select>
               </label>
-              {visiblePupils.map((s) => (
-                <label key={s.id}>
-                  <input
-                    type="checkbox"
-                    checked={form.students.includes(s.id)}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        students: e.target.checked
-                          ? [...f.students, s.id]
-                          : f.students.filter((id) => id !== s.id),
-                      }))
-                    }
-                  />
-                  {s.name}
-                  {s.className ? ` · ${s.className}` : ""}
-                </label>
-              ))}
-            </fieldset>
-            {quick.length > 0 && (
-              <div className="bn-quick" aria-label="Быстрые отметки">
-                <span>Быстрая отметка сегодня:</span>
-                {quick.map((c) => (
-                  <button
-                    key={c.id}
-                    className={`bn-chip bn-${c.kind}`}
-                    disabled={
-                      !form.students.length || form.students.length > 40
-                    }
-                    onClick={() => void submit(c.id, "")}
-                  >
-                    {c.kind === "praise" ? "＋ " : "− "}
-                    {c.title}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="bn-controls">
-              <label>
-                Категория
-                <select
-                  value={form.categoryId}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      categoryId: e.target.value,
-                      printed:
-                        options.categories.find((c) => c.id === e.target.value)
-                          ?.report ?? false,
-                    }))
-                  }
+              <a href={exportHref} download>
+                Скачать CSV
+              </a>
+              {options.canWrite && (
+                <button
+                  ref={newButton}
+                  className="primary"
+                  onClick={() => {
+                    // A message about the list does not belong to a new, empty record.
+                    setError("");
+                    setNotice("");
+                    setFormOpen(true);
+                  }}
                 >
-                  {options.myLevels.map((level) => (
-                    <optgroup key={level} label={options.levels[level]}>
-                      {usable
-                        .filter((c) => c.level === level)
-                        .map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {kindLabels[c.kind]}: {c.title}
-                            {c.approval && !options.admin
-                              ? " · согласование"
-                              : ""}
-                            {c.letter ? " · письмо" : ""}
-                          </option>
-                        ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Дата
-                <input
-                  type="date"
-                  max={options.today}
-                  value={form.day}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, day: e.target.value }))
-                  }
-                />
-              </label>
-              <label className="bn-check">
-                <input
-                  type="checkbox"
-                  checked={form.visible}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, visible: e.target.checked }))
-                  }
-                />
-                Показать семье
-              </label>
-              <label className="bn-check">
-                <input
-                  type="checkbox"
-                  checked={form.printed}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, printed: e.target.checked }))
-                  }
-                />
-                Печатать в табель
-              </label>
-              {course && (
-                <label className="bn-check">
-                  <input
-                    type="checkbox"
-                    checked={forCourse}
-                    onChange={(e) => setForCourse(e.target.checked)}
-                  />
-                  По предмету «{course.name}»
-                </label>
+                  ＋ Новая запись
+                </button>
               )}
             </div>
-            <label className="bn-wide">
-              Комментарий или основание
-              <textarea
-                maxLength={2000}
-                value={form.text}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, text: e.target.value }))
-                }
-              />
-            </label>
-            <button
-              disabled={
-                !form.students.length ||
-                form.students.length > 40 ||
-                !form.categoryId ||
-                !form.day
-              }
-              onClick={() => void submit()}
-            >
-              Сохранить
-            </button>
-          </section>
-        )}
+          )}
 
-        {options && staff && tab === "notes" && (
-          <section aria-label="Фильтры" className="bn-controls">
-            {periodFilters}
-            <label>
-              Ученик
-              <select
-                value={filters.studentId}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, studentId: e.target.value }))
-                }
-              >
-                <option value="">Все</option>
-                {pupils
-                  .filter(
-                    (s) => !filters.classId || s.classId === filters.classId,
-                  )
-                  .map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              Вид
-              <select
-                value={filters.kind}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, kind: e.target.value }))
-                }
-              >
-                <option value="">Все</option>
-                <option value="praise">Похвалы</option>
-                <option value="remark">Замечания</option>
-              </select>
-            </label>
-            <label>
-              Статус
-              <select
-                value={filters.status}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, status: e.target.value }))
-                }
-              >
-                <option value="">Все</option>
-                {(Object.keys(statusLabels) as Status[]).map((s) => (
-                  <option key={s} value={s}>
-                    {statusLabels[s]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <a href={exportHref} download>
-              Скачать CSV
-            </a>
-          </section>
-        )}
-
-        {options && (tab === "notes" || tab === "queue" || !staff) && (
-          <section aria-label="Записи">
-            {!notes.length && (
-              <p>
-                {tab === "queue"
+          {options && (tab === "notes" || tab === "queue" || !staff) && (
+            <BehaviourNotesTable
+              notes={notes}
+              staff={staff}
+              canAcknowledge={options.canAcknowledge}
+              openId={openId}
+              onToggle={(id) => setOpenId((now) => (now === id ? null : id))}
+              history={history}
+              empty={
+                tab === "queue"
                   ? "Мер на согласовании нет."
-                  : "Записей пока нет."}
-              </p>
-            )}
-            <ul className="bn-list">
-              {notes.map((n) => (
-                <li
-                  key={n.id}
-                  className={`bn-note bn-${n.kind}${n.status === "withdrawn" || n.status === "rejected" ? " bn-withdrawn" : ""}`}
+                  : "Записей пока нет."
+              }
+              onDecide={(n, approve) => void decide(n, approve)}
+              onAcknowledge={(n) => void acknowledge(n)}
+              onLetter={(n) => void letter(n)}
+              onEdit={(n) => void edit(n)}
+              onWithdraw={(n) => void withdraw(n)}
+              onHistory={(n) => void showHistory(n)}
+            >
+              {next && (
+                <button
+                  onClick={() =>
+                    options && void run(() => loadNotes(options, tab, true), "")
+                  }
                 >
-                  <p>
-                    <strong>{kindLabels[n.kind]}</strong> · {n.category} ·{" "}
-                    {dayLabel(n.day)}
-                    {n.level !== "teacher" && ` · ${n.levelTitle}`}
-                    {staff && n.status !== "published" && (
-                      <span className="bn-badge">{statusLabels[n.status]}</span>
-                    )}
-                    {staff && n.visible === false && (
-                      <span className="bn-badge">Скрыта от семьи</span>
-                    )}
-                    {staff && n.printed && (
-                      <span className="bn-badge">В табеле</span>
-                    )}
-                    {n.letterNumber && (
-                      <span className="bn-badge">
-                        Письмо № {n.letterNumber}
-                      </span>
-                    )}
-                  </p>
-                  {staff && (
-                    <p>
-                      {n.student}
-                      {n.className ? ` · ${n.className}` : ""}
-                    </p>
-                  )}
-                  {n.text && <p className="bn-text">{n.text}</p>}
-                  <p className="bn-meta">
-                    Автор: {n.author}
-                    {n.lesson && ` · Урок: ${n.lesson}`}
-                    {n.approvedBy && ` · Утвердил(а): ${n.approvedBy}`}
-                    {n.decision && ` · Решение: ${n.decision}`}
-                    {n.requireAck &&
-                      n.status === "published" &&
-                      (n.acknowledged
-                        ? ` · Родитель ознакомился ${stamp(n.acknowledgedAt)} (${n.acknowledgedBy})`
-                        : " · Ожидает подтверждения родителя")}
-                    {n.status === "withdrawn" &&
-                      ` · Отозвана: ${n.withdrawReason || ""}`}
-                  </p>
-                  <div className="bn-controls">
-                    {n.canDecide && (
-                      <>
-                        <button onClick={() => void decide(n, true)}>
-                          Утвердить
-                        </button>
-                        <button onClick={() => void decide(n, false)}>
-                          Отклонить
-                        </button>
-                      </>
-                    )}
-                    {options.canAcknowledge &&
-                      n.requireAck &&
-                      !n.acknowledged && (
-                        <button onClick={() => void acknowledge(n)}>
-                          Ознакомлен
-                        </button>
-                      )}
-                    {n.letter && n.status === "published" && (
-                      <button onClick={() => void letter(n)}>
-                        Письмо-решение
-                      </button>
-                    )}
-                    {staff && n.canChange && (
-                      <>
-                        <button
-                          disabled={n.acknowledged}
-                          onClick={() => void edit(n)}
-                        >
-                          Изменить
-                        </button>
-                        <button onClick={() => void withdraw(n)}>
-                          Отозвать
-                        </button>
-                      </>
-                    )}
-                    {staff && (
-                      <button onClick={() => void showHistory(n)}>
-                        История
-                      </button>
-                    )}
-                  </div>
-                  {history?.id === n.id && (
-                    <ol className="bn-history">
-                      {history.items.map((h) => (
-                        <li key={h.seq}>
-                          {stamp(h.created)} · {h.actor} ·{" "}
-                          {actionLabels[h.action] || h.action}
-                          {h.reason ? ` · ${h.reason}` : ""}
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {next && (
-              <button
-                onClick={() =>
-                  options && void run(() => loadNotes(options, tab, true), "")
-                }
-              >
-                Показать ещё
-              </button>
-            )}
-          </section>
-        )}
+                  Показать ещё
+                </button>
+              )}
+            </BehaviourNotesTable>
+          )}
+        </div>
 
         {options && staff && tab === "board" && (
           <section aria-label="Табло">

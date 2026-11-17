@@ -80,6 +80,7 @@ const ACTIONS: Spec[] = [
     label: "Новая заметка",
     category: "grades",
     via: ["behaviour"],
+    intent: "note",
     popular: true,
     words: "похвала замечание",
   },
