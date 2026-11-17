@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  type LoadStatus,
   auditAction,
   auditDetails,
   auditStamp,
@@ -10,15 +11,23 @@ import {
 // which records are shown is decided by the page, which also puts the paging line under the table.
 export default function AccessAuditTable({
   rows,
+  status = "ready",
   children,
 }: {
   rows: AuditEntry[];
+  // Until the records have arrived the table does not say that there are none; after a failed load the error says it.
+  status?: LoadStatus;
   // Placed under the table: «Показано N из M», «Показать ещё», «Показать более ранние».
   children?: ReactNode;
 }) {
   return (
     <section aria-label="Журнал действий" className="access-audit-section">
-      {!rows.length && <p>Записей по этим условиям нет.</p>}
+      {!rows.length && status === "loading" && (
+        <p role="status">Загружаю журнал…</p>
+      )}
+      {!rows.length && status === "ready" && (
+        <p>Записей по этим условиям нет.</p>
+      )}
       {rows.length > 0 && (
         <div className="access-audit-list">
           <table className="access-audit-table" aria-label="Журнал действий">

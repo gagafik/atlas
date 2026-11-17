@@ -242,6 +242,20 @@
     border: 0;
     background: none;
   }
+  /* The cells have no room to cut on a phone and no title to read: the text wraps, so that the whole name and login can be read. */
+  .access-c-name,
+  .access-c-login,
+  .access-c-role,
+  .access-c-access {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* The tint of the saved account belongs to the block, the cells above have none. */
+  .access-users-table tr.access-row.access-row-saved {
+    background: var(--accent-tint);
+  }
   .access-c-name {
     grid-area: name;
   }

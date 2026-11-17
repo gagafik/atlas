@@ -53,6 +53,13 @@ describe("AccessAuditTable", () => {
     const text = textOf(AccessAuditTable({ rows: [] }));
     expect(text.trim()).not.toBe("");
   });
+  it("does not say that nothing was found while the records are still coming", () => {
+    const say = (status: "loading" | "ready" | "failed") =>
+      textOf(AccessAuditTable({ rows: [], status })).trim();
+    expect(say("loading")).not.toBe("");
+    expect(say("loading")).not.toBe(say("ready"));
+    expect(say("failed")).toBe("");
+  });
   it("shows what is placed under the table", () => {
     const text = textOf(
       AccessAuditTable({ rows: [entry({ id: 4 })], children: "под таблицей" }),

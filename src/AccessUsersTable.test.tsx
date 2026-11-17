@@ -69,6 +69,33 @@ describe("AccessUsersTable", () => {
     });
     expect(textOf(ui).trim()).not.toBe("");
   });
+  it("does not say that nothing was found while the accounts are still coming", () => {
+    const say = (status: "loading" | "ready" | "failed") =>
+      textOf(
+        (AccessUsersTable as any)({
+          rows: [],
+          status,
+          busy: false,
+          onEdit: () => {},
+        }),
+      ).trim();
+    // A load that is on the way and one that is done and found nothing look different; a failed one leaves the line to the error.
+    expect(say("loading")).not.toBe("");
+    expect(say("loading")).not.toBe(say("ready"));
+    expect(say("failed")).toBe("");
+  });
+  it("shows the accounts that are there while the list is being reloaded", () => {
+    const edited: Account[] = [];
+    const ui = (
+      <AccessUsersTable
+        rows={[first]}
+        status="loading"
+        busy={false}
+        onEdit={(a) => edited.push(a)}
+      />
+    );
+    expect(buttonsOf(ui)).toHaveLength(1);
+  });
   it("disables the buttons while the page is busy", () => {
     for (const b of buttonsOf(table([first, second], [], true)))
       expect(b.props.disabled).toBe(true);

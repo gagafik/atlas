@@ -68,7 +68,7 @@ export default function AccessUserForm({
       }}
     >
       <div className="access-form-head">
-        <button type="button" onClick={onBack}>
+        <button type="button" disabled={busy} onClick={onBack}>
           ← К списку
         </button>
         <h3 ref={heading} tabIndex={-1}>

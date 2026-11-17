@@ -40,28 +40,58 @@ export interface AuditEntry {
 }
 
 export type RoleFilter = Role | "all";
+/** Whether the lists of the page have arrived: until then «nothing found» must not be said. */
+export type LoadStatus = "loading" | "ready" | "failed";
 export type StateFilter = "all" | "active" | "inactive";
 export const USERS_PAGE = 100;
 export const AUDIT_PAGE = 50;
 
 const workspaceName = (w: string) => (w === "school" ? "Школа" : "Пример");
 
-/** Roles that are present in the loaded list, in the order of roleNames, with how many accounts each has. */
+/**
+ * Roles that are present in the loaded list, in the order of roleNames. The count of a role is how many accounts of it match
+ * the other conditions (state and search), so that the number on the control agrees with what the table shows after pressing it.
+ */
 export function roleOptions(
   users: Account[],
+  f: { state?: StateFilter; query?: string } = {},
 ): { role: Role; label: string; count: number }[] {
+  const base = filterAccounts(users, {
+    role: "all",
+    state: f.state ?? "all",
+    query: f.query ?? "",
+  });
   return (Object.keys(roleNames) as Role[])
+    .filter((role) => users.some((u) => u.role === role))
     .map((role) => ({
       role,
       label: roleNames[role],
-      count: users.filter((u) => u.role === role).length,
-    }))
-    .filter((o) => o.count > 0);
+      count: base.filter((u) => u.role === role).length,
+    }));
 }
 
-export function stateCounts(users: Account[]) {
-  const active = users.filter((u) => u.active).length;
-  return { all: users.length, active, inactive: users.length - active };
+/** How many accounts each state filter would show, given the role filter and the search. */
+export function stateCounts(
+  users: Account[],
+  f: { role?: RoleFilter; query?: string } = {},
+) {
+  const base = filterAccounts(users, {
+    role: f.role ?? "all",
+    state: "all",
+    query: f.query ?? "",
+  });
+  const active = base.filter((u) => u.active).length;
+  return { all: base.length, active, inactive: base.length - active };
+}
+
+/** The role filter that still makes sense for the list: a role nobody has any more falls back to «all». */
+export function effectiveRole(
+  filter: RoleFilter,
+  users: Account[],
+): RoleFilter {
+  return filter === "all" || users.some((u) => u.role === filter)
+    ? filter
+    : "all";
 }
 
 /** The search of the page: a substring of the name and the login together, ignoring case. */
@@ -139,15 +169,38 @@ const grantKey = (grants: Grant[]) =>
       ),
   );
 
-/** True when the form differs from the account it was opened with, or holds a typed password or selected records. */
+/**
+ * The records selected in the grants editor that are not part of the form yet. Records of a grant the form already holds,
+ * shown by «Посмотреть и изменить» and left as they are, are not pending: nothing was changed and nothing is lost.
+ */
+export function pendingTargets(
+  form: AccessForm | null,
+  space: string,
+  view: AccessView,
+  targets: string[],
+): string[] {
+  const held = form?.grants.find(
+    (g) => g.workspace === space && g.view === view,
+  );
+  if (
+    held &&
+    held.entityIds.length === targets.length &&
+    JSON.stringify([...held.entityIds].sort()) ===
+      JSON.stringify([...targets].sort())
+  )
+    return [];
+  return targets;
+}
+
+/** True when the form differs from the account it was opened with, or holds a typed password or pending selected records. */
 export function accountFormDirty(
   form: AccessForm | null,
   base: AccessForm | null,
   repeat: string,
-  targets: string[],
+  pending: string[],
 ): boolean {
   if (!form) return false;
-  if (form.password || repeat || targets.length) return true;
+  if (form.password || repeat || pending.length) return true;
   if (!base) return false;
   return (
     form.name !== base.name ||
@@ -159,6 +212,14 @@ export function accountFormDirty(
   );
 }
 
+/** What leaving the form (to the list, another tab, another account) does: nothing while it saves, one question when it holds changes. */
+export function leaveDecision(
+  dirty: boolean,
+  busy: boolean,
+): "blocked" | "ask" | "go" {
+  return busy ? "blocked" : dirty ? "ask" : "go";
+}
+
 /** Where a just saved account is in the filtered list, and how many rows must be shown for it to be visible. */
 export function savedRowPlace(
   filtered: Account[],
@@ -168,6 +229,27 @@ export function savedRowPlace(
   const index = filtered.findIndex((u) => u.login === login);
   if (index < 0 || index < shown) return { index, shown };
   return { index, shown: Math.ceil((index + 1) / USERS_PAGE) * USERS_PAGE };
+}
+
+/**
+ * What the list does after a save, judged on the list as the reload brought it: the role filter that is still valid,
+ * whether the filters hide the saved account, how many rows to show and which row to mark.
+ */
+export function savedRowOutcome(
+  loaded: Account[],
+  filters: { role: RoleFilter; state: StateFilter; query: string },
+  login: string,
+  shown: number,
+): { role: RoleFilter; hidden: boolean; shown: number; id: string | null } {
+  const role = effectiveRole(filters.role, loaded);
+  const visible = filterAccounts(loaded, { ...filters, role });
+  const place = savedRowPlace(visible, login, shown);
+  return {
+    role,
+    hidden: place.index < 0,
+    shown: place.shown,
+    id: place.index < 0 ? null : visible[place.index].id,
+  };
 }
 
 export const auditActionNames: Record<string, string> = {

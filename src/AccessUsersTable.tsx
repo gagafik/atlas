@@ -1,17 +1,20 @@
 import type { ReactNode } from "react";
 import { roleNames, type Account } from "./auth";
-import { accessText } from "./accessModel";
+import { accessText, type LoadStatus } from "./accessModel";
 
 // The accounts as a compact table: one row per account and one button, «Изменить», which opens the form in place of the list.
 // It has no state: which rows are shown and what the button does are decided by the page.
 export default function AccessUsersTable({
   rows,
+  status = "ready",
   busy,
   highlightId,
   onEdit,
   children,
 }: {
   rows: Account[];
+  // Until the accounts have arrived the table does not say that there are none; after a failed load the error says it.
+  status?: LoadStatus;
   busy: boolean;
   // The account that was just saved; its row is marked.
   highlightId?: string | null;
@@ -21,7 +24,12 @@ export default function AccessUsersTable({
 }) {
   return (
     <section aria-label="Учётные записи" className="access-users-section">
-      {!rows.length && <p>Учётных записей по этим условиям нет.</p>}
+      {!rows.length && status === "loading" && (
+        <p role="status">Загружаю учётные записи…</p>
+      )}
+      {!rows.length && status === "ready" && (
+        <p>Учётных записей по этим условиям нет.</p>
+      )}
       {rows.length > 0 && (
         <div className="access-users-list">
           <table className="access-users-table" aria-label="Учётные записи">

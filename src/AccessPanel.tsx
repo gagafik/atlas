@@ -23,15 +23,19 @@ import {
   accountFormDirty,
   auditMatches,
   blankForm,
+  effectiveRole,
   filterAccounts,
+  leaveDecision,
   pageOf,
+  pendingTargets,
   roleOptions,
-  savedRowPlace,
+  savedRowOutcome,
   stateCounts,
   viewForRole,
   type AccessForm as Form,
   type AccessTab,
   type AuditEntry as Audit,
+  type LoadStatus,
   type RoleFilter,
   type StateFilter,
 } from "./accessModel";
@@ -56,7 +60,8 @@ export default function AccessPanel({
 }) {
   const [users, setUsers] = useState<Account[]>([]),
     [audit, setAudit] = useState<Audit[]>([]),
-    [form, setForm] = useState<Form | null>(null);
+    [form, setForm] = useState<Form | null>(null),
+    [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
@@ -82,36 +87,52 @@ export default function AccessPanel({
     loaded = useRef<Account[]>([]);
   const [tab, setTab] = useState<AccessTab>("users"),
     [visited, setVisited] = useState<AccessTab[]>(["users"]);
+  // The tab was left with the form open: a form with changes asks first and is closed, so that the question never comes
+  // up on a tab where no form is in sight. A message from the previous place does not follow to the next.
   const openTab = (id: AccessTab) => {
+    if (id === tab) return;
+    if (tab === "users" && form) {
+      if (!leaveForm()) return;
+      if (dirty) discardForm();
+    }
+    setError("");
+    setNotice("");
     setTab(id);
     setVisited((v) => (v.includes(id) ? v : [...v, id]));
   };
+  // The lists arrive together; a role filter nobody has any more is dropped, so that it does not come back by itself later.
+  function accept(u: Account[], a: Audit[]) {
+    loaded.current = u;
+    setUsers(u);
+    setAudit(a);
+    setRoleFilter((f) => effectiveRole(f, u));
+    setStatus("ready");
+  }
   async function reload() {
     const [u, a] = await Promise.all([
       api("access/users", workspace),
       api("access/audit", workspace),
     ]);
-    loaded.current = u;
-    setUsers(u);
-    setAudit(a);
+    accept(u, a);
   }
   useEffect(() => {
     let alive = true;
-    if (session.enabled)
+    if (session.enabled) {
+      setStatus("loading");
       Promise.all([
         api("access/users", workspace),
         api("access/audit", workspace),
       ])
         .then(([u, a]) => {
-          if (alive) {
-            loaded.current = u;
-            setUsers(u);
-            setAudit(a);
-          }
+          if (alive) accept(u, a);
         })
         .catch((e) => {
-          if (alive) setError(e.message);
+          if (alive) {
+            setError(e.message);
+            setStatus("failed");
+          }
         });
+    }
     return () => {
       alive = false;
     };
@@ -154,12 +175,15 @@ export default function AccessPanel({
       : form?.role === "student" || form?.role === "parent"
         ? ["student"]
         : ["class", "teacher", "room", "group", "student"];
-  const roles = roleOptions(users),
-    roleValue =
-      roleFilter === "all" || roles.some((o) => o.role === roleFilter)
-        ? roleFilter
-        : "all",
-    counts = stateCounts(users),
+  // The numbers on the controls count what the other conditions leave, so that they agree with «Показано N из M».
+  const roles = roleOptions(users, { state: stateFilter, query }),
+    roleValue = effectiveRole(roleFilter, users),
+    counts = stateCounts(users, { role: roleValue, query }),
+    allRoles = filterAccounts(users, {
+      role: "all",
+      state: stateFilter,
+      query,
+    }).length,
     filtered = filterAccounts(users, {
       role: roleValue,
       state: stateFilter,
@@ -174,7 +198,9 @@ export default function AccessPanel({
     setShown(USERS_PAGE);
     setHighlightId(null);
   };
-  const dirty = accountFormDirty(form, formBase, repeat, targets);
+  // Records of a grant that was only opened for a look are not a change.
+  const pending = pendingTargets(form, grantSpace, grantView, targets),
+    dirty = accountFormDirty(form, formBase, repeat, pending);
   // The page asks before the form with changes is lost by leaving the screen, the workspace or the program.
   useEffect(() => {
     if (!dirty) return;
@@ -212,6 +238,8 @@ export default function AccessPanel({
   // Opens the form in place of the list; asks first when another form with changes is open.
   function openForm(next: Form, view: AccessView) {
     if (!leaveForm()) return;
+    setError("");
+    setNotice("");
     setHighlightId(null);
     setForm(next);
     setFormBase(next);
@@ -220,13 +248,22 @@ export default function AccessPanel({
     setGrantView(view);
   }
   function leaveForm() {
-    return !dirty || window.confirm(leaveQuestion);
+    const decision = leaveDecision(dirty, busy);
+    return (
+      decision === "go" || (decision === "ask" && window.confirm(leaveQuestion))
+    );
   }
-  function closeForm() {
-    if (!leaveForm()) return;
+  function discardForm() {
     setForm(null);
     setFormBase(null);
     setRepeat("");
+    setTargets([]);
+  }
+  function closeForm() {
+    if (!leaveForm()) return;
+    setError("");
+    setNotice("");
+    discardForm();
   }
   async function editGrant(g: Grant) {
     await run(async () => {
@@ -262,7 +299,7 @@ export default function AccessPanel({
     setTargets([]);
   }
   async function save() {
-    if (targets.length)
+    if (pending.length)
       throw new Error(
         "Сначала добавьте выбранные записи в область доступа или очистите выбор.",
       );
@@ -274,24 +311,22 @@ export default function AccessPanel({
       id ? "PUT" : "POST",
       { ...rest, password: password || null },
     );
-    setForm(null);
-    setFormBase(null);
-    setRepeat("");
+    discardForm();
     await reload();
     await onAuthChange();
     // The saved row must be visible; when the filters hide it, the notice says so instead of changing them.
-    const visible = filterAccounts(loaded.current, {
-      role: roleValue,
-      state: stateFilter,
-      query,
-    });
-    const place = savedRowPlace(visible, form.login, shown);
+    const out = savedRowOutcome(
+      loaded.current,
+      { role: roleFilter, state: stateFilter, query },
+      form.login,
+      shown,
+    );
     let hidden = "";
-    if (place.index < 0) hidden = " Выбранные фильтры её не показывают.";
+    if (out.hidden) hidden = " Выбранные фильтры её не показывают.";
     else {
-      setShown(place.shown);
-      setHighlightId(visible[place.index].id);
-      returnFocus.current = `access-edit-${visible[place.index].id}`;
+      setShown(out.shown);
+      setHighlightId(out.id);
+      returnFocus.current = `access-edit-${out.id}`;
     }
     setNotice(
       "Учётная запись сохранена. Её прежние сеансы завершены." + hidden,
@@ -453,7 +488,7 @@ export default function AccessPanel({
                       resetShown();
                     }}
                   >
-                    <option value="all">Все ({users.length})</option>
+                    <option value="all">Все ({allRoles})</option>
                     {roles.map((o) => (
                       <option key={o.role} value={o.role}>
                         {o.label} ({o.count})
@@ -512,6 +547,7 @@ export default function AccessPanel({
               </details>
               <AccessUsersTable
                 rows={page.rows}
+                status={status}
                 busy={busy}
                 highlightId={highlightId}
                 onEdit={(u) => {
@@ -596,36 +632,40 @@ export default function AccessPanel({
                 расписания.
               </p>
             </div>
-            <AccessAuditTable rows={auditPage.rows}>
-              <div className="access-more">
-                <span>
-                  Показано {auditPage.shown} из {auditPage.total} загруженных
-                </span>
-                {auditPage.more && (
-                  <button onClick={() => setAuditShown((n) => n + AUDIT_PAGE)}>
-                    Показать ещё
-                  </button>
-                )}
-                {!auditPage.more && !!audit.length && (
-                  <button
-                    disabled={busy}
-                    onClick={() =>
-                      void run(async () => {
-                        const next = await api(
-                          `access/audit?before=${audit[audit.length - 1].id}`,
-                          workspace,
-                        );
-                        setAudit([...audit, ...next]);
-                        setAuditShown((n) => n + AUDIT_PAGE);
-                        if (!next.length)
-                          setNotice("Более ранних записей нет.");
-                      })
-                    }
-                  >
-                    Показать более ранние
-                  </button>
-                )}
-              </div>
+            <AccessAuditTable rows={auditPage.rows} status={status}>
+              {status === "ready" && (
+                <div className="access-more">
+                  <span>
+                    Показано {auditPage.shown} из {auditPage.total} загруженных
+                  </span>
+                  {auditPage.more && (
+                    <button
+                      onClick={() => setAuditShown((n) => n + AUDIT_PAGE)}
+                    >
+                      Показать ещё
+                    </button>
+                  )}
+                  {!auditPage.more && !!audit.length && (
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          const next = await api(
+                            `access/audit?before=${audit[audit.length - 1].id}`,
+                            workspace,
+                          );
+                          setAudit([...audit, ...next]);
+                          setAuditShown((n) => n + AUDIT_PAGE);
+                          if (!next.length)
+                            setNotice("Более ранних записей нет.");
+                        })
+                      }
+                    >
+                      Показать более ранние
+                    </button>
+                  )}
+                </div>
+              )}
             </AccessAuditTable>
           </section>
         </>
