@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   addPupils,
+  buildQuery,
+  emptyFilters,
   dayLabel,
   formDirty,
   freshForm,
@@ -325,5 +327,27 @@ describe("freshForm", () => {
 describe("dayLabel", () => {
   it("writes the day as day, month, year", () => {
     expect(dayLabel("2026-11-05")).toBe("05.11.2026");
+  });
+});
+
+describe("buildQuery", () => {
+  it("leaves out every filter that is not set, so a default request has no parameters", () => {
+    expect(buildQuery(emptyFilters)).toBe("");
+    expect(buildQuery(emptyFilters, { before: 7 })).toBe("?before=7");
+  });
+  it("carries the subject and the search only when they are set", () => {
+    const params = new URLSearchParams(
+      buildQuery({ ...emptyFilters, subjectId: "none", q: "ёлка и шар" }),
+    );
+    expect(params.get("subjectId")).toBe("none");
+    expect(params.get("q")).toBe("ёлка и шар");
+    expect(buildQuery({ ...emptyFilters, kind: "remark" })).not.toMatch(
+      /subjectId|q=/,
+    );
+  });
+  it("limits the filters to the keys a request understands", () => {
+    const filters = { ...emptyFilters, classId: "c1", q: "слово" };
+    expect(buildQuery(filters, {}, ["classId", "start"])).toBe("?classId=c1");
+    expect(buildQuery(filters, { before: 3 }, [])).toBe("?before=3");
   });
 });

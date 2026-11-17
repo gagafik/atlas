@@ -37,6 +37,8 @@ export type Options = {
   commission?: { manage: boolean; member: boolean; family: boolean } | null;
   configVersion: number | null;
   classes: { id: string; name: string }[];
+  // The subjects of the school, by name; absent in answers recorded before the filter existed.
+  subjects?: { id: string; name: string }[];
   students: Student[];
 };
 export type Status = "pending" | "published" | "rejected" | "withdrawn";
@@ -62,6 +64,9 @@ export type Note = {
   letter: boolean;
   letterNumber: string;
   lesson: string;
+  // The subject the record was written for (its lesson or its course); null without one.
+  subjectId?: string | null;
+  subject?: string | null;
   visible?: boolean;
   printed?: boolean;
   approval?: boolean;
@@ -88,6 +93,33 @@ export type NoteForm = {
   printed: boolean;
   students: string[];
 };
+
+// The filters of the list of records; an empty value is no filter.
+export const emptyFilters = {
+  classId: "",
+  studentId: "",
+  kind: "",
+  status: "",
+  start: "",
+  end: "",
+  subjectId: "",
+  q: "",
+};
+export type Filters = typeof emptyFilters;
+
+// «?a=1&b=2» of the values that are set, or "" with none: an empty value never reaches the address, because the
+// public demo answers only the addresses it recorded. `keys` limits the filters to those the request understands.
+export function buildQuery(
+  filters: Filters,
+  extra: Record<string, string | number> = {},
+  keys: string[] = Object.keys(filters),
+) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...filters, ...extra }))
+    if (v !== "" && (keys.includes(k) || k in extra)) params.set(k, String(v));
+  const text = params.toString();
+  return text ? "?" + text : "";
+}
 
 // One record may be written about at most this many pupils.
 export const PUPIL_LIMIT = 40;

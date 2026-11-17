@@ -4,12 +4,15 @@ import type { Account } from "./auth";
 import { measureCategory } from "./behaviourMeasure";
 import CommissionExams from "./CommissionExams";
 import {
+  buildQuery,
   dayLabel,
+  emptyFilters,
   formDirty,
   freshForm,
   stamp,
   statusLabels,
   type Category,
+  type Filters,
   type FormBase,
   type History,
   type Kind,
@@ -116,14 +119,9 @@ export default function BehaviourNotes({
     ),
     // The record whose line is open under its row.
     [openId, setOpenId] = useState<string | null>(null);
-  const [filters, setFilters] = useState({
-    classId: "",
-    studentId: "",
-    kind: "",
-    status: "",
-    start: "",
-    end: "",
-  });
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  // What is typed in the search field; it becomes the filter when typing stops or on Enter.
+  const [search, setSearch] = useState("");
   const [form, setForm] = useState<NoteForm>({
     categoryId: "",
     day: "",
@@ -189,13 +187,20 @@ export default function BehaviourNotes({
     extra: Record<string, string | number> = {},
     keys = Object.keys(filters),
   ) {
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries({ ...filters, ...extra }))
-      if (v !== "" && (keys.includes(k) || k in extra))
-        params.set(k, String(v));
-    const text = params.toString();
-    return text ? "?" + text : "";
+    return buildQuery(filters, extra, keys);
   }
+  // The text of the search becomes a filter 400 ms after the last key; the list effect then reloads, and an answer to an
+  // older search is dropped by the sequence check of load().
+  useEffect(() => {
+    const text = search.trim();
+    if (text === filters.q) return;
+    const timer = window.setTimeout(
+      () => setFilters((f) => (f.q === text ? f : { ...f, q: text })),
+      400,
+    );
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
   async function loadNotes(opts: Options, view = tab, more = false) {
     const token = sequence.current;
     const page: Record<string, number> = more && next ? { before: next } : {};
@@ -535,7 +540,15 @@ export default function BehaviourNotes({
   const pupils = options?.students || [];
   const exportHref =
     "/api/behaviour/export" +
-    query({ workspace }, ["classId", "studentId", "kind", "start", "end"]);
+    query({ workspace }, [
+      "classId",
+      "studentId",
+      "kind",
+      "start",
+      "end",
+      "subjectId",
+      "q",
+    ]);
   const quick = usable.filter((c) => c.quick);
   const tabs: [string, string][] = [
     ["notes", "Записи"],
@@ -671,14 +684,8 @@ export default function BehaviourNotes({
                   printed: false,
                 }));
                 setFormOpen(false);
-                setFilters({
-                  classId: "",
-                  studentId: "",
-                  kind: "",
-                  status: "",
-                  start: "",
-                  end: "",
-                });
+                setFilters(emptyFilters);
+                setSearch("");
                 setWorkspace(e.target.value);
               }}
             >
@@ -787,6 +794,39 @@ export default function BehaviourNotes({
                       </option>
                     ))}
                 </select>
+              </label>
+              <label>
+                Предмет
+                <select
+                  value={filters.subjectId}
+                  onChange={(e) =>
+                    setFilters((f) => ({ ...f, subjectId: e.target.value }))
+                  }
+                >
+                  <option value="">Все предметы</option>
+                  {(options.subjects ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                  <option value="none">Без предмета</option>
+                </select>
+              </label>
+              <label className="bn-search">
+                Поиск
+                <input
+                  type="search"
+                  value={search}
+                  maxLength={100}
+                  placeholder="Текст, ученик, автор"
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    const text = search.trim();
+                    setFilters((f) => (f.q === text ? f : { ...f, q: text }));
+                  }}
+                />
               </label>
               <label>
                 Вид

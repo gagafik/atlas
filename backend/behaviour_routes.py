@@ -3,7 +3,7 @@ from datetime import date,timedelta
 import json
 
 from fastapi import HTTPException,Query,Request
-from .behaviour import Config,NewNotes,Edit,Withdraw,Decision,Acknowledge,KINDS,LEVELS,PAGE,LESSON_JOIN,stamp,today,new_id,export_rows,window,note_subject_sql
+from .behaviour import Config,NewNotes,Edit,Withdraw,Decision,Acknowledge,KINDS,LEVELS,PAGE,LESSON_JOIN,stamp,today,new_id,export_rows,window,note_subject_sql,subject_title,SEARCH_LIMIT
 from .notifications import encoded
 
 STATUS='^(pending|published|rejected|withdrawn)$'
@@ -27,6 +27,11 @@ def register(service,app,Workspace):
 
     def items(rows,snap,user=None,staff_view=True):
         return [service.public(dict(r)|dict(data=json.loads(r['document'])),snap,staff_view,user) for r in rows]
+
+    def with_subject(rows,snap,user):
+        """Staff items of rows selected with note_subject_sql: the school's subject name wins over the stored one."""
+        names={s.id:s.name for s in snap.state.subjects}
+        return [i|dict(subjectId=r['subject_id'],subject=subject_title(r,names)) for i,r in zip(items(rows,snap,user),rows)]
 
     def publish(db,workspace,row,user,version,data,snap):
         """Bring a note into force: number its letter and tell the family if it is visible."""
@@ -54,6 +59,7 @@ def register(service,app,Workspace):
                         myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,commission=service.commission.flags(db,user,snap,workspace) if service.commission else None,
                         configVersion=cfg['version'] if user['role']=='admin' else None,
                         classes=[dict(id=id,name=name) for id,name in classes.items() if any(s.classId==id for s in pupils)],
+                        subjects=sorted((dict(id=s.id,name=s.name) for s in snap.state.subjects),key=lambda s:s['name'].casefold()) if allowed or user['role']=='admin' else [],
                         students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes.get(s.classId,'')) for s in pupils])
 
     @app.put('/api/behaviour/config')
@@ -121,14 +127,16 @@ def register(service,app,Workspace):
 
     @app.get('/api/behaviour/notes')
     def notes(request:Request,workspace:Workspace='school',classId:str|None=None,studentId:str|None=None,kind:str|None=Query(default=None,pattern='^(praise|remark)$'),
-              status:str|None=Query(default=None,pattern=STATUS),start:date|None=None,end:date|None=None,before:int|None=Query(default=None,ge=1)):
+              status:str|None=Query(default=None,pattern=STATUS),start:date|None=None,end:date|None=None,before:int|None=Query(default=None,ge=1),
+              subjectId:str|None=Query(default=None,max_length=100),q:str|None=Query(default=None,max_length=SEARCH_LIMIT)):
         window(start,end)
         with service.context(request,workspace) as (db,user,snap):
             staff(db,user,snap,workspace)
-            clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,status)
-            if before:clause+=' AND seq<?';params.append(before)
-            rows=db.execute(f'SELECT * FROM behaviour_notes WHERE {clause} ORDER BY day DESC,seq DESC LIMIT {PAGE+1}',params).fetchall()
-            return dict(items=items(rows[:PAGE],snap,user),nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)
+            clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,status,'n.',subjectId,q)
+            if before:clause+=' AND n.seq<?';params.append(before)
+            subject_id,subject_name,joined=note_subject_sql(db)
+            rows=db.execute(f'SELECT n.*,{subject_id} AS subject_id,{subject_name} AS subject FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE {clause} ORDER BY n.day DESC,n.seq DESC LIMIT {PAGE+1}',params).fetchall()
+            return dict(items=with_subject(rows[:PAGE],snap,user),nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)
 
     @app.get('/api/behaviour/queue')
     def queue(request:Request,workspace:Workspace='school',before:int|None=Query(default=None,ge=1)):
@@ -200,12 +208,13 @@ def register(service,app,Workspace):
 
     @app.get('/api/behaviour/export')
     def export(request:Request,workspace:Workspace='school',classId:str|None=None,studentId:str|None=None,kind:str|None=Query(default=None,pattern='^(praise|remark)$'),
-               start:date|None=None,end:date|None=None):
+               start:date|None=None,end:date|None=None,subjectId:str|None=Query(default=None,max_length=100),q:str|None=Query(default=None,max_length=SEARCH_LIMIT)):
         window(start,end)
         with service.context(request,workspace) as (db,user,snap):
             staff(db,user,snap,workspace)
-            clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,None)
-            rows=db.execute(f'SELECT * FROM behaviour_notes WHERE {clause} ORDER BY day,seq LIMIT 20001',params).fetchall()
+            clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,None,'n.',subjectId,q)
+            subject_id,subject_name,joined=note_subject_sql(db)
+            rows=db.execute(f'SELECT n.*,{subject_id} AS subject_id,{subject_name} AS subject FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE {clause} ORDER BY n.day,n.seq LIMIT 20001',params).fetchall()
             if len(rows)>20000:raise HTTPException(413,'Слишком много записей. Сократите период или выберите класс.')
             return export_rows(rows,snap)
 
