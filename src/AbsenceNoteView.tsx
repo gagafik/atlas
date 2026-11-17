@@ -161,7 +161,11 @@ export default function AbsenceNoteView({
         </div>
       ))}
       {historyNext !== null && (
-        <button disabled={busy} onClick={() => onHistory(historyNext)}>
+        <button
+          className="absence-notes-more"
+          disabled={busy}
+          onClick={() => onHistory(historyNext)}
+        >
           Предыдущие решения
         </button>
       )}

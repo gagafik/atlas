@@ -26,12 +26,15 @@ import {
   BULK_LIMIT,
   STATUS_LABELS,
   allPicked,
+  composeLabel,
   factsLine,
   filedBy,
   pickEligible,
+  tabsFor,
   type AbsenceNote,
   type ClassSetting,
   type NoteFile,
+  type Tab,
 } from "./absenceNotes";
 import "./AbsenceNotes.css";
 
@@ -77,7 +80,6 @@ type BulkPreview = {
 };
 // One view at a time replaces the others in place; the tabs belong to the list view.
 type View = "list" | "note" | "school" | "compose" | "bulk";
-type Tab = "notes" | "classes" | "codes";
 
 // A heading that can take the focus: forms bring their own heading, which gets its tabindex here.
 const headingOf = (box: HTMLElement | null | undefined) => {
@@ -171,6 +173,21 @@ export default function AbsencePanel({
       ?.querySelector<HTMLElement>("select, input, textarea")
       ?.focus({ preventScroll: true });
   }, [compose, options]);
+  // The portal asks again for the form after the panel has left it: it opens on the form without a remount, so the text stays.
+  useEffect(() => {
+    const again = () => {
+      setExpanded(true);
+      setView("compose");
+      focusOn.current = () => {
+        composeForm.current?.scrollIntoView({ block: "start" });
+        return composeForm.current?.querySelector<HTMLElement>(
+          "select, input, textarea",
+        );
+      };
+    };
+    window.addEventListener("atlas-absence-compose", again);
+    return () => window.removeEventListener("atlas-absence-compose", again);
+  }, []);
   // Asked to open while it is on show (the launcher): the section opens.
   useEffect(() => {
     if (defaultOpen) setExpanded(true);
@@ -471,17 +488,7 @@ export default function AbsencePanel({
   };
   const classSettings = options?.classSettings ?? [];
   const viewer = { parent: !!options?.parent, reviewer: !!options?.canReview };
-  const tabs: [Tab, string][] = options
-    ? [
-        ["notes", "Записки"],
-        ...(options.classSettings?.length
-          ? [["classes", "Классы"] as [Tab, string]]
-          : []),
-        ...(options.admin
-          ? [["codes", "Типы отсутствия"] as [Tab, string]]
-          : []),
-      ]
-    : [["notes", "Записки"]];
+  const tabs = tabsFor(options);
   const shownTab = tabs.some(([id]) => id === tab) ? tab : "notes";
   // A view whose data is gone (no open note, no prepared decision) falls back to the list.
   const shown: View =
@@ -495,7 +502,15 @@ export default function AbsencePanel({
     <details
       className="absence-panel"
       open={expanded}
-      onToggle={(e) => setExpanded(e.currentTarget.open)}
+      onToggle={(e) => {
+        const open = e.currentTarget.open;
+        setExpanded(open);
+        // Collapsing unmounts the content: the types list is asked for again only when its tab is shown again.
+        if (!open) {
+          setCodesSeen(false);
+          setTab("notes");
+        }
+      }}
     >
       <summary>Записки об отсутствии</summary>
       {expanded && (
@@ -589,12 +604,11 @@ export default function AbsencePanel({
                             headingOf(composeForm.current);
                         }}
                       >
-                        {unsent
-                          ? "Продолжить записку"
-                          : "Сообщить об отсутствии"}
+                        {composeLabel(unsent)}
                       </button>
                     )}
                     <button
+                      aria-label="Обновить записки"
                       disabled={busy}
                       onClick={() =>
                         void run(async () => {
@@ -756,6 +770,7 @@ export default function AbsencePanel({
                   />
                   {next !== null && (
                     <button
+                      className="absence-notes-more"
                       disabled={busy}
                       onClick={() => void run(() => list(next))}
                     >
@@ -1172,7 +1187,10 @@ export default function AbsencePanel({
             </div>
           )}
           {shown === "bulk" && bulkPreview && (
-            <section aria-label="Предпросмотр общего решения">
+            <section
+              className="absence-notes-note"
+              aria-label="Предпросмотр общего решения"
+            >
               <button
                 type="button"
                 className="absence-notes-back"

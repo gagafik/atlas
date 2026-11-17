@@ -223,7 +223,11 @@ export default function AbsenceCodesEditor({
         </div>
       ))}
       {next !== null && (
-        <button disabled={busy} onClick={() => void run(() => page(next))}>
+        <button
+          className="absence-notes-more"
+          disabled={busy}
+          onClick={() => void run(() => page(next))}
+        >
           Предыдущие изменения
         </button>
       )}

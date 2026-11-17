@@ -232,6 +232,8 @@ export default function PupilAttendance({
                 if (notesOff) return setContact(true);
                 setNotesOpen(true);
                 setCompose(true);
+                // A panel that has left the form is asked for it again; a fresh one starts on it.
+                window.dispatchEvent(new Event("atlas-absence-compose"));
               }}
             >
               Добавить новую записку об отсутствии

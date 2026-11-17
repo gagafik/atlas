@@ -42,6 +42,11 @@
 .absence-notes .absence-notes-tabs button span {
   font-size: 11px;
 }
+/* Inside the journal panel a general rule for pressed buttons would repaint the chosen tab. */
+.absence-notes .absence-notes-tabs button.selected {
+  background: var(--primary);
+  color: var(--text-on-primary);
+}
 
 /* The compact buttons of the screen itself; the buttons of the forms inside keep their own look. */
 .absence-notes .absence-notes-actions button,
@@ -127,6 +132,14 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 4px 12px;
+}
+.absence-notes-note > fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.absence-notes-all-text {
+  display: none;
 }
 .absence-notes-note h3,
 .absence-notes .absence-notes-title {
@@ -270,8 +283,14 @@
     padding: 8px;
     background: var(--surface-sunken);
   }
-  .absence-notes-table thead th.absence-notes-c-pick::after {
-    content: attr(data-all-label);
+  .absence-notes-all {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+  }
+  .absence-notes-all-text {
+    display: inline;
     font-size: 14px;
     color: var(--text);
   }
@@ -297,6 +316,7 @@
   }
   .absence-notes-t-notes tr.absence-notes-row {
     grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 10px;
     grid-template-areas:
       "pick name status"
       "pick period period"
@@ -345,6 +365,7 @@
   .absence-notes .absence-notes-bulk button,
   .absence-notes .absence-notes-buttons button,
   .absence-notes .absence-notes-back,
+  .absence-notes .absence-notes-more,
   .absence-notes .absence-notes-tabs button,
   .absence-notes .absence-notes-field select,
   .absence-notes .absence-notes-field input,
@@ -598,7 +619,7 @@
   }
   .absence-notes-codes {
     grid-template-columns:
-      minmax(180px, 1fr)
+      minmax(120px, 1fr)
       max-content max-content max-content;
     align-items: end;
     gap: 6px 16px;

@@ -330,6 +330,18 @@ describe("LessonsTable", () => {
     buttons[1].props.onClick?.();
     expect(calls).toEqual(["start:2026-10-20", "end:2026-10-20"]);
   });
+  it("names the lesson on each row button, so that two rows are told apart", () => {
+    const ui = (
+      <LessonsTable
+        lessons={[lesson(), lesson({ date: "2026-10-20", subject: "Химия" })]}
+        onEdge={() => {}}
+      />
+    );
+    const labels = find(ui, "button").map((b) => b.props["aria-label"]);
+    expect(new Set(labels).size).toBe(4);
+    expect(labels.every((l) => l?.includes("урок"))).toBe(true);
+    expect(labels.filter((l) => l?.includes("Химия"))).toHaveLength(2);
+  });
   it("shows nothing when there are no lessons", () => {
     expect(
       bodyRows(<LessonsTable lessons={[]} onEdge={() => {}} />),

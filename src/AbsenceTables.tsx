@@ -67,25 +67,27 @@ export function NotesTable({
         <thead>
           <tr>
             {pick && (
-              <th
-                scope="col"
-                className="absence-notes-c-pick"
-                data-all-label={`Выбрать до ${BULK_LIMIT} загруженных`}
-              >
-                <input
-                  type="checkbox"
-                  aria-label={`Выбрать до ${BULK_LIMIT} загруженных`}
-                  title={`Выбрать до ${BULK_LIMIT} загруженных`}
-                  checked={allPicked(items, pick.ids, pick.action)}
-                  ref={(el) => {
-                    if (el)
-                      el.indeterminate =
-                        picked.length > 0 &&
-                        !allPicked(items, pick.ids, pick.action);
-                  }}
-                  disabled={busy || !eligible.length}
-                  onChange={pick.onToggleAll}
-                />
+              <th scope="col" className="absence-notes-c-pick">
+                <label className="absence-notes-all">
+                  <input
+                    type="checkbox"
+                    aria-label={`Выбрать до ${BULK_LIMIT} загруженных`}
+                    title={`Выбрать до ${BULK_LIMIT} загруженных`}
+                    checked={allPicked(items, pick.ids, pick.action)}
+                    ref={(el) => {
+                      if (el)
+                        el.indeterminate =
+                          picked.length > 0 &&
+                          !allPicked(items, pick.ids, pick.action);
+                    }}
+                    disabled={busy || !eligible.length}
+                    onChange={pick.onToggleAll}
+                  />
+                  {/* Shown in a narrow container only, where the header cells are hidden. */}
+                  <span className="absence-notes-all-text">
+                    Выбрать до {BULK_LIMIT} загруженных
+                  </span>
+                </label>
               </th>
             )}
             <th scope="col">Ученик</th>
@@ -322,6 +324,7 @@ export function LessonsTable({
                 <button
                   type="button"
                   className="absence-notes-row-btn"
+                  aria-label={`С этого урока: ${l.date} ${l.start}–${l.end}, ${l.subject}`}
                   onClick={() => onEdge(l, "start")}
                 >
                   С этого урока
@@ -329,6 +332,7 @@ export function LessonsTable({
                 <button
                   type="button"
                   className="absence-notes-row-btn"
+                  aria-label={`По этот урок: ${l.date} ${l.start}–${l.end}, ${l.subject}`}
                   onClick={() => onEdge(l, "end")}
                 >
                   По этот урок

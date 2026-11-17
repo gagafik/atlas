@@ -74,6 +74,7 @@ const split = (value: string) => {
     ? {
         date: `${m[3]}.${m[2]}.${m[1]}`,
         day: `${m[1]}-${m[2]}-${m[3]}`,
+        // A bare date is a whole-day boundary: the start at 00:00, the end at 23:59.
         time: m[4] ?? "",
       }
     : null;
@@ -83,11 +84,13 @@ export const periodLabel = (start: string, end: string) => {
   const a = split(start),
     b = split(end);
   if (!a || !b) return `${start.replace("T", " ")} – ${end.replace("T", " ")}`;
-  const whole = a.time === "00:00" && b.time === "23:59";
-  if (a.day === b.day) return whole ? a.date : `${a.date} ${a.time}–${b.time}`;
+  const from = a.time || "00:00",
+    to = b.time || "23:59";
+  const whole = from === "00:00" && to === "23:59";
+  if (a.day === b.day) return whole ? a.date : `${a.date} ${from}–${to}`;
   return whole
     ? `${a.date} – ${b.date}`
-    : `${a.date} ${a.time} – ${b.date} ${b.time}`;
+    : `${a.date} ${from} – ${b.date} ${to}`;
 };
 
 export const subjectName = (
@@ -157,3 +160,19 @@ export const changedLabel = (c: Pick<ClassSetting, "updated" | "actor">) =>
   c.updated
     ? `${new Date(c.updated).toLocaleString("ru-RU")}${c.actor ? `, ${c.actor}` : ""}`
     : "";
+
+export type Tab = "notes" | "classes" | "codes";
+export type TabOptions = { admin?: boolean; classSettings?: unknown[] };
+
+// What the viewer is offered: the classes for those who have any, the types for the administrator.
+export const tabsFor = (options: TabOptions | null): [Tab, string][] => [
+  ["notes", "Записки"],
+  ...(options?.classSettings?.length
+    ? [["classes", "Классы"] as [Tab, string]]
+    : []),
+  ...(options?.admin ? [["codes", "Типы отсутствия"] as [Tab, string]] : []),
+];
+
+// The parent's main button goes on with a half-written note instead of starting a new one.
+export const composeLabel = (unsent: boolean) =>
+  unsent ? "Продолжить записку" : "Сообщить об отсутствии";

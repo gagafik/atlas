@@ -3,12 +3,14 @@ import {
   allPicked,
   bulkEligible,
   changedLabel,
+  composeLabel,
   factsLine,
   filedBy,
   periodLabel,
   pickEligible,
   statusTone,
   subjectName,
+  tabsFor,
   type AbsenceNote,
 } from "./absenceNotes";
 
@@ -49,10 +51,49 @@ describe("periodLabel", () => {
       "19.10.2026 00:00 – 22.10.2026 12:30",
     );
   });
+  it("treats a date without a time as whole days", () => {
+    expect(periodLabel("2026-10-19", "2026-10-19")).toBe("19.10.2026");
+    expect(periodLabel("2026-10-19", "2026-10-22")).toBe(
+      "19.10.2026 – 22.10.2026",
+    );
+    expect(periodLabel("2026-10-19T08:00", "2026-10-19")).toBe(
+      "19.10.2026 08:00–23:59",
+    );
+  });
   it("does not move the day with the time zone", () => {
     expect(periodLabel("2026-12-31T00:00", "2026-12-31T23:59")).toBe(
       "31.12.2026",
     );
+  });
+});
+
+describe("tabsFor", () => {
+  const ids = (o: Parameters<typeof tabsFor>[0]) =>
+    tabsFor(o).map(([id]) => id);
+  it("offers the administrator the notes, the classes and the types", () => {
+    expect(ids({ admin: true, classSettings: [{}] })).toEqual([
+      "notes",
+      "classes",
+      "codes",
+    ]);
+  });
+  it("does not offer the types to a class teacher who is not an administrator", () => {
+    expect(ids({ admin: false, classSettings: [{}] })).toEqual([
+      "notes",
+      "classes",
+    ]);
+  });
+  it("leaves a parent or a pupil with the notes only", () => {
+    expect(ids({ classSettings: [] })).toEqual(["notes"]);
+    expect(ids({})).toEqual(["notes"]);
+    expect(ids(null)).toEqual(["notes"]);
+  });
+});
+
+describe("composeLabel", () => {
+  it("goes on with a note that was started", () => {
+    expect(composeLabel(true)).toBe("Продолжить записку");
+    expect(composeLabel(false)).toBe("Сообщить об отсутствии");
   });
 });
 
