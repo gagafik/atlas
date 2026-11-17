@@ -56,8 +56,15 @@ const allCapabilities = Object.keys(classCapabilities) as ClassCapability[];
 const capsDiffer = (a: ClassCapability[], b: ClassCapability[]) =>
   [...a].sort().join() !== [...b].sort().join();
 
-export default function ClassStaffPanel({ workspace }: { workspace: string }) {
-  const [expanded, setExpanded] = useState(false),
+export default function ClassStaffPanel({
+  workspace,
+  bare,
+}: {
+  workspace: string;
+  /** Shown open without the fold, for a tab of its own. */
+  bare?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(!!bare),
     [options, setOptions] = useState<Options | null>(null);
   const [assignments, setAssignments] = useState<ClassAssignments>({}),
     [classId, setClassId] = useState(""),
@@ -103,6 +110,9 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
       window.removeEventListener("atlas-homework-leave", leave);
       window.removeEventListener("beforeunload", unload);
     };
+  }, []);
+  useEffect(() => {
+    if (bare) void run(reload);
   }, []);
   async function run(action: () => Promise<void>) {
     if (lock.current) return;
@@ -208,17 +218,8 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
       setLeaderNext(result.nextBefore);
     }
   }
-  return (
-    <details
-      className="class-staff-panel"
-      open={expanded}
-      onToggle={(e) => {
-        const open = e.currentTarget.open;
-        setExpanded(open);
-        if (open && !options) void run(reload);
-      }}
-    >
-      <summary>Права работы с классами</summary>
+  const body = (
+    <>
       <p>
         Классный руководитель по умолчанию получает все пять полномочий своего
         класса. Здесь можно снять отдельное полномочие у него или назначить
@@ -560,6 +561,21 @@ export default function ClassStaffPanel({ workspace }: { workspace: string }) {
           </details>
         </>
       )}
+    </>
+  );
+  if (bare) return <section className="class-staff-panel">{body}</section>;
+  return (
+    <details
+      className="class-staff-panel"
+      open={expanded}
+      onToggle={(e) => {
+        const open = e.currentTarget.open;
+        setExpanded(open);
+        if (open && !options) void run(reload);
+      }}
+    >
+      <summary>Права работы с классами</summary>
+      {body}
     </details>
   );
 }

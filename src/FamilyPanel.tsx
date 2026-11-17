@@ -152,13 +152,16 @@ export default function FamilyPanel({
   state,
   users,
   onChanged,
+  bare,
 }: {
   workspace: string;
   state: State;
   users: Account[];
   onChanged: () => Promise<void>;
+  /** Shown open without the fold, for a tab of its own. */
+  bare?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false),
+  const [expanded, setExpanded] = useState(!!bare),
     [query, setQuery] = useState(""),
     [items, setItems] = useState<FamilyLink[]>([]),
     [next, setNext] = useState<number | null>(null),
@@ -245,320 +248,312 @@ export default function FamilyPanel({
       clearTimeout(timer);
     };
   }, [expanded, query, workspace]);
+  const body = expanded && (
+    <>
+      <p>
+        Одна связь относится к одному аккаунту родителя и одному ученику.
+        Нескольким представителям выдаются отдельные аккаунты; один родитель
+        может иметь нескольких детей.
+      </p>
+      <p>
+        Старые назначения действуют до изменения школой и отмечены как требующие
+        уточнения. Подтверждение означает проверку сотрудником школы; система не
+        проверяет документы автоматически.
+      </p>
+      {error && (
+        <p role="alert" className="error-banner">
+          {error}
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      <label className="field">
+        <span>Найти родителя или ученика в реестре</span>
+        <input
+          type="search"
+          value={query}
+          maxLength={100}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </label>
+      <button
+        disabled={busy}
+        onClick={() =>
+          void run(async () => {
+            await list();
+            await onChanged();
+          })
+        }
+      >
+        Обновить реестр
+      </button>
+      {items.map((item) => (
+        <article className="family-card" key={keyOf(item)}>
+          <strong>
+            {item.parentName} → {item.studentName}
+          </strong>
+          <p>
+            {activities[item.activity]} ·{" "}
+            {item.verified ? "Проверено школой" : "Требует уточнения"}
+            {!item.accountActive ? " · аккаунт неактивен" : ""}
+          </p>
+          <button
+            disabled={busy}
+            onClick={() => void run(() => open(item.parentId, item.studentId))}
+          >
+            Открыть связь
+          </button>
+        </article>
+      ))}
+      {!busy && !items.length && <p>Связи не найдены.</p>}
+      {next !== null && (
+        <button disabled={busy} onClick={() => void run(() => list(next))}>
+          Следующие связи
+        </button>
+      )}
+      <details>
+        <summary>Назначить ребёнка или открыть конкретную связь</summary>
+        <fieldset className="access-fields" disabled={busy}>
+          <label className="field">
+            <span>Поиск аккаунта родителя</span>
+            <input
+              value={parentSearch}
+              onChange={(e) => {
+                setParentSearch(e.target.value);
+                setParent("");
+              }}
+            />
+          </label>
+          <label className="field">
+            <span>Аккаунт родителя</span>
+            <select value={parent} onChange={(e) => setParent(e.target.value)}>
+              <option value="">Выберите родителя</option>
+              {parents.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.login}
+                  {!p.active ? " · отключён" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Поиск ученика</span>
+            <input
+              value={studentSearch}
+              onChange={(e) => {
+                setStudentSearch(e.target.value);
+                setStudent("");
+              }}
+            />
+          </label>
+          <label className="field">
+            <span>Ученик</span>
+            <select
+              value={student}
+              onChange={(e) => setStudent(e.target.value)}
+            >
+              <option value="">Выберите ученика</option>
+              {pupils.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                  {!s.active ? " · неактивен" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p>
+            Показаны первые 100 совпадений. Уточните поиск, если нужной записи
+            нет.
+          </p>
+          <button
+            disabled={!parent || !student}
+            onClick={() => void run(() => open(parent, student))}
+          >
+            Подготовить связь
+          </button>
+        </fieldset>
+      </details>
+      {form && (
+        <form
+          className="family-card"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (
+              !window.confirm(
+                `${form.status === "revoked" ? "Отозвать" : "Сохранить"} доступ ${form.parentName} к ученику ${form.studentName}? Изменение применяется ко всем разделам кабинета.`,
+              )
+            )
+              return;
+            void run(async () => {
+              await api(
+                `access/families/${form.parentId}/${form.studentId}`,
+                workspace,
+                "PUT",
+                {
+                  version: form.version,
+                  accountVersion: form.accountVersion,
+                  relationship: form.relationship,
+                  verified: form.verified,
+                  evidence: form.evidence || "",
+                  reason: form.reason || "",
+                  startDate: form.startDate || null,
+                  endDate: form.endDate || null,
+                  status: form.status,
+                },
+              );
+              await open(form.parentId, form.studentId);
+              await list();
+              await onChanged();
+              setNotice(
+                "Связь сохранена. Текущие права обновлены во всех разделах кабинета.",
+              );
+            });
+          }}
+        >
+          <h3>
+            {form.parentName} → {form.studentName}
+          </h3>
+          <fieldset className="access-fields" disabled={busy}>
+            <label className="field">
+              <span>Отношение к ребёнку</span>
+              <select
+                value={form.relationship}
+                onChange={(e) =>
+                  setForm({ ...form, relationship: e.target.value })
+                }
+              >
+                {Object.entries(relationships).map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline">
+              <input
+                type="checkbox"
+                checked={form.verified}
+                onChange={(e) =>
+                  setForm({ ...form, verified: e.target.checked })
+                }
+              />
+              Школа проверила сведения о представителе
+            </label>
+            <label className="field">
+              <span>Основание проверки — только администраторам</span>
+              <textarea
+                value={form.evidence || ""}
+                maxLength={2000}
+                onChange={(e) => setForm({ ...form, evidence: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>Доступ к кабинету ребёнка</span>
+              <select
+                value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+              >
+                <option value="active">Разрешён в указанные сроки</option>
+                <option value="revoked">Отозван</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Начало доступа (необязательно)</span>
+              <input
+                type="date"
+                value={form.startDate || ""}
+                onChange={(e) =>
+                  setForm({ ...form, startDate: e.target.value || null })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Последний день доступа (необязательно)</span>
+              <input
+                type="date"
+                value={form.endDate || ""}
+                onChange={(e) =>
+                  setForm({ ...form, endDate: e.target.value || null })
+                }
+              />
+            </label>
+            <p>
+              Asia/Qyzylorda, до конца последнего дня. Срок проверяется при
+              каждом запросе, без перезапуска сервера. Разрешение охватывает
+              действующие разделы кабинета, включая выбор курсов; согласия и
+              выдача ребёнка ещё не входят в этот реестр.
+            </p>
+            <label className="field">
+              <span>Причина изменения — только администраторам</span>
+              <textarea
+                required
+                maxLength={1000}
+                value={form.reason || ""}
+                onChange={(e) => setForm({ ...form, reason: e.target.value })}
+              />
+            </label>
+            <button
+              className="primary"
+              type="submit"
+              disabled={!form.reason?.trim()}
+            >
+              Сохранить связь и доступ
+            </button>
+            <button type="button" onClick={() => void run(() => changes())}>
+              История связи
+            </button>
+          </fieldset>
+          {history.map((h) => (
+            <article className="family-history" key={h.id}>
+              <p>
+                {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·
+                версия {h.version}
+              </p>
+              <p>
+                {relationships[h.document.relationship]} ·{" "}
+                {h.document.verified ? "Проверено школой" : "Не уточнено"} ·{" "}
+                {h.document.status === "active" ? "Разрешено" : "Отозвано"}
+              </p>
+              <p>
+                {h.document.startDate || "Без начала"} —{" "}
+                {h.document.endDate || "Без окончания"}
+              </p>
+              <p className="journal-text">
+                Основание: {h.document.evidence || "Не указано"}
+              </p>
+              <p className="journal-text">Причина: {h.document.reason}</p>
+              <small>
+                {h.source.startsWith("invitation:")
+                  ? `Школьное приглашение ${h.source.split(":")[1]}`
+                  : h.source === "account.assignment"
+                    ? "Настройка аккаунта"
+                    : h.source === "account.revoked"
+                      ? "Отзыв в аккаунте"
+                      : "Реестр семей"}
+              </small>
+            </article>
+          ))}
+          {historyNext !== null && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run(() => changes(historyNext))}
+            >
+              Предыдущие изменения связи
+            </button>
+          )}
+        </form>
+      )}
+    </>
+  );
+  if (bare)
+    return <section className="family-panel family-panel-bare">{body}</section>;
   return (
     <details
       className="family-panel"
       onToggle={(e) => setExpanded(e.currentTarget.open)}
     >
       <summary>Семьи и доступ к детям</summary>
-      {expanded && (
-        <>
-          <p>
-            Одна связь относится к одному аккаунту родителя и одному ученику.
-            Нескольким представителям выдаются отдельные аккаунты; один родитель
-            может иметь нескольких детей.
-          </p>
-          <p>
-            Старые назначения действуют до изменения школой и отмечены как
-            требующие уточнения. Подтверждение означает проверку сотрудником
-            школы; система не проверяет документы автоматически.
-          </p>
-          {error && (
-            <p role="alert" className="error-banner">
-              {error}
-            </p>
-          )}
-          {notice && <p role="status">{notice}</p>}
-          <label className="field">
-            <span>Найти родителя или ученика в реестре</span>
-            <input
-              type="search"
-              value={query}
-              maxLength={100}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-          <button
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                await list();
-                await onChanged();
-              })
-            }
-          >
-            Обновить реестр
-          </button>
-          {items.map((item) => (
-            <article className="family-card" key={keyOf(item)}>
-              <strong>
-                {item.parentName} → {item.studentName}
-              </strong>
-              <p>
-                {activities[item.activity]} ·{" "}
-                {item.verified ? "Проверено школой" : "Требует уточнения"}
-                {!item.accountActive ? " · аккаунт неактивен" : ""}
-              </p>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(() => open(item.parentId, item.studentId))
-                }
-              >
-                Открыть связь
-              </button>
-            </article>
-          ))}
-          {!busy && !items.length && <p>Связи не найдены.</p>}
-          {next !== null && (
-            <button disabled={busy} onClick={() => void run(() => list(next))}>
-              Следующие связи
-            </button>
-          )}
-          <details>
-            <summary>Назначить ребёнка или открыть конкретную связь</summary>
-            <fieldset className="access-fields" disabled={busy}>
-              <label className="field">
-                <span>Поиск аккаунта родителя</span>
-                <input
-                  value={parentSearch}
-                  onChange={(e) => {
-                    setParentSearch(e.target.value);
-                    setParent("");
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span>Аккаунт родителя</span>
-                <select
-                  value={parent}
-                  onChange={(e) => setParent(e.target.value)}
-                >
-                  <option value="">Выберите родителя</option>
-                  {parents.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} · {p.login}
-                      {!p.active ? " · отключён" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Поиск ученика</span>
-                <input
-                  value={studentSearch}
-                  onChange={(e) => {
-                    setStudentSearch(e.target.value);
-                    setStudent("");
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span>Ученик</span>
-                <select
-                  value={student}
-                  onChange={(e) => setStudent(e.target.value)}
-                >
-                  <option value="">Выберите ученика</option>
-                  {pupils.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                      {!s.active ? " · неактивен" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p>
-                Показаны первые 100 совпадений. Уточните поиск, если нужной
-                записи нет.
-              </p>
-              <button
-                disabled={!parent || !student}
-                onClick={() => void run(() => open(parent, student))}
-              >
-                Подготовить связь
-              </button>
-            </fieldset>
-          </details>
-          {form && (
-            <form
-              className="family-card"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (
-                  !window.confirm(
-                    `${form.status === "revoked" ? "Отозвать" : "Сохранить"} доступ ${form.parentName} к ученику ${form.studentName}? Изменение применяется ко всем разделам кабинета.`,
-                  )
-                )
-                  return;
-                void run(async () => {
-                  await api(
-                    `access/families/${form.parentId}/${form.studentId}`,
-                    workspace,
-                    "PUT",
-                    {
-                      version: form.version,
-                      accountVersion: form.accountVersion,
-                      relationship: form.relationship,
-                      verified: form.verified,
-                      evidence: form.evidence || "",
-                      reason: form.reason || "",
-                      startDate: form.startDate || null,
-                      endDate: form.endDate || null,
-                      status: form.status,
-                    },
-                  );
-                  await open(form.parentId, form.studentId);
-                  await list();
-                  await onChanged();
-                  setNotice(
-                    "Связь сохранена. Текущие права обновлены во всех разделах кабинета.",
-                  );
-                });
-              }}
-            >
-              <h3>
-                {form.parentName} → {form.studentName}
-              </h3>
-              <fieldset className="access-fields" disabled={busy}>
-                <label className="field">
-                  <span>Отношение к ребёнку</span>
-                  <select
-                    value={form.relationship}
-                    onChange={(e) =>
-                      setForm({ ...form, relationship: e.target.value })
-                    }
-                  >
-                    {Object.entries(relationships).map(([id, label]) => (
-                      <option key={id} value={id}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="inline">
-                  <input
-                    type="checkbox"
-                    checked={form.verified}
-                    onChange={(e) =>
-                      setForm({ ...form, verified: e.target.checked })
-                    }
-                  />
-                  Школа проверила сведения о представителе
-                </label>
-                <label className="field">
-                  <span>Основание проверки — только администраторам</span>
-                  <textarea
-                    value={form.evidence || ""}
-                    maxLength={2000}
-                    onChange={(e) =>
-                      setForm({ ...form, evidence: e.target.value })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Доступ к кабинету ребёнка</span>
-                  <select
-                    value={form.status}
-                    onChange={(e) =>
-                      setForm({ ...form, status: e.target.value })
-                    }
-                  >
-                    <option value="active">Разрешён в указанные сроки</option>
-                    <option value="revoked">Отозван</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Начало доступа (необязательно)</span>
-                  <input
-                    type="date"
-                    value={form.startDate || ""}
-                    onChange={(e) =>
-                      setForm({ ...form, startDate: e.target.value || null })
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>Последний день доступа (необязательно)</span>
-                  <input
-                    type="date"
-                    value={form.endDate || ""}
-                    onChange={(e) =>
-                      setForm({ ...form, endDate: e.target.value || null })
-                    }
-                  />
-                </label>
-                <p>
-                  Asia/Qyzylorda, до конца последнего дня. Срок проверяется при
-                  каждом запросе, без перезапуска сервера. Разрешение охватывает
-                  действующие разделы кабинета, включая выбор курсов; согласия и
-                  выдача ребёнка ещё не входят в этот реестр.
-                </p>
-                <label className="field">
-                  <span>Причина изменения — только администраторам</span>
-                  <textarea
-                    required
-                    maxLength={1000}
-                    value={form.reason || ""}
-                    onChange={(e) =>
-                      setForm({ ...form, reason: e.target.value })
-                    }
-                  />
-                </label>
-                <button
-                  className="primary"
-                  type="submit"
-                  disabled={!form.reason?.trim()}
-                >
-                  Сохранить связь и доступ
-                </button>
-                <button type="button" onClick={() => void run(() => changes())}>
-                  История связи
-                </button>
-              </fieldset>
-              {history.map((h) => (
-                <article className="family-history" key={h.id}>
-                  <p>
-                    {new Date(h.created).toLocaleString("ru-RU")} · {h.actor} ·
-                    версия {h.version}
-                  </p>
-                  <p>
-                    {relationships[h.document.relationship]} ·{" "}
-                    {h.document.verified ? "Проверено школой" : "Не уточнено"} ·{" "}
-                    {h.document.status === "active" ? "Разрешено" : "Отозвано"}
-                  </p>
-                  <p>
-                    {h.document.startDate || "Без начала"} —{" "}
-                    {h.document.endDate || "Без окончания"}
-                  </p>
-                  <p className="journal-text">
-                    Основание: {h.document.evidence || "Не указано"}
-                  </p>
-                  <p className="journal-text">Причина: {h.document.reason}</p>
-                  <small>
-                    {h.source.startsWith("invitation:")
-                      ? `Школьное приглашение ${h.source.split(":")[1]}`
-                      : h.source === "account.assignment"
-                        ? "Настройка аккаунта"
-                        : h.source === "account.revoked"
-                          ? "Отзыв в аккаунте"
-                          : "Реестр семей"}
-                  </small>
-                </article>
-              ))}
-              {historyNext !== null && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void run(() => changes(historyNext))}
-                >
-                  Предыдущие изменения связи
-                </button>
-              )}
-            </form>
-          )}
-        </>
-      )}
+      {body}
     </details>
   );
 }

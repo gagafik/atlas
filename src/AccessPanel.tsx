@@ -1,36 +1,52 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Multi } from "./DatedSchedule";
 import InvitationPanel from "./InvitationPanel";
 import FamilyPanel from "./FamilyPanel";
 import ClassStaffPanel from "./ClassStaffPanel";
+import AccessUserForm from "./AccessUserForm";
+import AccessUsersTable from "./AccessUsersTable";
+import AccessAuditTable from "./AccessAuditTable";
 import "./classStaff.css";
+import "./AccessPanel.css";
 import type { State } from "./types";
 import {
-  roleNames,
   type Account,
   type Role,
   type AuthStatus,
   type Grant,
   type AccessView,
 } from "./auth";
-const viewNames: Record<AccessView, string> = {
-  class: "Классы",
-  teacher: "Учителя",
-  room: "Кабинеты",
-  group: "Группы",
-  student: "Ученики",
-};
-type Form = Omit<Account, "id"> & { id?: string; password: string };
-interface Audit {
-  id: number;
-  created: string;
-  actorName: string;
-  action: string;
-  workspace: string | null;
-  revision: number | null;
-  detail: string;
-}
+import {
+  AUDIT_PAGE,
+  USERS_PAGE,
+  accessTabs,
+  accountFormDirty,
+  auditMatches,
+  blankForm,
+  effectiveRole,
+  filterAccounts,
+  leaveDecision,
+  pageOf,
+  pendingTargets,
+  roleOptions,
+  savedRowOutcome,
+  stateCounts,
+  viewForRole,
+  type AccessForm as Form,
+  type AccessTab,
+  type AuditEntry as Audit,
+  type LoadStatus,
+  type RoleFilter,
+  type StateFilter,
+} from "./accessModel";
+
+const leaveQuestion =
+  "В учётной записи есть несохранённые изменения. Уйти без сохранения?";
+const stateFilters: { id: StateFilter; label: string }[] = [
+  { id: "all", label: "Все" },
+  { id: "active", label: "Активные" },
+  { id: "inactive", label: "Отключённые" },
+];
 export default function AccessPanel({
   session,
   state,
@@ -44,7 +60,8 @@ export default function AccessPanel({
 }) {
   const [users, setUsers] = useState<Account[]>([]),
     [audit, setAudit] = useState<Audit[]>([]),
-    [form, setForm] = useState<Form | null>(null);
+    [form, setForm] = useState<Form | null>(null),
+    [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
@@ -57,30 +74,65 @@ export default function AccessPanel({
     [targets, setTargets] = useState<string[]>([]);
   const [grantData, setGrantData] = useState<State | null>(null),
     [query, setQuery] = useState("");
+  // The form as it was opened, to tell whether it holds changes.
+  const [formBase, setFormBase] = useState<Form | null>(null);
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all"),
+    [stateFilter, setStateFilter] = useState<StateFilter>("all"),
+    [shown, setShown] = useState(USERS_PAGE),
+    [highlightId, setHighlightId] = useState<string | null>(null);
+  const [auditQuery, setAuditQuery] = useState(""),
+    [auditShown, setAuditShown] = useState(AUDIT_PAGE);
+  // The button that gets the focus when the list comes back, and the accounts as the last reload brought them.
+  const returnFocus = useRef<string | null>(null),
+    loaded = useRef<Account[]>([]);
+  const [tab, setTab] = useState<AccessTab>("users"),
+    [visited, setVisited] = useState<AccessTab[]>(["users"]);
+  // The tab was left with the form open: a form with changes asks first and is closed, so that the question never comes
+  // up on a tab where no form is in sight. A message from the previous place does not follow to the next.
+  const openTab = (id: AccessTab) => {
+    if (id === tab) return;
+    if (tab === "users" && form) {
+      if (!leaveForm()) return;
+      if (dirty) discardForm();
+    }
+    setError("");
+    setNotice("");
+    setTab(id);
+    setVisited((v) => (v.includes(id) ? v : [...v, id]));
+  };
+  // The lists arrive together; a role filter nobody has any more is dropped, so that it does not come back by itself later.
+  function accept(u: Account[], a: Audit[]) {
+    loaded.current = u;
+    setUsers(u);
+    setAudit(a);
+    setRoleFilter((f) => effectiveRole(f, u));
+    setStatus("ready");
+  }
   async function reload() {
     const [u, a] = await Promise.all([
       api("access/users", workspace),
       api("access/audit", workspace),
     ]);
-    setUsers(u);
-    setAudit(a);
+    accept(u, a);
   }
   useEffect(() => {
     let alive = true;
-    if (session.enabled)
+    if (session.enabled) {
+      setStatus("loading");
       Promise.all([
         api("access/users", workspace),
         api("access/audit", workspace),
       ])
         .then(([u, a]) => {
-          if (alive) {
-            setUsers(u);
-            setAudit(a);
-          }
+          if (alive) accept(u, a);
         })
         .catch((e) => {
-          if (alive) setError(e.message);
+          if (alive) {
+            setError(e.message);
+            setStatus("failed");
+          }
         });
+    }
     return () => {
       alive = false;
     };
@@ -123,6 +175,57 @@ export default function AccessPanel({
       : form?.role === "student" || form?.role === "parent"
         ? ["student"]
         : ["class", "teacher", "room", "group", "student"];
+  // The numbers on the controls count what the other conditions leave, so that they agree with «Показано N из M».
+  const roles = roleOptions(users, { state: stateFilter, query }),
+    roleValue = effectiveRole(roleFilter, users),
+    counts = stateCounts(users, { role: roleValue, query }),
+    allRoles = filterAccounts(users, {
+      role: "all",
+      state: stateFilter,
+      query,
+    }).length,
+    filtered = filterAccounts(users, {
+      role: roleValue,
+      state: stateFilter,
+      query,
+    }),
+    page = pageOf(filtered, shown),
+    auditPage = pageOf(
+      audit.filter((a) => auditMatches(a, auditQuery)),
+      auditShown,
+    );
+  const resetShown = () => {
+    setShown(USERS_PAGE);
+    setHighlightId(null);
+  };
+  // Records of a grant that was only opened for a look are not a change.
+  const pending = pendingTargets(form, grantSpace, grantView, targets),
+    dirty = accountFormDirty(form, formBase, repeat, pending);
+  // The page asks before the form with changes is lost by leaving the screen, the workspace or the program.
+  useEffect(() => {
+    if (!dirty) return;
+    const leave = (e: Event) => {
+      if (!window.confirm(leaveQuestion)) e.preventDefault();
+    };
+    const unload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("atlas-homework-leave", leave);
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      window.removeEventListener("atlas-homework-leave", leave);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, [dirty]);
+  // The list comes back: the button that opened the form (or the saved account's button) gets the focus.
+  useEffect(() => {
+    if (form || busy || !returnFocus.current) return;
+    const el = document.getElementById(returnFocus.current);
+    returnFocus.current = null;
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [form, busy]);
   const table =
     grantData &&
     {
@@ -132,17 +235,50 @@ export default function AccessPanel({
       group: grantData.groups,
       student: grantData.students,
     }[grantView];
+  // Opens the form in place of the list; asks first when another form with changes is open.
+  function openForm(next: Form, view: AccessView) {
+    if (!leaveForm()) return;
+    setError("");
+    setNotice("");
+    setHighlightId(null);
+    setForm(next);
+    setFormBase(next);
+    setRepeat("");
+    setTargets([]);
+    setGrantView(view);
+  }
+  function leaveForm() {
+    const decision = leaveDecision(dirty, busy);
+    return (
+      decision === "go" || (decision === "ask" && window.confirm(leaveQuestion))
+    );
+  }
+  function discardForm() {
+    setForm(null);
+    setFormBase(null);
+    setRepeat("");
+    setTargets([]);
+  }
+  function closeForm() {
+    if (!leaveForm()) return;
+    setError("");
+    setNotice("");
+    discardForm();
+  }
+  async function editGrant(g: Grant) {
+    await run(async () => {
+      setGrantSpace(g.workspace);
+      setGrantView(g.view);
+      const fresh = await api("state", g.workspace);
+      setGrantData(fresh);
+      setTargets(g.entityIds);
+    });
+  }
   function role(value: Role) {
     if (!form) return;
     setForm({ ...form, role: value, grants: [] });
     setTargets([]);
-    setGrantView(
-      value === "teacher"
-        ? "teacher"
-        : ["student", "parent"].includes(value)
-          ? "student"
-          : "class",
-    );
+    setGrantView(viewForRole(value));
   }
   function addGrant() {
     if (!form || !targets.length) return;
@@ -163,7 +299,7 @@ export default function AccessPanel({
     setTargets([]);
   }
   async function save() {
-    if (targets.length)
+    if (pending.length)
       throw new Error(
         "Сначала добавьте выбранные записи в область доступа или очистите выбор.",
       );
@@ -175,11 +311,26 @@ export default function AccessPanel({
       id ? "PUT" : "POST",
       { ...rest, password: password || null },
     );
-    setForm(null);
-    setRepeat("");
+    discardForm();
     await reload();
     await onAuthChange();
-    setNotice("Учётная запись сохранена. Её прежние сеансы завершены.");
+    // The saved row must be visible; when the filters hide it, the notice says so instead of changing them.
+    const out = savedRowOutcome(
+      loaded.current,
+      { role: roleFilter, state: stateFilter, query },
+      form.login,
+      shown,
+    );
+    let hidden = "";
+    if (out.hidden) hidden = " Выбранные фильтры её не показывают.";
+    else {
+      setShown(out.shown);
+      setHighlightId(out.id);
+      returnFocus.current = `access-edit-${out.id}`;
+    }
+    setNotice(
+      "Учётная запись сохранена. Её прежние сеансы завершены." + hidden,
+    );
   }
   return (
     <div className="access-panel dated-panel">
@@ -268,496 +419,254 @@ export default function AccessPanel({
         </form>
       ) : (
         <>
-          <InvitationPanel
-            key={workspace}
-            state={state}
-            workspace={workspace}
-            onChange={reload}
-          />
-          <FamilyPanel
-            key={`family:${workspace}`}
-            workspace={workspace}
-            state={state}
-            users={users}
-            onChanged={reload}
-          />
-          <ClassStaffPanel
-            key={`class-staff:${workspace}`}
-            workspace={workspace}
-          />
-          <p className="info-line">
-            Администратор управляет доступом и всей базой. Составитель
-            редактирует выбранные пространства. Сотруднику отдельно назначаются
-            функции по классам. Остальные роли видят только назначенные
-            расписания текущей рабочей версии. Пароли хранятся в виде защищённых
-            проверочных значений.
-          </p>
-          <div className="dated-toolbar">
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => {
-                setForm({
-                  name: "",
-                  login: "",
-                  role: "editor",
-                  active: true,
-                  version: 0,
-                  workspaces: [workspace],
-                  grants: [],
-                  password: "",
-                });
-                setRepeat("");
-                setTargets([]);
-                setGrantView("class");
-              }}
-            >
-              Добавить учётную запись
-            </button>
-            <button disabled={busy} onClick={() => void run(reload)}>
-              Обновить список
-            </button>
-          </div>
-          {form && (
-            <form
-              className="dated-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void run(async () => {
-                  if (form.password && form.password !== repeat)
-                    throw new Error("Пароли не совпадают.");
-                  await save();
-                });
-              }}
-            >
-              <h3>
-                {form.id ? "Изменить учётную запись" : "Новая учётная запись"}
-              </h3>
-              <fieldset className="access-fields" disabled={busy}>
-                <div className="dated-fields">
-                  <label className="field">
-                    <span>Имя пользователя</span>
-                    <input
-                      required
-                      maxLength={160}
-                      value={form.name}
-                      onChange={(e) =>
-                        setForm({ ...form, name: e.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Логин пользователя</span>
-                    <input
-                      autoComplete="off"
-                      required
-                      pattern={"[a-z0-9][a-z0-9._\\-]{2,63}"}
-                      value={form.login}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          login: e.target.value.toLowerCase(),
-                        })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Роль</span>
-                    <select
-                      value={form.role}
-                      onChange={(e) => role(e.target.value as Role)}
-                    >
-                      {Object.entries(roleNames).map(([id, name]) => (
-                        <option key={id} value={id}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <label className="check-line">
-                  <input
-                    type="checkbox"
-                    checked={form.active}
-                    onChange={(e) =>
-                      setForm({ ...form, active: e.target.checked })
-                    }
-                  />
-                  Учётная запись активна
-                </label>
-                <div className="dated-fields">
-                  <label className="field">
-                    <span>
-                      {form.id
-                        ? "Новый пароль (необязательно)"
-                        : "Пароль пользователя"}
-                    </span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      required={!form.id}
-                      minLength={12}
-                      maxLength={128}
-                      value={form.password}
-                      onChange={(e) =>
-                        setForm({ ...form, password: e.target.value })
-                      }
-                    />
-                    <small>
-                      От 12 символов. При редактировании пустое поле сохраняет
-                      текущий пароль.
-                    </small>
-                  </label>
-                  <label className="field">
-                    <span>Повторите пароль</span>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      required={!!form.password}
-                      minLength={12}
-                      maxLength={128}
-                      value={repeat}
-                      onChange={(e) => setRepeat(e.target.value)}
-                    />
-                  </label>
-                </div>
-                {form.role === "admin" ? (
-                  <p>
-                    Администратору доступны школа, пример и управление
-                    пользователями.
-                  </p>
-                ) : ["editor", "staff"].includes(form.role) ? (
-                  <Multi
-                    label="Разрешённые пространства"
-                    items={[
-                      { id: "school", name: "Школа" },
-                      { id: "demo", name: "Пример" },
-                    ]}
-                    values={form.workspaces}
-                    onChange={(v) => setForm({ ...form, workspaces: v })}
-                  />
-                ) : (
-                  <section>
-                    <h4>Разрешённые расписания</h4>
-                    <p>
-                      Добавьте одну или несколько областей. Выбранные записи
-                      нужно включить кнопкой «Добавить область доступа».
-                    </p>
-                    <div className="dated-fields">
-                      <label className="field">
-                        <span>Пространство доступа</span>
-                        <select
-                          value={grantSpace}
-                          onChange={(e) =>
-                            setGrantSpace(e.target.value as "school" | "demo")
-                          }
-                        >
-                          <option value="school">Школа</option>
-                          <option value="demo">Пример</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Вид доступа</span>
-                        <select
-                          value={grantView}
-                          onChange={(e) => {
-                            setGrantView(e.target.value as AccessView);
-                            setTargets([]);
-                          }}
-                        >
-                          {allowedViews.map((v) => (
-                            <option key={v} value={v}>
-                              {viewNames[v]}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    {table ? (
-                      <Multi
-                        label="Записи для доступа"
-                        items={table}
-                        values={targets}
-                        onChange={setTargets}
-                      />
-                    ) : (
-                      <p>Загружаю справочник…</p>
-                    )}
-                    <button
-                      type="button"
-                      disabled={
-                        !targets.length ||
-                        targets.length > 200 ||
-                        (form.role === "student" && targets.length !== 1)
-                      }
-                      onClick={addGrant}
-                    >
-                      Добавить область доступа
-                    </button>
-                    {form.grants.map((g, i) => (
-                      <div className="access-grant" key={g.workspace + g.view}>
-                        <span>
-                          {g.workspace === "school" ? "Школа" : "Пример"} ·{" "}
-                          {viewNames[g.view]} · записей {g.entityIds.length}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void run(async () => {
-                              setGrantSpace(g.workspace);
-                              setGrantView(g.view);
-                              const fresh = await api("state", g.workspace);
-                              setGrantData(fresh);
-                              setTargets(g.entityIds);
-                            })
-                          }
-                        >
-                          Посмотреть и изменить
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setForm({
-                              ...form,
-                              grants: form.grants.filter((_, n) => n !== i),
-                            });
-                          }}
-                        >
-                          Удалить область
-                        </button>
-                      </div>
-                    ))}
-                  </section>
-                )}
-                <p className="muted">
-                  Изменение доступа завершает все сеансы этой записи. Последнего
-                  действующего администратора нельзя отключить.
-                </p>
-                <div className="dated-toolbar">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setForm(null);
-                      setRepeat("");
-                    }}
-                  >
-                    Закрыть форму
-                  </button>
-                  <button className="primary">Сохранить учётную запись</button>
-                </div>
-              </fieldset>
-            </form>
-          )}
-          <label className="field">
-            <span>Поиск пользователей</span>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Имя или логин"
-            />
-          </label>
-          <div className="access-users">
-            {users
-              .filter((u) =>
-                (u.name + " " + u.login)
-                  .toLocaleLowerCase()
-                  .includes(query.toLocaleLowerCase()),
-              )
-              .map((u) => (
-                <article className="export-card" key={u.id}>
-                  <h4>{u.name}</h4>
-                  <p>
-                    {u.login} · {roleNames[u.role]} ·{" "}
-                    {u.active ? "Активна" : "Отключена"}
-                  </p>
-                  <p className="muted">
-                    {u.role === "admin"
-                      ? "Все пространства"
-                      : ["editor", "staff"].includes(u.role)
-                        ? u.workspaces
-                            .map((w) => (w === "school" ? "Школа" : "Пример"))
-                            .join(", ")
-                        : `Областей доступа: ${u.grants.length}`}
-                  </p>
-                  <button
-                    disabled={busy}
-                    onClick={() => {
-                      setForm({ ...u, password: "" });
-                      setRepeat("");
-                      setTargets([]);
-                      setGrantView(
-                        u.role === "teacher"
-                          ? "teacher"
-                          : ["student", "parent"].includes(u.role)
-                            ? "student"
-                            : "class",
-                      );
-                    }}
-                  >
-                    Редактировать доступ
-                  </button>
-                </article>
-              ))}
-          </div>
-          <section className="access-audit">
-            <h3>Журнал действий</h3>
-            <p className="muted">
-              Сохранения расписания, отмена/повтор и управление доступом.
-              Последние 10 000 записей хранятся отдельно от школьного
-              расписания.
-            </p>
-            {audit.map((a) => (
-              <article key={a.id}>
-                <strong>{a.actorName}</strong>
-                <span>{new Date(a.created).toLocaleString("ru")}</span>
-                <p>
-                  {(
-                    {
-                      "state.saved": "Сохранено расписание",
-                      "timetable.versioned":
-                        "Сохранена прежняя версия расписания",
-                      "absence.submitted": "Подана объяснительная",
-                      "absence.approved": "Принята объяснительная",
-                      "absence.rejected": "Отклонена объяснительная",
-                      "absence.revoked": "Отменено решение по объяснительной",
-                      "absence.withdrawn": "Родитель отозвал объяснительную",
-                      "absence.read": "Просмотрена причина отсутствия",
-                      "attendance.summary_read":
-                        "Просмотрена сводная посещаемость",
-                      "attendance.details_read":
-                        "Просмотрена посещаемость уроков ученика",
-                      "attendance.exported": "Выгружена посещаемость",
-                      "journal.coverage_read": "Проверено заполнение журналов",
-                      "journal.period_created": "Создан учебный период",
-                      "journal.period_updated": "Изменён учебный период",
-                      "journal.period_closed": "Журналы периода закрыты",
-                      "journal.period_reopened":
-                        "Период открыт для исправлений",
-                      "journal.period_archive_read":
-                        "Просмотрен архив журналов",
-                      "journal.coverage_exported":
-                        "Выгружена проверка журналов",
-                      "staff-time.workload_exported":
-                        "Выгружена нагрузка учителей",
-                      "absence.bulk_preview":
-                        "Подготовлено общее решение по объяснительным",
-                      "absence.bulk_applied":
-                        "Сохранено общее решение по объяснительным",
-                      "absence.history_read":
-                        "Просмотрена история объяснительной",
-                      "absence.file_read": "Скачан файл объяснительной",
-                      "absence.file_uploaded": "Загружен файл объяснительной",
-                      "absence.reviewers_updated":
-                        "Назначены ответственные за объяснительные",
-                      "absence.recorded": "Школа внесла записку об отсутствии",
-                      "absence.notes_preview":
-                        "Подготовлены записки об отсутствии от школы",
-                      "absence.notes_applied":
-                        "Внесены записки об отсутствии от школы",
-                      "absence.codes_saved": "Изменены типы отсутствия",
-                      "family.updated":
-                        "Изменены семейная связь и доступ к ребёнку",
-                      "family.history_read":
-                        "Просмотрена история семейной связи",
-                      "family.evidence_read":
-                        "Просмотрены основания семейной связи",
-                      "message.reported": "Отправлена жалоба на сообщение",
-                      "message.evidence_read": "Просмотрены материалы жалобы",
-                      "message.evidence_file_read": "Скачано вложение жалобы",
-                      "message.moderation_hide": "Сообщение скрыто по жалобе",
-                      "message.moderation_restore": "Сообщение восстановлено",
-                      "message.moderation_dismiss": "Жалоба отклонена",
-                      "message.manager_recovered":
-                        "Восстановлено управление обсуждением",
-                      "message.channels_updated": "Изменены каналы сообщений",
-                      "school.sections_updated": "Изменены разделы школы",
-                      "message.saved_group_saved":
-                        "Сохранена группа получателей",
-                      "message.saved_group_deleted":
-                        "Удалена группа получателей",
-                      "message.feed_replied": "Ответ под объявлением",
-                      "state.undo": "Отмена изменения",
-                      "state.redo": "Повтор изменения",
-                      "journal.draft_saved":
-                        "Сохранён черновик учебного журнала",
-                      "journal.final_scale": "Изменена шкала итоговых оценок",
-                      "journal.final_prepared":
-                        "Подготовлена итоговая ведомость",
-                      "journal.gradebook_queued":
-                        "Подготовка ведомости поставлена в очередь",
-                      "journal.gradebook_cancel_requested":
-                        "Запрошена отмена подготовки ведомости",
-                      "journal.gradebook_cancelled":
-                        "Подготовка ведомости отменена",
-                      "journal.gradebook_failed":
-                        "Подготовка ведомости не завершена",
-                      "journal.gradebook_stale":
-                        "Изменился источник или доступ к подготовке ведомости",
-                      "journal.gradebook_prepared":
-                        "Подготовлена итоговая ведомость",
-                      "journal.final_assign": "Назначен ответственный за итоги",
-                      "journal.final_saved": "Сохранён черновик итога",
-                      "journal.final_submitted":
-                        "Итог отправлен на утверждение",
-                      "journal.final_approve": "Утверждён итог",
-                      "journal.final_return": "Итог возвращён на исправление",
-                      "journal.final_publish": "Опубликован итог",
-                      "journal.final_reopen": "Открыто исправление итога",
-                      "journal.final_withdraw": "Отозван итог",
-                      "journal.final_report_settings":
-                        "Изменены настройки табеля школы",
-                      "journal.final_layout":
-                        "Изменён порядок предметов в табеле класса",
-                      "journal.published":
-                        "Опубликована запись учебного журнала",
-                      "journal.withdrawn": "Отозвана запись учебного журнала",
-                      "courses.intake_configured":
-                        "Изменены условия приёма заявок на курсы",
-                      "courses.preference_submitted":
-                        "Получены предпочтения по курсам",
-                      "courses.preference_returned":
-                        "Заявка возвращена для уточнения",
-                      "courses.preference_accepted":
-                        "Предпочтения перенесены в план заявок",
-                      "access.enabled": "Включён вход",
-                      "account.created": "Создана учётная запись",
-                      "account.updated": "Изменён доступ",
-                      "account.password_changed": "Сменён пароль",
-                      "account.password_reset_locally":
-                        "Пароль сброшен на сервере",
-                      "account.signed_in": "Вход в систему",
-                      "account.signed_out": "Выход из системы",
-                      "account.login_failed": "Неудачная попытка входа",
-                      "safety.briefing_created": "Записан инструктаж",
-                      "safety.briefing_updated": "Изменён инструктаж",
-                      "safety.briefing_withdrawn": "Инструктаж отозван",
-                    } as Record<string, string>
-                  )[a.action] || a.action}
-                  {a.workspace
-                    ? ` · ${a.workspace === "school" ? "Школа" : "Пример"}`
-                    : ""}
-                  {a.revision !== null ? ` · версия ${a.revision}` : ""}
-                  {a.detail ? " · " + a.detail : ""}
-                </p>
-              </article>
-            ))}
-            {!!audit.length && (
+          <div
+            className="segmented access-tabs"
+            role="group"
+            aria-label="Разделы"
+          >
+            {accessTabs.map((t) => (
               <button
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const next = await api(
-                      `access/audit?before=${audit[audit.length - 1].id}`,
-                      workspace,
-                    );
-                    setAudit([...audit, ...next]);
-                    if (!next.length) setNotice("Более ранних записей нет.");
+                key={t.id}
+                type="button"
+                className={tab === t.id ? "selected" : ""}
+                aria-pressed={tab === t.id}
+                onClick={() => openTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="access-tab" hidden={tab !== "invitations"}>
+            <InvitationPanel
+              key={workspace}
+              state={state}
+              workspace={workspace}
+              onChange={reload}
+            />
+          </div>
+          {visited.includes("families") && (
+            <div className="access-tab" hidden={tab !== "families"}>
+              <FamilyPanel
+                key={`family:${workspace}`}
+                workspace={workspace}
+                state={state}
+                users={users}
+                onChanged={reload}
+                bare
+              />
+            </div>
+          )}
+          {visited.includes("classStaff") && (
+            <div className="access-tab" hidden={tab !== "classStaff"}>
+              <ClassStaffPanel
+                key={`class-staff:${workspace}`}
+                workspace={workspace}
+                bare
+              />
+            </div>
+          )}
+          <div className="access-tab dated-panel" hidden={tab !== "users"}>
+            <div className="access-browse dated-panel" hidden={!!form}>
+              <div className="access-toolbar">
+                <label>
+                  <span>Поиск пользователей</span>
+                  <input
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      resetShown();
+                    }}
+                    placeholder="Имя или логин"
+                  />
+                </label>
+                <label>
+                  <span>Роль</span>
+                  <select
+                    value={roleValue}
+                    onChange={(e) => {
+                      setRoleFilter(e.target.value as RoleFilter);
+                      resetShown();
+                    }}
+                  >
+                    <option value="all">Все ({allRoles})</option>
+                    {roles.map((o) => (
+                      <option key={o.role} value={o.role}>
+                        {o.label} ({o.count})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div
+                  className="segmented"
+                  role="group"
+                  aria-label="Состояние учётной записи"
+                >
+                  {stateFilters.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={stateFilter === f.id ? "selected" : ""}
+                      aria-pressed={stateFilter === f.id}
+                      onClick={() => {
+                        setStateFilter(f.id);
+                        resetShown();
+                      }}
+                    >
+                      {f.label} <span>{counts[f.id]}</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="access-reload"
+                  disabled={busy}
+                  onClick={() => void run(reload)}
+                >
+                  Обновить список
+                </button>
+                <button
+                  id="access-add"
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    returnFocus.current = "access-add";
+                    openForm(blankForm(workspace), "class");
+                  }}
+                >
+                  ＋ Добавить учётную запись
+                </button>
+              </div>
+              <details className="access-roles">
+                <summary>Что может каждая роль</summary>
+                <p>
+                  Администратор управляет доступом и всей базой. Составитель
+                  редактирует выбранные пространства. Сотруднику отдельно
+                  назначаются функции по классам. Остальные роли видят только
+                  назначенные расписания текущей рабочей версии. Пароли хранятся
+                  в виде защищённых проверочных значений.
+                </p>
+              </details>
+              <AccessUsersTable
+                rows={page.rows}
+                status={status}
+                busy={busy}
+                highlightId={highlightId}
+                onEdit={(u) => {
+                  returnFocus.current = `access-edit-${u.id}`;
+                  openForm({ ...u, password: "" }, viewForRole(u.role));
+                }}
+              >
+                {!!page.total && (
+                  <div className="access-more">
+                    <span>
+                      Показано {page.shown} из {page.total}
+                    </span>
+                    {page.more && (
+                      <button onClick={() => setShown((n) => n + USERS_PAGE)}>
+                        Показать ещё
+                      </button>
+                    )}
+                  </div>
+                )}
+              </AccessUsersTable>
+            </div>
+            {form && (
+              <AccessUserForm
+                key={form.id ?? "new"}
+                form={form}
+                setForm={setForm}
+                repeat={repeat}
+                onRepeat={setRepeat}
+                busy={busy}
+                error={error}
+                grantSpace={grantSpace}
+                onGrantSpace={setGrantSpace}
+                grantView={grantView}
+                onGrantView={setGrantView}
+                targets={targets}
+                onTargets={setTargets}
+                table={table}
+                allowedViews={allowedViews}
+                onRole={role}
+                onAddGrant={addGrant}
+                onEditGrant={editGrant}
+                onRemoveGrant={(i) =>
+                  setForm({
+                    ...form,
+                    grants: form.grants.filter((_, n) => n !== i),
                   })
                 }
-              >
-                Показать более ранние
-              </button>
+                onSubmit={() =>
+                  void run(async () => {
+                    if (form.password && form.password !== repeat)
+                      throw new Error("Пароли не совпадают.");
+                    await save();
+                  })
+                }
+                onBack={closeForm}
+              />
             )}
+          </div>
+          <section
+            className="access-tab dated-panel"
+            hidden={tab !== "audit"}
+            aria-label="Журнал действий"
+          >
+            <div className="access-toolbar access-audit-toolbar">
+              <label>
+                <span>Поиск в журнале</span>
+                <input
+                  value={auditQuery}
+                  onChange={(e) => {
+                    setAuditQuery(e.target.value);
+                    setAuditShown(AUDIT_PAGE);
+                  }}
+                  placeholder="Кто или что сделал"
+                />
+              </label>
+              <button disabled={busy} onClick={() => void run(reload)}>
+                Обновить
+              </button>
+              <p className="muted access-audit-note">
+                Сохранения расписания, отмена/повтор и управление доступом.
+                Последние 10 000 записей хранятся отдельно от школьного
+                расписания.
+              </p>
+            </div>
+            <AccessAuditTable rows={auditPage.rows} status={status}>
+              {status === "ready" && (
+                <div className="access-more">
+                  <span>
+                    Показано {auditPage.shown} из {auditPage.total} загруженных
+                  </span>
+                  {auditPage.more && (
+                    <button
+                      onClick={() => setAuditShown((n) => n + AUDIT_PAGE)}
+                    >
+                      Показать ещё
+                    </button>
+                  )}
+                  {!auditPage.more && !!audit.length && (
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () => {
+                          const next = await api(
+                            `access/audit?before=${audit[audit.length - 1].id}`,
+                            workspace,
+                          );
+                          setAudit([...audit, ...next]);
+                          setAuditShown((n) => n + AUDIT_PAGE);
+                          if (!next.length)
+                            setNotice("Более ранних записей нет.");
+                        })
+                      }
+                    >
+                      Показать более ранние
+                    </button>
+                  )}
+                </div>
+              )}
+            </AccessAuditTable>
           </section>
         </>
       )}
