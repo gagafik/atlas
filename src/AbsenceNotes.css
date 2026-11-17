@@ -138,6 +138,10 @@
   gap: 8px;
   min-width: 0;
 }
+/* A button that is a grid child of the note keeps its own width. */
+.absence-notes-note > button {
+  justify-self: start;
+}
 .absence-notes-all-text {
   display: none;
 }
@@ -314,45 +318,84 @@
     content: attr(data-label) ": ";
     color: var(--text-muted);
   }
+  /* A note is a block of four lines: name and status, period, type and subject, who filed it with the button. */
   .absence-notes-t-notes tr.absence-notes-row {
-    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
-    column-gap: 10px;
-    grid-template-areas:
-      "pick name status"
-      "pick period period"
-      "pick type subject"
-      "pick by by"
-      "actions actions actions";
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    gap: 2px 12px;
   }
-  .absence-notes-t-notes .absence-notes-c-pick {
-    grid-area: pick;
-    align-self: start;
-    padding-right: 10px;
+  /* The checkbox stands in a left margin kept for it, so every line of the block starts under the name. */
+  .absence-notes-pickable tr.absence-notes-row {
+    padding-left: 42px;
   }
+  .absence-notes-t-notes td.absence-notes-c-pick {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    width: auto;
+    padding: 0;
+  }
+  /* The status follows the name on the first line, whatever the order of the columns. */
   .absence-notes-t-notes .absence-notes-c-name {
-    grid-area: name;
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .absence-notes-t-notes .absence-notes-c-status {
-    grid-area: status;
-    justify-self: end;
+    order: 2;
+    flex: 0 0 auto;
+    margin-left: auto;
   }
   .absence-notes-t-notes .absence-notes-c-period {
-    grid-area: period;
+    order: 3;
+    flex: 1 1 100%;
   }
-  .absence-notes-t-notes .absence-notes-c-type {
-    grid-area: type;
-  }
+  .absence-notes-t-notes .absence-notes-c-type,
   .absence-notes-t-notes .absence-notes-c-subject {
-    grid-area: subject;
+    order: 4;
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .absence-notes-t-notes .absence-notes-c-by {
-    grid-area: by;
+    order: 5;
+    flex: 1 1 auto;
+    min-width: 0;
   }
+  /* width: the wide table gives this cell 1 %, which would squeeze the button out of the block. */
   .absence-notes-t-notes .absence-notes-c-actions {
+    order: 6;
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: auto;
+  }
+  /* A class: the name with the switch state, the teacher beside the one button. */
+  .absence-notes-t-classes tr.absence-notes-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 10px;
+    grid-template-areas:
+      "name enabled"
+      "teacher actions"
+      "changed actions";
+    align-items: center;
+  }
+  .absence-notes-t-classes .absence-notes-c-name {
+    grid-area: name;
+  }
+  .absence-notes-t-classes .absence-notes-c-enabled {
+    grid-area: enabled;
+    justify-self: end;
+  }
+  .absence-notes-t-classes .absence-notes-c-teacher {
+    grid-area: teacher;
+  }
+  .absence-notes-t-classes .absence-notes-c-changed {
+    grid-area: changed;
+  }
+  .absence-notes-t-classes .absence-notes-c-actions {
     grid-area: actions;
-    text-align: left;
-    padding-top: 6px;
+    align-self: end;
   }
   .absence-notes-c-changed:empty,
   .absence-notes-c-actions:empty,
@@ -372,16 +415,21 @@
   .absence-notes .absence-notes-field textarea {
     min-height: 40px;
   }
-  .absence-notes .absence-notes-table .absence-notes-row-btn {
-    width: 100%;
-  }
-  .absence-notes-table input[type="checkbox"] {
+  /* min-width: the general rule of the panel (min-width: 0) would let the grid column of the checkbox collapse. */
+  .absence-notes .absence-notes-table input[type="checkbox"] {
     width: 24px;
+    min-width: 24px;
     height: 24px;
   }
-  .absence-notes .absence-notes-field,
+  /* Two filters in a line: the table stays near the top of a phone screen. */
+  .absence-notes .absence-notes-field {
+    flex: 1 1 130px;
+  }
   .absence-notes .absence-notes-bulk-more .absence-notes-field {
     flex: 1 1 100%;
+  }
+  .absence-notes .absence-notes-tabs button {
+    padding-inline: 8px;
   }
   .absence-notes .absence-notes-bulk button,
   .absence-notes .absence-notes-actions button {
@@ -605,7 +653,8 @@
   align-items: center;
 }
 
-@container absence-notes (min-width: 400px) {
+/* A phone (about 310 px of panel) still shows a day and its time side by side. */
+@container absence-notes (min-width: 290px) {
   .absence-notes-dates {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

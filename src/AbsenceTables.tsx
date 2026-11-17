@@ -62,7 +62,12 @@ export function NotesTable({
   const eligible = pick ? pickEligible(items, pick.action) : [];
   const picked = pick ? pick.ids.filter((id) => eligible.includes(id)) : [];
   return (
-    <div className="absence-notes-table absence-notes-t-notes">
+    <div
+      className={
+        "absence-notes-table absence-notes-t-notes" +
+        (pick ? " absence-notes-pickable" : "")
+      }
+    >
       <table aria-label="Записки об отсутствии">
         <thead>
           <tr>

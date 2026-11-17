@@ -174,10 +174,13 @@ export default function AbsencePanel({
       ?.focus({ preventScroll: true });
   }, [compose, options]);
   // The portal asks again for the form after the panel has left it: it opens on the form without a remount, so the text stays.
+  // The counter makes a render even when the form is already on show, so the queued focus is not left waiting.
+  const [, setAsked] = useState(0);
   useEffect(() => {
     const again = () => {
       setExpanded(true);
       setView("compose");
+      setAsked((n) => n + 1);
       focusOn.current = () => {
         composeForm.current?.scrollIntoView({ block: "start" });
         return composeForm.current?.querySelector<HTMLElement>(
