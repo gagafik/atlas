@@ -5,6 +5,7 @@ import {
   emptyFilters,
   dayLabel,
   formDirty,
+  searchToApply,
   freshForm,
   noteActions,
   noteChips,
@@ -349,5 +350,17 @@ describe("buildQuery", () => {
     const filters = { ...emptyFilters, classId: "c1", q: "слово" };
     expect(buildQuery(filters, {}, ["classId", "start"])).toBe("?classId=c1");
     expect(buildQuery(filters, { before: 3 }, [])).toBe("?before=3");
+  });
+});
+
+describe("searchToApply", () => {
+  it("asks for the trimmed text, and for nothing when the list already has it", () => {
+    expect(searchToApply("  опозд ", "")).toBe("опозд");
+    expect(searchToApply("опозд", "опозд")).toBeNull();
+    expect(searchToApply(" опозд  ", "опозд")).toBeNull();
+    expect(searchToApply("   ", "")).toBeNull();
+  });
+  it("clears an applied search when the field is emptied", () => {
+    expect(searchToApply("", "опозд")).toBe("");
   });
 });

@@ -9,6 +9,7 @@ import {
   emptyFilters,
   formDirty,
   freshForm,
+  searchToApply,
   stamp,
   statusLabels,
   type Category,
@@ -104,10 +105,14 @@ export default function BehaviourNotes({
       : spaces[0] || "school",
   );
   const [options, setOptions] = useState<Options | null>(null),
-    [busy, setBusy] = useState(false),
+    // An action (save, decide, a tab change) locks the controls; a reload of the list after a filter change does not,
+    // or the search field you type in would be disabled and lose its focus on every pause.
+    [acting, setActing] = useState(false),
+    [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [tab, setTab] = useState("notes");
+  const busy = acting || loading;
   const [notes, setNotes] = useState<Note[]>([]),
     [next, setNext] = useState<number | null>(null),
     [totals, setTotals] = useState({ praise: 0, remark: 0 }),
@@ -190,17 +195,18 @@ export default function BehaviourNotes({
     return buildQuery(filters, extra, keys);
   }
   // The text of the search becomes a filter 400 ms after the last key; the list effect then reloads, and an answer to an
-  // older search is dropped by the sequence check of load().
+  // older search is dropped by the sequence check of load(). While the form of a record is open, or another tab is on
+  // show, nothing is applied: the reload would clear the messages of the form and lock it. The search waits and is
+  // applied when the list is back.
   useEffect(() => {
-    const text = search.trim();
-    if (text === filters.q) return;
+    const text = searchToApply(search, filters.q);
+    if (text === null || showForm || tab !== "notes") return;
     const timer = window.setTimeout(
       () => setFilters((f) => (f.q === text ? f : { ...f, q: text })),
       400,
     );
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, filters.q, showForm, tab]);
   async function loadNotes(opts: Options, view = tab, more = false) {
     const token = sequence.current;
     const page: Record<string, number> = more && next ? { before: next } : {};
@@ -232,7 +238,7 @@ export default function BehaviourNotes({
   }
   async function load(view = tab) {
     const token = ++sequence.current;
-    setBusy(true);
+    setLoading(true);
     setError("");
     try {
       const opts: Options = await api("behaviour/options", workspace);
@@ -312,7 +318,7 @@ export default function BehaviourNotes({
         setError(e.message);
       }
     } finally {
-      if (token === sequence.current) setBusy(false);
+      if (token === sequence.current) setLoading(false);
     }
   }
   useEffect(() => {
@@ -328,7 +334,7 @@ export default function BehaviourNotes({
     [],
   );
   async function run(action: () => Promise<void>, message: string) {
-    setBusy(true);
+    setActing(true);
     setError("");
     setNotice("");
     try {
@@ -337,7 +343,7 @@ export default function BehaviourNotes({
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setActing(false);
     }
   }
   async function refreshAfterChange() {
@@ -662,7 +668,7 @@ export default function BehaviourNotes({
       {error && !showForm && <p role="alert">{error}</p>}
       {notice && !showForm && <p role="status">{notice}</p>}
       {busy && <p role="status">Загрузка…</p>}
-      <fieldset disabled={busy}>
+      <fieldset disabled={acting}>
         <div className="bn-controls">
           <label>
             Пространство
@@ -823,8 +829,9 @@ export default function BehaviourNotes({
                   onKeyDown={(e) => {
                     if (e.key !== "Enter") return;
                     e.preventDefault();
-                    const text = search.trim();
-                    setFilters((f) => (f.q === text ? f : { ...f, q: text }));
+                    const text = searchToApply(search, filters.q);
+                    if (text !== null)
+                      setFilters((f) => (f.q === text ? f : { ...f, q: text }));
                   }}
                 />
               </label>
@@ -899,6 +906,8 @@ export default function BehaviourNotes({
             >
               {next && (
                 <button
+                  // The cursor belongs to the list on show: while another list is on its way it would continue the wrong one.
+                  disabled={loading}
                   onClick={() =>
                     options && void run(() => loadNotes(options, tab, true), "")
                   }

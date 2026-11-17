@@ -59,7 +59,7 @@ def register(service,app,Workspace):
                         myClassIds=sorted(service.rights(db,user,snap,workspace)[1]),remarkAck=cfg['remarkAck'],categories=cfg['categories'],pending=pending,commission=service.commission.flags(db,user,snap,workspace) if service.commission else None,
                         configVersion=cfg['version'] if user['role']=='admin' else None,
                         classes=[dict(id=id,name=name) for id,name in classes.items() if any(s.classId==id for s in pupils)],
-                        subjects=sorted((dict(id=s.id,name=s.name) for s in snap.state.subjects),key=lambda s:s['name'].casefold()) if allowed or user['role']=='admin' else [],
+                        subjects=service.subjects(db,workspace,snap,allowed) if allowed or user['role']=='admin' else [],
                         students=[dict(id=s.id,name=s.name,classId=s.classId,className=classes.get(s.classId,'')) for s in pupils])
 
     @app.put('/api/behaviour/config')
@@ -133,7 +133,8 @@ def register(service,app,Workspace):
         with service.context(request,workspace) as (db,user,snap):
             staff(db,user,snap,workspace)
             clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,status,'n.',subjectId,q)
-            if before:clause+=' AND n.seq<?';params.append(before)
+            # The list runs by day, then seq, and a note may be dated back: the next page starts after the (day, seq) of the cursor, not after its seq alone.
+            if before:clause+=' AND (n.day,n.seq)<(SELECT day,seq FROM behaviour_notes WHERE seq=?)';params.append(before)
             subject_id,subject_name,joined=note_subject_sql(db)
             rows=db.execute(f'SELECT n.*,{subject_id} AS subject_id,{subject_name} AS subject FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE {clause} ORDER BY n.day DESC,n.seq DESC LIMIT {PAGE+1}',params).fetchall()
             return dict(items=with_subject(rows[:PAGE],snap,user),nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)

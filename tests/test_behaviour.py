@@ -473,3 +473,59 @@ def test_options_list_the_subjects_for_staff_only(client):
         listed = ok(staff.get(url('options')))['subjects']
         assert [s['name'] for s in listed] == sorted((s.name for s in subjects), key=str.casefold) and {s['id'] for s in listed} == {s.id for s in subjects}
     assert ok(signed('mother').get(url('options')))['subjects'] == []
+
+
+def test_paging_does_not_skip_a_note_dated_back_after_the_others(client):
+    from backend.behaviour import PAGE
+    enable(client)
+    earlier = (date.fromisoformat(SEARCH_DAY) - timedelta(days=5)).isoformat()
+    batches = -(-(PAGE + 3) // 4)
+    for _ in range(batches):
+        search_note(client, ['s1', 's2', 's3', 's4'], text='Нужное слово')
+    # Written last, so its seq is the highest, but dated before every note of the first page.
+    ok(note(client, ['s1'], 'activity', 'Нужное слово задним числом', day=earlier))
+    for query in ({}, dict(q='нужное')):
+        found, before = [], None
+        while True:
+            page = ok(client.get(url('notes', **query, **(dict(before=before) if before else {}))))
+            found += page['items']; before = page['nextBefore']
+            if not before:
+                break
+        ids = [n['id'] for n in found]
+        assert len(set(ids)) == len(ids) == 4 * batches + 1
+        assert [n['day'] for n in found] == sorted((n['day'] for n in found), reverse=True)
+        assert 'Нужное слово задним числом' in {n['text'] for n in found}
+
+
+def test_subject_filter_takes_the_subject_of_the_published_lesson_for_old_notes(client, monkeypatch):
+    import csv, io
+    from test_journal import entry, write, graded
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client)
+    published, unpublished = lesson_key(client), lesson_key(client, 'Математика')
+    ok(lesson_note(client, published, ['s1'], 'discipline', text='Английский')); ok(lesson_note(client, unpublished, ['s1'], 'discipline', text='Математика'))
+    assert write(client, graded(entry(client, published, day=LESSON_DAY)), publish=True).status_code == 200
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_remove(document,'$.lesson.subjectId','$.lesson.subject')")
+    assert texts(client, subjectId=english().id) == {'Английский'}
+    assert texts(client, subjectId='none') == {'Математика'}
+    assert {n['text']: n['subject'] for n in staff_list(client)} == {'Английский': english().name, 'Математика': None}
+    for query, expected in ((dict(subjectId=english().id), ['Английский']), (dict(subjectId='none'), ['Математика'])):
+        rows = list(csv.reader(io.StringIO(client.get(url('export', **query)).text.lstrip('﻿'))))
+        assert [r[6] for r in rows[1:]] == expected
+
+
+def test_a_subject_the_school_no_longer_has_can_still_be_chosen(client):
+    enable(client)
+    search_note(client, ['s1'], text='Старый предмет', subjectId=english().id)
+    search_note(client, ['s1'], text='Без предмета')
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_set(document,'$.course.subjectId','dropped','$.course.subject','Физика (старая)') WHERE json_extract(document,'$.course') IS NOT NULL")
+    listed = {s['id']: s['name'] for s in ok(client.get(url('options')))['subjects']}
+    assert listed['dropped'] == 'Физика (старая)' and english().id in listed
+    assert texts(client, subjectId='dropped') == {'Старый предмет'}
+    assert texts(client, subjectId='none') == {'Без предмета'}
+    assert {n['text']: n['subject'] for n in staff_list(client)}['Старый предмет'] == 'Физика (старая)'
+    # A teacher reads the old subject only through the pupils of their own scope.
+    teacher(client, 'math', 't1')
+    assert 'dropped' not in {s['id'] for s in ok(signed('math').get(url('options')))['subjects']}

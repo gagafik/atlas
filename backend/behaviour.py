@@ -333,6 +333,14 @@ class Behaviour:
             params+=[needle]*len(texts)+[encoded(named)]
         return clause,params
 
+    def subjects(self,db,workspace,snap,allowed):
+        """What the subject filter offers: the subjects of the school, and those still stored with the notes of these pupils that the school no longer has (a later import dropped or renamed them), so every subject a row shows can be chosen."""
+        found={s.id:s.name for s in snap.state.subjects}
+        subject_id,subject_name,joined=note_subject_sql(db)
+        for row in db.execute(f'SELECT DISTINCT {subject_id} AS id,{subject_name} AS name FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE n.workspace=? AND {subject_id} IS NOT NULL AND n.student_id IN (SELECT value FROM json_each(?))',(workspace,encoded(sorted(allowed)))):
+            found.setdefault(row['id'],row['name'] or row['id'])
+        return sorted((dict(id=id,name=name) for id,name in found.items()),key=lambda s:(s['name'].casefold(),s['id']))
+
     def register(self,app,Workspace):
         late_opener('behaviour_staff',self.open_staff)
         from .behaviour_routes import register

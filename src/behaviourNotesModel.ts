@@ -121,6 +121,13 @@ export function buildQuery(
   return text ? "?" + text : "";
 }
 
+// What the search field asks the list for: the typed text without blanks at the edges, or null when the list already
+// has it (typing blanks, or typing back to the applied text, is no new search).
+export function searchToApply(typed: string, applied: string) {
+  const text = typed.trim();
+  return text === applied ? null : text;
+}
+
 // One record may be written about at most this many pupils.
 export const PUPIL_LIMIT = 40;
 
