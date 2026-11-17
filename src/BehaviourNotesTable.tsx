@@ -206,7 +206,9 @@ export default function BehaviourNotesTable({
                           {n.text && <p className="bn-text">{n.text}</p>}
                           <p className="bn-meta">
                             Автор: {n.author}
-                            {n.lesson && ` · Урок: ${n.lesson}`}
+                            {n.lesson
+                              ? ` · Урок: ${n.lesson}`
+                              : n.subject && ` · Предмет: ${n.subject}`}
                             {n.approvedBy && ` · Утвердил(а): ${n.approvedBy}`}
                             {n.decision && ` · Решение: ${n.decision}`}
                             {n.requireAck &&

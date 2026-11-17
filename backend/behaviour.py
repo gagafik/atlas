@@ -37,6 +37,10 @@ DEFAULT_CATEGORIES=[
     category('director-remark','remark','Замечание директора','director',letter=True,report=True),
 ]
 PAGE=50
+SEARCH_LIMIT=100
+def fold(text):
+    """What a search compares: letter case and «ё» do not matter («Артем» finds «Артём»)."""
+    return str(text or '').casefold().replace('ё','е')
 def stamp():return now().isoformat()
 def today():return now().astimezone(ZoneInfo('Asia/Qyzylorda')).date()
 
@@ -301,8 +305,10 @@ class Behaviour:
         db.execute('INSERT INTO behaviour_letters(workspace,year,last) VALUES (?,?,1) ON CONFLICT(workspace,year) DO UPDATE SET last=last+1',(workspace,year))
         return f"{year}-{db.execute('SELECT last FROM behaviour_letters WHERE workspace=? AND year=?',(workspace,year)).fetchone()[0]:04d}"
 
-    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status,alias=''):
-        """The WHERE clause of the notes this account may read; `alias` ('n.') qualifies the columns for a query that joins the lessons."""
+    def filtered(self,db,user,snap,workspace,classId,studentId,kind,start,end,status,alias='',subjectId=None,q=None):
+        """The WHERE clause of the notes this account may read; `alias` ('n.') qualifies the columns for a query that joins the lessons.
+
+        subjectId ('none': no subject) and q only narrow that set; both need the alias 'n.', and subjectId the lesson join when note_subject_sql says so."""
         allowed=self.scope(db,user,snap,workspace)
         if studentId:allowed&={studentId}
         if classId:allowed={id for id in allowed if snap.entities['student'][id].classId==classId}
@@ -312,7 +318,28 @@ class Behaviour:
         if status:clause+=f' AND {alias}status=?';params.append(status)
         if start:clause+=f' AND {alias}day>=?';params.append(start.isoformat())
         if end:clause+=f' AND {alias}day<=?';params.append(end.isoformat())
+        if (subjectId or q) and alias!='n.':raise ValueError('The subject and the search read the notes as n.')
+        if subjectId:
+            subject=note_subject_sql(db)[0]
+            if subjectId=='none':clause+=f' AND {subject} IS NULL'
+            else:clause+=f' AND {subject}=?';params.append(subjectId)
+        needle=fold((q or '').strip()[:SEARCH_LIMIT])
+        if needle:
+            db.create_function('behaviour_fold',1,fold,deterministic=True)
+            # The pupil's name is not in the row: the readable pupils whose name holds the needle are found from the snapshot.
+            named=sorted(id for id in allowed if needle in fold(snap.entities['student'][id].name))
+            texts=["json_extract(n.document,'$.text')","json_extract(n.document,'$.category')",'n.author_name',"json_extract(n.document,'$.letterNumber')"]
+            clause+=' AND ('+' OR '.join(f'instr(behaviour_fold({t}),?)>0' for t in texts)+' OR n.student_id IN (SELECT value FROM json_each(?)))'
+            params+=[needle]*len(texts)+[encoded(named)]
         return clause,params
+
+    def subjects(self,db,workspace,snap,allowed):
+        """What the subject filter offers: the subjects of the school, and those still stored with the notes of these pupils that the school no longer has (a later import dropped or renamed them), so every subject a row shows can be chosen."""
+        found={s.id:s.name for s in snap.state.subjects}
+        subject_id,subject_name,joined=note_subject_sql(db)
+        for row in db.execute(f'SELECT DISTINCT {subject_id} AS id,{subject_name} AS name FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE n.workspace=? AND {subject_id} IS NOT NULL AND n.student_id IN (SELECT value FROM json_each(?))',(workspace,encoded(sorted(allowed)))):
+            found.setdefault(row['id'],row['name'] or row['id'])
+        return sorted((dict(id=id,name=name) for id,name in found.items()),key=lambda s:(s['name'].casefold(),s['id']))
 
     def register(self,app,Workspace):
         late_opener('behaviour_staff',self.open_staff)
@@ -337,17 +364,22 @@ def csv_cell(value):
     return "'"+text if text.lstrip().startswith(('=','+','-','@')) else text
 
 
+def subject_title(row,names):
+    """The subject of a row selected with note_subject_sql (subject_id, subject): the school's name wins over the stored one; None without a subject."""
+    return names.get(row['subject_id'],row['subject']) if row['subject_id'] else None
+
+
 def export_rows(rows,snap):
     output=tempfile.SpooledTemporaryFile(max_size=512*1024,mode='w+',encoding='utf-8',newline='')
     try:
         writer=csv.writer(output);output.write('﻿')
-        writer.writerow(['Дата','Ученик','Класс','Вид','Уровень','Категория','Комментарий','Автор','Статус','Скрыта от семьи','Письмо','Ознакомлен'])
-        classes={c.id:c.name for c in snap.state.classes}
+        writer.writerow(['Дата','Ученик','Класс','Вид','Уровень','Категория','Комментарий','Автор','Статус','Скрыта от семьи','Письмо','Ознакомлен','Предмет'])
+        classes={c.id:c.name for c in snap.state.classes};names={s.id:s.name for s in snap.state.subjects}
         for row in rows:
             data=json.loads(row['document']);pupil=snap.entities['student'].get(row['student_id'])
             writer.writerow([csv_cell(v) for v in [row['day'],pupil.name if pupil else row['student_id'],classes.get(row['class_id'],''),KINDS[row['kind']],
                              LEVELS[data.get('level','teacher')],data['category'],data['text'],row['author_name'],STATES[row['status']],
-                             '' if row['visible'] else 'Да',data.get('letterNumber',''),row['ack_at'] or '']])
+                             '' if row['visible'] else 'Да',data.get('letterNumber',''),row['ack_at'] or '',subject_title(row,names)]])
         output.seek(0)
     except BaseException:
         output.close();raise

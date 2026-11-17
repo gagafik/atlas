@@ -357,3 +357,175 @@ def test_notes_written_before_subjects_take_the_subject_of_their_published_lesso
         db.execute("UPDATE behaviour_notes SET document=json_remove(document,'$.lesson.subjectId','$.lesson.subject')")
     subjects = {n['text']: n['subjectId'] for n in ok(family(mother, 's1'))['items']}
     assert subjects == {'Английский': english().id, 'Математика': None}
+
+
+SEARCH_DAY = '2026-08-18'
+
+
+def school_subject(name):
+    return next(s for s in api.read('demo').subjects if s.name == name)
+
+
+def search_note(c, students, category='activity', text='Отличная работа', **values):
+    return ok(note(c, students, category, text, day=SEARCH_DAY, **values))
+
+
+def texts(c, **query):
+    return {n['text'] for n in staff_list(c, **query)}
+
+
+def test_staff_list_filters_by_subject_of_lesson_course_or_none(client, monkeypatch):
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher')
+    t = signed('teacher'); maths = school_subject('Математика')
+    ok(lesson_note(t, lesson_key(t), ['s1'], 'discipline', text='С урока'))
+    search_note(t, ['s1'], text='По своему курсу', subjectId=english().id)
+    search_note(client, ['s1'], text='По чужому курсу', subjectId=maths.id)
+    search_note(t, ['s1'], text='Без предмета')
+    assert texts(t) == {'С урока', 'По своему курсу', 'По чужому курсу', 'Без предмета'}
+    assert texts(t, subjectId=english().id) == {'С урока', 'По своему курсу'}
+    assert texts(client, subjectId=maths.id) == {'По чужому курсу'}
+    assert texts(t, subjectId='none') == {'Без предмета'} and texts(t, subjectId='no-such-subject') == set()
+    # The items name the subject, the school's name for it; a note without one has none.
+    subjects = {n['text']: (n['subjectId'], n['subject']) for n in staff_list(client)}
+    assert subjects['С урока'] == (english().id, english().name) and subjects['Без предмета'] == (None, None)
+    # The filters narrow each other.
+    assert texts(t, subjectId=english().id, kind='remark') == {'С урока'}
+    assert texts(t, subjectId=english().id, q='курсу') == {'По своему курсу'}
+
+
+def test_search_finds_text_category_author_letter_and_pupil_in_any_case(client):
+    enable(client); teacher(client, 'math', 't1'); t = signed('math')
+    search_note(t, ['s2'], text='Принёс модель вулкана')
+    search_note(t, ['s4'], 'discipline', 'Елка на уроке')
+    search_note(client, ['s2'], 'director-praise', 'За победу')
+    letter = next(n['letterNumber'] for n in staff_list(client) if n['letterNumber'])
+    category = next(c['title'] for c in ok(client.get(url('options')))['categories'] if c['id'] == 'discipline')
+    assert texts(t, q='ВУЛКАН') == {'Принёс модель вулкана'} and texts(t, q='  вулкан  ') == {'Принёс модель вулкана'}
+    # «е» finds «ё» and «ё» finds «е».
+    assert texts(t, q='принес') == {'Принёс модель вулкана'} and texts(t, q='ПРИНЁС') == {'Принёс модель вулкана'}
+    assert texts(t, q='ёлка') == {'Елка на уроке'}
+    assert texts(client, q=category[:8].upper()) == {'Елка на уроке'}
+    assert texts(client, q='администратор') == {'За победу'}
+    assert texts(client, q=letter) == {'За победу'}
+    # A part of the pupil's name; the name is not in the note itself.
+    assert {n['studentId'] for n in staff_list(client, q='ученик 2')} == {'s2'}
+    assert staff_list(client, q='такого-слова-нет') == []
+    # Nothing typed, or only blanks, is no search.
+    assert staff_list(t, q='   ') == staff_list(t)
+    assert t.get(url('notes', q='я' * 101)).status_code == 422
+
+
+def test_search_and_subject_never_reach_a_pupil_outside_the_scope(client):
+    enable(client); teacher(client, 'math', 't1'); t = signed('math')
+    search_note(t, ['s2'], text='Свой ученик')
+    search_note(client, ['s1'], text='Чужой секрет', subjectId=english().id)
+    assert texts(client, q='секрет') == {'Чужой секрет'}
+    assert texts(t, q='секрет') == set() and texts(t, subjectId=english().id) == set()
+    assert texts(t, q='ученик 1') == set() and {n['studentId'] for n in staff_list(t, q='ученик')} == {'s2'}
+    assert 'Чужой секрет' not in t.get(url('export', q='секрет')).text
+    guardian(client, 'mother', 's1')
+    assert signed('mother').get(url('notes', q='секрет')).status_code == 403
+    assert signed('mother').get(url('export', subjectId='none')).status_code == 403
+
+
+def test_paging_continues_with_the_search(client):
+    from backend.behaviour import PAGE
+    enable(client)
+    batches = -(-(PAGE + 3) // 4)
+    for _ in range(batches):
+        search_note(client, ['s1', 's2', 's3', 's4'], text='Нужное слово')
+    search_note(client, ['s1'], text='Другое')
+    first = ok(client.get(url('notes', q='нужное')))
+    assert len(first['items']) == PAGE and first['nextBefore']
+    second = ok(client.get(url('notes', q='нужное', before=first['nextBefore'])))
+    assert second['nextBefore'] is None
+    found = first['items'] + second['items']
+    assert len({n['id'] for n in found}) == len(found) == 4 * batches and {n['text'] for n in found} == {'Нужное слово'}
+
+
+def test_export_follows_the_subject_and_the_search_and_names_the_subject(client, monkeypatch):
+    import csv, io
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client); create(client, 'teacher')
+    t = signed('teacher')
+    ok(lesson_note(t, lesson_key(t), ['s1'], 'discipline', text='С урока'))
+    search_note(t, ['s1'], text='Без предмета')
+
+    def rows(**query):
+        response = t.get(url('export', **query))
+        assert response.status_code == 200
+        return list(csv.reader(io.StringIO(response.text.lstrip('﻿'))))
+    everything = rows()
+    assert len(everything) == 3 and everything[0][-1] == 'Предмет'
+    assert {r[6]: r[-1] for r in everything[1:]} == {'С урока': english().name, 'Без предмета': ''}
+    assert [r[6] for r in rows(subjectId=english().id)[1:]] == ['С урока']
+    assert [r[6] for r in rows(subjectId='none')[1:]] == ['Без предмета']
+    assert [r[6] for r in rows(q='ПРЕДМЕТА')[1:]] == ['Без предмета']
+    assert rows(subjectId=english().id, q='предмета')[1:] == []
+
+
+def test_options_list_the_subjects_for_staff_only(client):
+    enable(client); teacher(client, 'math', 't1'); guardian(client, 'mother', 's2')
+    subjects = api.read('demo').subjects
+    assert subjects
+    for staff in (client, signed('math')):
+        listed = ok(staff.get(url('options')))['subjects']
+        assert [s['name'] for s in listed] == sorted((s.name for s in subjects), key=str.casefold) and {s['id'] for s in listed} == {s.id for s in subjects}
+    assert ok(signed('mother').get(url('options')))['subjects'] == []
+
+
+def test_paging_does_not_skip_a_note_dated_back_after_the_others(client):
+    from backend.behaviour import PAGE
+    enable(client)
+    earlier = (date.fromisoformat(SEARCH_DAY) - timedelta(days=5)).isoformat()
+    batches = -(-(PAGE + 3) // 4)
+    for _ in range(batches):
+        search_note(client, ['s1', 's2', 's3', 's4'], text='Нужное слово')
+    # Written last, so its seq is the highest, but dated before every note of the first page.
+    ok(note(client, ['s1'], 'activity', 'Нужное слово задним числом', day=earlier))
+    for query in ({}, dict(q='нужное')):
+        found, before = [], None
+        while True:
+            page = ok(client.get(url('notes', **query, **(dict(before=before) if before else {}))))
+            found += page['items']; before = page['nextBefore']
+            if not before:
+                break
+        ids = [n['id'] for n in found]
+        assert len(set(ids)) == len(ids) == 4 * batches + 1
+        assert [n['day'] for n in found] == sorted((n['day'] for n in found), reverse=True)
+        assert 'Нужное слово задним числом' in {n['text'] for n in found}
+
+
+def test_subject_filter_takes_the_subject_of_the_published_lesson_for_old_notes(client, monkeypatch):
+    import csv, io
+    from test_journal import entry, write, graded
+    monkeypatch.setattr('backend.behaviour_routes.today', lambda: date(2026, 8, 31))
+    enable(client)
+    published, unpublished = lesson_key(client), lesson_key(client, 'Математика')
+    ok(lesson_note(client, published, ['s1'], 'discipline', text='Английский')); ok(lesson_note(client, unpublished, ['s1'], 'discipline', text='Математика'))
+    assert write(client, graded(entry(client, published, day=LESSON_DAY)), publish=True).status_code == 200
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_remove(document,'$.lesson.subjectId','$.lesson.subject')")
+    assert texts(client, subjectId=english().id) == {'Английский'}
+    assert texts(client, subjectId='none') == {'Математика'}
+    assert {n['text']: n['subject'] for n in staff_list(client)} == {'Английский': english().name, 'Математика': None}
+    for query, expected in ((dict(subjectId=english().id), ['Английский']), (dict(subjectId='none'), ['Математика'])):
+        rows = list(csv.reader(io.StringIO(client.get(url('export', **query)).text.lstrip('﻿'))))
+        assert [r[6] for r in rows[1:]] == expected
+
+
+def test_a_subject_the_school_no_longer_has_can_still_be_chosen(client):
+    enable(client)
+    search_note(client, ['s1'], text='Старый предмет', subjectId=english().id)
+    search_note(client, ['s1'], text='Без предмета')
+    with api.connect() as db:
+        db.execute("UPDATE behaviour_notes SET document=json_set(document,'$.course.subjectId','dropped','$.course.subject','Физика (старая)') WHERE json_extract(document,'$.course') IS NOT NULL")
+    listed = {s['id']: s['name'] for s in ok(client.get(url('options')))['subjects']}
+    assert listed['dropped'] == 'Физика (старая)' and english().id in listed
+    assert texts(client, subjectId='dropped') == {'Старый предмет'}
+    assert texts(client, subjectId='none') == {'Без предмета'}
+    assert {n['text']: n['subject'] for n in staff_list(client)}['Старый предмет'] == 'Физика (старая)'
+    # A teacher reads the old subject only through the pupils of their own scope.
+    teacher(client, 'math', 't1')
+    assert 'dropped' not in {s['id'] for s in ok(signed('math').get(url('options')))['subjects']}
