@@ -134,7 +134,7 @@ def register(service,app,Workspace):
             staff(db,user,snap,workspace)
             clause,params=service.filtered(db,user,snap,workspace,classId,studentId,kind,start,end,status,'n.',subjectId,q)
             # The list runs by day, then seq, and a note may be dated back: the next page starts after the (day, seq) of the cursor, not after its seq alone.
-            if before:clause+=' AND (n.day,n.seq)<(SELECT day,seq FROM behaviour_notes WHERE seq=?)';params.append(before)
+            if before:clause+=' AND (n.day,n.seq)<(SELECT day,seq FROM behaviour_notes WHERE workspace=? AND seq=?)';params+=[workspace,before]
             subject_id,subject_name,joined=note_subject_sql(db)
             rows=db.execute(f'SELECT n.*,{subject_id} AS subject_id,{subject_name} AS subject FROM behaviour_notes n{LESSON_JOIN if joined else ""} WHERE {clause} ORDER BY n.day DESC,n.seq DESC LIMIT {PAGE+1}',params).fetchall()
             return dict(items=with_subject(rows[:PAGE],snap,user),nextBefore=rows[PAGE-1]['seq'] if len(rows)>PAGE else None)
