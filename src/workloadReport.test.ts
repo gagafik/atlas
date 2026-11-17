@@ -6,6 +6,7 @@ import {
   hours,
   lessonCounts,
   lessonNotes,
+  lessonSelection,
   monthOf,
   outcomeTone,
   partsLine,
@@ -214,6 +215,14 @@ describe("workload lesson filters", () => {
         end: "2026-11-15",
       }),
     ).toHaveLength(0);
+  });
+  it("words the narrowing for the printed sheet, and says nothing when there is none", () => {
+    expect(lessonSelection(null, "all")).toBe("");
+    expect(lessonSelection(week, "all")).toBe("Неделя 02.11 – 08.11");
+    expect(lessonSelection(null, "other")).toBe("Не проведено");
+    expect(lessonSelection(week, "other")).toBe(
+      "Неделя 02.11 – 08.11 · Не проведено",
+    );
   });
 });
 

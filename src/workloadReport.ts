@@ -210,6 +210,14 @@ export function filterLessons<T extends Row>(
   );
 }
 
+// What the rows of the lessons tab are narrowed to, for the printed sheet; empty when nothing is: «Неделя 02.11 – 08.11 · Не проведено».
+export function lessonSelection(week: Span | null, filter: LessonFilter) {
+  const label = LESSON_FILTERS.find(([id]) => id === filter)?.[1] ?? "";
+  return [week ? `Неделя ${weekLabel(week)}` : "", filter === "all" ? "" : label]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // Counts on the chips: the lessons of the selected week (or of the whole period) by group.
 export function lessonCounts(lessons: Row[], week: Span | null) {
   const counts: Record<LessonFilter, number> = {

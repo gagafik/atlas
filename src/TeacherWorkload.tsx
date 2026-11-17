@@ -8,6 +8,7 @@ import {
   TeachersTable,
   WeeksTable,
   WorkloadFiguresStrip,
+  workloadLessonsId,
   workloadNameId,
 } from "./WorkloadTables";
 import {
@@ -15,6 +16,7 @@ import {
   clip,
   dayLabel,
   lessonCounts,
+  lessonSelection,
   monthOf,
   reportWeeks,
   validPeriod,
@@ -81,7 +83,12 @@ export default function TeacherWorkload({
     printable = useRef<HTMLDivElement>(null),
     headingRef = useRef<HTMLHeadingElement>(null),
     // Where the focus goes when the report that was asked for has loaded: the heading or the id of a button.
-    focusAfter = useRef<string | null>(null);
+    focusAfter = useRef<string | null>(null),
+    // The «Уроки» tab stays mounted when the week button of the weeks table goes away, so the focus moves there.
+    lessonsTab = useRef<HTMLButtonElement>(null),
+    focusTab = useRef(false),
+    // The lessons block and the index of the first row that «Показать ещё» revealed.
+    focusRow = useRef<{ id: string; index: number } | null>(null);
   const admin = user.role === "admin";
   useEffect(() => {
     dialog.current?.showModal();
@@ -169,9 +176,24 @@ export default function TeacherWorkload({
     if (!target || loading) return;
     focusAfter.current = null;
     if (!report) return;
-    if (target === "heading") headingRef.current?.focus();
-    else document.getElementById(target)?.focus();
+    // «Все мои» of a teacher has no table of names, so a missing button falls back to the heading.
+    const el = target === "heading" ? null : document.getElementById(target);
+    (el ?? headingRef.current)?.focus();
   }, [report, loading]);
+  useEffect(() => {
+    if (!focusTab.current || tab !== "lessons") return;
+    focusTab.current = false;
+    lessonsTab.current?.focus();
+  }, [tab]);
+  useEffect(() => {
+    const row = focusRow.current;
+    if (!row) return;
+    focusRow.current = null;
+    document
+      .getElementById(row.id)
+      ?.querySelectorAll<HTMLElement>("tbody tr")
+      [row.index]?.focus();
+  }, [limits]);
   const preset = (range: { start: string; end: string }) => {
     const found = options ? within(range, options) : range;
     if (!found) {
@@ -211,12 +233,15 @@ export default function TeacherWorkload({
     week = weeks.find((w) => w.start === weekStart) ?? null,
     lessonsOf = report?.teachers.flatMap((t) => t.lessons ?? []) ?? [],
     counts = lessonCounts(lessonsOf, week),
+    selection =
+      detailed && tab === "lessons" ? lessonSelection(week, filter) : "",
     many = (report?.teachers.length ?? 0) > 1,
     canBack =
       !!teacherId &&
       !!options &&
       (options.canSeeAll || options.teachers.length > 1);
   const openWeek = (w: WorkloadWeek) => {
+    focusTab.current = true;
     setWeekStart(w.start);
     setTab("lessons");
   };
@@ -410,6 +435,7 @@ export default function TeacherWorkload({
                 </button>
               </div>
             </div>
+            {selection && <p className="workload-printonly">{selection}</p>}
             {!report.teachers.length && <p>За период нет уроков и замен.</p>}
             {!detailed && !!report.teachers.length && (
               <TeachersTable
@@ -430,6 +456,7 @@ export default function TeacherWorkload({
                     По неделям
                   </button>
                   <button
+                    ref={lessonsTab}
                     type="button"
                     className={tab === "lessons" ? "selected" : ""}
                     aria-pressed={tab === "lessons"}
@@ -485,20 +512,30 @@ export default function TeacherWorkload({
                   {many && <h4>{t.name}</h4>}
                   <WorkloadFiguresStrip t={t} />
                   {tab === "weeks" ? (
-                    <WeeksTable weeks={t.weeks!} onOpenWeek={openWeek} />
+                    <WeeksTable
+                      weeks={t.weeks!}
+                      onOpenWeek={openWeek}
+                      label={`Недели: ${t.name}`}
+                    />
                   ) : (
                     <LessonsTable
                       lessons={t.lessons ?? []}
                       filter={filter}
                       week={week}
                       limit={limits[t.teacherId] ?? LESSON_PAGE}
-                      onMore={() =>
+                      id={workloadLessonsId(t.teacherId)}
+                      label={`Уроки: ${t.name}`}
+                      onMore={(index) => {
+                        focusRow.current = {
+                          id: workloadLessonsId(t.teacherId),
+                          index,
+                        };
                         setLimits((all) => ({
                           ...all,
                           [t.teacherId]:
                             (all[t.teacherId] ?? LESSON_PAGE) + LESSON_PAGE,
-                        }))
-                      }
+                        }));
+                      }}
                     />
                   )}
                 </section>

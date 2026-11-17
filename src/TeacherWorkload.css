@@ -330,6 +330,10 @@
   background: var(--danger-tint);
   color: var(--danger);
 }
+/* Which week and filter the printed rows are: the sheet shows the line, the screen has the select and the chips. */
+.workload-printonly {
+  display: none;
+}
 .workload-more {
   display: flex;
   align-items: center;
@@ -350,7 +354,7 @@
   }
   .workload-lessons tr.workload-lesson {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
       "date outcome"
       "time group"
@@ -386,6 +390,7 @@
     grid-area: group;
     text-align: right;
     color: var(--text-muted);
+    overflow-wrap: anywhere;
   }
   .workload-c-subject {
     grid-area: subject;

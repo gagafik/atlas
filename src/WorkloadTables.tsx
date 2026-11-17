@@ -22,6 +22,10 @@ export const LESSON_PAGE = 50;
 export const workloadNameId = (teacherId: string) =>
   `workload-name-${teacherId}`;
 
+/** The id of the lessons block of a teacher: the page puts the focus on a row there after «Показать ещё». */
+export const workloadLessonsId = (teacherId: string) =>
+  `workload-lessons-${teacherId}`;
+
 // The tables of the workload dialog. They have no state: which teacher is open, which tab and how many rows are shown is
 // decided by the dialog.
 
@@ -92,7 +96,7 @@ export function TeachersTable({
 }) {
   return (
     <div className="workload-table">
-      <table>
+      <table aria-label="Учителя">
         <thead>
           <tr>
             <th scope="col">Учитель</th>
@@ -151,13 +155,15 @@ export function TeachersTable({
 export function WeeksTable({
   weeks,
   onOpenWeek,
+  label = "Недели",
 }: {
   weeks: WorkloadWeek[];
   onOpenWeek: (week: WorkloadWeek) => void;
+  label?: string;
 }) {
   return (
     <div className="workload-table">
-      <table>
+      <table aria-label={label}>
         <thead>
           <tr>
             <th scope="col">Неделя</th>
@@ -208,20 +214,25 @@ export function LessonsTable({
   week,
   limit = LESSON_PAGE,
   onMore,
+  id,
+  label = "Уроки",
 }: {
   lessons: WorkloadLesson[];
   filter: LessonFilter;
   week: { start: string; end: string } | null;
   limit?: number;
-  onMore: () => void;
+  /** Gets the index of the first row that «Показать ещё» reveals, so that the page can put the focus there. */
+  onMore: (firstNew: number) => void;
+  id?: string;
+  label?: string;
 }) {
   if (!lessons.length) return <p>За период уроков нет.</p>;
   const found = filterLessons(lessons, filter, week);
   if (!found.length) return <p>Таких уроков нет.</p>;
   const shown = found.slice(0, limit);
   return (
-    <div className="workload-lessons">
-      <table aria-label="Уроки">
+    <div className="workload-lessons" id={id}>
+      <table aria-label={label}>
         <thead>
           <tr>
             <th scope="col">Дата</th>
@@ -236,6 +247,7 @@ export function LessonsTable({
           {shown.map((l, i) => (
             <tr
               key={i}
+              tabIndex={-1}
               className={
                 i === 0 || shown[i - 1].date !== l.date
                   ? "workload-lesson workload-day-start"
@@ -268,7 +280,7 @@ export function LessonsTable({
           </span>
           <button
             className="workload-row-btn workload-noprint"
-            onClick={onMore}
+            onClick={() => onMore(shown.length)}
           >
             Показать ещё
           </button>

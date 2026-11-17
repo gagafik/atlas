@@ -204,6 +204,31 @@ describe("WeeksTable", () => {
   });
 });
 
+describe("table names", () => {
+  it("lets the page tell the tables of several teachers apart", () => {
+    const names = (ui: ReactNode) =>
+      find(ui, "table").map((t) => t.props["aria-label"]);
+    expect(
+      names(
+        <WeeksTable weeks={[week()]} onOpenWeek={() => {}} label="Недели: А" />,
+      ),
+    ).toEqual(["Недели: А"]);
+    expect(names(lessonsUi([lesson()], { label: "Уроки: Б" }))).toEqual([
+      "Уроки: Б",
+    ]);
+    expect(names(lessonsUi([lesson()]))).toEqual(["Уроки"]);
+    expect(
+      names(
+        <TeachersTable
+          teachers={[teacher()]}
+          totals={figures()}
+          onPick={() => {}}
+        />,
+      ),
+    ).toEqual(["Учителя"]);
+  });
+});
+
 describe("LessonsTable", () => {
   it("shows a row per lesson with the weekday, the time and the outcome", () => {
     const ui = lessonsUi([
@@ -249,6 +274,13 @@ describe("LessonsTable", () => {
     expect(buttons).toHaveLength(1);
     buttons[0].props.onClick!();
     expect(more).toBe(1);
+  });
+  it("tells which row «Показать ещё» reveals first, so that the focus can go there", () => {
+    const revealed: number[] = [];
+    const many = Array.from({ length: LESSON_PAGE + 20 }, () => lesson());
+    const ui = lessonsUi(many, { onMore: (i) => revealed.push(i) });
+    find(ui, "button")[0].props.onClick!();
+    expect(revealed).toEqual([LESSON_PAGE]);
   });
   it("shows more rows when the limit grows and drops the button when all are shown", () => {
     const many = Array.from({ length: LESSON_PAGE + 20 }, () => lesson());
