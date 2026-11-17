@@ -349,8 +349,8 @@ export default function AttendancePanel({ workspace }: { workspace: string }) {
           {options && !options.available && (
             <p>
               Для сводки нужно назначение ответственным за класс. Администратор
-              назначает его в разделе «Пользователи и доступ» → «Права работы с
-              классами».
+              назначает его в разделе «Пользователи и доступ» → «Права по
+              классам».
             </p>
           )}
           {options?.available && (

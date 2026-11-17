@@ -4286,12 +4286,6 @@ main {
   margin: 0;
   min-width: 0;
 }
-.access-panel {
-  grid-template-columns: minmax(0, 1fr);
-}
-.access-panel > * {
-  min-width: 0;
-}
 .access-audit {
   overflow-wrap: anywhere;
 }
