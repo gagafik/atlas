@@ -224,8 +224,17 @@
     grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 }
+/* A name keeps to one line where there is room: the column headings wrap instead. */
+@container workload (min-width: 620px) {
+  .workload-table tbody th,
+  .teacher-workload .workload-table .workload-name {
+    white-space: nowrap;
+  }
+}
+/* position: a visually hidden header label inside must stay in this scroll box, not widen the dialog. */
 .workload-table,
 .workload-lessons {
+  position: relative;
   overflow-x: auto;
   margin: 8px 0;
 }
@@ -354,12 +363,11 @@
   }
   .workload-lessons tr.workload-lesson {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto auto minmax(0, 1fr);
     grid-template-areas:
-      "date outcome"
-      "time group"
-      "subject subject"
-      "notes notes";
+      "date time outcome"
+      "group group subject"
+      "notes notes notes";
     column-gap: 8px;
     align-items: center;
     padding: 6px 8px;
@@ -388,8 +396,7 @@
   }
   .workload-c-group {
     grid-area: group;
-    text-align: right;
-    color: var(--text-muted);
+    font-weight: var(--weight-semibold);
     overflow-wrap: anywhere;
   }
   .workload-c-subject {
