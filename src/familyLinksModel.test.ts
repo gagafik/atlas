@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  countLabel,
+  emptyState,
   filterLinks,
   formatDay,
   linkChips,
@@ -189,6 +191,43 @@ describe("savedLinkOutcome", () => {
     expect(savedLinkOutcome([good], "all", linkKey(sibling))).toBe("absent");
     expect(savedLinkOutcome([good, sibling], "all", linkKey(sibling))).toBe(
       "visible",
+    );
+  });
+});
+
+describe("countLabel", () => {
+  it("is the plain number when every link is loaded", () => {
+    expect(countLabel(3, false)).toBe("3");
+    expect(countLabel(0, false)).toBe("0");
+  });
+  it("is not the plain number while the server has more pages", () => {
+    expect(countLabel(0, true)).not.toBe(countLabel(0, false));
+    expect(countLabel(12, true)).toContain("12");
+    expect(countLabel(12, true)).not.toBe(countLabel(12, false));
+  });
+});
+
+describe("emptyState", () => {
+  it("has nothing to say while rows are shown, whatever the status", () => {
+    for (const status of ["loading", "ready", "failed"] as const)
+      expect(emptyState(status, 4, 2, true)).toBeNull();
+  });
+  it("tells a load on the way and a failed load from an empty answer", () => {
+    expect(emptyState("loading", 0, 0, false)).toBe("loading");
+    expect(emptyState("failed", 0, 0, false)).toBe("failed");
+    expect(emptyState("ready", 0, 0, false)).toBe("empty");
+  });
+  it("does not call the registry empty while a new answer is on its way", () => {
+    expect(emptyState("loading", 5, 0, false)).toBe("loading");
+  });
+  it("tells links hidden by the filter from a registry without links", () => {
+    expect(emptyState("ready", 5, 0, false)).not.toBe(
+      emptyState("ready", 0, 0, false),
+    );
+  });
+  it("says the answer is not final when the filter hides everything and more pages exist", () => {
+    expect(emptyState("ready", 5, 0, true)).not.toBe(
+      emptyState("ready", 5, 0, false),
     );
   });
 });

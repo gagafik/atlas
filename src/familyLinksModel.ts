@@ -157,3 +157,23 @@ export function savedLinkOutcome(
     ? "visible"
     : "filtered";
 }
+
+/** The count of a filter button: only the loaded pages are counted, so a count with more pages to come is a lower bound. */
+export const countLabel = (count: number, more: boolean) =>
+  more ? `${count}+` : String(count);
+
+/**
+ * What the table says instead of rows: the registry has not arrived, did not load, is empty, or holds links that the state
+ * filter hides (then, when the server has more pages, the answer is not final).
+ */
+export function emptyState(
+  status: "loading" | "ready" | "failed",
+  loaded: number,
+  shown: number,
+  more: boolean,
+): "loading" | "failed" | "empty" | "filtered" | "filtered-more" | null {
+  if (shown > 0) return null;
+  if (status !== "ready") return status;
+  if (loaded === 0) return "empty";
+  return more ? "filtered-more" : "filtered";
+}

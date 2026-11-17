@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { LoadStatus } from "./accessModel";
 import {
   accessInactive,
+  emptyState,
   linkChips,
   linkKey,
   relationships,
@@ -24,6 +25,8 @@ const ChipView = ({ chip }: { chip: Chip }) => (
 // link in place of the registry. It has no state: which rows are shown and what the button does are decided by the page.
 export default function FamilyLinksTable({
   rows,
+  loaded = rows.length,
+  more = false,
   status = "ready",
   busy,
   highlightKey,
@@ -31,6 +34,10 @@ export default function FamilyLinksTable({
   children,
 }: {
   rows: FamilyLink[];
+  // How many links are loaded (the rows are those the state filter lets through) and whether the server has more pages:
+  // an empty answer of the filter is not «no links» while other pages are still to come.
+  loaded?: number;
+  more?: boolean;
   // Until the registry has arrived the table does not say that there are no links; after a failed load it says so itself.
   status?: LoadStatus;
   busy: boolean;
@@ -40,14 +47,20 @@ export default function FamilyLinksTable({
   // Placed under the table: «Показано N» and «Следующие связи».
   children?: ReactNode;
 }) {
+  const empty = emptyState(status, loaded, rows.length, more);
   return (
     <section aria-label="Связи родителей и учеников" className="family-section">
-      {!rows.length && status === "loading" && (
-        <p role="status">Загружаю связи…</p>
-      )}
-      {!rows.length && status === "ready" && <p>Связи не найдены.</p>}
-      {!rows.length && status === "failed" && (
+      {empty === "loading" && <p role="status">Загружаю связи…</p>}
+      {empty === "empty" && <p>Связи не найдены.</p>}
+      {empty === "failed" && (
         <p role="status">Связи не загрузились. Нажмите «Обновить реестр».</p>
+      )}
+      {empty === "filtered" && <p>Среди загруженных связей таких нет.</p>}
+      {empty === "filtered-more" && (
+        <p>
+          Среди загруженных связей таких нет. Другие могут быть на следующих
+          страницах: нажмите «Следующие связи».
+        </p>
       )}
       {rows.length > 0 && (
         <div className="family-list">

@@ -99,6 +99,22 @@ describe("FamilyLinksTable", () => {
     expect(say("failed")).not.toBe("");
     expect(new Set([say("loading"), say("ready"), say("failed")]).size).toBe(3);
   });
+  it("does not call the registry empty when the filter hides the links that are loaded", () => {
+    const say = (loaded: number, more: boolean) =>
+      textOf(
+        (FamilyLinksTable as any)({
+          rows: [],
+          loaded,
+          more,
+          busy: false,
+          onOpen: () => {},
+        }),
+      ).trim();
+    const empty = say(0, false);
+    expect(say(5, false)).not.toBe(empty);
+    // With more pages to come the line differs again: the answer is not final.
+    expect(say(5, true)).not.toBe(say(5, false));
+  });
   it("shows the links that are there while the registry is being reloaded", () => {
     const ui = (
       <FamilyLinksTable

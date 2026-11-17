@@ -6,6 +6,7 @@ import FamilyLinksTable, { familyOpenId } from "./FamilyLinksTable";
 import { leaveDecision, type LoadStatus } from "./accessModel";
 import {
   activities,
+  countLabel,
   filterLinks,
   linkCounts,
   linkFormDirty,
@@ -153,7 +154,10 @@ export default function FamilyPanel({
     [next, setNext] = useState<number | null>(null),
     [status, setStatus] = useState<LoadStatus>("loading"),
     [filter, setFilter] = useState<LinkFilter>("all"),
-    [busy, setBusy] = useState(false),
+    // An action of the administrator (open, save, reload) and a search on the way are counted apart: one ending must not
+    // switch the other's «busy» off.
+    [acting, setActing] = useState(false),
+    [searching, setSearching] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [parentSearch, setParentSearch] = useState(""),
@@ -172,7 +176,9 @@ export default function FamilyPanel({
   const returnFocus = useRef<string | null>(null),
     saved = useRef<FamilyLink | null>(null),
     loadFailed = useRef(false),
+    searchGeneration = useRef(0),
     heading = useRef<HTMLHeadingElement>(null);
+  const busy = acting || searching;
   const parents = users
     .filter(
       (u) =>
@@ -188,7 +194,7 @@ export default function FamilyPanel({
     )
     .slice(0, 100);
   const run = async (fn: () => Promise<void>) => {
-    setBusy(true);
+    setActing(true);
     setError("");
     setNotice("");
     try {
@@ -196,26 +202,30 @@ export default function FamilyPanel({
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      setActing(false);
     }
   };
   const list = async (offset = 0) => {
+    const generation = searchGeneration.current;
     const r = await api(
       `access/families?${new URLSearchParams({ q: query, offset: String(offset) })}`,
       workspace,
     );
+    // The search was changed while this page was on its way: it belongs to the old query and must not join the new rows.
+    if (generation !== searchGeneration.current) return;
     setItems((old) => (offset ? [...old, ...r.items] : r.items));
     setNext(r.nextOffset);
     setStatus("ready");
     loadFailed.current = false;
   };
-  const open = async (p: string, s: string) => {
+  // The heading takes the focus when a link opens; after a save the form stays and so do the focus and the scroll.
+  const open = async (p: string, s: string, moveFocus = true) => {
     const r = await api(`access/families/${p}/${s}`, workspace);
     setForm(r);
     setBase(r);
     setHistory([]);
     setHistoryNext(null);
-    setFocusTick((n) => n + 1);
+    if (moveFocus) setFocusTick((n) => n + 1);
   };
   const changes = async (before?: number) => {
     if (!form) return;
@@ -228,7 +238,10 @@ export default function FamilyPanel({
   };
   useEffect(() => {
     let live = true;
-    setBusy(true);
+    searchGeneration.current += 1;
+    setSearching(true);
+    // The line of the previous answer does not describe the one that is on its way.
+    setStatus("loading");
     const timer = setTimeout(() => {
       api(`access/families?${new URLSearchParams({ q: query })}`, workspace)
         .then((r) => {
@@ -252,7 +265,7 @@ export default function FamilyPanel({
           }
         })
         .finally(() => {
-          if (live) setBusy(false);
+          if (live) setSearching(false);
         });
     }, 250);
     return () => {
@@ -394,7 +407,12 @@ export default function FamilyPanel({
               }}
             />
           </label>
-          <div className="segmented" role="group" aria-label="Состояние связи">
+          <div
+            className="segmented"
+            role="group"
+            aria-label="Состояние связи"
+            title="Считаются только загруженные связи"
+          >
             {linkFilters.map((f) => (
               <button
                 key={f.id}
@@ -406,7 +424,8 @@ export default function FamilyPanel({
                   setHighlightKey(null);
                 }}
               >
-                {f.label} <span>{filterCounts[f.id]}</span>
+                {f.label}{" "}
+                <span>{countLabel(filterCounts[f.id], next !== null)}</span>
               </button>
             ))}
           </div>
@@ -446,6 +465,8 @@ export default function FamilyPanel({
         </details>
         <FamilyLinksTable
           rows={rows}
+          loaded={items.length}
+          more={next !== null}
           status={status}
           busy={busy}
           highlightKey={highlightKey}
@@ -584,7 +605,7 @@ export default function FamilyPanel({
                 },
               );
               saved.current = form;
-              await open(form.parentId, form.studentId);
+              await open(form.parentId, form.studentId, false);
               await list();
               await onChanged();
               setNotice(

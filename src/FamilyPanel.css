@@ -108,7 +108,9 @@
 .family-table {
   border-collapse: separate;
   border-spacing: 0;
-  table-layout: fixed;
+  /* Automatic layout: the last column is as wide as its button, so that the button can never stick out of the box; the
+     three columns of names give way (an ellipsis with the full text in title) and share what is left. */
+  table-layout: auto;
   width: 100%;
   font-size: 12px;
   line-height: 16px;
@@ -134,29 +136,30 @@
   background: var(--accent-tint);
 }
 .family-table th:nth-child(1) {
-  width: 18%;
+  width: 19%;
 }
 .family-table th:nth-child(2) {
-  width: 18%;
+  width: 19%;
 }
 .family-table th:nth-child(3) {
   width: 11%;
 }
 .family-table th:nth-child(4) {
-  width: 14%;
+  width: 13%;
 }
 .family-table th:nth-child(5) {
-  width: 17%;
+  width: 15%;
 }
 .family-table th:nth-child(6) {
   width: 13%;
 }
 .family-table th:nth-child(7) {
-  width: 9%;
+  width: 1%;
 }
 .family-c-parent,
 .family-c-student,
 .family-c-relation {
+  max-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -169,6 +172,7 @@
 }
 .family-c-actions {
   text-align: right;
+  white-space: nowrap;
 }
 .family-table button {
   min-height: 28px;
@@ -241,6 +245,7 @@
   .family-c-parent,
   .family-c-student,
   .family-c-relation {
+    max-width: none;
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
