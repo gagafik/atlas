@@ -604,8 +604,34 @@ def test_demo_and_import_placeholders_are_not_names_and_do_not_hide_the_school_s
 
 
 def test_an_id_of_the_application_is_no_phone_number_but_a_phone_number_is():
-    assert not tool.has_phone('14814725-1567-489d-8590-2be35d2e88ef') and not tool.has_phone('student-12345678901234567890')
+    assert not tool.has_phone('14814725-1567-489d-8590-2be35d2e88ef') and not tool.has_phone('ai-14814725-1567-489d-8590-2be35d2e88ef')
+    assert not tool.has_phone('student-8637d92c98fbb33497e6') and not tool.has_phone('t-12345678901a34')
     assert tool.has_phone('8 (701) 234-56-78') and tool.has_phone('1234567890123456')
+
+
+def test_a_phone_number_glued_to_a_short_word_is_still_a_phone_number():
+    registry = tool.Registry()
+    transformer = tool.Transformer(registry, tool.Pseudonyms(registry), POLICY)
+    for text in ['tel-87012345678', 'whatsapp-87012345678', 'mama-8701234567', 'tel87012-345-67-89', 'student-12345678901234567890']:
+        assert tool.has_phone(text), text
+        assert transformer.text(text, 't.c') == tool.HIDDEN, text
+
+
+def test_a_hash_id_of_digits_alone_gets_a_tail_with_a_letter_and_is_no_phone_number_in_the_copy():
+    ids = tool.Ids(tails={'12345678901234'})
+    fresh = ids.sub('p-12345678901234')
+    assert fresh != 'p-12345678901234' and len(fresh) == 16 and not tool.has_phone(fresh)
+    assert ids.sub('{"workloadId":"p-12345678901234"}') == '{"workloadId":"' + fresh + '"}' and ids.found('см. p-12345678901234')
+    assert tool.DIGIT_ID.findall('{"id":"p-12345678901234","other":"p-1234567890123a","n":12345678901234}') == ['12345678901234']
+
+
+def test_a_name_made_of_short_words_inside_a_text_is_hidden_by_the_rule_not_left_for_the_gate():
+    registry = tool.Registry()
+    registry.add(SHORT)
+    transformer = tool.Transformer(registry, tool.Pseudonyms(registry), POLICY)
+    assert transformer.text(f'Спросить {SHORT} о работе', 't.c') == tool.HIDDEN
+    assert transformer.names(f'Спросить {SHORT.lower()} о работе', 't.c') == tool.HIDDEN
+    assert transformer.text('Правда ли это?', 't.c') == 'Правда ли это?'
 
 
 def test_a_real_name_that_is_also_an_id_or_an_enum_value_of_the_application_does_not_corrupt_the_copy():

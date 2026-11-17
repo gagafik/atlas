@@ -50,11 +50,15 @@ HASHED = re.compile(r'(?:[a-z]{1,12}(?:-[a-z]{1,4})?-)?([0-9a-f]{8,64})')
 PLACEHOLDERS = [re.compile(p) for p in PLACEHOLDER_PATTERNS]
 EMAIL = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 STAMP = re.compile(r'\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?')
-# The digits after a decimal point are a number, not a phone: `57.77777777777`.
-PHONE = re.compile(r'(?<!\w)(?<!\d[.,])\+?[\d(][\d\s\-()]{8,}(?!\w)')
+# The digits after a decimal point are a number, not a phone: `57.77777777777`. A number may follow a word with no space ("тел87012345678"),
+# but not a hex letter: inside a hash id a run of digits is no phone.
+PHONE = re.compile(r'(?<![0-9A-Fa-f_])(?<!\d[.,])\+?[\d(][\d\s\-()]{8,}(?!\w)')
 # The shapes of the ids that the import tools and the application make: a short letter prefix with digits, a hash or a uuid.
 OPAQUE = re.compile(r'[a-z]{1,4}\d{1,9}(?:-\d{1,6}){0,3}|[a-z]{1,12}(?:-[a-z]{1,4})?-[0-9a-f]{8,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
                     r'|[0-9a-f]{16,64}|asc-(?:[a-z]{1,4})-(?=[0-9a-z*_.-]*\d)[0-9a-z*_.-]{1,40}')
+UUID = re.compile(r'(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])')
+# A hash id whose tail happens to hold digits only: it reads as a phone number, so it gets a fresh tail (see Ids).
+DIGIT_ID = re.compile(r'(?<![\w-])[a-z]{1,12}(?:-[a-z]{1,4})?-(\d{10,64})(?![\w-])')
 CHUNK = 500
 STOP = 'Остановлено: '
 CHILD_MARK = ' [шаг]'
@@ -97,10 +101,12 @@ def has_email(text):
 
 def has_phone(text):
     """A run of 10 digits or more, spaces, dashes and brackets allowed inside it; dates and times do not count.
-    An id of the application (a uuid, a hash) is no phone number even when a run of its digits looks like one."""
-    if OPAQUE.fullmatch(text) and any(c.isalpha() for c in text):
+    A uuid is no phone number even when a run of its digits looks like one. No other shape is excused: a short word glued to a number
+    ("tel-87012345678") has the shape of an id too."""
+    if sum(c.isdigit() for c in text) < 10:
         return False
-    return sum(c.isdigit() for c in text) >= 10 and any(sum(c.isdigit() for c in m.group()) >= 10 for m in PHONE.finditer(STAMP.sub(' ', text)))
+    rest = UUID.sub(lambda m: m.group() if m.group().replace('-', '').isdigit() else ' ', STAMP.sub(' ', text))
+    return any(sum(c.isdigit() for c in m.group()) >= 10 for m in PHONE.finditer(rest))
 
 
 def contact(text):
@@ -298,12 +304,13 @@ class Ids:
     """Ids of people that were made from personal data (a hash of a name or of an external id, as the import tools do) can be guessed by anyone
     who has a list of candidates. Every such id gets a random one of the same shape, for this run only; the real ones are looked for by the gate."""
 
-    def __init__(self, ids=()):
-        self.real, self.map = {m.group(1) for i in ids if (m := HASHED.fullmatch(i))}, {}
+    def __init__(self, ids=(), tails=()):
+        self.real, self.map = {m.group(1) for i in ids if (m := HASHED.fullmatch(i))} | set(tails), {}
         taken = set(self.real)
         for tail in sorted(self.real):
             fresh = tail
-            while fresh in taken:
+            # A fresh tail always holds a letter: digits alone would read as a phone number.
+            while fresh in taken or fresh.isdigit():
                 fresh = ''.join(secrets.choice('0123456789abcdef') for _ in tail)
             taken.add(fresh)
             self.map[tail] = fresh
@@ -329,7 +336,7 @@ class Transformer:
     def text(self, value, where):
         if not isinstance(value, str) or not value:
             return value
-        if self.registry.hit(value) or contact(value):
+        if self.registry.hit(value) or self.registry.has_short(value) or contact(value):
             self.hidden[where] += 1
             return HIDDEN
         return value
@@ -342,7 +349,7 @@ class Transformer:
         if known is None:
             parts = self.registry.index.split(value)
             rest = '\x00'.join(p for p, is_name in parts if not is_name)
-            hidden = self.registry.hit(rest) or contact(rest)
+            hidden = self.registry.hit(rest) or self.registry.has_short(rest) or contact(rest)
             known = (HIDDEN if hidden else ''.join(self.pseudonyms.issue(p) if is_name else p for p, is_name in parts), hidden)
             if len(self.memo) < 200000:
                 self.memo[value] = known
@@ -523,6 +530,19 @@ def check_ids(src):
         shapes = '; '.join(f'{shape} x{count}' for shape, count in sorted(bad.items()))
         raise Refused(f'Идентификаторы людей не непрозрачны (буква = a, цифра = 9): {shapes}. Копия не создана.')
     return ids
+
+
+def digit_tails(src, tables):
+    """The digits-only tails of hash ids in the tables that are copied ("p-12345678901234": about one hash id in 700 is such)."""
+    found, present = set(), set(source_tables(src))
+    for table in sorted(set(tables) & present):
+        for column in table_columns(src, table):
+            cursor = src.execute(f"SELECT {quote(column)} FROM {quote(table)} WHERE typeof({quote(column)})='text'")
+            while rows := cursor.fetchmany(CHUNK):
+                for (value,) in rows:
+                    if '-' in value:
+                        found.update(DIGIT_ID.findall(value))
+    return found
 
 
 # ---- the schema of the copy, made by the application itself
@@ -918,7 +938,7 @@ def run(source, output, policy=POLICY, log=print):
         with closing(sqlite3.connect(snap.as_uri() + '?mode=ro', uri=True)) as src:
             src.execute('PRAGMA query_only=ON')
             registry = build_registry(src)
-            ids = Ids(check_ids(src))
+            ids = Ids(check_ids(src), digit_tails(src, policy.tables))
             run_child('schema', fresh)
             check_rules(policy, columns_of(fresh, policy.tables), {t: table_columns(src, t) for t in source_tables(src) if t in policy.tables})
             output.mkdir(parents=True, exist_ok=False)
