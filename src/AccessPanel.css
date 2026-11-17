@@ -21,3 +21,277 @@
 .access-tab > .class-staff-panel {
   margin: 0;
 }
+
+/* «Учётные записи»: the list and the form are two views of the same tab; the hidden attribute must win over the grids. */
+.access-browse {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+.access-browse[hidden] {
+  display: none;
+}
+.access-tab.dated-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+.access-tab.dated-panel > * {
+  min-width: 0;
+}
+/* One row of filters, search and the two buttons; on a phone every field takes the line. */
+.access-toolbar {
+  container: access-toolbar / inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  min-width: 0;
+}
+.access-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+.access-toolbar input,
+.access-toolbar select {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.access-toolbar input {
+  width: 220px;
+  max-width: 100%;
+}
+.access-toolbar select {
+  max-width: 200px;
+}
+.access-toolbar > button {
+  min-height: 32px;
+  padding: 4px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.access-toolbar > .primary {
+  margin-left: auto;
+}
+@container access-toolbar (max-width: 619px) {
+  .access-toolbar label {
+    flex: 1 1 100%;
+  }
+  .access-toolbar input,
+  .access-toolbar select {
+    width: 100%;
+    max-width: none;
+  }
+  .access-toolbar > button {
+    flex: 1 1 calc(50% - 5px);
+  }
+  .access-toolbar > .primary {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+.access-roles summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.access-roles p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.access-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+/* The accounts: a compact table in a box of its own; under 620 px of its own width a row becomes a block. */
+.access-users-list {
+  container: access-users-list / inline-size;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.access-users-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.access-users-table th,
+.access-users-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  min-width: 0;
+}
+.access-users-table thead th {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+.access-users-table tbody > tr:last-child > td {
+  border-bottom: 0;
+}
+.access-users-table tbody > tr:hover > td {
+  background: var(--accent-tint);
+}
+.access-users-table th:nth-child(1) {
+  width: 24%;
+}
+.access-users-table th:nth-child(2) {
+  width: 16%;
+}
+.access-users-table th:nth-child(3) {
+  width: 14%;
+}
+.access-users-table th:nth-child(4) {
+  width: 13%;
+}
+.access-users-table th:nth-child(5) {
+  width: 19%;
+}
+.access-users-table th:nth-child(6) {
+  width: 14%;
+}
+.access-c-name,
+.access-c-login,
+.access-c-role,
+.access-c-access {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.access-c-name {
+  font-weight: var(--weight-semibold);
+}
+.access-c-actions {
+  text-align: right;
+}
+.access-users-table button {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+}
+.access-state {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.access-state[data-state="active"] {
+  background: var(--success-tint);
+  color: var(--success);
+}
+.access-state[data-state="inactive"] {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.access-row-off > td {
+  color: var(--text-muted);
+}
+.access-row-saved > td {
+  background: var(--accent-tint);
+}
+@container access-users-list (max-width: 619px) {
+  .access-users-table,
+  .access-users-table tbody {
+    display: block;
+  }
+  .access-users-table thead {
+    display: none;
+  }
+  .access-users-table tr.access-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name state"
+      "login role"
+      "access access"
+      "actions actions";
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .access-users-table tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .access-users-table tr.access-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+  }
+  .access-c-name {
+    grid-area: name;
+  }
+  .access-c-login {
+    grid-area: login;
+    color: var(--text-muted);
+  }
+  .access-c-role {
+    grid-area: role;
+    text-align: right;
+  }
+  .access-c-state {
+    grid-area: state;
+    text-align: right;
+  }
+  .access-c-access {
+    grid-area: access;
+    color: var(--text-muted);
+  }
+  .access-c-actions {
+    grid-area: actions;
+  }
+  .access-c-actions button {
+    width: 100%;
+  }
+}
+/* The form: heading with the way back, grants of the account, the error next to the buttons. */
+.access-form-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.access-form-head h3 {
+  margin: 0;
+}
+.access-form-head h3:focus {
+  outline: 0;
+}
+.access-form-error {
+  margin: 12px 0 0;
+}
+.access-grant {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}

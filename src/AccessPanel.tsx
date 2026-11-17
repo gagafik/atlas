@@ -1,14 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { Multi } from "./DatedSchedule";
 import InvitationPanel from "./InvitationPanel";
 import FamilyPanel from "./FamilyPanel";
 import ClassStaffPanel from "./ClassStaffPanel";
+import AccessUserForm from "./AccessUserForm";
+import AccessUsersTable from "./AccessUsersTable";
 import "./classStaff.css";
 import "./AccessPanel.css";
 import type { State } from "./types";
 import {
-  roleNames,
   type Account,
   type Role,
   type AuthStatus,
@@ -16,17 +16,32 @@ import {
   type AccessView,
 } from "./auth";
 import {
+  USERS_PAGE,
   accessTabs,
-  accessText,
+  accountFormDirty,
   auditAction,
   auditDetails,
   blankForm,
+  filterAccounts,
+  pageOf,
+  roleOptions,
+  savedRowPlace,
+  stateCounts,
   viewForRole,
-  viewNames,
   type AccessForm as Form,
   type AccessTab,
   type AuditEntry as Audit,
+  type RoleFilter,
+  type StateFilter,
 } from "./accessModel";
+
+const leaveQuestion =
+  "В учётной записи есть несохранённые изменения. Уйти без сохранения?";
+const stateFilters: { id: StateFilter; label: string }[] = [
+  { id: "all", label: "Все" },
+  { id: "active", label: "Активные" },
+  { id: "inactive", label: "Отключённые" },
+];
 export default function AccessPanel({
   session,
   state,
@@ -53,6 +68,15 @@ export default function AccessPanel({
     [targets, setTargets] = useState<string[]>([]);
   const [grantData, setGrantData] = useState<State | null>(null),
     [query, setQuery] = useState("");
+  // The form as it was opened, to tell whether it holds changes.
+  const [formBase, setFormBase] = useState<Form | null>(null);
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all"),
+    [stateFilter, setStateFilter] = useState<StateFilter>("all"),
+    [shown, setShown] = useState(USERS_PAGE),
+    [highlightId, setHighlightId] = useState<string | null>(null);
+  // The button that gets the focus when the list comes back, and the accounts as the last reload brought them.
+  const returnFocus = useRef<string | null>(null),
+    loaded = useRef<Account[]>([]);
   const [tab, setTab] = useState<AccessTab>("users"),
     [visited, setVisited] = useState<AccessTab[]>(["users"]);
   const openTab = (id: AccessTab) => {
@@ -64,6 +88,7 @@ export default function AccessPanel({
       api("access/users", workspace),
       api("access/audit", workspace),
     ]);
+    loaded.current = u;
     setUsers(u);
     setAudit(a);
   }
@@ -76,6 +101,7 @@ export default function AccessPanel({
       ])
         .then(([u, a]) => {
           if (alive) {
+            loaded.current = u;
             setUsers(u);
             setAudit(a);
           }
@@ -125,6 +151,48 @@ export default function AccessPanel({
       : form?.role === "student" || form?.role === "parent"
         ? ["student"]
         : ["class", "teacher", "room", "group", "student"];
+  const roles = roleOptions(users),
+    roleValue =
+      roleFilter === "all" || roles.some((o) => o.role === roleFilter)
+        ? roleFilter
+        : "all",
+    counts = stateCounts(users),
+    filtered = filterAccounts(users, {
+      role: roleValue,
+      state: stateFilter,
+      query,
+    }),
+    page = pageOf(filtered, shown);
+  const resetShown = () => {
+    setShown(USERS_PAGE);
+    setHighlightId(null);
+  };
+  const dirty = accountFormDirty(form, formBase, repeat, targets);
+  // The page asks before the form with changes is lost by leaving the screen, the workspace or the program.
+  useEffect(() => {
+    if (!dirty) return;
+    const leave = (e: Event) => {
+      if (!window.confirm(leaveQuestion)) e.preventDefault();
+    };
+    const unload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("atlas-homework-leave", leave);
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      window.removeEventListener("atlas-homework-leave", leave);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, [dirty]);
+  // The list comes back: the button that opened the form (or the saved account's button) gets the focus.
+  useEffect(() => {
+    if (form || busy || !returnFocus.current) return;
+    const el = document.getElementById(returnFocus.current);
+    returnFocus.current = null;
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [form, busy]);
   const table =
     grantData &&
     {
@@ -134,6 +202,34 @@ export default function AccessPanel({
       group: grantData.groups,
       student: grantData.students,
     }[grantView];
+  // Opens the form in place of the list; asks first when another form with changes is open.
+  function openForm(next: Form, view: AccessView) {
+    if (!leaveForm()) return;
+    setHighlightId(null);
+    setForm(next);
+    setFormBase(next);
+    setRepeat("");
+    setTargets([]);
+    setGrantView(view);
+  }
+  function leaveForm() {
+    return !dirty || window.confirm(leaveQuestion);
+  }
+  function closeForm() {
+    if (!leaveForm()) return;
+    setForm(null);
+    setFormBase(null);
+    setRepeat("");
+  }
+  async function editGrant(g: Grant) {
+    await run(async () => {
+      setGrantSpace(g.workspace);
+      setGrantView(g.view);
+      const fresh = await api("state", g.workspace);
+      setGrantData(fresh);
+      setTargets(g.entityIds);
+    });
+  }
   function role(value: Role) {
     if (!form) return;
     setForm({ ...form, role: value, grants: [] });
@@ -172,10 +268,27 @@ export default function AccessPanel({
       { ...rest, password: password || null },
     );
     setForm(null);
+    setFormBase(null);
     setRepeat("");
     await reload();
     await onAuthChange();
-    setNotice("Учётная запись сохранена. Её прежние сеансы завершены.");
+    // The saved row must be visible; when the filters hide it, the notice says so instead of changing them.
+    const visible = filterAccounts(loaded.current, {
+      role: roleValue,
+      state: stateFilter,
+      query,
+    });
+    const place = savedRowPlace(visible, form.login, shown);
+    let hidden = "";
+    if (place.index < 0) hidden = " Выбранные фильтры её не показывают.";
+    else {
+      setShown(place.shown);
+      setHighlightId(visible[place.index].id);
+      returnFocus.current = `access-edit-${visible[place.index].id}`;
+    }
+    setNotice(
+      "Учётная запись сохранена. Её прежние сеансы завершены." + hidden,
+    );
   }
   return (
     <div className="access-panel dated-panel">
@@ -311,302 +424,144 @@ export default function AccessPanel({
             </div>
           )}
           <div className="access-tab dated-panel" hidden={tab !== "users"}>
-            <p className="info-line">
-              Администратор управляет доступом и всей базой. Составитель
-              редактирует выбранные пространства. Сотруднику отдельно
-              назначаются функции по классам. Остальные роли видят только
-              назначенные расписания текущей рабочей версии. Пароли хранятся в
-              виде защищённых проверочных значений.
-            </p>
-            <div className="dated-toolbar">
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() => {
-                  setForm(blankForm(workspace));
-                  setRepeat("");
-                  setTargets([]);
-                  setGrantView("class");
+            <div className="access-browse dated-panel" hidden={!!form}>
+              <div className="access-toolbar">
+                <label>
+                  <span>Поиск пользователей</span>
+                  <input
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      resetShown();
+                    }}
+                    placeholder="Имя или логин"
+                  />
+                </label>
+                <label>
+                  <span>Роль</span>
+                  <select
+                    value={roleValue}
+                    onChange={(e) => {
+                      setRoleFilter(e.target.value as RoleFilter);
+                      resetShown();
+                    }}
+                  >
+                    <option value="all">Все ({users.length})</option>
+                    {roles.map((o) => (
+                      <option key={o.role} value={o.role}>
+                        {o.label} ({o.count})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div
+                  className="segmented"
+                  role="group"
+                  aria-label="Состояние учётной записи"
+                >
+                  {stateFilters.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={stateFilter === f.id ? "selected" : ""}
+                      aria-pressed={stateFilter === f.id}
+                      onClick={() => {
+                        setStateFilter(f.id);
+                        resetShown();
+                      }}
+                    >
+                      {f.label} <span>{counts[f.id]}</span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="access-reload"
+                  disabled={busy}
+                  onClick={() => void run(reload)}
+                >
+                  Обновить список
+                </button>
+                <button
+                  id="access-add"
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    returnFocus.current = "access-add";
+                    openForm(blankForm(workspace), "class");
+                  }}
+                >
+                  ＋ Добавить учётную запись
+                </button>
+              </div>
+              <details className="access-roles">
+                <summary>Что может каждая роль</summary>
+                <p>
+                  Администратор управляет доступом и всей базой. Составитель
+                  редактирует выбранные пространства. Сотруднику отдельно
+                  назначаются функции по классам. Остальные роли видят только
+                  назначенные расписания текущей рабочей версии. Пароли хранятся
+                  в виде защищённых проверочных значений.
+                </p>
+              </details>
+              <AccessUsersTable
+                rows={page.rows}
+                busy={busy}
+                highlightId={highlightId}
+                onEdit={(u) => {
+                  returnFocus.current = `access-edit-${u.id}`;
+                  openForm({ ...u, password: "" }, viewForRole(u.role));
                 }}
               >
-                Добавить учётную запись
-              </button>
-              <button disabled={busy} onClick={() => void run(reload)}>
-                Обновить список
-              </button>
+                {!!page.total && (
+                  <div className="access-more">
+                    <span>
+                      Показано {page.shown} из {page.total}
+                    </span>
+                    {page.more && (
+                      <button onClick={() => setShown((n) => n + USERS_PAGE)}>
+                        Показать ещё
+                      </button>
+                    )}
+                  </div>
+                )}
+              </AccessUsersTable>
             </div>
             {form && (
-              <form
-                className="dated-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
+              <AccessUserForm
+                key={form.id ?? "new"}
+                form={form}
+                setForm={setForm}
+                repeat={repeat}
+                onRepeat={setRepeat}
+                busy={busy}
+                error={error}
+                grantSpace={grantSpace}
+                onGrantSpace={setGrantSpace}
+                grantView={grantView}
+                onGrantView={setGrantView}
+                targets={targets}
+                onTargets={setTargets}
+                table={table}
+                allowedViews={allowedViews}
+                onRole={role}
+                onAddGrant={addGrant}
+                onEditGrant={editGrant}
+                onRemoveGrant={(i) =>
+                  setForm({
+                    ...form,
+                    grants: form.grants.filter((_, n) => n !== i),
+                  })
+                }
+                onSubmit={() =>
                   void run(async () => {
                     if (form.password && form.password !== repeat)
                       throw new Error("Пароли не совпадают.");
                     await save();
-                  });
-                }}
-              >
-                <h3>
-                  {form.id ? "Изменить учётную запись" : "Новая учётная запись"}
-                </h3>
-                <fieldset className="access-fields" disabled={busy}>
-                  <div className="dated-fields">
-                    <label className="field">
-                      <span>Имя пользователя</span>
-                      <input
-                        required
-                        maxLength={160}
-                        value={form.name}
-                        onChange={(e) =>
-                          setForm({ ...form, name: e.target.value })
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Логин пользователя</span>
-                      <input
-                        autoComplete="off"
-                        required
-                        pattern={"[a-z0-9][a-z0-9._\\-]{2,63}"}
-                        value={form.login}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            login: e.target.value.toLowerCase(),
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Роль</span>
-                      <select
-                        value={form.role}
-                        onChange={(e) => role(e.target.value as Role)}
-                      >
-                        {Object.entries(roleNames).map(([id, name]) => (
-                          <option key={id} value={id}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <label className="check-line">
-                    <input
-                      type="checkbox"
-                      checked={form.active}
-                      onChange={(e) =>
-                        setForm({ ...form, active: e.target.checked })
-                      }
-                    />
-                    Учётная запись активна
-                  </label>
-                  <div className="dated-fields">
-                    <label className="field">
-                      <span>
-                        {form.id
-                          ? "Новый пароль (необязательно)"
-                          : "Пароль пользователя"}
-                      </span>
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        required={!form.id}
-                        minLength={12}
-                        maxLength={128}
-                        value={form.password}
-                        onChange={(e) =>
-                          setForm({ ...form, password: e.target.value })
-                        }
-                      />
-                      <small>
-                        От 12 символов. При редактировании пустое поле сохраняет
-                        текущий пароль.
-                      </small>
-                    </label>
-                    <label className="field">
-                      <span>Повторите пароль</span>
-                      <input
-                        type="password"
-                        autoComplete="new-password"
-                        required={!!form.password}
-                        minLength={12}
-                        maxLength={128}
-                        value={repeat}
-                        onChange={(e) => setRepeat(e.target.value)}
-                      />
-                    </label>
-                  </div>
-                  {form.role === "admin" ? (
-                    <p>
-                      Администратору доступны школа, пример и управление
-                      пользователями.
-                    </p>
-                  ) : ["editor", "staff"].includes(form.role) ? (
-                    <Multi
-                      label="Разрешённые пространства"
-                      items={[
-                        { id: "school", name: "Школа" },
-                        { id: "demo", name: "Пример" },
-                      ]}
-                      values={form.workspaces}
-                      onChange={(v) => setForm({ ...form, workspaces: v })}
-                    />
-                  ) : (
-                    <section>
-                      <h4>Разрешённые расписания</h4>
-                      <p>
-                        Добавьте одну или несколько областей. Выбранные записи
-                        нужно включить кнопкой «Добавить область доступа».
-                      </p>
-                      <div className="dated-fields">
-                        <label className="field">
-                          <span>Пространство доступа</span>
-                          <select
-                            value={grantSpace}
-                            onChange={(e) =>
-                              setGrantSpace(e.target.value as "school" | "demo")
-                            }
-                          >
-                            <option value="school">Школа</option>
-                            <option value="demo">Пример</option>
-                          </select>
-                        </label>
-                        <label className="field">
-                          <span>Вид доступа</span>
-                          <select
-                            value={grantView}
-                            onChange={(e) => {
-                              setGrantView(e.target.value as AccessView);
-                              setTargets([]);
-                            }}
-                          >
-                            {allowedViews.map((v) => (
-                              <option key={v} value={v}>
-                                {viewNames[v]}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                      {table ? (
-                        <Multi
-                          label="Записи для доступа"
-                          items={table}
-                          values={targets}
-                          onChange={setTargets}
-                        />
-                      ) : (
-                        <p>Загружаю справочник…</p>
-                      )}
-                      <button
-                        type="button"
-                        disabled={
-                          !targets.length ||
-                          targets.length > 200 ||
-                          (form.role === "student" && targets.length !== 1)
-                        }
-                        onClick={addGrant}
-                      >
-                        Добавить область доступа
-                      </button>
-                      {form.grants.map((g, i) => (
-                        <div
-                          className="access-grant"
-                          key={g.workspace + g.view}
-                        >
-                          <span>
-                            {g.workspace === "school" ? "Школа" : "Пример"} ·{" "}
-                            {viewNames[g.view]} · записей {g.entityIds.length}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void run(async () => {
-                                setGrantSpace(g.workspace);
-                                setGrantView(g.view);
-                                const fresh = await api("state", g.workspace);
-                                setGrantData(fresh);
-                                setTargets(g.entityIds);
-                              })
-                            }
-                          >
-                            Посмотреть и изменить
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setForm({
-                                ...form,
-                                grants: form.grants.filter((_, n) => n !== i),
-                              });
-                            }}
-                          >
-                            Удалить область
-                          </button>
-                        </div>
-                      ))}
-                    </section>
-                  )}
-                  <p className="muted">
-                    Изменение доступа завершает все сеансы этой записи.
-                    Последнего действующего администратора нельзя отключить.
-                  </p>
-                  <div className="dated-toolbar">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setForm(null);
-                        setRepeat("");
-                      }}
-                    >
-                      Закрыть форму
-                    </button>
-                    <button className="primary">
-                      Сохранить учётную запись
-                    </button>
-                  </div>
-                </fieldset>
-              </form>
-            )}
-            <label className="field">
-              <span>Поиск пользователей</span>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Имя или логин"
+                  })
+                }
+                onBack={closeForm}
               />
-            </label>
-            <div className="access-users">
-              {users
-                .filter((u) =>
-                  (u.name + " " + u.login)
-                    .toLocaleLowerCase()
-                    .includes(query.toLocaleLowerCase()),
-                )
-                .map((u) => (
-                  <article className="export-card" key={u.id}>
-                    <h4>{u.name}</h4>
-                    <p>
-                      {u.login} · {roleNames[u.role]} ·{" "}
-                      {u.active ? "Активна" : "Отключена"}
-                    </p>
-                    <p className="muted">{accessText(u)}</p>
-                    <button
-                      disabled={busy}
-                      onClick={() => {
-                        setForm({ ...u, password: "" });
-                        setRepeat("");
-                        setTargets([]);
-                        setGrantView(viewForRole(u.role));
-                      }}
-                    >
-                      Редактировать доступ
-                    </button>
-                  </article>
-                ))}
-            </div>
+            )}
           </div>
           <section className="access-audit access-tab" hidden={tab !== "audit"}>
             <h3>Журнал действий</h3>

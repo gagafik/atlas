@@ -4289,17 +4289,9 @@ main {
 .access-audit {
   overflow-wrap: anywhere;
 }
-.access-grant,
 .access-audit article {
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
-}
-.access-grant {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
 }
 .access-users {
   display: grid;
