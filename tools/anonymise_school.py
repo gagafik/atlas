@@ -1,0 +1,671 @@
+"""Pseudonymised copy of a school database, to hand to colleagues.
+
+    python -m tools.anonymise_school --database data/timetable.db --output ../atlas-copy
+
+The copy keeps the classes, timetable, journal, marks and attendance and gives
+every person an invented name. It has no contacts, accounts, messages, notes
+about children, files or histories. The tool fails closed: the copy is a NEW
+database whose tables come from the application's own code, only tables of the
+allow-list in tools/anonymise_policy.py are filled, and a last step reads the
+finished file back and removes the whole output if any real name, e-mail
+address or phone number is left. The source is only read, from a snapshot.
+Console output and report.json hold counts, never a name or a text value.
+"""
+import argparse
+from collections import Counter
+from contextlib import closing
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import unicodedata
+
+from tools import anonymise_names as invented
+from tools.anonymise_policy import ACCOUNT_TABLES, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, NAME_TABLES, POLICY, \
+    STATE_DOCUMENTS, STUDENT_ID_COLUMNS, TEACHER_ID_COLUMNS, Policy
+
+ROOT = Path(__file__).resolve().parent.parent
+DATABASE = 'timetable.db'
+UNVERIFIED = 'НЕ-ПЕРЕДАВАТЬ-не-проверено.txt'
+LETTERS = re.compile(r'[^\W\d_]+')
+VOWELS = 'аяйьыиеоуюэ'
+EMAIL = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
+STAMP = re.compile(r'\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?')
+# The digits after a decimal point are a number, not a phone: `57.77777777777`.
+PHONE = re.compile(r'(?<!\w)(?<!\d[.,])\+?[\d(][\d\s\-()]{8,}(?!\w)')
+# The shapes of the ids that the import tools and the application make: a short letter prefix with digits, a hash or a uuid.
+OPAQUE = re.compile(r'[a-z]{1,4}\d{1,9}(?:-\d{1,6}){0,3}|[a-z]{1,12}(?:-[a-z]{1,4})?-[0-9a-f]{8,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                    r'|[0-9a-f]{16,64}|asc-(?:[a-z]{1,4})-(?=[0-9a-z*_.-]*\d)[0-9a-z*_.-]{1,40}')
+CHUNK = 500
+
+
+class Refused(Exception):
+    """The tool stops. The message is for people and never holds a name or a text value of the school."""
+
+
+class GateFailed(Exception):
+    def __init__(self, findings):
+        super().__init__('gate')
+        self.findings = findings
+
+
+def norm(text):
+    """One spelling of a letter with a mark (a decomposed й is two characters otherwise)."""
+    return text if text.isascii() else unicodedata.normalize('NFKC', text)
+
+
+def fold(word):
+    return word.casefold().replace('ё', 'е')
+
+
+def quote(identifier):
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def mask(value):
+    """Every letter becomes a, every digit 9: the shape of an id without its content."""
+    return ''.join('a' if c.isalpha() else '9' if c.isdigit() else c for c in value)
+
+
+def has_email(text):
+    return '@' in text and bool(EMAIL.search(text))
+
+
+def has_phone(text):
+    """A run of 10 digits or more, spaces, dashes and brackets allowed inside it; dates and times do not count."""
+    return sum(c.isdigit() for c in text) >= 10 and any(sum(c.isdigit() for c in m.group()) >= 10 for m in PHONE.finditer(STAMP.sub(' ', text)))
+
+
+def contact(text):
+    return has_email(text) or has_phone(text)
+
+
+class NameIndex:
+    """Exact full names found in a text, by their first word; the longest name wins."""
+
+    def __init__(self, names=()):
+        self.first = {}
+        for name in names:
+            self.add(name)
+
+    def add(self, name):
+        found = LETTERS.search(name)
+        if found:
+            bucket = self.first.setdefault(found.group(), [])
+            if name not in bucket:
+                bucket.append(name)
+                bucket.sort(key=len, reverse=True)
+
+    def split(self, text):
+        """[(segment, is_name)] with the names found; one segment of the text when none is found."""
+        if not self.first:
+            return [(text, False)]
+        parts, last = [], 0
+        for m in LETTERS.finditer(text):
+            if m.start() < last:
+                continue
+            for name in self.first.get(m.group(), ()):
+                end = m.start() + len(name)
+                if text.startswith(name, m.start()) and (end == len(text) or not text[end].isalnum()) and (m.start() == 0 or not text[m.start() - 1].isalnum()):
+                    if m.start() > last:
+                        parts.append((text[last:m.start()], False))
+                    parts.append((name, True))
+                    last = end
+                    break
+        if last < len(text):
+            parts.append((text[last:], False))
+        return parts or [(text, False)]
+
+
+class Registry:
+    """The real names of the school: full names to replace and the words (tokens) that must not survive anywhere."""
+
+    def __init__(self):
+        self.names, self.tokens, self.stems = set(), set(), set()
+        self.index = NameIndex()
+        self.words = {}
+
+    def add(self, value):
+        if not isinstance(value, str):
+            return
+        value = value.strip()
+        if not value or fold(value) in IGNORED_NAMES:
+            return
+        words = {fold(w) for w in LETTERS.findall(norm(value))}
+        for word in words:
+            if len(word) >= 3:
+                self.tokens.add(word)
+                if len(word) >= 5:
+                    self.stems.add(word[:-1] if word[-1] in VOWELS else word)
+        if any(len(w) >= 3 for w in words) and len(value) >= 5:
+            self.names.add(value)
+            self.index.add(value)
+
+    def hit(self, text):
+        """Whether the text holds a real-name token as a whole word (or with an ending of the language: a name in another case)."""
+        for word in LETTERS.findall(norm(text)):
+            known = self.words.get(word)
+            if known is None:
+                f = fold(word)
+                n = len(f)
+                known = n >= 3 and (f in self.tokens or any(f[:k] in self.stems for k in range(max(4, n - 4), n)))
+                if len(self.words) < 500000:
+                    self.words[word] = known
+            if known:
+                return True
+        return False
+
+
+class Pseudonyms:
+    """One real full name, one invented name, for the whole run. Never written anywhere."""
+
+    def __init__(self, registry):
+        self.registry, self.map, self.used = registry, {}, set()
+
+    def issue(self, real):
+        known = self.map.get(real)
+        if known:
+            return known
+        female = invented.is_female(real)
+        for _ in range(200000):
+            name = invented.invent(female)
+            if name not in self.used and name not in self.registry.names and fold(name.split()[0]) not in self.registry.tokens:
+                break
+        else:
+            raise Refused('Запас вымышленных имён исчерпан.')
+        self.used.add(name)
+        self.map[real] = name
+        return name
+
+
+class Transformer:
+    """The column rules applied to one value; counts what was hidden, per table.column."""
+
+    def __init__(self, registry, pseudonyms, policy):
+        self.registry, self.pseudonyms, self.policy = registry, pseudonyms, policy
+        self.hidden = Counter()
+        self.salt = secrets.token_bytes(16)
+        self.memo = {}
+
+    def person(self, value):
+        return self.pseudonyms.issue(value) if isinstance(value, str) and value.strip() else value
+
+    def text(self, value, where):
+        if not isinstance(value, str) or not value:
+            return value
+        if self.registry.hit(value) or contact(value):
+            self.hidden[where] += 1
+            return HIDDEN
+        return value
+
+    def names(self, value, where):
+        """Known full names become pseudonyms; the rest of the text is then checked like any text."""
+        if not isinstance(value, str) or not value:
+            return value
+        known = self.memo.get(value)
+        if known is None:
+            parts = self.registry.index.split(value)
+            rest = '\x00'.join(p for p, is_name in parts if not is_name)
+            hidden = self.registry.hit(rest) or contact(rest)
+            known = (HIDDEN if hidden else ''.join(self.pseudonyms.issue(p) if is_name else p for p, is_name in parts), hidden)
+            if len(self.memo) < 200000:
+                self.memo[value] = known
+        if known[1]:
+            self.hidden[where] += 1
+        return known[0]
+
+    def value(self, rule, value, where, column_empty):
+        if value is None or rule in ('keep', 'number'):
+            return value
+        if rule == 'drop':
+            return column_empty
+        if rule == 'person':
+            return self.person(value)
+        if rule == 'text':
+            return self.text(value, where)
+        if rule == 'names':
+            return self.names(value, where)
+        if rule == 'hash':
+            return hashlib.sha256(self.salt + str(value).encode('utf-8')).hexdigest() if isinstance(value, str) else value
+        return self.document(value, self.policy.profile(rule), where)
+
+    def document(self, raw, profile, where):
+        if not isinstance(raw, str):
+            raise Refused(f'{where}: ожидался документ JSON.')
+        try:
+            node = json.loads(raw)
+        except ValueError:
+            raise Refused(f'{where}: значение не является документом JSON.') from None
+        return json.dumps(self.walk(node, (), profile, where), ensure_ascii=False, separators=(',', ':'))
+
+    def walk(self, node, path, profile, where):
+        if isinstance(node, dict):
+            result = {}
+            for key, child in node.items():
+                here = path + (key,)
+                dotted = '.'.join(here)
+                if key in profile.drop:
+                    result[key] = profile.drop[key]
+                elif dotted in profile.const:
+                    result[key] = profile.const[dotted]
+                else:
+                    result[key] = self.walk(child, here, profile, where)
+            return result
+        if isinstance(node, list):
+            return [self.walk(child, path, profile, where) for child in node]
+        if isinstance(node, str):
+            dotted = '.'.join(path)
+            if dotted in profile.people:
+                return self.person(node)
+            if dotted in profile.text:
+                return self.text(node, where)
+            return self.names(node, where)
+        return node
+
+
+# ---- the registry and the ids, from the snapshot of the source
+
+def table_columns(db, table):
+    return [row[1] for row in db.execute(f'PRAGMA table_info({quote(table)})')]
+
+
+def source_tables(db):
+    return sorted(name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"))
+
+
+def is_name_column(table, column):
+    c = column.lower()
+    return c in NAME_COLUMNS or c.endswith(NAME_SUFFIXES) or (c == 'name' and table in NAME_TABLES)
+
+
+def collect_names(node, found, parent=''):
+    """Names of people in a JSON document: a `name` under a key that holds people, and the keys that are names themselves."""
+    if isinstance(node, dict):
+        for key, child in node.items():
+            if isinstance(child, str):
+                if (key == 'name' and parent in NAME_PARENT_KEYS) or key in NAME_LEAF_KEYS:
+                    found.append(child)
+            else:
+                collect_names(child, found, key if isinstance(child, (dict, list)) else parent)
+    elif isinstance(node, list):
+        for child in node:
+            collect_names(child, found, parent)
+
+
+def documents(db, table, column):
+    cursor = db.execute(f'SELECT {quote(column)} FROM {quote(table)} WHERE typeof({quote(column)})=\'text\' AND substr({quote(column)},1,1) IN (\'{{\',\'[\')')
+    while rows := cursor.fetchmany(CHUNK):
+        for (raw,) in rows:
+            try:
+                yield json.loads(raw)
+            except ValueError:
+                continue
+
+
+def build_registry(src):
+    registry = Registry()
+    names = []
+    for table in source_tables(src):
+        columns = table_columns(src, table)
+        for column in columns:
+            if is_name_column(table, column):
+                names += [v for (v,) in src.execute(f'SELECT DISTINCT {quote(column)} FROM {quote(table)}')]
+            for document in documents(src, table, column):
+                collect_names(document, names)
+    for name in names:
+        registry.add(name)
+    return registry
+
+
+def state_ids(db, kind):
+    found = []
+    for table, column in STATE_DOCUMENTS:
+        if column in table_columns(db, table):
+            for document in documents(db, table, column):
+                walk_ids(document, kind, found)
+    return found
+
+
+def walk_ids(node, kind, found):
+    if isinstance(node, dict):
+        for key, child in node.items():
+            if key == kind and isinstance(child, list):
+                found += [i['id'] for i in child if isinstance(i, dict) and isinstance(i.get('id'), str)]
+            walk_ids(child, kind, found)
+    elif isinstance(node, list):
+        for child in node:
+            walk_ids(child, kind, found)
+
+
+def check_ids(src):
+    """Person ids are kept as they are, so they must be opaque. Anything else stops the tool, shown only as a shape."""
+    tables = set(source_tables(src))
+    ids = set(state_ids(src, 'students')) | set(state_ids(src, 'teachers'))
+    for table, column in STUDENT_ID_COLUMNS + TEACHER_ID_COLUMNS:
+        if table in tables and column in table_columns(src, table):
+            ids |= {v for (v,) in src.execute(f'SELECT DISTINCT {quote(column)} FROM {quote(table)}') if isinstance(v, str)}
+    bad = Counter(mask(i) for i in ids if not OPAQUE.fullmatch(i))
+    if bad:
+        shapes = '; '.join(f'{shape} x{count}' for shape, count in sorted(bad.items()))
+        raise Refused(f'Идентификаторы людей не непрозрачны (буква = a, цифра = 9): {shapes}. Копия не создана.')
+
+
+# ---- the schema of the copy, made by the application itself
+
+def child_guard(expected):
+    """A child process works only on the database it was started for: the application reads TIMETABLE_DB at import."""
+    given = os.environ.get('TIMETABLE_DB')
+    if not given or os.path.normcase(os.path.realpath(given)) != os.path.normcase(os.path.realpath(expected)):
+        raise Refused('TIMETABLE_DB не указывает на базу копии.')
+
+
+def child_schema(path):
+    child_guard(path)
+    from backend import api
+    from backend.final_grades import tables as grading_tables
+    from backend.timetable_history import tables as timetable_tables
+    with api.connect() as db:
+        api.journal.prepare(db)
+        grading_tables(db)
+        timetable_tables(db)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute('PRAGMA journal_mode=DELETE')
+
+
+def run_child(kind, database):
+    environment = {**os.environ, 'TIMETABLE_DB': str(database), 'PYTHONUTF8': '1', 'ATLAS_WEB_PUSH_ENABLED': '0', 'ATLAS_BACKUP_DIR': ''}
+    done = subprocess.run([sys.executable, '-X', 'utf8', '-m', 'tools.anonymise_school', '--child', kind, '--database', str(database)],
+                          cwd=ROOT, env=environment, capture_output=True)
+    if done.returncode:
+        # The child output may hold anything: only the code is shown.
+        raise Refused(f'Шаг «{kind}» завершился с ошибкой (код {done.returncode}).')
+
+
+def check_rules(policy, fresh, src):
+    """Every column of every allow-listed table has a rule, and every rule names a column of the application's schema."""
+    problems = policy.problems()
+    if problems:
+        raise Refused('Правила неизвестного вида: ' + ', '.join(problems) + '.')
+    without, stale = [], []
+    for table, rules in policy.tables.items():
+        if table not in fresh:
+            stale.append(table)
+            continue
+        without += [f'{table}.{c}' for c in [*fresh[table], *src.get(table, [])] if c not in rules]
+        stale += [f'{table}.{c}' for c in rules if c not in fresh[table]]
+    if without:
+        raise Refused('Столбцы без правила, копия не создана: ' + ', '.join(sorted(set(without))) + '.')
+    if stale:
+        raise Refused('Правила для того, чего нет в схеме приложения: ' + ', '.join(sorted(set(stale))) + '.')
+
+
+def columns_of(path, tables):
+    with closing(sqlite3.connect(path)) as db:
+        return {t: table_columns(db, t) for t in tables if table_columns(db, t)}
+
+
+# ---- copying
+
+def copy_tables(src, out, policy, transformer, report):
+    present = set(source_tables(src))
+    for table, rules in policy.tables.items():
+        if table not in present:
+            report['missingInSource'].append(table)
+            continue
+        wanted = [c for c in rules if c in table_columns(src, table)]
+        empty = {row[1]: ('' if row[3] else None) for row in out.execute(f'PRAGMA table_info({quote(table)})')}
+        select = ','.join(map(quote, wanted))
+        insert = f'INSERT OR REPLACE INTO {quote(table)} ({select}) VALUES ({",".join("?" * len(wanted))})'
+        count = 0
+        cursor = src.execute(f'SELECT {select} FROM {quote(table)}')
+        while rows := cursor.fetchmany(CHUNK):
+            out.executemany(insert, [[transformer.value(rules[c], v, f'{table}.{c}', empty[c]) for c, v in zip(wanted, row)] for row in rows])
+            count += len(rows)
+        report['tables'][table] = count
+
+
+def check_projections(src, out):
+    """Projections are copied as they are, so the source must have been made by the same version of the application."""
+    if 'journal_projection_versions' not in source_tables(src):
+        return
+    wanted = set(out.execute('SELECT name,version FROM journal_projection_versions'))
+    if not wanted <= set(src.execute('SELECT name,version FROM journal_projection_versions')):
+        raise Refused('База сделана другой версией Атласа: откройте её в текущей версии один раз и повторите.')
+
+
+def create_accounts(output, report, pseudonyms):
+    """SEAM of the second step: the accounts of the copy (an administrator, a teacher, a pupil, a parent).
+
+    Called after the rows are copied and before the gate, on the finished-but-ungated output. The step runs the application in a
+    CHILD process with TIMETABLE_DB set to `output / DATABASE` (run_child shows how; child_guard makes the child refuse any other
+    database) and never in this process, which works with the source. Names of accounts come from `pseudonyms.issue(real name)` so that
+    a person has one invented name everywhere. The tables it fills go into policy.ACCOUNT_TABLES, so that the gate lets them hold rows
+    (and still reads every value of them); logins and passwords go to accounts.json, never to the console. Nothing here yet.
+    """
+
+
+def finish(path):
+    with closing(sqlite3.connect(path)) as db:
+        db.execute('PRAGMA journal_mode=DELETE')
+        db.execute('VACUUM')
+
+
+# ---- the gate
+
+def strings_of(node, out):
+    if isinstance(node, dict):
+        for key, child in node.items():
+            out.append(str(key))
+            strings_of(child, out)
+    elif isinstance(node, list):
+        for child in node:
+            strings_of(child, out)
+    elif isinstance(node, str):
+        out.append(node)
+
+
+def decoded(text):
+    """The text of a cell; the strings of a JSON document, one after another."""
+    if text[:1] in ('{', '['):
+        try:
+            node = json.loads(text)
+        except ValueError:
+            return text
+        found = []
+        strings_of(node, found)
+        return '\x00'.join(found)
+    return text
+
+
+class Gate:
+    def __init__(self, registry, pseudonyms):
+        self.registry, self.issued = registry, NameIndex(pseudonyms.used)
+        self.cache, self.cells = {}, 0
+
+    def kinds(self, text, technical):
+        """What is wrong with a text: real-name tokens, an e-mail address, a phone-like run of digits."""
+        key = (text, technical)
+        known = self.cache.get(key)
+        if known is None:
+            rest = '\x00'.join(p for p, is_name in self.issued.split(decoded(text)) if not is_name)
+            known = tuple(kind for kind, bad in [('name', self.registry.hit(rest)), ('email', has_email(rest)),
+                                                 ('phone', not technical and has_phone(rest))] if bad)
+            if len(text) <= 300 and len(self.cache) < 300000:
+                self.cache[key] = known
+        return known
+
+    def database(self, path, policy, findings):
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+            if db.execute('PRAGMA freelist_count').fetchone()[0]:
+                findings[('(file)', 'free pages', 'leftover')] += 1
+            for table in source_tables(db):
+                columns = table_columns(db, table)
+                allowed = table in policy.tables or table in ACCOUNT_TABLES
+                if not allowed and db.execute(f'SELECT 1 FROM {quote(table)} LIMIT 1').fetchone():
+                    findings[(table, '(table)', 'not allow-listed')] += 1
+                    continue
+                for column in columns:
+                    technical = policy.rule(table, column) == 'number'
+                    for (value,) in db.execute(f'SELECT {quote(column)} FROM {quote(table)}'):
+                        self.cells += 1
+                        if isinstance(value, bytes):
+                            findings[(table, column, 'blob')] += 1
+                        elif isinstance(value, str):
+                            for kind in self.kinds(value, technical):
+                                findings[(table, column, kind)] += 1
+            for (sql,) in db.execute('SELECT sql FROM sqlite_master WHERE sql IS NOT NULL'):
+                for kind in self.kinds(sql, False):
+                    findings[('sqlite_master', 'sql', kind)] += 1
+
+    def file(self, path, findings):
+        text = path.read_text(encoding='utf-8', errors='replace')
+        self.cells += 1
+        for kind in self.kinds(text, False):
+            findings[(path.name, '(file)', kind)] += 1
+
+
+def run_gate(output, registry, pseudonyms, policy):
+    gate, findings = Gate(registry, pseudonyms), Counter()
+    gate.database(output / DATABASE, policy, findings)
+    for path in sorted(output.iterdir()):
+        if path.name in (DATABASE, 'README.txt', UNVERIFIED):
+            continue
+        if path.suffix in ('-wal', '-shm', '-journal') or path.name.endswith(('-wal', '-shm', '-journal')):
+            findings[(path.name, '(file)', 'leftover')] += 1
+        elif path.is_file():
+            gate.file(path, findings)
+        else:
+            findings[(path.name, '(directory)', 'leftover')] += 1
+    if findings:
+        raise GateFailed(findings)
+    return gate.cells
+
+
+# ---- the run
+
+def check_paths(source, output):
+    if not source.is_file():
+        raise Refused('Источник должен быть существующим файлом базы данных.')
+    if output.exists():
+        raise Refused('Папка результата уже существует: выберите новую.')
+    where = output.resolve()
+    root = ROOT.resolve()
+    if where == root or root in where.parents or any((parent / '.git').exists() for parent in where.parents):
+        raise Refused('Результат нельзя класть в репозиторий Git: копия не должна попасть в историю.')
+    if source.resolve() == where or where in source.resolve().parents:
+        raise Refused('Папка результата не может содержать источник.')
+
+
+def snapshot(source, target):
+    """A consistent snapshot through the backup API from a read-only connection; the source is never opened for writing."""
+    try:
+        with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True, timeout=30)) as read, closing(sqlite3.connect(target)) as copy:
+            read.backup(copy)
+            copy.execute('PRAGMA journal_mode=DELETE')
+    except sqlite3.Error:
+        raise Refused('Источник не удалось прочитать как базу SQLite.') from None
+
+
+def run(source, output, policy=POLICY, log=print):
+    source, output = Path(source), Path(output)
+    check_paths(source, output)
+    work = Path(tempfile.mkdtemp(prefix='atlas-anonymise-'))
+    created = False
+    try:
+        snap, fresh = work / 'snapshot.db', work / 'schema.db'
+        snapshot(source, snap)
+        with closing(sqlite3.connect(snap.as_uri() + '?mode=ro', uri=True)) as src:
+            src.execute('PRAGMA query_only=ON')
+            registry = build_registry(src)
+            check_ids(src)
+            run_child('schema', fresh)
+            check_rules(policy, columns_of(fresh, policy.tables), {t: table_columns(src, t) for t in source_tables(src) if t in policy.tables})
+            output.mkdir(parents=True, exist_ok=False)
+            created = True
+            # Present until the gate has passed: a run that is killed half way leaves a folder that says it must not be shared.
+            (output / UNVERIFIED).write_text('Эта папка не проверена и не закончена. Не передавайте её, удалите.\n', encoding='utf-8')
+            target = output / DATABASE
+            shutil.copyfile(fresh, target)
+            pseudonyms = Pseudonyms(registry)
+            transformer = Transformer(registry, pseudonyms, policy)
+            report = dict(format=1, tables={}, missingInSource=[], notCopied={}, hiddenCells={})
+            with closing(sqlite3.connect(target)) as out:
+                out.execute('PRAGMA journal_mode=MEMORY')
+                out.execute('PRAGMA synchronous=OFF')
+                check_projections(src, out)
+                copy_tables(src, out, policy, transformer, report)
+                out.commit()
+            report['notCopied'] = {t: n for t in source_tables(src) if t not in policy.tables
+                                   if (n := src.execute(f'SELECT count(*) FROM {quote(t)}').fetchone()[0])}
+        create_accounts(output, report, pseudonyms)
+        finish(target)
+        report['hiddenCells'] = dict(sorted(transformer.hidden.items()))
+        report['pseudonymsIssued'] = len(pseudonyms.used)
+        (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
+        cells = run_gate(output, registry, pseudonyms, policy)
+        (output / UNVERIFIED).unlink()
+        report['gate'] = dict(cellsChecked=cells, findings=0)
+        (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
+        return report
+    except BaseException:
+        if created:
+            shutil.rmtree(output, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def describe(report):
+    lines = [f'Таблиц скопировано: {len(report["tables"])}, строк: {sum(report["tables"].values())}']
+    lines += [f'  {t}: {n}' for t, n in report['tables'].items()]
+    if report['missingInSource']:
+        lines.append('Нет в источнике: ' + ', '.join(report['missingInSource']))
+    lines.append('Не копировалось (есть строки):')
+    lines += [f'  {t}: {n}' for t, n in report['notCopied'].items()]
+    lines.append('Текст скрыт в ячейках:' + ('' if report['hiddenCells'] else ' нигде'))
+    lines += [f'  {c}: {n}' for c, n in report['hiddenCells'].items()]
+    lines.append(f'Вымышленных имён выдано: {report["pseudonymsIssued"]}')
+    lines.append(f'Проверка пройдена: ячеек {report["gate"]["cellsChecked"]}, находок 0')
+    return '\n'.join(lines)
+
+
+def main(argv=None, policy=POLICY):
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('--database', type=Path, required=True, help='the school database (only read)')
+    parser.add_argument('--output', type=Path, help='a NEW directory outside the repository')
+    parser.add_argument('--child', choices=['schema'], help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    try:
+        if args.child:
+            child_schema(args.database)
+            return 0
+        if not args.output:
+            parser.error('--output is required')
+        report = run(args.database, args.output, policy)
+        print(f'Обезличенная копия создана: {args.output.resolve()}')
+        print(describe(report))
+        print('Копия обезличена, но не анонимна: передавайте её только лично и никогда не публикуйте.')
+        return 0
+    except Refused as stop:
+        print(f'Остановлено: {stop}', file=sys.stderr)
+        return 2
+    except GateFailed as failed:
+        print('Проверка не пройдена, результат удалён. Найдено (таблица, столбец, вид: число):', file=sys.stderr)
+        for (table, column, kind), count in sorted(failed.findings.items()):
+            print(f'  {table}.{column}: {kind} x{count}', file=sys.stderr)
+        return 3
+    except Exception as error:
+        # Never the message: it may quote a value of the school.
+        print(f'Остановлено: непредвиденная ошибка ({type(error).__name__}). Результат удалён.', file=sys.stderr)
+        return 4
+
+
+if __name__ == '__main__':
+    sys.exit(main())
