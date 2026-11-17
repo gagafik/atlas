@@ -30,6 +30,11 @@ export default function AccessUsersTable({
       {!rows.length && status === "ready" && (
         <p>Учётных записей по этим условиям нет.</p>
       )}
+      {!rows.length && status === "failed" && (
+        <p role="status">
+          Учётные записи не загрузились. Нажмите «Обновить список».
+        </p>
+      )}
       {rows.length > 0 && (
         <div className="access-users-list">
           <table className="access-users-table" aria-label="Учётные записи">

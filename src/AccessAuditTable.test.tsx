@@ -57,8 +57,8 @@ describe("AccessAuditTable", () => {
     const say = (status: "loading" | "ready" | "failed") =>
       textOf(AccessAuditTable({ rows: [], status })).trim();
     expect(say("loading")).not.toBe("");
-    expect(say("loading")).not.toBe(say("ready"));
-    expect(say("failed")).toBe("");
+    expect(say("failed")).not.toBe("");
+    expect(new Set([say("loading"), say("ready"), say("failed")]).size).toBe(3);
   });
   it("shows what is placed under the table", () => {
     const text = textOf(

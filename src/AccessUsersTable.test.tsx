@@ -79,10 +79,11 @@ describe("AccessUsersTable", () => {
           onEdit: () => {},
         }),
       ).trim();
-    // A load that is on the way and one that is done and found nothing look different; a failed one leaves the line to the error.
+    // A load on the way, one that found nothing and one that failed each say their own thing:
+    // the page's error line is cleared by a tab switch, so a failed load may not look empty.
     expect(say("loading")).not.toBe("");
-    expect(say("loading")).not.toBe(say("ready"));
-    expect(say("failed")).toBe("");
+    expect(say("failed")).not.toBe("");
+    expect(new Set([say("loading"), say("ready"), say("failed")]).size).toBe(3);
   });
   it("shows the accounts that are there while the list is being reloaded", () => {
     const edited: Account[] = [];

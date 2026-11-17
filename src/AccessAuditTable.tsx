@@ -28,6 +28,9 @@ export default function AccessAuditTable({
       {!rows.length && status === "ready" && (
         <p>Записей по этим условиям нет.</p>
       )}
+      {!rows.length && status === "failed" && (
+        <p role="status">Журнал не загрузился. Нажмите «Обновить».</p>
+      )}
       {rows.length > 0 && (
         <div className="access-audit-list">
           <table className="access-audit-table" aria-label="Журнал действий">
