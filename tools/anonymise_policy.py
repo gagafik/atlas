@@ -129,6 +129,9 @@ NAME_LEAF_KEYS = {'author', 'actor', 'actorName', 'authorName', 'studentName', '
                   'userName', 'hostName', 'creatorName'}
 # System actors are not people: their words are not names to look for.
 IGNORED_NAMES = {'система', 'локальный пользователь', 'администратор', 'не указан', 'без учителя'}
+# Words of a role, not of a person: an account called "Администратор школы" must not make every text with the word look like a name.
+IGNORED_WORDS = {'администратор', 'администрация', 'система', 'локальный', 'пользователь', 'учитель', 'ученик', 'родитель', 'директор', 'школа', 'школы',
+                 'admin', 'administrator', 'system', 'user', 'teacher', 'student', 'pupil', 'parent', 'school'}
 # The application's own placeholder people (the demo workspace, the aSc import) are not real names either: their words ("учитель", "ученик")
 # are ordinary words. The demo ones are read from backend.seed by the tool.
 PLACEHOLDER_PATTERNS = (r'Учитель aSc \S+', r'Синтетический ученик \d+.*', r'Ученик \d+ \(пример\)')

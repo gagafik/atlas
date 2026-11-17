@@ -586,6 +586,17 @@ def test_the_gate_looks_for_the_exact_name_made_of_short_words_and_for_the_other
     assert latin.hit('Иван Петренко') and latin.hit('Петренко') and not latin.hit('Квадратные уравнения')
 
 
+def test_the_letters_inside_a_digest_or_a_uuid_are_not_names_and_a_role_word_is_no_name():
+    registry = tool.Registry()
+    for name in ['Ада Дедова', 'Администратор школы', 'Беа Фадеева']:
+        registry.add(name)
+    for text in ['7c3ada9f04c1dede77b0', 'p-3ada9f04bea1c2', 'import-1481ada5-dead-589d-bea0-2be35d2e88ef', '3ada9f04c1dede77b03ada9f04c1dede77b03ada9f04c1dede77b0ada9f04c1a']:
+        assert not registry.hit(text), text
+    for text in ['Ada', 'спросить Аду', 'ключ 7c3ada9f Дедовой', 'Dedova-7c3ada9f04', 'ada-dedova']:
+        assert registry.hit(text), text
+    assert not registry.hit('Администратор копии') and not registry.hit('Школа (обезличенная копия)')
+
+
 def test_names_of_three_and_four_letters_are_found_in_every_case():
     registry = tool.Registry()
     for name in ['Канарейкин Иван', 'Синицына Анна', 'Щеглов Ким', 'Лев Орлов', 'Ева Мун']:
@@ -606,6 +617,9 @@ def test_demo_and_import_placeholders_are_not_names_and_do_not_hide_the_school_s
 def test_an_id_of_the_application_is_no_phone_number_but_a_phone_number_is():
     assert not tool.has_phone('14814725-1567-489d-8590-2be35d2e88ef') and not tool.has_phone('ai-14814725-1567-489d-8590-2be35d2e88ef')
     assert not tool.has_phone('student-8637d92c98fbb33497e6') and not tool.has_phone('t-12345678901a34')
+    # A row of a spreadsheet import: a prefix and a uuid made from the upload token and the row number, not from the person.
+    imported = 'import-14814725-1567-589d-8590-2be35d2e88ef'
+    assert tool.OPAQUE.fullmatch(imported) and not tool.has_phone(imported) and not tool.OPAQUE.fullmatch('ivanov-ivan')
     assert tool.has_phone('8 (701) 234-56-78') and tool.has_phone('1234567890123456')
 
 

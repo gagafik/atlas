@@ -29,7 +29,7 @@ import time
 import unicodedata
 
 from tools import anonymise_names as invented
-from tools.anonymise_policy import ACCOUNT_CLEARED, HIDDEN, IGNORED_NAMES, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_LIST_COLUMNS, NAME_LIST_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, \
+from tools.anonymise_policy import ACCOUNT_CLEARED, HIDDEN, IGNORED_NAMES, IGNORED_WORDS, NAME_COLUMNS, NAME_LEAF_KEYS, NAME_LIST_COLUMNS, NAME_LIST_KEYS, NAME_PARENT_KEYS, NAME_SUFFIXES, \
     NAME_TABLES, PLACEHOLDER_PATTERNS, PLAIN_KEYS, POLICY, STATE_DOCUMENTS, STUDENT_ID_COLUMNS, TEACHER_ID_COLUMNS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,11 +54,14 @@ STAMP = re.compile(r'\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:
 # but not a hex letter: inside a hash id a run of digits is no phone.
 PHONE = re.compile(r'(?<![0-9A-Fa-f_])(?<!\d[.,])\+?[\d(][\d\s\-()]{8,}(?!\w)')
 # The shapes of the ids that the import tools and the application make: a short letter prefix with digits, a hash or a uuid.
-OPAQUE = re.compile(r'[a-z]{1,4}\d{1,9}(?:-\d{1,6}){0,3}|[a-z]{1,12}(?:-[a-z]{1,4})?-[0-9a-f]{8,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+OPAQUE = re.compile(r'[a-z]{1,4}\d{1,9}(?:-\d{1,6}){0,3}|[a-z]{1,12}(?:-[a-z]{1,4})?-[0-9a-f]{8,64}|(?:[a-z]{1,12}-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
                     r'|[0-9a-f]{16,64}|asc-(?:[a-z]{1,4})-(?=[0-9a-z*_.-]*\d)[0-9a-z*_.-]{1,40}')
 UUID = re.compile(r'(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])')
 # A hash id whose tail happens to hold digits only: it reads as a phone number, so it gets a fresh tail (see Ids).
 DIGIT_ID = re.compile(r'(?<![\w-])[a-z]{1,12}(?:-[a-z]{1,4})?-(\d{10,64})(?![\w-])')
+# A digest or a uuid is no text: the letters between its digits ("…3ada9f…") are not words and must not be read as names. A word of the
+# letters a-f alone is still a word.
+TECHNICAL = re.compile(r'(?<![0-9A-Za-z])(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}|(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{8,64})(?![0-9A-Za-z])')
 CHUNK = 500
 STOP = 'Остановлено: '
 CHILD_MARK = ' [шаг]'
@@ -224,7 +227,7 @@ class Registry:
         lower = [w.casefold() for w in LETTERS.findall(norm(value))]
         words = [w.replace('ё', 'е') for w in lower]
         for word, original in zip(words, lower):
-            if len(word) >= 3:
+            if len(word) >= 3 and word not in IGNORED_WORDS:
                 if word.isascii():
                     self.lat.add(word)
                     if len(skeleton(word)) >= 3:
@@ -255,7 +258,7 @@ class Registry:
     def hit(self, text):
         """Whether the text holds a real-name token as a whole word (or with an ending of the language: a name in another case; or the same
         name in the other script)."""
-        for word in LETTERS.findall(norm(text)):
+        for word in LETTERS.findall(norm(TECHNICAL.sub(' ', text))):
             known = self.words.get(word)
             if known is None:
                 known = self.known(word.casefold())
@@ -525,7 +528,8 @@ def check_ids(src):
     for table, column in STUDENT_ID_COLUMNS + TEACHER_ID_COLUMNS:
         if table in tables and column in table_columns(src, table):
             ids |= {v for (v,) in src.execute(f'SELECT DISTINCT {quote(column)} FROM {quote(table)}') if isinstance(v, str)}
-    bad = Counter(mask(i) for i in ids if not OPAQUE.fullmatch(i))
+    # One line per kind of shape: a thousand uuids differ only in where their letters stand.
+    bad = Counter(re.sub(r'[a9]{8}(?:-[a9]{4}){3}-[a9]{12}', '<uuid>', mask(i)) for i in ids if not OPAQUE.fullmatch(i))
     if bad:
         shapes = '; '.join(f'{shape} x{count}' for shape, count in sorted(bad.items()))
         raise Refused(f'Идентификаторы людей не непрозрачны (буква = a, цифра = 9): {shapes}. Копия не создана.')
