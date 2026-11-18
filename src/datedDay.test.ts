@@ -3,11 +3,14 @@ import {
   DAY_TABS,
   dateInWords,
   dayRowView,
+  firstRecordWithRows,
+  rowInRecord,
   reasonText,
   nextDayTab,
   rowActions,
   stateTone,
   type DayRowFacts,
+  type DayRowRecords,
 } from "./datedDay";
 
 const lesson = (over: Partial<DayRowFacts> = {}): DayRowFacts => ({
@@ -197,5 +200,46 @@ describe("the tabs", () => {
     expect(nextDayTab(2, "Enter")).toBeNull();
     expect(nextDayTab(2, "ArrowDown")).toBeNull();
     expect(nextDayTab(2, "Tab")).toBeNull();
+  });
+});
+
+const recordsRow = (over: Partial<DayRowRecords> = {}): DayRowRecords => ({
+  originalClassIds: [],
+  originalStudentIds: [],
+  teacherIds: [],
+  originalTeacherIds: [],
+  roomIds: [],
+  ...over,
+});
+
+describe("the record shown first", () => {
+  const rows = [
+    recordsRow({ originalClassIds: ["c3"], roomIds: ["r2"] }),
+    recordsRow({ originalClassIds: ["c4"], teacherIds: ["t2"] }),
+  ];
+
+  it("skips the records that have no lessons that day", () => {
+    expect(
+      firstRecordWithRows(["c1", "c2", "c3", "c4"], rows, "class", "c1"),
+    ).toBe("c3");
+  });
+
+  it("follows the order of the list, not the order of the rows", () => {
+    expect(firstRecordWithRows(["c4", "c3"], rows, "class", "c3")).toBe("c4");
+  });
+
+  it("keeps the current record when nobody has lessons", () => {
+    expect(firstRecordWithRows(["c1", "c2"], rows, "class", "c1")).toBe("c1");
+    expect(firstRecordWithRows(["c1"], [], "class", "")).toBe("");
+  });
+
+  it("looks at the mode that is shown", () => {
+    expect(firstRecordWithRows(["r1", "r2"], rows, "room", "r1")).toBe("r2");
+    expect(firstRecordWithRows(["t1", "t2"], rows, "teacher", "")).toBe("t2");
+  });
+
+  it("counts a teacher who was replaced as present in the lesson", () => {
+    const moved = [recordsRow({ originalTeacherIds: ["t9"] })];
+    expect(rowInRecord(moved[0], "teacher", "t9")).toBe(true);
   });
 });
