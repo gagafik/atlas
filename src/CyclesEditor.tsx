@@ -62,9 +62,11 @@ export default function CyclesEditor({
       <header>
         <div>
           <h2>Недели и учебные периоды</h2>
-          <p>
-            Общие справочники, отдельное расписание для каждой недели цикла.
-          </p>
+          {draft && (
+            <p>
+              Общие справочники, отдельное расписание для каждой недели цикла.
+            </p>
+          )}
         </div>
         {!draft && (
           <button
@@ -88,23 +90,28 @@ export default function CyclesEditor({
           .join(" → ")}{" "}
         · {(s.cycles?.periods || []).length} отдельных учебных периодов
       </p>
-      <label className="field">
-        <span>Посмотреть неделю на дату</span>
-        <input
-          type="date"
-          value={day}
-          onChange={(e) => setDay(e.target.value)}
-        />
-      </label>
-      <p role="status">
-        {cycle ? named(patterns(s), cycle) : "Дата вне учебных периодов"}
-      </p>
-      <p className="muted">
-        Чередование отсчитывается по календарным неделям с понедельника;
-        каникулы его не сдвигают. Без отдельных периодов действует весь учебный
-        год и последовательность недель из списка. Это выбор шаблона недели;
-        отмены уроков по праздникам учитываются отдельно в календаре.
-      </p>
+      <div className="cycle-probe">
+        <label className="field">
+          <span>Посмотреть неделю на дату</span>
+          <input
+            type="date"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+          />
+        </label>
+        <p role="status">
+          {cycle ? named(patterns(s), cycle) : "Дата вне учебных периодов"}
+        </p>
+      </div>
+      <details className="settings-more">
+        <summary>Как считается чередование</summary>
+        <p className="muted">
+          Чередование отсчитывается по календарным неделям с понедельника;
+          каникулы его не сдвигают. Без отдельных периодов действует весь
+          учебный год и последовательность недель из списка. Это выбор шаблона
+          недели; отмены уроков по праздникам учитываются отдельно в календаре.
+        </p>
+      </details>
       {error && (
         <div role="alert" className="error-banner">
           {error}
