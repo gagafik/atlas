@@ -6,6 +6,7 @@ import {
   accountFormDirty,
   accountMatches,
   auditAction,
+  auditDetailText,
   auditDetails,
   auditMatches,
   auditStamp,
@@ -338,6 +339,34 @@ describe("audit log", () => {
     expect(noRevision).not.toContain("7");
     expect(noRevision.length).toBeLessThan(text.length);
     expect(noRevision.trim()).toBe(noRevision);
+  });
+  it("prints a structured detail as text: no internal ids, no empty values, dates day first", () => {
+    expect(
+      auditDetailText(
+        '{"reason":"","rowId":"bb6816c1abb2491685f3ae22412f6294","version":2}',
+      ),
+    ).toBe("версия записи: 2");
+    expect(
+      auditDetailText(
+        '{"classId":"c0","end":"2026-11-22","start":"2026-11-16"}',
+      ),
+    ).toBe("16.11.2026 — 22.11.2026, класс: c0");
+    expect(
+      auditDetailText(
+        '{"periodId":"8e381be94a2f4cc5ab29d80d8a964aa1","reason":"Начало учебного периода","version":1}',
+      ),
+    ).toBe("причина: Начало учебного периода, версия записи: 1");
+    expect(auditDetailText('{"id":"dad93c2fc6284bb78f63c8663cc6e885"}')).toBe(
+      "",
+    );
+  });
+  it("leaves a plain detail and broken JSON as they were", () => {
+    expect(auditDetailText("класс 5А")).toBe("класс 5А");
+    expect(auditDetailText("{не json")).toBe("{не json");
+    expect(auditDetailText("")).toBe("");
+    const e = entry({ detail: '{"reason":"Болезнь","version":3}' });
+    expect(auditDetails(e)).toContain("причина: Болезнь");
+    expect(auditMatches(e, "болезнь")).toBe(true);
   });
   it("writes the time of a local date as day.month.year hours:minutes:seconds", () => {
     const d = new Date(2026, 10, 3, 9, 5, 7);

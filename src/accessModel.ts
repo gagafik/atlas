@@ -342,12 +342,55 @@ export const auditActionNames: Record<string, string> = {
 export const auditAction = (a: Pick<AuditEntry, "action">): string =>
   auditActionNames[a.action] || a.action;
 
+const DETAIL_LABELS: Record<string, string> = {
+  reason: "причина",
+  version: "версия записи",
+  closureVersion: "версия закрытия",
+  classId: "класс",
+};
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const OPAQUE_ID = /^[0-9a-f]{16,64}$/i;
+const day = (value: string) => value.replace(ISO_DAY, "$3.$2.$1");
+
+/**
+ * The detail of an entry as text. Some actions store a small JSON object: its internal ids and empty values are
+ * left out, dates are written as ДД.ММ.ГГГГ, «start» and «end» read as a period. Anything else comes back as it was.
+ */
+export function auditDetailText(detail: string): string {
+  if (!detail.startsWith("{")) return detail;
+  let data: unknown;
+  try {
+    data = JSON.parse(detail);
+  } catch {
+    return detail;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return detail;
+  const fields = data as Record<string, unknown>;
+  const out: string[] = [];
+  const text = (v: unknown) =>
+    typeof v === "string"
+      ? day(v.trim())
+      : typeof v === "number"
+        ? String(v)
+        : "";
+  const start = text(fields.start),
+    end = text(fields.end);
+  if (start && end) out.push(start === end ? start : `${start} — ${end}`);
+  for (const [key, value] of Object.entries(fields)) {
+    if ((key === "start" || key === "end") && start && end) continue;
+    const shown = text(value);
+    if (!shown || OPAQUE_ID.test(shown)) continue;
+    out.push(`${DETAIL_LABELS[key] ?? key}: ${shown}`);
+  }
+  return out.join(", ");
+}
+
 /** Space, version and detail of an entry, joined as the log showed them. */
 export function auditDetails(a: AuditEntry): string {
   return [
     a.workspace ? workspaceName(a.workspace) : "",
     a.revision !== null ? `версия ${a.revision}` : "",
-    a.detail || "",
+    auditDetailText(a.detail || ""),
   ]
     .filter(Boolean)
     .join(" · ");
