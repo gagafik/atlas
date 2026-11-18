@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { uid, named, csvCell, download } from "./utils";
 import type {
@@ -16,6 +16,16 @@ import AbsenceFeed from "./AbsenceFeed";
 import SubstitutionPlan from "./SubstitutionPlan";
 import SubstitutionReport from "./SubstitutionReport";
 import ScheduleDays from "./ScheduleDays";
+import {
+  DAY_TABS,
+  dateInWords,
+  dayRowView,
+  nextDayTab,
+  stateText,
+  type DayTabId,
+  type RowAction,
+} from "./datedDay";
+import "./DatedDay.css";
 import {
   CHANGE_TYPES,
   effectiveType,
@@ -77,12 +87,6 @@ interface DayReport {
   missingTeachers: number;
   missingRooms: number;
 }
-const STATUS = {
-  scheduled: "По расписанию",
-  changed: "Изменение",
-  added: "Разовый урок",
-  cancelled: "Отменён",
-};
 export default function DatedSchedule({
   state: s,
   workspace,
@@ -103,9 +107,7 @@ export default function DatedSchedule({
         ? s.settings.yearStart
         : today),
   );
-  const [tab, setTab] = useState<
-    "day" | "absences" | "changes" | "plan" | "days" | "report"
-  >("day");
+  const [tab, setTab] = useState<DayTabId>("day");
   const [planTeacher, setPlanTeacher] = useState("");
   const [mode, setMode] = useState<
     "class" | "teacher" | "room" | "student" | "all"
@@ -124,6 +126,21 @@ export default function DatedSchedule({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [history, setHistory] = useState({ undo: 0, redo: 0 });
+  const tabButtons = useRef<(HTMLButtonElement | null)[]>([]),
+    panel = useRef<HTMLDivElement>(null),
+    opener = useRef<{ row: string; action: RowAction } | null>(null);
+  // After a form or the preview closes, focus goes back to the button that opened it (or to its row) while that row is still listed.
+  useEffect(() => {
+    const o = opener.current;
+    if (!o || tab !== "day" || busy || loading || lesson || absence || preview)
+      return;
+    if (report?.revision !== s.revision) return;
+    opener.current = null;
+    const own = Array.from(
+      panel.current?.querySelectorAll<HTMLButtonElement>("[data-dd-row]") ?? [],
+    ).filter((b) => b.dataset.ddRow === o.row);
+    (own.find((b) => b.dataset.ddAction === o.action) ?? own[0])?.focus();
+  });
   useEffect(() => {
     let live = true;
     api("history", workspace)
@@ -201,13 +218,73 @@ export default function DatedSchedule({
         : false;
   }
   function statusLabel(r: DatedRow) {
-    return r.activity === "booking"
-      ? "Бронирование"
-      : r.activity === "duty"
-        ? "Дежурство"
-        : r.changeType && !excluded(r) && r.status !== "scheduled"
-          ? CHANGE_TYPES[r.changeType]
-          : STATUS[excluded(r) ? "cancelled" : r.status];
+    return stateText(r, excluded(r));
+  }
+  function switchTab(id: DayTabId) {
+    opener.current = null;
+    reset();
+    setTab(id);
+  }
+  function keyTab(e: React.KeyboardEvent, index: number) {
+    const to = nextDayTab(index, e.key);
+    if (to === null) return;
+    e.preventDefault();
+    switchTab(DAY_TABS[to].id);
+    tabButtons.current[to]?.focus();
+  }
+  function runRowAction(r: DatedRow, action: RowAction) {
+    if (action === "commitment") {
+      onCommitment?.(r.commitmentId!);
+      return;
+    }
+    opener.current = { row: r.id, action };
+    if (action === "remove") {
+      reset();
+      void check("datedLessons", undefined, r.changeId!);
+    } else editRow(r, action);
+  }
+  function cycleName(rep: DayReport) {
+    return rep.cycleId
+      ? named(
+          s.cycles?.patterns || [{ id: "weekly", name: "Каждая неделя" }],
+          rep.cycleId,
+        )
+      : "Вне учебных периодов";
+  }
+  function downloadCsv() {
+    download(
+      `Расписание-${day}.csv`,
+      "\uFEFF" +
+        [
+          [
+            "Дата",
+            "Группа",
+            "Предмет",
+            "Начало",
+            "Конец",
+            "Учителя",
+            "Кабинеты",
+            "Статус",
+            "Тип изменения",
+            "Примечание",
+          ],
+          ...shown.map((r) => [
+            r.date,
+            r.group,
+            r.subject,
+            r.start,
+            r.end,
+            r.teachers,
+            r.rooms,
+            statusLabel(r),
+            r.changeType ? CHANGE_TYPES[r.changeType] : "",
+            r.reasons.join("; "),
+          ]),
+        ]
+          .map((row) => row.map(csvCell).join(";"))
+          .join("\r\n"),
+      "text/csv;charset=utf-8",
+    );
   }
   function reset() {
     setLesson(null);
@@ -417,40 +494,40 @@ export default function DatedSchedule({
   const dateBounds = { min: s.settings.yearStart, max: s.settings.yearEnd };
   const mergeChoice = mergeOptions.find((o) => o.rowId === lesson?.mergeWith);
   return (
-    <div className="dated-panel">
-      <p className="info-line">
-        Здесь — фактические занятия на дату. Замены, переносы и отмены
-        сохраняются отдельно от повторяющейся недели. Влияние каникул включается
-        явно в «Учебном календаре».
-      </p>
+    <div className="dd" ref={panel}>
       <div
-        className="exchange-tabs"
-        role="group"
+        className="dd-tabs"
+        role="tablist"
         aria-label="Раздел расписания по датам"
       >
-        {(
-          [
-            ["day", "Занятия на дату"],
-            ["plan", "Замена на день"],
-            ["absences", "Отсутствия учителей"],
-            ["changes", "Все изменения"],
-            ["days", "Дни в расписании"],
-            ["report", "Итоги замен"],
-          ] as const
-        ).map(([id, label]) => (
+        {DAY_TABS.map((t, i) => (
           <button
-            key={id}
-            className={tab === id ? "selected" : ""}
-            onClick={() => {
-              reset();
-              setTab(id);
+            key={t.id}
+            ref={(el) => {
+              tabButtons.current[i] = el;
             }}
+            type="button"
+            role="tab"
+            id={`dd-tab-${t.id}`}
+            aria-selected={tab === t.id}
+            aria-controls="dd-panel"
+            tabIndex={tab === t.id ? 0 : -1}
+            onClick={() => switchTab(t.id)}
+            onKeyDown={(e) => keyTab(e, i)}
           >
-            {label}
+            {t.label}
           </button>
         ))}
       </div>
-      <div className="dated-toolbar">
+      <details className="dd-help">
+        <summary>Как устроены замены</summary>
+        <p>
+          Здесь — фактические занятия на дату. Замены, переносы и отмены
+          сохраняются отдельно от повторяющейся недели. Влияние каникул
+          включается явно в «Учебном календаре».
+        </p>
+      </details>
+      <div className="dd-controls">
         <DateField
           label="Дата расписания"
           value={day}
@@ -462,24 +539,102 @@ export default function DatedSchedule({
           }}
           {...dateBounds}
         />
-        <button disabled={busy} onClick={newLesson}>
-          Добавить разовый урок
-        </button>
-        <button disabled={busy} onClick={newAbsence}>
-          Указать отсутствие
-        </button>
-        <button
-          disabled={busy || !history.undo}
-          onClick={() => historyAction("undo")}
-        >
-          Отменить действие
-        </button>
-        <button
-          disabled={busy || !history.redo}
-          onClick={() => historyAction("redo")}
-        >
-          Повторить действие
-        </button>
+        {tab === "day" && (
+          <>
+            <label className="field">
+              <span>Показать расписание</span>
+              <select
+                value={mode}
+                onChange={(e) => {
+                  setMode(e.target.value as typeof mode);
+                  setSelected("");
+                }}
+              >
+                <option value="class">Класса</option>
+                <option value="teacher">Учителя</option>
+                <option value="room">Кабинета</option>
+                <option value="student">Ученика</option>
+                <option value="all">Всей школы</option>
+              </select>
+            </label>
+            {mode !== "all" && (
+              <label className="field">
+                <span>Выбранная запись</span>
+                <select
+                  value={selected}
+                  onChange={(e) => setSelected(e.target.value)}
+                >
+                  <option value="">Все записи</option>
+                  {entities.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                      {mode === "student"
+                        ? ` · ${named(s.classes, (x as State["students"][number]).classId)}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="field">
+              <span>Поиск занятия</span>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Группа, предмет, учитель…"
+              />
+            </label>
+          </>
+        )}
+      </div>
+      <div className="dd-line">
+        <p className="dd-summary">
+          <strong>
+            {dateInWords(day)}
+            {tab === "day" && fresh && ` · ${cycleName(report)}`}
+            {tab === "day" &&
+              fresh &&
+              report.scheduleDay &&
+              ` · работает как «${s.settings.days[report.scheduleDay.day] ?? report.scheduleDay.day}»` +
+                (report.scheduleDay.classIds.length
+                  ? ` для классов: ${report.scheduleDay.classIds.map((id) => named(s.classes, id)).join(", ")}`
+                  : "")}
+          </strong>
+          {tab === "day" && fresh && (
+            <span>Показано занятий: {shown.length}</span>
+          )}
+        </p>
+        <div className="dd-tools">
+          <button className="dd-btn" disabled={busy} onClick={newLesson}>
+            Добавить разовый урок
+          </button>
+          <button className="dd-btn" disabled={busy} onClick={newAbsence}>
+            Указать отсутствие
+          </button>
+          <button
+            className="dd-btn"
+            disabled={busy || !history.undo}
+            onClick={() => historyAction("undo")}
+          >
+            Отменить действие
+          </button>
+          <button
+            className="dd-btn"
+            disabled={busy || !history.redo}
+            onClick={() => historyAction("redo")}
+          >
+            Повторить действие
+          </button>
+          {tab === "day" && fresh && (
+            <button
+              className="dd-btn"
+              disabled={!shown.length}
+              onClick={downloadCsv}
+            >
+              Скачать CSV
+            </button>
+          )}
+        </div>
       </div>
       {error && (
         <p className="error-banner" role="alert">
@@ -900,120 +1055,21 @@ export default function DatedSchedule({
           )}
         </>
       )}
-      {tab === "day" && (
-        <>
-          <div className="dated-fields">
-            <label className="field">
-              <span>Показать расписание</span>
-              <select
-                value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value as typeof mode);
-                  setSelected("");
-                }}
-              >
-                <option value="class">Класса</option>
-                <option value="teacher">Учителя</option>
-                <option value="room">Кабинета</option>
-                <option value="student">Ученика</option>
-                <option value="all">Всей школы</option>
-              </select>
-            </label>
-            {mode !== "all" && (
-              <label className="field">
-                <span>Выбранная запись</span>
-                <select
-                  value={selected}
-                  onChange={(e) => setSelected(e.target.value)}
-                >
-                  <option value="">Все записи</option>
-                  {entities.map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.name}
-                      {mode === "student"
-                        ? ` · ${named(s.classes, (x as State["students"][number]).classId)}`
-                        : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="field">
-              <span>Поиск занятия</span>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Группа, предмет, учитель…"
-              />
-            </label>
-          </div>
-          {loading ? (
+      <div
+        className="dd-panel"
+        role="tabpanel"
+        id="dd-panel"
+        aria-labelledby={`dd-tab-${tab}`}
+      >
+        {tab === "day" &&
+          (loading ? (
             <p role="status">Загружаю занятия…</p>
           ) : !fresh ? (
             <p>Данные изменились в другом окне. Обновите страницу.</p>
           ) : (
             <>
-              <div className="dated-summary">
-                <strong>
-                  {day} ·{" "}
-                  {report.cycleId
-                    ? named(
-                        s.cycles?.patterns || [
-                          { id: "weekly", name: "Каждая неделя" },
-                        ],
-                        report.cycleId,
-                      )
-                    : "Вне учебных периодов"}
-                  {report.scheduleDay &&
-                    ` · работает как «${s.settings.days[report.scheduleDay.day] ?? report.scheduleDay.day}»` +
-                      (report.scheduleDay.classIds.length
-                        ? ` для классов: ${report.scheduleDay.classIds.map((id) => named(s.classes, id)).join(", ")}`
-                        : "")}
-                </strong>
-                <span>Показано занятий: {shown.length}</span>
-                <button
-                  disabled={!shown.length}
-                  onClick={() =>
-                    download(
-                      `Расписание-${day}.csv`,
-                      "\uFEFF" +
-                        [
-                          [
-                            "Дата",
-                            "Группа",
-                            "Предмет",
-                            "Начало",
-                            "Конец",
-                            "Учителя",
-                            "Кабинеты",
-                            "Статус",
-                            "Тип изменения",
-                            "Примечание",
-                          ],
-                          ...shown.map((r) => [
-                            r.date,
-                            r.group,
-                            r.subject,
-                            r.start,
-                            r.end,
-                            r.teachers,
-                            r.rooms,
-                            statusLabel(r),
-                            r.changeType ? CHANGE_TYPES[r.changeType] : "",
-                            r.reasons.join("; "),
-                          ]),
-                        ]
-                          .map((row) => row.map(csvCell).join(";"))
-                          .join("\r\n"),
-                      "text/csv;charset=utf-8",
-                    )
-                  }
-                >
-                  Скачать CSV
-                </button>
-              </div>
               {report.events.length > 0 && (
-                <p className="info-line">
+                <p className="info-line dd-note">
                   {report.events
                     .map(
                       (e) =>
@@ -1023,7 +1079,7 @@ export default function DatedSchedule({
                 </p>
               )}
               {!report.completeChecks && (
-                <p className="muted">
+                <p className="muted dd-note">
                   Весь день: без учителя {report.missingTeachers}, без кабинета{" "}
                   {report.missingRooms}, неполных составов{" "}
                   {report.unknownGroups}, непроверенной вместимости{" "}
@@ -1032,7 +1088,10 @@ export default function DatedSchedule({
                   успешной проверкой.
                 </p>
               )}
-              <details className="dated-issues" open={report.issueCount > 0}>
+              <details
+                className="dated-issues dd-check"
+                open={report.issueCount > 0}
+              >
                 <summary>
                   Проверка всей школы на дату: {report.issueCount} проблем
                 </summary>
@@ -1059,7 +1118,7 @@ export default function DatedSchedule({
                 </ul>
               </details>
               {!!report.warningCount && (
-                <details className="dated-issues">
+                <details className="dated-issues dd-check">
                   <summary>
                     Пожелания: {report.warningCount} · штраф{" "}
                     {report.qualityPenalty}
@@ -1080,238 +1139,278 @@ export default function DatedSchedule({
                   </ul>
                 </details>
               )}
-              {!shown.length && (
+              {!shown.length ? (
                 <p className="empty-state">
                   На эту дату по выбранным условиям занятий нет.
                 </p>
+              ) : (
+                <div className="table-card">
+                  <table className="data-table dd-table">
+                    <caption className="sr-only">
+                      Занятия: {dateInWords(day)}
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col" className="dd-time">
+                          Время
+                        </th>
+                        <th scope="col" className="dd-lesson">
+                          Занятие
+                        </th>
+                        <th scope="col" className="dd-teacher">
+                          Учитель
+                        </th>
+                        <th scope="col" className="dd-room">
+                          Кабинет
+                        </th>
+                        <th scope="col" className="dd-state">
+                          Состояние
+                        </th>
+                        <th scope="col" className="dd-act">
+                          <span className="sr-only">Действия</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.map((r) => {
+                        const v = dayRowView(r, excluded(r));
+                        const away = r.excludedClassIds.length
+                          ? `Не посещают: ${r.excludedClassIds.map((id) => named(s.classes, id)).join(", ")}`
+                          : "";
+                        const reasons = r.reasons.join("; ");
+                        return (
+                          <tr
+                            key={r.id}
+                            className={v.struck ? "cancelled" : ""}
+                          >
+                            <td className="dd-time">{v.time}</td>
+                            <td
+                              className="dd-lesson"
+                              title={away ? `${v.lesson} · ${away}` : v.lesson}
+                            >
+                              <strong className="dd-name">{v.lesson}</strong>
+                              {away && (
+                                <span className="dd-note-away">{away}</span>
+                              )}
+                            </td>
+                            <td className="dd-teacher" title={v.teacher}>
+                              {v.teacherMissing ? (
+                                <span className="dd-missing">{v.teacher}</span>
+                              ) : (
+                                v.teacher
+                              )}
+                            </td>
+                            <td className="dd-room" title={v.room}>
+                              {v.roomMissing ? (
+                                <span className="dd-missing">{v.room}</span>
+                              ) : (
+                                v.room
+                              )}
+                            </td>
+                            <td
+                              className="dd-state"
+                              title={
+                                reasons ? `${v.state}: ${reasons}` : v.state
+                              }
+                            >
+                              <span className={`dd-badge ${v.tone}`}>
+                                {v.state}
+                              </span>
+                              {reasons && (
+                                <span className="dd-reason">{reasons}</span>
+                              )}
+                            </td>
+                            <td className="dd-act">
+                              <div className="dd-acts">
+                                {v.actions.map((a) => (
+                                  <button
+                                    key={a.action}
+                                    type="button"
+                                    className="dd-btn"
+                                    data-dd-row={r.id}
+                                    data-dd-action={a.action}
+                                    aria-label={a.label}
+                                    disabled={a.action !== "commitment" && busy}
+                                    onClick={() => runRowAction(r, a.action)}
+                                  >
+                                    {a.text}
+                                  </button>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
-              <div className="dated-lessons">
-                {shown.map((r) => (
-                  <article
-                    key={r.id}
-                    className={`dated-lesson ${r.status === "cancelled" || excluded(r) ? "cancelled" : ""}`}
-                  >
-                    <div className="dated-time">
-                      {r.start}–{r.end}
-                      <small>{statusLabel(r)}</small>
-                    </div>
-                    <div>
-                      <h3>
-                        {r.subject} · {r.group}
-                      </h3>
-                      <p>
-                        {r.teachers || "Учитель не назначен"} ·{" "}
-                        {r.rooms || "Кабинет не назначен"}
-                      </p>
-                      {r.reasons.length > 0 && (
-                        <small>{r.reasons.join("; ")}</small>
-                      )}
-                      {!!r.excludedClassIds.length && (
-                        <small>
-                          Не посещают:{" "}
-                          {r.excludedClassIds
-                            .map((id) => named(s.classes, id))
-                            .join(", ")}
-                        </small>
-                      )}
-                    </div>
-                    <div className="dated-actions">
-                      {r.commitmentId && (
-                        <button onClick={() => onCommitment?.(r.commitmentId!)}>
-                          Открыть запись события
-                        </button>
-                      )}
-                      {r.status !== "cancelled" && !r.commitmentId && (
-                        <>
-                          <button
-                            disabled={busy}
-                            onClick={() => editRow(r, "change")}
-                          >
-                            Заменить / перенести
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() => editRow(r, "cancel")}
-                          >
-                            Отменить урок
-                          </button>
-                        </>
-                      )}
-                      {r.changeId && (
-                        <button
-                          disabled={busy}
-                          onClick={() => {
-                            reset();
-                            void check("datedLessons", undefined, r.changeId!);
-                          }}
-                        >
-                          Убрать изменение
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
             </>
-          )}
-        </>
-      )}
-      {tab === "absences" && (
-        <div className="dated-records">
-          <AbsenceFeed
+          ))}
+        {tab === "absences" && (
+          <div className="dated-records">
+            <AbsenceFeed
+              workspace={workspace}
+              revision={s.revision}
+              busy={busy}
+              onAdd={(value) => {
+                reset();
+                void check("absences", value);
+              }}
+              onRemove={(id) => {
+                reset();
+                void check("absences", undefined, id);
+              }}
+              onPlan={(date, teacherId) => {
+                reset();
+                setDay(date);
+                setPlanTeacher(teacherId);
+                setTab("plan");
+              }}
+            />
+            {!(s.absences || []).length && <p>Отсутствия пока не внесены.</p>}
+            {(s.absences || [])
+              .slice()
+              .sort((a, b) => b.start.localeCompare(a.start))
+              .map((a) => (
+                <article key={a.id}>
+                  <div>
+                    <strong>
+                      {named(s.teachers, a.teacherId)} · {a.name}
+                    </strong>
+                    <p>
+                      {a.start} — {a.end} · каждый день {a.startTime}–
+                      {a.endTime}
+                    </p>
+                  </div>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      reset();
+                      setDay(a.start);
+                      setPlanTeacher(a.teacherId);
+                      setTab("plan");
+                    }}
+                  >
+                    Замены на день
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      reset();
+                      setAbsence(a);
+                    }}
+                  >
+                    Изменить отсутствие
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      reset();
+                      void check("absences", undefined, a.id);
+                    }}
+                  >
+                    Удалить отсутствие
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDay(a.start);
+                      setTab("day");
+                      setMode("teacher");
+                      setSelected(a.teacherId);
+                      reset();
+                    }}
+                  >
+                    К урокам
+                  </button>
+                </article>
+              ))}
+          </div>
+        )}
+        {tab === "changes" && (
+          <div className="dated-records">
+            {!(s.datedLessons || []).length && (
+              <p>Разовых изменений пока нет.</p>
+            )}
+            {(s.datedLessons || [])
+              .slice()
+              .sort((a, b) => b.onDate.localeCompare(a.onDate))
+              .map((c) => (
+                <article key={c.id}>
+                  <div>
+                    <strong>{c.name}</strong>
+                    <p>
+                      {c.onDate} · {CHANGE_TYPES[effectiveType(c)]}
+                      {c.sourceDate &&
+                        c.sourceDate !== c.onDate &&
+                        ` · исходная дата ${c.sourceDate}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setDay(c.onDate);
+                      setTab("day");
+                      setMode("all");
+                      reset();
+                    }}
+                  >
+                    Открыть дату
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      reset();
+                      void openChange(c);
+                    }}
+                  >
+                    Изменить запись
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      reset();
+                      void check("datedLessons", undefined, c.id);
+                    }}
+                  >
+                    Убрать изменение
+                  </button>
+                </article>
+              ))}
+          </div>
+        )}
+        {tab === "plan" && (
+          <SubstitutionPlan
+            state={s}
             workspace={workspace}
-            revision={s.revision}
+            onState={onState}
+            day={day}
+            initialTeacher={planTeacher}
+          />
+        )}
+        {tab === "days" && (
+          <ScheduleDays
+            state={s}
             busy={busy}
-            onAdd={(value) => {
+            onCheck={(value, removeId) => {
               reset();
-              void check("absences", value);
+              void check("scheduleDays", value, removeId);
             }}
-            onRemove={(id) => {
+            onOpenDate={(d) => {
               reset();
-              void check("absences", undefined, id);
-            }}
-            onPlan={(date, teacherId) => {
-              reset();
-              setDay(date);
-              setPlanTeacher(teacherId);
-              setTab("plan");
+              setDay(d);
+              setTab("day");
+              setMode("all");
             }}
           />
-          {!(s.absences || []).length && <p>Отсутствия пока не внесены.</p>}
-          {(s.absences || [])
-            .slice()
-            .sort((a, b) => b.start.localeCompare(a.start))
-            .map((a) => (
-              <article key={a.id}>
-                <div>
-                  <strong>
-                    {named(s.teachers, a.teacherId)} · {a.name}
-                  </strong>
-                  <p>
-                    {a.start} — {a.end} · каждый день {a.startTime}–{a.endTime}
-                  </p>
-                </div>
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    reset();
-                    setDay(a.start);
-                    setPlanTeacher(a.teacherId);
-                    setTab("plan");
-                  }}
-                >
-                  Замены на день
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    reset();
-                    setAbsence(a);
-                  }}
-                >
-                  Изменить отсутствие
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    reset();
-                    void check("absences", undefined, a.id);
-                  }}
-                >
-                  Удалить отсутствие
-                </button>
-                <button
-                  onClick={() => {
-                    setDay(a.start);
-                    setTab("day");
-                    setMode("teacher");
-                    setSelected(a.teacherId);
-                    reset();
-                  }}
-                >
-                  К урокам
-                </button>
-              </article>
-            ))}
-        </div>
-      )}
-      {tab === "changes" && (
-        <div className="dated-records">
-          {!(s.datedLessons || []).length && <p>Разовых изменений пока нет.</p>}
-          {(s.datedLessons || [])
-            .slice()
-            .sort((a, b) => b.onDate.localeCompare(a.onDate))
-            .map((c) => (
-              <article key={c.id}>
-                <div>
-                  <strong>{c.name}</strong>
-                  <p>
-                    {c.onDate} · {CHANGE_TYPES[effectiveType(c)]}
-                    {c.sourceDate &&
-                      c.sourceDate !== c.onDate &&
-                      ` · исходная дата ${c.sourceDate}`}
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setDay(c.onDate);
-                    setTab("day");
-                    setMode("all");
-                    reset();
-                  }}
-                >
-                  Открыть дату
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    reset();
-                    void openChange(c);
-                  }}
-                >
-                  Изменить запись
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={() => {
-                    reset();
-                    void check("datedLessons", undefined, c.id);
-                  }}
-                >
-                  Убрать изменение
-                </button>
-              </article>
-            ))}
-        </div>
-      )}
-      {tab === "plan" && (
-        <SubstitutionPlan
-          state={s}
-          workspace={workspace}
-          onState={onState}
-          day={day}
-          initialTeacher={planTeacher}
-        />
-      )}
-      {tab === "days" && (
-        <ScheduleDays
-          state={s}
-          busy={busy}
-          onCheck={(value, removeId) => {
-            reset();
-            void check("scheduleDays", value, removeId);
-          }}
-          onOpenDate={(d) => {
-            reset();
-            setDay(d);
-            setTab("day");
-            setMode("all");
-          }}
-        />
-      )}
-      {tab === "report" && (
-        <SubstitutionReport state={s} workspace={workspace} onState={onState} />
-      )}
+        )}
+        {tab === "report" && (
+          <SubstitutionReport
+            state={s}
+            workspace={workspace}
+            onState={onState}
+          />
+        )}
+      </div>
     </div>
   );
 }
