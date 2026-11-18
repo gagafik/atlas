@@ -1,0 +1,365 @@
+/* «Замены»: the frame (tabs, one controls row, one line of actions) and the lessons of the date as a table.
+   The shared .dated-panel / .dated-toolbar / .dated-fields rules stay untouched: other screens use them. */
+.dd {
+  container: dd / inline-size;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.dd > *,
+.dd-panel > * {
+  min-width: 0;
+}
+.dd-panel {
+  display: grid;
+  gap: 12px;
+}
+
+/* Tabs: one line, scrolling sideways on a phone; the focus ring is drawn inside the button so the scroller cannot clip it. */
+.dd-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+.dd .dd-tabs button {
+  flex: none;
+  min-height: 36px;
+  padding: 6px 14px;
+  white-space: nowrap;
+  font-size: 13px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: none;
+  color: var(--text-muted);
+}
+.dd .dd-tabs button:hover:not([aria-selected="true"]) {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+.dd .dd-tabs button:focus-visible {
+  outline-offset: -3px;
+}
+.dd .dd-tabs button[aria-selected="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: inset 0 -3px 0 var(--accent-strong);
+}
+
+/* The explanation: closed, one quiet line at the right. */
+.dd-help {
+  display: grid;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dd-help > summary {
+  justify-self: end;
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+}
+.dd-help > p {
+  margin: 6px 0 0;
+  max-width: 80ch;
+  line-height: 1.5;
+}
+
+/* Controls: one row from 1000 px of content, wrapping below, two in a line on a phone. */
+.dd-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+.dd-controls .field {
+  flex: 1 1 180px;
+  min-width: 0;
+  margin: 0;
+  gap: 3px;
+}
+.dd-controls .field:only-child {
+  flex: 0 1 240px;
+}
+.dd-controls .field > span {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+.dd-controls .field input,
+.dd-controls .field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+}
+@container dd (min-width: 1000px) {
+  .dd-controls {
+    flex-wrap: nowrap;
+  }
+}
+
+/* The date in words on the left, the actions on the right. */
+.dd-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.dd-summary {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.dd-summary span {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.dd-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.dd .dd-btn {
+  min-height: 30px;
+  padding: 3px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@container dd (min-width: 1000px) {
+  .dd-tools {
+    flex-wrap: nowrap;
+  }
+}
+
+/* Notes between the line and the table stay compact. */
+.dd .dd-note {
+  margin: 0;
+  font-size: 12px;
+}
+.dd .dated-issues.dd-check {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.dd .dated-issues.dd-check > summary {
+  cursor: pointer;
+  font-weight: var(--weight-semibold);
+}
+.dd .dated-issues.dd-check p,
+.dd .dated-issues.dd-check ul {
+  margin: 6px 0 0;
+}
+
+/* The table: one line per lesson, columns sized by their content; lesson, teacher and state take the rest. */
+.dd-table th,
+.dd-table td {
+  padding: 0 12px;
+  height: 40px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.dd-table th {
+  height: 34px;
+  font-size: 11px;
+}
+.dd-table.data-table td.dd-act,
+.dd-table.data-table th.dd-act {
+  width: 1%;
+  padding: 0 8px;
+}
+.dd-table.data-table td.dd-time,
+.dd-table.data-table th.dd-time {
+  width: 1%;
+}
+.dd-table td.dd-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+.dd-table.data-table td.dd-lesson,
+.dd-table.data-table td.dd-teacher,
+.dd-table.data-table td.dd-room,
+.dd-table.data-table td.dd-state {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dd-table.data-table th.dd-lesson {
+  width: 31%;
+}
+.dd-table.data-table th.dd-teacher {
+  width: 22%;
+}
+.dd-table.data-table th.dd-room {
+  width: 23%;
+}
+.dd-table.data-table th.dd-state {
+  width: 24%;
+}
+.dd-note-away,
+.dd-reason {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: var(--weight-regular);
+  color: var(--text-subtle);
+}
+.dd-missing {
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+.dd-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+}
+.dd-badge.quiet {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.dd-badge.change {
+  background: var(--info-tint);
+  border-color: var(--info-line);
+  color: var(--info);
+}
+.dd-badge.cancelled {
+  background: var(--danger-tint);
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+.dd-table tr.cancelled td {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.dd-table tr.cancelled .dd-name {
+  text-decoration: line-through;
+}
+.dd-acts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.dd .dd-acts .dd-btn {
+  min-height: 28px;
+}
+
+/* A phone: a lesson is a block: time and state, the lesson, teacher and room, the buttons. */
+@container dd (max-width: 600px) {
+  .dd-table,
+  .dd-table tbody {
+    display: block;
+  }
+  .dd-table thead {
+    display: none;
+  }
+  .dd-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "time state"
+      "lesson lesson"
+      "teacher room"
+      "act act";
+    align-items: center;
+    gap: 3px 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dd-table tr:last-child {
+    border-bottom: 0;
+  }
+  .dd-table.data-table td,
+  .dd-table.data-table td.dd-time,
+  .dd-table.data-table td.dd-lesson,
+  .dd-table.data-table td.dd-teacher,
+  .dd-table.data-table td.dd-room,
+  .dd-table.data-table td.dd-state,
+  .dd-table.data-table td.dd-act {
+    display: block;
+    width: auto;
+    max-width: none;
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .dd-table.data-table td.dd-time {
+    grid-area: time;
+  }
+  .dd-table.data-table td.dd-state {
+    grid-area: state;
+    justify-self: end;
+    text-align: right;
+    white-space: normal;
+  }
+  .dd-table.data-table td.dd-lesson {
+    grid-area: lesson;
+  }
+  .dd-table.data-table td.dd-teacher {
+    grid-area: teacher;
+  }
+  .dd-table.data-table td.dd-room {
+    grid-area: room;
+    justify-self: end;
+    text-align: right;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dd-table.data-table td.dd-act {
+    grid-area: act;
+    margin-top: 4px;
+  }
+  .dd-table tr.cancelled td {
+    background: none;
+  }
+  .dd-table tr.cancelled {
+    background: var(--surface-sunken);
+  }
+  .dd-reason {
+    display: block;
+    margin: 2px 0 0;
+  }
+  .dd-acts {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+  .dd .dd-acts .dd-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+  }
+  .dd-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dd .dd-tools,
+  .dd-tools {
+    width: 100%;
+    margin-left: 0;
+  }
+  .dd .dd-tools .dd-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+  }
+}
