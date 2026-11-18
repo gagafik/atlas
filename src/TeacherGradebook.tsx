@@ -53,10 +53,27 @@ export default function TeacherGradebook({
     [open, setOpen] = useState<string | null>(null);
   const first = useRef(true);
   const searchBox = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLElement>(null);
+  const lastOpen = useRef<string | null>(null);
+  // Back from the grid: the button that opened it was unmounted, so focus returns to the same row.
+  useEffect(() => {
+    if (open || !lastOpen.current) return;
+    const id = lastOpen.current;
+    lastOpen.current = null;
+    const rowButton = [
+      ...(root.current?.querySelectorAll<HTMLElement>("[data-course]") ?? []),
+    ].find((b) => b.dataset.course === id);
+    rowButton?.focus();
+  }, [open]);
   useEffect(() => {
     let live = true;
     setList(null);
     setError("");
+    // The filters of another workspace may not exist here.
+    setFilters(NO_FILTERS);
+    setSearch("");
+    setSort(DEFAULT_SORT);
+    setPage(0);
     first.current = true;
     api("journal/course-table/courses", workspace)
       .then((value: CourseList) => {
@@ -107,12 +124,15 @@ export default function TeacherGradebook({
         course={open}
         embedded
         onOpen={onOpen}
-        onBack={() => setOpen(null)}
+        onBack={() => {
+          lastOpen.current = open;
+          setOpen(null);
+        }}
       />
     );
 
   return (
-    <section className="gc" aria-label="Оценки">
+    <section className="gc" aria-label="Оценки" ref={root}>
       {error && (
         <p role="alert" className="error-banner">
           {error}
@@ -293,6 +313,7 @@ export default function TeacherGradebook({
                             <button
                               type="button"
                               className="gc-name"
+                              aria-label={label}
                               onClick={() => setOpen(r.id)}
                             >
                               {r.course.group}
@@ -321,6 +342,7 @@ export default function TeacherGradebook({
                           <button
                             type="button"
                             className="gc-open"
+                            data-course={r.id}
                             aria-label={`Открыть ${label}`}
                             onClick={() => setOpen(r.id)}
                           >

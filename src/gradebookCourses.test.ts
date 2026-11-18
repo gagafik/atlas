@@ -95,6 +95,32 @@ describe("filters", () => {
     expect(ids(filterRows(rows, f, "англ"))).toEqual(["4"]);
     expect(filterRows(rows, f, "физ")).toEqual([]);
   });
+  it("narrows by class or subject together with the search and other filters", () => {
+    const f = (patch: Partial<typeof NO_FILTERS>) => ({
+      ...NO_FILTERS,
+      ...patch,
+    });
+    expect(ids(filterRows(rows, f({ className: "5А" }), "англ"))).toEqual([
+      "4",
+    ]);
+    expect(filterRows(rows, f({ className: "5А" }), "физ")).toEqual([]);
+    expect(ids(filterRows(rows, f({ subjectId: "eng" }), "пётр"))).toEqual([
+      "4",
+    ]);
+    expect(filterRows(rows, f({ subjectId: "eng" }), "музык")).toEqual([]);
+    expect(
+      ids(
+        filterRows(
+          rows,
+          f({ subjectId: "eng", access: "admin", teacher: "Седов Иван" }),
+          "",
+        ),
+      ),
+    ).toEqual(["4"]);
+    expect(
+      filterRows(rows, f({ className: "5Б", access: "course" }), ""),
+    ).toEqual([]);
+  });
   it("knows when something is set", () => {
     expect(filtersActive(NO_FILTERS, "  ")).toBe(false);
     expect(filtersActive(NO_FILTERS, "а")).toBe(true);
@@ -125,6 +151,18 @@ describe("offered filters", () => {
       showTeacher: false,
       showAccess: false,
     });
+  });
+  it("does not offer the teacher filter when a colleague only co-teaches one own course", () => {
+    const own = [
+      course({ id: "a", teachers: ["Орлов Пётр"] }),
+      course({
+        id: "b",
+        subjectId: "eng",
+        subject: "Английский",
+        teachers: ["Орлов Пётр", "Седов Иван"],
+      }),
+    ];
+    expect(offeredFilters(own).showTeacher).toBe(false);
   });
   it("offers access to a teacher who is also a class teacher", () => {
     const mixed = [
@@ -259,6 +297,11 @@ describe("word forms and summary", () => {
     expect(form(14)).toBe("14 курсов");
     expect(form(21)).toBe("21 курс");
     expect(form(112)).toBe("112 курсов");
+  });
+  it("puts the total after «из» in the genitive", () => {
+    expect(summaryText(5, 21, true, null)).toBe("Показано 5 из 21 курса");
+    expect(summaryText(3, 22, true, null)).toBe("Показано 3 из 22 курсов");
+    expect(summaryText(3, 11, true, null)).toBe("Показано 3 из 11 курсов");
   });
   it("says the total alone without filters and adds the common access", () => {
     expect(summaryText(240, 240, false, null)).toBe("240 курсов");

@@ -117,8 +117,10 @@ export function offeredFilters(courses: CourseItem[]) {
     teachers,
     showClass: classes.length > 1,
     showSubject: subjects.size > 1,
-    // An ordinary teacher with only own courses has nobody to choose from.
-    showTeacher: teachers.length > 1,
+    // A teacher shared by every course (an ordinary teacher with own courses, some co-taught) splits nothing.
+    showTeacher:
+      teachers.length > 1 &&
+      !teachers.some((t) => courses.every((c) => c.teachers.includes(t))),
     showAccess: kinds.size > 1,
   };
 }
@@ -179,7 +181,7 @@ export function summaryText(
   access: string | null,
 ) {
   const base = filtered
-    ? `Показано ${shown} из ${total} ${courseWord(total)}`
+    ? `Показано ${shown} из ${total} ${wordForm(total, "курса", "курсов", "курсов")}`
     : `${total} ${courseWord(total)}`;
   return access ? `${base} · ${access}` : base;
 }

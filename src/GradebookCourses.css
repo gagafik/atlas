@@ -212,6 +212,14 @@
     border: 0;
     text-align: left;
   }
+  .gc-table .gc-group,
+  .gc-table .gc-teacher,
+  .gc-table .gc-subject,
+  .gc-table .gc-access {
+    width: auto;
+    max-width: none;
+    min-width: 0;
+  }
   .gc-table td.gc-group {
     grid-area: group;
   }
@@ -227,6 +235,7 @@
   }
   .gc-table td.gc-act {
     grid-area: act;
+    width: auto;
     justify-self: end;
   }
   .gc-open {
