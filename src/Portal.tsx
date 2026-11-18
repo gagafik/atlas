@@ -19,6 +19,12 @@ import { useSchoolYears } from "./schoolYears";
 import { currentChild, recallChoice, rememberChoice } from "./familyChild";
 import { eventPart, eventViews, schoolYear } from "./navigation";
 import { bellState, minutesNow } from "./startPage";
+import {
+  dateInWords,
+  lessonLine,
+  stateLabel as statusLabel,
+} from "./portalHome";
+import "./PortalHome.css";
 import { journalPanels as panelsOf, type JournalView } from "./journal";
 import { IntakePortal } from "./IntakePanel";
 import { FamilyPortal } from "./FamilyPanel";
@@ -55,20 +61,6 @@ interface Schedule {
   rows: Row[];
   classTeacher?: string | null;
 }
-const statusLabel = (r: Row) =>
-  r.status === "cancelled"
-    ? "Отменено"
-    : r.activity === "duty"
-      ? "Дежурство"
-      : r.activity === "booking"
-        ? "Бронирование"
-        : r.changeType
-          ? CHANGE_TYPES[r.changeType as ChangeType] || r.changeType
-          : r.status === "changed"
-            ? "Изменено"
-            : r.status === "added"
-              ? "Разовый урок"
-              : "По расписанию";
 const days = [
   "Понедельник",
   "Вторник",
@@ -157,6 +149,7 @@ function TodayLessons({
           {named && record && (bound || records.length < 2)
             ? ` · ${record.name}`
             : ""}
+          <small className="th-date">{dateInWords(now)}</small>
         </h2>
         {!bound && records.length > 1 && (
           <select
@@ -187,26 +180,26 @@ function TodayLessons({
       ) : (
         rows &&
         (rows.length ? (
-          <div className="portal-day">
-            {rows.map((r, i) => (
-              <article
-                className={`dated-lesson ${r.status === "cancelled" ? "cancelled" : ""} ${r === current ? "current" : ""}`}
-                key={i}
-              >
-                <strong>
-                  {r.start}–{r.end}
-                </strong>
-                <span>{statusLabel(r)}</span>
-                <h4>
-                  {r.subject} · {r.group}
-                </h4>
-                <p>
-                  {r.teachers || "Учитель не назначен"}
-                  {r.rooms ? " · " + r.rooms : ""}
-                </p>
-              </article>
-            ))}
-          </div>
+          <ol className="th-lessons">
+            {rows.map((r, i) => {
+              const l = lessonLine(r, r === current);
+              return (
+                <li
+                  key={i}
+                  className={`th-lesson th-${l.tone}${l.current ? " th-current" : ""}`}
+                  title={l.full}
+                  aria-current={l.current ? "true" : undefined}
+                >
+                  <time className="th-time">{l.time}</time>
+                  <span className="th-text">
+                    <b>{l.title}</b>
+                    <span className="th-details">{l.details}</span>
+                  </span>
+                  <span className="th-state">{l.state}</span>
+                </li>
+              );
+            })}
+          </ol>
         ) : (
           <p className="info-line">На сегодня уроков нет.</p>
         ))
@@ -454,21 +447,23 @@ export default function Portal({
           </div>
           {section === "home" ? (
             <>
-              <label className="field">
-                <span>Пространство</span>
-                <select
-                  value={workspace}
-                  onChange={(e) => setWorkspace(e.target.value)}
-                >
-                  {spaces.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {spaces.length > 1 && (
+                <label className="field">
+                  <span>Пространство</span>
+                  <select
+                    value={workspace}
+                    onChange={(e) => setWorkspace(e.target.value)}
+                  >
+                    {spaces.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {workspace ? (
-                <>
+                <div className="th-home">
                   <TodayLessons
                     key={workspace}
                     workspace={workspace}
@@ -480,7 +475,7 @@ export default function Portal({
                     <h2>Уведомления</h2>
                     <MessageFeed key={workspace} workspace={workspace} />
                   </section>
-                </>
+                </div>
               ) : (
                 !loading && (
                   <p className="info-line">
