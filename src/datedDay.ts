@@ -163,3 +163,41 @@ export function dateInWords(iso: string): string {
     return iso;
   return `${WEEKDAYS[t.getUTCDay()]}, ${m[3]}.${m[2]}.${m[1]}`;
 }
+
+export type DayMode = "class" | "teacher" | "room" | "student" | "all";
+
+export interface DayRowRecords {
+  originalClassIds: string[];
+  originalStudentIds: string[];
+  teacherIds: string[];
+  originalTeacherIds: string[];
+  roomIds: string[];
+}
+
+// Does the row belong to the chosen record of the mode? No record, or the whole school, takes every row.
+export function rowInRecord(
+  r: DayRowRecords,
+  mode: DayMode,
+  id: string,
+): boolean {
+  if (!id || mode === "all") return true;
+  return mode === "class"
+    ? r.originalClassIds.includes(id)
+    : mode === "student"
+      ? r.originalStudentIds.includes(id)
+      : mode === "teacher"
+        ? r.teacherIds.includes(id) || r.originalTeacherIds.includes(id)
+        : r.roomIds.includes(id);
+}
+
+// The record to start with: the first of the list that has a row on the date; when none has, the current one stays.
+export function firstRecordWithRows(
+  ids: string[],
+  rows: DayRowRecords[],
+  mode: DayMode,
+  current: string,
+): string {
+  return (
+    ids.find((id) => rows.some((r) => rowInRecord(r, mode, id))) ?? current
+  );
+}

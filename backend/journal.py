@@ -361,9 +361,15 @@ class Journal:
             from .attendance_projection import replace
             replace(db,workspace,key)
 
-    def historical_students(self, db, workspace, user):
-        query = 'SELECT DISTINCT m.student_id,m.name FROM journal_members m JOIN journal_entries e ON e.workspace=m.workspace AND e.lesson_key=m.lesson_key WHERE m.workspace=?'
-        params = [workspace]
+    def historical_students(self, db, workspace, user, known=()):
+        """Pupils the journal remembers but `known` does not hold, as (id,name) rows, under the rights of the account."""
+        # Skip-scan of journal_member_lookup: one seek per distinct pupil instead of a pass over every member row.
+        remembered = [r[0] for r in db.execute('WITH RECURSIVE ids(id) AS (SELECT MIN(student_id) FROM journal_members WHERE workspace=? UNION ALL SELECT (SELECT MIN(student_id) FROM journal_members WHERE workspace=? AND student_id>ids.id) FROM ids WHERE id IS NOT NULL) SELECT id FROM ids WHERE id IS NOT NULL',(workspace,workspace))]
+        known = set(known)
+        candidates = [i for i in remembered if i not in known]
+        if not candidates: return []
+        query = 'SELECT DISTINCT m.student_id,m.name FROM journal_members m JOIN journal_entries e ON e.workspace=m.workspace AND e.lesson_key=m.lesson_key WHERE m.workspace=? AND m.student_id IN (SELECT value FROM json_each(?))'
+        params = [workspace,encoded(sorted(candidates))]
         if user['role']=='teacher':
             query += " AND m.kind='draft' AND EXISTS(SELECT 1 FROM json_each(e.document,'$.lesson.teacherIds') t WHERE t.value IN (SELECT value FROM json_each(?)))"
             params.append(encoded(sorted(user_ids(user,workspace,'teacher'))))
@@ -593,7 +599,7 @@ class Journal:
                 from . import school_years
                 start,end,old = school_years.bounds(db,workspace,state,year);chosen = year or school_years.current(db,workspace,state)['id']
                 periods = [dict(id=r[0],name=r[1],start=r[2],end=r[3],kind=r[4]) for r in db.execute('SELECT id,name,start_day,end_day,kind FROM journal_periods WHERE workspace=? AND start_day>=? AND end_day<=? ORDER BY start_day,end_day DESC,id',(workspace,start,end))]
-                return self.historical_students(db,workspace,user),self.panels(db,workspace,user,snap),periods,(start,end,old,chosen)
+                return self.historical_students(db,workspace,user,students),self.panels(db,workspace,user,snap),periods,(start,end,old,chosen)
             historical,panels,periods,(start,end,old,chosen) = self.reading(read)
             for student in historical: students.setdefault(student['id'],dict(student,className=None,profileId=None))
             # Families cannot read /api/state or /api/journal/periods: the school's own periods and bells reach them here.

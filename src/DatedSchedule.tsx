@@ -17,11 +17,20 @@ import SubstitutionPlan from "./SubstitutionPlan";
 import SubstitutionReport from "./SubstitutionReport";
 import ScheduleDays from "./ScheduleDays";
 import DatedChanges from "./DatedChanges";
-import { absenceRows } from "./datedLists";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  absenceRows,
+  changePage,
+  changePageCount,
+  clampChangePage,
+  CHANGES_PAGE_SIZE,
+} from "./datedLists";
 import {
   DAY_TABS,
   dateInWords,
   dayRowView,
+  firstRecordWithRows,
+  rowInRecord,
   reasonText,
   nextDayTab,
   stateText,
@@ -118,6 +127,9 @@ export default function DatedSchedule({
   >(initialDate ? "all" : "class");
   const [selected, setSelected] = useState(s.classes[0]?.id || ""),
     [query, setQuery] = useState("");
+  // Until the person picks a mode or a record, the first record that has lessons that day is chosen for them.
+  const [picked, setPicked] = useState(false),
+    [page, setPage] = useState(0);
   const [report, setReport] = useState<DayReport | null>(null),
     [loading, setLoading] = useState(false);
   const [lesson, setLesson] = useState<DatedLesson | null>(null),
@@ -132,17 +144,20 @@ export default function DatedSchedule({
   const [history, setHistory] = useState({ undo: 0, redo: 0 });
   const tabButtons = useRef<(HTMLButtonElement | null)[]>([]),
     panel = useRef<HTMLDivElement>(null),
-    opener = useRef<{ row: string; action: RowAction } | null>(null);
+    opener = useRef<{ row: string; action: RowAction } | null>(null),
+    autoDay = useRef("");
   // After a form or the preview closes, focus goes back to the button that opened it (or to its row) while that row is still listed.
   useEffect(() => {
     const o = opener.current;
     if (!o || tab !== "day" || busy || loading || lesson || absence || preview)
       return;
     if (report?.revision !== s.revision) return;
-    opener.current = null;
     const own = Array.from(
       panel.current?.querySelectorAll<HTMLButtonElement>("[data-dd-row]") ?? [],
     ).filter((b) => b.dataset.ddRow === o.row);
+    // The row is listed but on another page: wait until the page follows it.
+    if (!own.length && shown.some((r) => r.id === o.row)) return;
+    opener.current = null;
     (own.find((b) => b.dataset.ddAction === o.action) ?? own[0])?.focus();
   });
   useEffect(() => {
@@ -195,6 +210,20 @@ export default function DatedSchedule({
           : mode === "student"
             ? s.students.filter((x) => x.active !== false)
             : [];
+  useEffect(() => {
+    // The report of the day that is shown: after a date change the old one is still here for one render.
+    if (picked || !fresh || report.date !== day || mode === "all") return;
+    // Only once per date: reloads after a change must not move the record.
+    if (autoDay.current === day) return;
+    autoDay.current = day;
+    const first = firstRecordWithRows(
+      entities.map((x) => x.id),
+      report.rows,
+      mode,
+      selected,
+    );
+    if (first !== selected) setSelected(first);
+  }, [report, fresh, picked, mode, day]);
   const shown = (fresh ? report.rows : []).filter((r) => {
     if (
       query &&
@@ -203,16 +232,19 @@ export default function DatedSchedule({
         .includes(query.toLocaleLowerCase())
     )
       return false;
-    if (!selected || mode === "all") return true;
-    return mode === "class"
-      ? r.originalClassIds.includes(selected)
-      : mode === "student"
-        ? r.originalStudentIds.includes(selected)
-        : mode === "teacher"
-          ? r.teacherIds.includes(selected) ||
-            r.originalTeacherIds.includes(selected)
-          : r.roomIds.includes(selected);
+    return rowInRecord(r, mode, selected);
   });
+  const safePage = clampChangePage(page, shown.length);
+  const pages = changePageCount(shown.length);
+  const visible = changePage(shown, safePage);
+  useEffect(() => setPage(0), [day, mode, selected, query]);
+  // A row chosen for an action keeps the table on its page.
+  // It also follows the row after filters or a reload moved it (runs after the reset above).
+  const followId = selectedRow?.id ?? opener.current?.row ?? "";
+  const followIndex = followId ? shown.findIndex((r) => r.id === followId) : -1;
+  useEffect(() => {
+    if (followIndex >= 0) setPage(Math.floor(followIndex / CHANGES_PAGE_SIZE));
+  }, [followId, followIndex, fresh]);
   function excluded(r: DatedRow) {
     return mode === "class"
       ? r.excludedClassIds.includes(selected)
@@ -553,6 +585,7 @@ export default function DatedSchedule({
               <select
                 value={mode}
                 onChange={(e) => {
+                  setPicked(true);
                   setMode(e.target.value as typeof mode);
                   setSelected("");
                 }}
@@ -569,7 +602,10 @@ export default function DatedSchedule({
                 <span>Выбранная запись</span>
                 <select
                   value={selected}
-                  onChange={(e) => setSelected(e.target.value)}
+                  onChange={(e) => {
+                    setPicked(true);
+                    setSelected(e.target.value);
+                  }}
                 >
                   <option value="">Все записи</option>
                   {entities.map((x) => (
@@ -1179,7 +1215,7 @@ export default function DatedSchedule({
                       </tr>
                     </thead>
                     <tbody>
-                      {shown.map((r) => {
+                      {visible.map((r) => {
                         const v = dayRowView(r, excluded(r));
                         const away = r.excludedClassIds.length
                           ? `Не посещают: ${r.excludedClassIds.map((id) => named(s.classes, id)).join(", ")}`
@@ -1250,6 +1286,38 @@ export default function DatedSchedule({
                       })}
                     </tbody>
                   </table>
+                  {pages > 1 && (
+                    <div className="table-footer dl-footer">
+                      <span>
+                        {safePage * CHANGES_PAGE_SIZE + 1}–
+                        {safePage * CHANGES_PAGE_SIZE + visible.length} из{" "}
+                        {shown.length}
+                      </span>
+                      <div>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Предыдущая страница"
+                          disabled={!safePage}
+                          onClick={() => setPage(safePage - 1)}
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <span>
+                          стр. {safePage + 1} из {pages}
+                        </span>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Следующая страница"
+                          disabled={safePage + 1 >= pages}
+                          onClick={() => setPage(safePage + 1)}
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -1341,6 +1409,7 @@ export default function DatedSchedule({
                                 setDay(a.start);
                                 setTab("day");
                                 setMode("teacher");
+                                setPicked(true);
                                 setSelected(a.teacherId);
                                 reset();
                               }}
