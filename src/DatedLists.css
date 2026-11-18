@@ -233,6 +233,7 @@
     padding: 0 8px;
   }
   .dl-table.dl-totals.data-table td.dl-text,
+  .dl-table.dl-totals.data-table thead th.dl-text,
   .dl-table.dl-totals.data-table tfoot th.dl-cell {
     position: sticky;
     left: 0;
@@ -241,11 +242,18 @@
     background: var(--surface);
     box-shadow: 1px 0 0 var(--line);
   }
+  .dl-table.dl-totals.data-table thead th.dl-text,
   .dl-table.dl-totals.data-table tfoot th.dl-cell {
     background: var(--surface-alt);
   }
+  /* The breakdown wraps inside the width of the figures and adds nothing to the table's own width. */
   .dl-table.dl-totals.data-table tr.dl-more td.dl-cell {
     position: static;
     padding-left: 12px;
+    contain: inline-size;
+  }
+  .dl-table.dl-totals.data-table tr.dl-more span {
+    display: block;
+    margin-right: 0;
   }
 }

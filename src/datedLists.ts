@@ -122,6 +122,15 @@ export interface ChangeRowView {
   labels: { open: string; edit: string; remove: string };
 }
 
+/** Names the app itself gives to records: they say nothing the type does not. */
+const GENERATED_NAMES = new Set<string>([
+  ...Object.values(CHANGE_TYPES),
+  "Замена",
+  "Замена / перенос",
+  "Отмена урока",
+  "Дополнительный урок",
+]);
+
 export const LESSON_UNKNOWN = "Занятие не определено";
 
 export function changeRow(c: DatedLesson, names: ChangeNames): ChangeRowView {
@@ -144,7 +153,8 @@ export function changeRow(c: DatedLesson, names: ChangeNames): ChangeRowView {
         .filter(Boolean)
         .join(" · ")
     : LESSON_UNKNOWN;
-  const name = c.name.trim() === typeText ? "" : c.name.trim();
+  const raw = c.name.trim();
+  const name = GENERATED_NAMES.has(raw) || raw === typeText ? "" : raw;
   const sourceDate =
     c.sourceDate && c.sourceDate !== c.onDate ? c.sourceDate : null;
   const who = `${dateNumeric(c.onDate)}, ${resolved ? lesson : typeText}`;

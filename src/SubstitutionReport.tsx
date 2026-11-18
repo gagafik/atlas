@@ -227,7 +227,7 @@ export default function SubstitutionReport({
             </caption>
             <thead>
               <tr>
-                <th scope="col" className="dl-cell">
+                <th scope="col" className="dl-cell dl-text">
                   Учитель
                 </th>
                 {REPORT_COLUMNS.map((c) => (

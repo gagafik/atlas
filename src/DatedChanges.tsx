@@ -11,7 +11,6 @@ import {
   changeTypeOptions,
   clampChangePage,
   dateShort,
-  dateNumeric,
   filterChanges,
   wordForm,
   type ChangeNames,
@@ -57,9 +56,16 @@ export default function DatedChanges({
     () => changeRows(s.datedLessons || [], names),
     [s.datedLessons, names],
   );
-  const shown = useMemo(() => filterChanges(all, filters), [all, filters]);
   const columns = changeColumns(all.map((r) => r.view));
   const types = changeTypeOptions(all.map((r) => r.view));
+  // A type that no record has any more cannot stay selected.
+  const effective: ChangeFilters = types.some((t) => t.type === filters.type)
+    ? filters
+    : { ...filters, type: "" };
+  const shown = useMemo(
+    () => filterChanges(all, effective),
+    [all, effective.search, effective.type],
+  );
   const safePage = clampChangePage(page, shown.length);
   const pages = changePageCount(shown.length);
   const visible = changePage(shown, safePage);
@@ -87,7 +93,7 @@ export default function DatedChanges({
         <label className="field dl-type">
           <span>Тип</span>
           <select
-            value={filters.type}
+            value={effective.type}
             onChange={(e) => set({ type: e.target.value as ChangeType | "" })}
           >
             <option value="">Все типы</option>
@@ -140,7 +146,7 @@ export default function DatedChanges({
                   </td>
                   {columns.source && (
                     <td className="dl-cell dl-fit">
-                      {v.sourceDate && dateNumeric(v.sourceDate)}
+                      {v.sourceDate && dateShort(v.sourceDate)}
                     </td>
                   )}
                   <td className="dl-cell dl-act">
@@ -181,7 +187,7 @@ export default function DatedChanges({
       ) : (
         <div className="dl-none">
           <h3>По этим условиям ничего не найдено</h3>
-          {changeFiltersActive(filters) && (
+          {changeFiltersActive(effective) && (
             <button
               type="button"
               className="dd-btn"

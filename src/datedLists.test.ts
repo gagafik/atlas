@@ -113,6 +113,20 @@ describe("change rows", () => {
       "Болезнь учителя",
     );
   });
+  it("names the app generates itself are hidden, whatever the type", () => {
+    for (const name of [
+      "Замена / перенос",
+      "Отмена урока",
+      "Дополнительный урок",
+    ])
+      expect(changeRow(change({ name }), names).name).toBe("");
+    const v = changeRow(
+      change({ name: "Замена", changeType: "self_study" }),
+      names,
+    );
+    expect(v.name).toBe("");
+    expect(v.typeText).toBe("Самостоятельная работа");
+  });
   it("a source date shows only when it differs, and the column follows", () => {
     const same = changeRow(change({ sourceDate: "2026-11-02" }), names);
     const moved = changeRow(
