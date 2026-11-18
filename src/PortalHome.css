@@ -73,8 +73,9 @@
   white-space: nowrap;
   font-size: 12px;
 }
+/* A lesson that goes by the timetable carries no label: only a change or a cancellation is marked. */
 .th-planned .th-state {
-  color: var(--text-muted);
+  display: none;
 }
 .th-changed .th-state,
 .th-cancelled .th-state {
@@ -113,6 +114,10 @@
   .th-columns > .start-feed {
     margin-top: 0;
   }
+  /* The shared .start-feed rule spans every column of the administrator's start grid; here the feed is the second column. */
+  .th-columns > .start-feed {
+    grid-column: auto;
+  }
 }
 @container th-home (max-width: 600px) {
   .th-lesson {
@@ -130,5 +135,15 @@
   }
   .th-text {
     grid-area: text;
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+  /* On a phone the teacher and the room are not cut: they always stand under the subject, so every lesson reads the same. */
+  .th-text b {
+    max-width: 100%;
+  }
+  .th-details {
+    flex-basis: 100%;
+    white-space: normal;
   }
 }
