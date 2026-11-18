@@ -41,13 +41,16 @@ body:has(dialog.lj-dialog[open]) {
   flex: none;
   gap: 4px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
-  border-bottom: 1px solid var(--line);
+  /* room for the focus ring, which the scroller would otherwise clip */
+  padding: 5px 5px 0;
+  margin: -5px -5px 0;
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 .sf-dialog.lj-dialog .lj-tabs button {
   flex: none;
   white-space: nowrap;
-  margin-bottom: -1px;
   border: 1px solid transparent;
   border-bottom: 0;
   border-radius: var(--radius) var(--radius) 0 0;
