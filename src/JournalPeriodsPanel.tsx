@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { dateNumeric, dateShort, periodText } from "./datedLists";
 import CategoryBadge from "./CategoryBadge";
 import { categoryOf, useAssessmentCategories } from "./assessmentCategories";
 import {
@@ -317,7 +318,7 @@ export default function JournalPeriodsPanel({
                     </option>
                     {options.items.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} · {p.start}–{p.end} ·{" "}
+                        {p.name} · {periodText(p.start, p.end)} ·{" "}
                         {p.status === "closed" ? "Закрыт" : "Открыт"}
                       </option>
                     ))}
@@ -343,7 +344,7 @@ export default function JournalPeriodsPanel({
               {selected && (
                 <p>
                   <strong>{selected.name}</strong> · {kinds[selected.kind]} ·{" "}
-                  {selected.start}–{selected.end} ·{" "}
+                  {dateNumeric(selected.start)} — {dateNumeric(selected.end)} ·{" "}
                   {selected.status === "closed" ? "Закрыт" : "Открыт"}
                 </p>
               )}
@@ -597,8 +598,8 @@ export default function JournalPeriodsPanel({
                       {lessons.map((l) => (
                         <article key={l.lessonKey}>
                           <p>
-                            {l.date} · {l.start} · {l.subject} · {l.group} ·{" "}
-                            {l.teachers}
+                            {dateShort(l.date)} · {l.start} · {l.subject} ·{" "}
+                            {l.group} · {l.teachers}
                           </p>
                           <button
                             disabled={busy}
