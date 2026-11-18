@@ -1,0 +1,275 @@
+/* Login journal: the dialog is a column, only the table area scrolls. Safety.css stays untouched. */
+html:has(dialog.lj-dialog[open]),
+body:has(dialog.lj-dialog[open]) {
+  overflow: hidden;
+}
+.sf-dialog.lj-dialog {
+  height: min(860px, 90dvh);
+  max-height: 90dvh;
+  box-sizing: border-box;
+  padding: 16px 20px;
+  overflow: hidden;
+}
+.sf-dialog.lj-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.lj-head {
+  align-items: center;
+  flex: none;
+}
+.sf-dialog .lj-head h2 {
+  margin: 0;
+}
+.lj-about {
+  flex: none;
+  margin: 4px 0 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.lj-about summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.sf-dialog .lj-about p {
+  margin: 6px 0 0;
+}
+
+/* Tabs: the pattern of the final grades screen, kept in one line. */
+.lj-tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  /* room for the focus ring, which the scroller would otherwise clip */
+  padding: 5px 5px 0;
+  margin: -5px -5px 0;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+.sf-dialog.lj-dialog .lj-tabs button {
+  flex: none;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: none;
+  color: var(--text-muted);
+  font-weight: var(--weight-semibold);
+}
+/* The strip scrolls, so a ring outside the button would lose its lower edge: draw it inside. */
+.sf-dialog.lj-dialog .lj-tabs button:focus-visible {
+  outline-offset: -3px;
+}
+.sf-dialog.lj-dialog .lj-tabs button[aria-selected="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: inset 0 -3px 0 var(--accent-strong);
+}
+
+.lj-filters {
+  display: flex;
+  flex: none;
+  align-items: end;
+  gap: 12px;
+  margin: 12px 0;
+}
+.lj-filters label {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.lj-filters label select {
+  text-overflow: ellipsis;
+}
+.lj-csv {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 40px;
+  margin-left: auto;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.lj-error {
+  flex: none;
+  margin: 0 0 8px;
+}
+
+/* The only scrolling part. */
+.lj-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.lj-state {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-muted);
+}
+.lj-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+}
+.lj-table th,
+.lj-table td {
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--line);
+}
+.lj-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-bottom-color: var(--line-strong);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+}
+.lj-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* Every column is as wide as its longest value (fonts differ between browsers, so no fixed widths);
+   the account takes the rest and is the only cell that is cut: the name stands first, a long login goes. */
+.lj-table .lj-account {
+  width: 100%;
+  max-width: 0;
+}
+.lj-time,
+.lj-net {
+  font-variant-numeric: tabular-nums;
+}
+.lj-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.lj-badge.lj-bad {
+  border-color: var(--danger);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-weight: var(--weight-semibold);
+}
+.lj-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  margin-top: 10px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.lj-foot button {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .sf-dialog.lj-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    padding: 12px;
+    border: 0;
+    border-radius: 0;
+  }
+  .lj-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .lj-csv {
+    grid-column: 1 / -1;
+    justify-content: center;
+    margin-left: 0;
+  }
+}
+/* Below 1040 px six columns do not fit beside a readable name: a sign-in becomes a block of three lines. */
+@media (max-width: 1040px) {
+  .lj-table,
+  .lj-table tbody {
+    display: block;
+  }
+  .lj-table thead {
+    display: none;
+  }
+  .lj-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 10px;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .lj-table td,
+  .lj-table .lj-account,
+  .lj-table .lj-time,
+  .lj-table .lj-result,
+  .lj-table .lj-role,
+  .lj-table .lj-net,
+  .lj-table .lj-browser {
+    display: block;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    border: 0;
+    line-height: 1.45;
+  }
+  .lj-table .lj-time {
+    grid-row: 1;
+    grid-column: 1;
+  }
+  .lj-table .lj-result {
+    grid-row: 1;
+    grid-column: 2;
+  }
+  .lj-table .lj-account {
+    grid-row: 2;
+    grid-column: 1;
+  }
+  .lj-table .lj-role {
+    grid-row: 2;
+    grid-column: 2;
+    color: var(--text-muted);
+  }
+  .lj-table .lj-net {
+    grid-row: 3;
+    grid-column: 1;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .lj-table .lj-browser {
+    grid-row: 3;
+    grid-column: 2;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+}

@@ -133,3 +133,84 @@ def test_upgrade_blanks_typed_names_in_old_failed_sign_ins(client):
     listed(client)
     details={e['detail'] for e in client.get('/api/access/audit').json() if e['action']=='account.login_failed'}
     assert details=={'','admin'}
+
+
+def kinds_school(client):
+    """One successful sign-in per role, plus a failed one for the teacher and one for a login nobody has."""
+    enable(client)
+    for role in ['teacher','student','parent','editor','staff']:create(client,role)
+    create(client,'viewer',grants=[dict(workspace='demo',view='teacher',entityIds=['t2'])])
+    for role in ['teacher','student','parent','editor','staff','viewer']:assert attempt(remote(),role)==200
+    assert attempt(remote(),'admin')==200
+    assert attempt(remote(),'teacher',WRONG)==401
+    assert attempt(remote(),'ghost')==401
+
+
+@pytest.mark.parametrize('kind,expected',[
+    ('',['','admin','editor','parent','staff','student','teacher','teacher','viewer']),
+    ('teacher',['teacher','teacher']),
+    ('student',['student']),
+    ('parent',['parent']),
+    ('staff',['admin','editor','staff','viewer']),
+    ('unknown',['']),
+])
+def test_kind_returns_exactly_the_rows_of_that_kind(client,kind,expected):
+    kinds_school(client)
+    assert sorted(i['accountLogin'] or '' for i in listed(client,kind=kind)['items'])==expected
+    assert sorted(r[3] for r in exported(client,kind=kind))==expected
+
+
+def test_kind_unknown_is_the_same_as_the_unknown_account(client):
+    kinds_school(client)
+    assert listed(client,kind='unknown')['items']==listed(client,account='unknown')['items']
+
+
+def test_kind_combines_with_outcome_and_account(client):
+    kinds_school(client)
+    assert [i['outcome'] for i in listed(client,kind='teacher',outcome='failed')['items']]==['failed']
+    assert [r[1] for r in exported(client,kind='teacher',outcome='success')]==['Вход']
+    assert listed(client,kind='student',outcome='failed')['items']==[]
+    teacher=next(u for u in client.get('/api/access/users').json() if u['login']=='teacher')
+    assert len(listed(client,kind='teacher',account=teacher['id'])['items'])==2
+    assert listed(client,kind='parent',account=teacher['id'])['items']==[]
+
+
+def test_kind_pages_with_before(client):
+    kinds_school(client)
+    seen=[];before=None
+    for _ in range(10):
+        page=listed(client,kind='staff',limit=1,**(dict(before=before) if before else {}))
+        assert len(page['items'])==1
+        seen+=[i['accountLogin'] for i in page['items']]
+        before=page['nextBefore']
+        if not before:break
+    assert sorted(seen)==['admin','editor','staff','viewer']
+
+
+def test_kind_combines_with_the_period(client):
+    enable(client);create(client,'teacher')
+    CLOCK['at']=datetime(2026,10,14,6,0,tzinfo=timezone.utc)
+    assert attempt(remote(),'teacher')==200
+    CLOCK['at']=datetime(2026,10,16,6,0,tzinfo=timezone.utc)
+    assert attempt(remote(),'teacher',WRONG)==401
+    period=dict(kind='teacher',start='2026-10-16',end='2026-10-16')
+    assert [i['outcome'] for i in listed(client,**period)['items']]==['failed']
+    assert [r[1] for r in exported(client,**period)]==['Неудачная попытка']
+    earlier=dict(kind='teacher',start='2026-10-14',end='2026-10-14')
+    assert [i['outcome'] for i in listed(client,**earlier)['items']]==['success']
+    assert [r[1] for r in exported(client,**earlier)]==['Вход']
+
+
+@pytest.mark.parametrize('path',['/api/access/logins','/api/access/logins/export'])
+def test_unknown_kind_value_is_refused(client,path):
+    enable(client)
+    for bad in ['admin','Teacher','everyone']:
+        assert client.get(path,params=dict(kind=bad)).status_code==422
+
+
+@pytest.mark.parametrize('role',['editor','teacher','staff','parent','student'])
+def test_kind_does_not_open_the_journal_to_others(client,role):
+    enable(client);create(client,role)
+    other=signed(role)
+    for path in ['/api/access/logins','/api/access/logins/export']:
+        assert other.get(path,params=dict(kind=role)).status_code==403

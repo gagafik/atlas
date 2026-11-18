@@ -18,6 +18,8 @@ ZONE=ZoneInfo('Asia/Qyzylorda')
 MARKER='login_journal_created'
 BROWSERS=[('YaBrowser/','yandex'),('Edg/','edge'),('EdgA/','edge'),('EdgiOS/','edge'),('OPR/','opera'),('Opera','opera'),('Firefox/','firefox'),('FxiOS/','firefox'),
           ('Chrome/','chrome'),('CriOS/','chrome'),('Chromium/','chrome'),('Safari/','safari')]
+STAFF_ROLES=('admin','editor','viewer','staff')
+Kind=Literal['','teacher','student','parent','staff','unknown']
 COLUMNS=['seq','created','outcome','account_id','account_login','account_name','role','address','browser']
 
 
@@ -74,7 +76,7 @@ def register(app,access):
         first=datetime.combine(start,time(),ZONE).astimezone(timezone.utc).replace(microsecond=0) if start else None
         last=datetime.combine(end+timedelta(days=1),time(),ZONE).astimezone(timezone.utc).replace(microsecond=0) if end else None
         return max(low,first) if first else low,last
-    def query(request,outcome,account,start,end,before,limit):
+    def query(request,outcome,account,kind,start,end,before,limit):
         user=request.state.user
         if not user or user['role']!='admin':raise HTTPException(403,'Журнал входов доступен администрации.')
         low,high=bounds(start,end)
@@ -87,17 +89,20 @@ def register(app,access):
         if outcome:where.append('outcome=?');params.append(outcome)
         if account=='unknown':where.append('account_id IS NULL')
         elif account:where.append('account_id=?');params.append(account)
+        if kind=='unknown':where.append('account_id IS NULL')
+        elif kind=='staff':where.append(f"role IN ({','.join('?'*len(STAFF_ROLES))})");params.extend(STAFF_ROLES)
+        elif kind:where.append('role=?');params.append(kind)
         if before is not None:where.append('seq<?');params.append(before)
         with closing(access.read_connect()) as db:
             return db.execute(f"SELECT {','.join(COLUMNS)} FROM login_journal WHERE {' AND '.join(where)} ORDER BY seq DESC LIMIT ?",(*params,limit)).fetchall()
     @app.get('/api/access/logins')
-    def logins(request:Request,outcome:Literal['','success','failed']='',account:str='',start:date|None=None,end:date|None=None,before:int|None=None,limit:int=Query(100,ge=1,le=200)):
-        rows=query(request,outcome,account,start,end,before,limit+1)
+    def logins(request:Request,outcome:Literal['','success','failed']='',account:str='',kind:Kind='',start:date|None=None,end:date|None=None,before:int|None=None,limit:int=Query(100,ge=1,le=200)):
+        rows=query(request,outcome,account,kind,start,end,before,limit+1)
         items=[dict(seq=r[0],created=r[1],outcome=r[2],accountId=r[3],accountLogin=r[4],accountName=r[5],role=r[6],address=r[7],browser=r[8]) for r in rows[:limit]]
         return dict(items=items,nextBefore=items[-1]['seq'] if len(rows)>limit else None,retentionDays=RETENTION_DAYS)
     @app.get('/api/access/logins/export')
-    def export(request:Request,outcome:Literal['','success','failed']='',account:str='',start:date|None=None,end:date|None=None):
-        rows=query(request,outcome,account,start,end,None,EXPORT_ROWS)
+    def export(request:Request,outcome:Literal['','success','failed']='',account:str='',kind:Kind='',start:date|None=None,end:date|None=None):
+        rows=query(request,outcome,account,kind,start,end,None,EXPORT_ROWS)
         stream=io.StringIO(newline='');writer=csv.writer(stream,delimiter=';')
         writer.writerow(['Время','Результат','Учётная запись','Логин','Роль','Сеть','Браузер'])
         for r in rows:
