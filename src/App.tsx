@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { schoolYearText, weekShape } from "./settingsSummary";
 import type { FormEvent, ReactNode } from "react";
 import { TeachingLoadList } from "./TeachingLoadList";
 import StudentSchedule from "./StudentSchedule";
@@ -1523,6 +1524,7 @@ export default function App({
               "curriculum",
               "messages",
               "school-year",
+              "settings",
             ].includes(page) && (
               <div className="cycle-switcher">
                 <label className="field">
@@ -2720,28 +2722,40 @@ export default function App({
                 <section className="settings-card">
                   <h2>Параметры школы</h2>
                   <dl>
-                    <dt>Название</dt>
-                    <dd>{s.settings.name}</dd>
-                    <dt>Учебный год</dt>
-                    <dd>
-                      {s.settings.yearStart} — {s.settings.yearEnd}
-                    </dd>
-                    <dt>Учебная неделя</dt>
-                    <dd>
-                      {s.settings.days.length} дней · {s.settings.shifts} смена
-                    </dd>
-                    <dt>Хранение</dt>
-                    <dd>Локальная база на вашем компьютере</dd>
-                    <dt>Версия данных</dt>
-                    <dd>{s.revision}</dd>
+                    <div>
+                      <dt>Название</dt>
+                      <dd>{s.settings.name}</dd>
+                    </div>
+                    <div>
+                      <dt>Учебный год</dt>
+                      <dd>
+                        {schoolYearText(
+                          s.settings.yearStart,
+                          s.settings.yearEnd,
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Учебная неделя</dt>
+                      <dd>
+                        {weekShape(s.settings.days.length, s.settings.shifts)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Хранение</dt>
+                      <dd>Локальная база на вашем компьютере</dd>
+                    </div>
+                    <div>
+                      <dt>Версия данных</dt>
+                      <dd>{s.revision}</dd>
+                    </div>
                   </dl>
                 </section>
                 <section className="settings-card">
                   <h2>Резервные копии</h2>
                   <p>
-                    JSON содержит все справочники, группы, составы и расписание.
-                    Перед каждым изменением сохраняется предыдущая версия (до
-                    30).
+                    JSON: справочники, группы, составы и расписание. Перед
+                    каждым изменением сохраняется предыдущая версия (до 30).
                   </p>
                   <div className="button-row">
                     <button
@@ -2795,8 +2809,8 @@ export default function App({
                   workspace={workspace}
                   onState={receiveState}
                 />
-                <section className="settings-card full-span">
-                  <h2>Возможности Атласа</h2>
+                <details className="settings-more">
+                  <summary>Что умеет Атлас</summary>
                   <p>
                     Редактирование недельного расписания, справочников и
                     нагрузки, фиксация занятий, проверка пересечений по
@@ -2811,7 +2825,7 @@ export default function App({
                     учебный журнал. На других устройствах нужен доступ к серверу
                     школы с HTTPS; локальный адрес работает на этом компьютере.
                   </p>
-                </section>
+                </details>
               </div>
             )}
             <footer className="page-footer">
