@@ -111,7 +111,7 @@ export function filtersActive(f: LoadFilters) {
   return !!(f.classId || f.teacherId || f.subjectId || f.state !== "all");
 }
 
-/** The search of the page: group, subject and teacher names. */
+/** The search of the page: group, subject and teacher names and the synchronous block. */
 function matchesSearch(r: LoadRow, search: string) {
   if (!search) return true;
   const q = search.toLowerCase();
@@ -119,6 +119,7 @@ function matchesSearch(r: LoadRow, search: string) {
     r.groupName.toLowerCase().includes(q) ||
     r.subjectName.toLowerCase().includes(q) ||
     r.teacherText.toLowerCase().includes(q) ||
+    r.block.toLowerCase().includes(q) ||
     `${r.groupName} · ${r.subjectName}`.toLowerCase().includes(q)
   );
 }
@@ -145,7 +146,8 @@ export function totals(rows: LoadRow[]) {
   return {
     count: rows.length,
     hours: rows.reduce((n, r) => n + r.hours, 0),
-    placed: rows.reduce((n, r) => n + r.placed, 0),
+    // Only lessons that fill a required hour count: extra lessons of one row must not cover missing ones of another.
+    placed: rows.reduce((n, r) => n + Math.min(r.placed, r.hours), 0),
   };
 }
 
@@ -196,7 +198,7 @@ export function filterOptions(s: LoadSchool) {
     [...items].sort((a, b) => byText(a.name, b.name));
   return {
     classes: sortedClasses(s.classes),
-    teachers: byName(s.teachers),
+    teachers: [{ id: NO_TEACHER, name: "Без учителя" }, ...byName(s.teachers)],
     subjects: byName(s.subjects),
   };
 }

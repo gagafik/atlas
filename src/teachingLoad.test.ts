@@ -153,13 +153,20 @@ describe("filters", () => {
     expect(withFilter({}, "10б")).toEqual(["w3", "w5"]);
     expect(withFilter({}, "нет такого")).toEqual([]);
   });
+
+  it("also finds the synchronous block", () => {
+    expect(withFilter({}, "б2")).toEqual(["w4"]);
+  });
 });
 
 describe("totals", () => {
   it("counts the hours of the active cycle and the placed lessons of the shown rows", () => {
-    expect(totals(rows)).toEqual({ count: 6, hours: 15, placed: 9 });
+    expect(totals(rows)).toEqual({ count: 6, hours: 15, placed: 8 });
     const shown = filterRows(rows, { ...NO_FILTERS, classId: "c5b" }, "");
-    expect(totals(shown)).toEqual({ count: 3, hours: 6, placed: 6 });
+    expect(totals(shown)).toEqual({ count: 3, hours: 6, placed: 5 });
+    // An over-placed row (w4: 5 of 4) does not cover an under-placed one (w2: 1 of 2).
+    const two = shown.filter((r) => r.id !== "w6");
+    expect(totals(two).placed).toBeLessThan(totals(two).hours);
     expect(totals([])).toEqual({ count: 0, hours: 0, placed: 0 });
   });
 
@@ -249,6 +256,7 @@ describe("options", () => {
       "10Б",
     ]);
     expect(options.teachers.map((t) => t.name)).toEqual([
+      "Без учителя",
       "Анна Белова",
       "Яков Орлов",
     ]);

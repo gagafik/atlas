@@ -46,6 +46,9 @@
   border: 1px solid var(--border-control);
   border-radius: var(--radius);
 }
+.tl-sortfield {
+  display: none;
+}
 .tl-summary {
   margin: 0;
   font-size: 12px;
@@ -65,12 +68,12 @@
 .tl-table th,
 .tl-table td {
   padding: 0 12px;
-  height: 40px;
+  height: 38px;
   vertical-align: middle;
   white-space: nowrap;
 }
 .tl-table th {
-  height: 38px;
+  height: 36px;
   font-size: 11px;
 }
 .tl-table td.tl-act,
@@ -164,6 +167,9 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+  .tl-sortfield {
+    display: grid;
+  }
   .tl-reset {
     grid-column: 1 / -1;
   }
@@ -188,6 +194,14 @@
   }
   .tl-table tr:last-child {
     border-bottom: 0;
+  }
+  .tl-table .tl-group,
+  .tl-table .tl-teacher {
+    max-width: none;
+    min-width: 0;
+  }
+  .tl-table td.tl-act {
+    width: auto;
   }
   .tl-table td {
     display: block;

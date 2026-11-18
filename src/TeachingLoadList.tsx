@@ -1,9 +1,8 @@
 import { ChevronLeft, ChevronRight, Pencil } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   DEFAULT_SORT,
   NO_FILTERS,
-  NO_TEACHER,
   buildRows,
   clampPage,
   filterOptions,
@@ -26,7 +25,7 @@ import "./TeachingLoad.css";
 const STATES: { value: LoadStateFilter; label: string }[] = [
   { value: "all", label: "Все" },
   { value: "unplaced", label: "Не расставлено" },
-  { value: "noTeacher", label: "Без учителя" },
+  { value: "noTeacher", label: "Учитель не назначен" },
   { value: "inactive", label: "Не ведётся в этом цикле" },
 ];
 
@@ -74,6 +73,11 @@ export function TeachingLoadList({
   const safePage = clampPage(page, shown.length);
   const visible = pageRows(shown, safePage);
   const pages = pageCount(shown.length);
+  // Keep the stored page equal to the shown one, so rows coming back do not move the list.
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+  const firstFilter = useRef<HTMLSelectElement>(null);
 
   function setFilter(patch: Partial<LoadFilters>) {
     setFilters((f) => ({ ...f, ...patch }));
@@ -82,6 +86,7 @@ export function TeachingLoadList({
   function reset() {
     setFilters(NO_FILTERS);
     setPage(0);
+    firstFilter.current?.focus();
   }
   function sortBy(key: SortKey) {
     setSort((s) => nextSort(s, key));
@@ -96,6 +101,7 @@ export function TeachingLoadList({
         <label className="tl-field">
           <span>Класс</span>
           <select
+            ref={firstFilter}
             value={filters.classId}
             onChange={(e) => setFilter({ classId: e.target.value })}
           >
@@ -114,7 +120,6 @@ export function TeachingLoadList({
             onChange={(e) => setFilter({ teacherId: e.target.value })}
           >
             <option value="">Все учителя</option>
-            <option value={NO_TEACHER}>Без учителя</option>
             {options.teachers.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
@@ -151,6 +156,25 @@ export function TeachingLoadList({
             ))}
           </select>
         </label>
+        <label className="tl-field tl-sortfield">
+          <span>Сортировка</span>
+          <select
+            value={`${sort.key}:${sort.dir}`}
+            onChange={(e) => {
+              const [key, dir] = e.target.value.split(":");
+              setSort({ key: key as SortKey, dir: dir as SortSpec["dir"] });
+              setPage(0);
+            }}
+          >
+            {COLUMNS.flatMap((c) =>
+              (["asc", "desc"] as const).map((dir) => (
+                <option key={`${c.key}:${dir}`} value={`${c.key}:${dir}`}>
+                  {c.label}, {dir === "asc" ? "по возрастанию" : "по убыванию"}
+                </option>
+              )),
+            )}
+          </select>
+        </label>
         {filtersActive(filters) && (
           <button type="button" className="tl-reset" onClick={reset}>
             Сбросить
@@ -176,7 +200,7 @@ export function TeachingLoadList({
                           ? sort.dir === "asc"
                             ? "ascending"
                             : "descending"
-                          : "none"
+                          : undefined
                       }
                     >
                       <button
@@ -217,11 +241,12 @@ export function TeachingLoadList({
                       <td className="tl-subject" title={r.subjectName}>
                         <span className="badge neutral">{r.subjectName}</span>
                       </td>
-                      <td
-                        className={`tl-teacher${r.teacherMissing ? " amber-text" : ""}`}
-                        title={r.teacherText}
-                      >
-                        {r.teacherText}
+                      <td className="tl-teacher" title={r.teacherText}>
+                        {r.teacherMissing ? (
+                          <span className="amber-text">{r.teacherText}</span>
+                        ) : (
+                          r.teacherText
+                        )}
                       </td>
                       <td className="tl-hours">
                         <strong>{r.active ? r.hours : "Не ведётся"}</strong>
