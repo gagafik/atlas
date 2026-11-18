@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "./api";
 import { download } from "./utils";
 import type { State, SubstitutionWeights } from "./types";
 import {
-  CHANGE_TYPES,
   DEFAULT_WEIGHTS,
   WEIGHT_LABELS,
   reportCsv,
   type ReportTeacher,
   type SubstitutionReportData,
 } from "./substitutions";
+import { REPORT_COLUMNS, breakdownLines } from "./datedLists";
+import "./DatedDay.css";
+import "./DatedLists.css";
 
 const currentMonth = (s: State) => {
   const today = new Date().toLocaleDateString("sv-SE").slice(0, 7);
@@ -18,53 +21,6 @@ const currentMonth = (s: State) => {
     ? first
     : today;
 };
-function Figures({ t }: { t: ReportTeacher }) {
-  const types = (["substitution", "self_study", "move"] as const)
-    .filter((k) => t.byType[k])
-    .map((k) => `${CHANGE_TYPES[k]}: ${t.byType[k]}`)
-    .join(", ");
-  return (
-    <dl className="report-figures">
-      <div>
-        <dt>По расписанию</dt>
-        <dd>{t.planned}</dd>
-      </div>
-      <div>
-        <dt>Проведено</dt>
-        <dd>{t.held}</dd>
-        <small>
-          свои {t.own}, за других {t.substitutions}, дополнительные {t.extra}
-        </small>
-      </div>
-      <div>
-        <dt>Замены за других</dt>
-        <dd>{t.substitutions}</dd>
-        {types && <small>{types}</small>}
-      </div>
-      <div>
-        <dt>Присоединено</dt>
-        <dd>{t.merged ?? 0}</dd>
-        <small>объединение групп, часов не добавляет</small>
-      </div>
-      <div>
-        <dt>Пропущено</dt>
-        <dd>{t.missed}</dd>
-        <small>
-          при отсутствии {t.missedAbsent}, без замены {t.uncovered ?? 0},
-          отменено {t.cancelled}
-        </small>
-      </div>
-      <div>
-        <dt>Перенесено</dt>
-        <dd>{t.moved}</dd>
-      </div>
-      <div>
-        <dt>Предстоит</dt>
-        <dd>{t.upcoming ?? 0}</dd>
-      </div>
-    </dl>
-  );
-}
 const asDraft = (w: SubstitutionWeights) =>
   Object.fromEntries(Object.entries(w).map(([k, v]) => [k, String(v)]));
 
@@ -87,6 +43,7 @@ export default function SubstitutionReport({
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   useEffect(
     () => setDraft(asDraft(s.settings.substitutionWeights ?? DEFAULT_WEIGHTS)),
     [s.revision, s.settings.substitutionWeights],
@@ -148,9 +105,59 @@ export default function SubstitutionReport({
       setBusy(false);
     }
   }
+  // One row of figures, closed to a single line and opened to the breakdowns of the former cards.
+  const figures = (
+    id: string,
+    t: ReportTeacher,
+    name: string,
+    total: boolean,
+  ) => {
+    const toggle = (
+      <button
+        type="button"
+        className="dl-toggle"
+        aria-expanded={!!open[id]}
+        aria-controls={`dl-more-${id}`}
+        title="Показать расшифровку"
+        onClick={() => setOpen({ ...open, [id]: !open[id] })}
+      >
+        {open[id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span>{name}</span>
+      </button>
+    );
+    return (
+      <Fragment key={id}>
+        <tr>
+          {total ? (
+            <th scope="row" className="dl-cell dl-text">
+              {toggle}
+            </th>
+          ) : (
+            <td className="dl-cell dl-text" title={name}>
+              {toggle}
+            </td>
+          )}
+          {REPORT_COLUMNS.map((c) => (
+            <td key={c.key} className="dl-cell dl-num">
+              {c.value(t)}
+            </td>
+          ))}
+        </tr>
+        {open[id] && (
+          <tr className="dl-more" id={`dl-more-${id}`}>
+            <td className="dl-cell" colSpan={REPORT_COLUMNS.length + 1}>
+              {breakdownLines(t).map((l) => (
+                <span key={l}>{l}</span>
+              ))}
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  };
   return (
-    <div className="dated-records substitution-report">
-      <div className="dated-toolbar">
+    <div className="dl substitution-report">
+      <div className="dd-controls">
         <label className="field">
           <span>Месяц</span>
           <input
@@ -176,6 +183,8 @@ export default function SubstitutionReport({
           </select>
         </label>
         <button
+          type="button"
+          className="dd-btn"
           disabled={!report || !report.teachers.length}
           onClick={() =>
             report &&
@@ -194,78 +203,96 @@ export default function SubstitutionReport({
           {error}
         </p>
       )}
-      <p className="muted">
-        Проведено — только завершившиеся уроки по расписанию того дня, с
-        заменами и отменами; заполнение журнала не учитывается. Часы с
-        подтверждением журналом — в отчёте «Нагрузка учителей». Перенесённый
-        урок считается в дату проведения, группа, присоединённая к другому
-        уроку, часов не добавляет. Урок учителя с внесённым отсутствием и без
-        замены считается «Без замены» и «Пропущено» сразу, в том числе на
-        будущие даты.
-      </p>
-      {loading && <p role="status">Считаю итоги…</p>}
-      {report && !loading && (
-        <>
-          {!report.teachers.length && <p>За месяц нет уроков и замен.</p>}
-          {report.teachers.map((t) => (
-            <article key={t.teacherId}>
-              <div>
-                <strong>{t.name}</strong>
-                <Figures t={t} />
-              </div>
-            </article>
-          ))}
-          {report.teachers.length > 1 && (
-            <article>
-              <div>
-                <strong>Итого</strong>
-                <Figures t={report.totals} />
-              </div>
-            </article>
-          )}
-        </>
-      )}
-      <form
-        className="dated-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void saveWeights();
-        }}
-      >
-        <h3>Настройка подбора замен</h3>
-        <p className="info-line">
-          Баллы за каждый критерий при подборе заменяющего. Свободное время
-          проверяется всегда и баллами не заменяется. Ноль отключает критерий.
+      <details className="dd-help">
+        <summary>Как считаются итоги</summary>
+        <p>
+          Проведено — только завершившиеся уроки по расписанию того дня, с
+          заменами и отменами; заполнение журнала не учитывается. Часы с
+          подтверждением журналом — в отчёте «Нагрузка учителей». Перенесённый
+          урок считается в дату проведения, группа, присоединённая к другому
+          уроку, часов не добавляет. Урок учителя с внесённым отсутствием и без
+          замены считается «Без замены» и «Пропущено» сразу, в том числе на
+          будущие даты.
         </p>
-        <div className="dated-fields">
-          {WEIGHT_LABELS.map(([key, label]) => (
-            <label className="field" key={key}>
-              <span>{label}</span>
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                required
-                value={draft[key] ?? ""}
-                onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
-              />
-            </label>
-          ))}
+      </details>
+      {loading && <p role="status">Считаю итоги…</p>}
+      {report && !loading && !report.teachers.length && (
+        <p>За месяц нет уроков и замен.</p>
+      )}
+      {report && !loading && !!report.teachers.length && (
+        <div className="table-card dl-scroll">
+          <table className="data-table dl-table dl-totals">
+            <caption className="sr-only">
+              Итоги замен за месяц {report.month}
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col" className="dl-cell">
+                  Учитель
+                </th>
+                {REPORT_COLUMNS.map((c) => (
+                  <th key={c.key} scope="col" className="dl-cell dl-num">
+                    <abbr title={c.title}>{c.label}</abbr>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {report.teachers.map((t) =>
+                figures(t.teacherId, t, t.name, false),
+              )}
+            </tbody>
+            {report.teachers.length > 1 && (
+              <tfoot>{figures("totals", report.totals, "Итого", true)}</tfoot>
+            )}
+          </table>
         </div>
-        <div className="modal-actions">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setDraft(asDraft(DEFAULT_WEIGHTS))}
-          >
-            Вернуть стандартные
-          </button>
-          <button className="primary" disabled={busy}>
-            Сохранить веса
-          </button>
-        </div>
-      </form>
+      )}
+      <details className="dl-weights">
+        <summary>Настройка подбора замен</summary>
+        <form
+          className="dated-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveWeights();
+          }}
+        >
+          <p className="info-line">
+            Баллы за каждый критерий при подборе заменяющего. Свободное время
+            проверяется всегда и баллами не заменяется. Ноль отключает критерий.
+          </p>
+          <div className="dated-fields">
+            {WEIGHT_LABELS.map(([key, label]) => (
+              <label className="field" key={key}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  required
+                  value={draft[key] ?? ""}
+                  onChange={(e) =>
+                    setDraft({ ...draft, [key]: e.target.value })
+                  }
+                />
+              </label>
+            ))}
+          </div>
+          <div className="modal-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setDraft(asDraft(DEFAULT_WEIGHTS))}
+            >
+              Вернуть стандартные
+            </button>
+            <button className="primary" disabled={busy}>
+              Сохранить веса
+            </button>
+          </div>
+        </form>
+      </details>
     </div>
   );
 }
