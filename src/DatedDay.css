@@ -114,7 +114,8 @@
   gap: 6px 12px;
 }
 .dd-summary {
-  flex: 1 1 320px;
+  flex: 1 1 200px;
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -181,9 +182,7 @@
   padding: 0 8px;
 }
 .dd-table.data-table td.dd-time,
-.dd-table.data-table td.dd-room,
-.dd-table.data-table th.dd-time,
-.dd-table.data-table th.dd-room {
+.dd-table.data-table th.dd-time {
   width: 1%;
 }
 .dd-table td.dd-time {
@@ -193,19 +192,23 @@
 }
 .dd-table.data-table td.dd-lesson,
 .dd-table.data-table td.dd-teacher,
+.dd-table.data-table td.dd-room,
 .dd-table.data-table td.dd-state {
   max-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .dd-table.data-table th.dd-lesson {
-  width: 40%;
+  width: 34%;
 }
 .dd-table.data-table th.dd-teacher {
-  width: 25%;
+  width: 22%;
+}
+.dd-table.data-table th.dd-room {
+  width: 12%;
 }
 .dd-table.data-table th.dd-state {
-  width: 35%;
+  width: 30%;
 }
 .dd-note-away,
 .dd-reason {

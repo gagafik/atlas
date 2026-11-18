@@ -346,6 +346,7 @@ export default function DatedSchedule({
     setReplaceTeacher(r.teacherIds[0] || "");
   }
   function newLesson() {
+    opener.current = null;
     reset();
     setLesson({
       id: uid(),
@@ -366,6 +367,7 @@ export default function DatedSchedule({
     });
   }
   function newAbsence() {
+    opener.current = null;
     reset();
     setAbsence({
       id: uid(),
@@ -419,6 +421,7 @@ export default function DatedSchedule({
   }
   async function historyAction(action: "undo" | "redo") {
     if (busy) return;
+    opener.current = null;
     setBusy(true);
     setError("");
     try {

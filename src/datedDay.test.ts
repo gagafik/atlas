@@ -48,6 +48,22 @@ describe("what a lesson row offers", () => {
       ),
     ).toEqual(["commitment", "remove"]);
   });
+  it("a row with three buttons shows short texts and keeps the full names", () => {
+    const view = dayRowView(
+      lesson({ status: "changed", changeId: "c1", changeType: "substitution" }),
+      false,
+    );
+    expect(view.actions.map((a) => a.text)).toEqual([
+      "Заменить",
+      "Отменить",
+      "Убрать",
+    ]);
+    expect(view.actions.map((a) => a.label)).toEqual([
+      "Заменить / перенести: Математика · 7А, 08:30",
+      "Отменить урок: Математика · 7А, 08:30",
+      "Убрать изменение: Математика · 7А, 08:30",
+    ]);
+  });
   it("every button name says which lesson it is about", () => {
     const view = dayRowView(lesson(), false);
     expect(view.actions.map((a) => a.label)).toEqual([

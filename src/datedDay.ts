@@ -88,6 +88,14 @@ export const ACTION_TEXT: Record<RowAction, string> = {
   remove: "Убрать изменение",
 };
 
+// With three buttons in a row the visible texts are shortened so the actions column does not squeeze the other cells; the accessible name stays full.
+const SHORT_TEXT: Record<RowAction, string> = {
+  commitment: "Открыть запись",
+  change: "Заменить",
+  cancel: "Отменить",
+  remove: "Убрать",
+};
+
 export interface DayRowView {
   time: string;
   lesson: string;
@@ -103,6 +111,7 @@ export interface DayRowView {
 
 export function dayRowView(r: DayRowFacts, excluded: boolean): DayRowView {
   const lesson = `${r.subject} · ${r.group}`;
+  const acts = rowActions(r);
   return {
     time: `${r.start}–${r.end}`,
     lesson,
@@ -113,9 +122,9 @@ export function dayRowView(r: DayRowFacts, excluded: boolean): DayRowView {
     state: stateText(r, excluded),
     tone: stateTone(r, excluded),
     struck: excluded || r.status === "cancelled",
-    actions: rowActions(r).map((action) => ({
+    actions: acts.map((action) => ({
       action,
-      text: ACTION_TEXT[action],
+      text: acts.length >= 3 ? SHORT_TEXT[action] : ACTION_TEXT[action],
       label: `${ACTION_TEXT[action]}: ${lesson}, ${r.start}`,
     })),
   };
