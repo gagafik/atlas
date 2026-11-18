@@ -3,6 +3,7 @@ import {
   DAY_TABS,
   dateInWords,
   dayRowView,
+  reasonText,
   nextDayTab,
   rowActions,
   stateTone,
@@ -157,6 +158,17 @@ describe("the date in words", () => {
     expect(dateInWords("")).toBe("");
     expect(dateInWords("2026-02-30")).toBe("2026-02-30");
     expect(dateInWords("вчера")).toBe("вчера");
+  });
+});
+
+describe("the reasons beside the state", () => {
+  it("leaves out a reason that only repeats the state and keeps the others", () => {
+    expect(reasonText(["Замена"], "Замена")).toBe("");
+    expect(reasonText(["замена ", "Учитель на курсах"], "Замена")).toBe(
+      "Учитель на курсах",
+    );
+    expect(reasonText(["Отмена урока"], "Отмена")).toBe("Отмена урока");
+    expect(reasonText([], "По расписанию")).toBe("");
   });
 });
 

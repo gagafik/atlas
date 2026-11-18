@@ -22,6 +22,7 @@ import {
   DAY_TABS,
   dateInWords,
   dayRowView,
+  reasonText,
   nextDayTab,
   stateText,
   type DayTabId,
@@ -1183,7 +1184,7 @@ export default function DatedSchedule({
                         const away = r.excludedClassIds.length
                           ? `Не посещают: ${r.excludedClassIds.map((id) => named(s.classes, id)).join(", ")}`
                           : "";
-                        const reasons = r.reasons.join("; ");
+                        const reasons = reasonText(r.reasons, v.state);
                         return (
                           <tr
                             key={r.id}
