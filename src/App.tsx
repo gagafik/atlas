@@ -2240,7 +2240,11 @@ export default function App({
               "school-year",
             ].includes(page) && (
               <>
-                <div className="list-toolbar">
+                {/* «Учебная нагрузка» keeps its search in its own filter row. */}
+                <div
+                  className="list-toolbar"
+                  style={page === "workloads" ? { display: "none" } : undefined}
+                >
                   {page === "groups" ? (
                     <div className="segmented">
                       <button
@@ -2389,6 +2393,7 @@ export default function App({
                     counts={counts}
                     activeCycle={activeCycle}
                     search={search}
+                    onSearch={setSearch}
                     onEdit={(row) => open("workload", row)}
                     empty={
                       <Empty

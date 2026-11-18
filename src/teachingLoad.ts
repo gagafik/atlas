@@ -5,7 +5,15 @@ import { gradeOf, named, teacherIds, teacherNames } from "./utils";
 // The rules of the «Учебная нагрузка» list: which rows a filter keeps, what the totals of the shown rows are, how the
 // rows are ordered and cut into pages. The screen only draws what these functions return.
 
-export const PAGE_SIZE = 25;
+export const PAGE_SIZE = 20;
+
+/** The Russian word form for a number: 1 назначение, 2 назначения, 5 назначений, 11 назначений, 21 назначение. */
+export function wordForm(n: number, one: string, few: string, many: string) {
+  const tens = Math.abs(n) % 100,
+    units = tens % 10;
+  if (tens >= 11 && tens <= 14) return many;
+  return units === 1 ? one : units >= 2 && units <= 4 ? few : many;
+}
 /** The value of the teacher filter that keeps the assignments without any teacher. */
 export const NO_TEACHER = "__none__";
 
@@ -148,6 +156,8 @@ export function totals(rows: LoadRow[]) {
     hours: rows.reduce((n, r) => n + r.hours, 0),
     // Only lessons that fill a required hour count: extra lessons of one row must not cover missing ones of another.
     placed: rows.reduce((n, r) => n + Math.min(r.placed, r.hours), 0),
+    // Lessons placed beyond the hours of their own row, a row not taught in this cycle included.
+    extra: rows.reduce((n, r) => n + Math.max(0, r.placed - r.hours), 0),
   };
 }
 

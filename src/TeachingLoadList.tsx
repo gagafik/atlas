@@ -13,6 +13,7 @@ import {
   pageRows,
   sortRows,
   totals,
+  wordForm,
   type LoadFilters,
   type LoadSchool,
   type LoadStateFilter,
@@ -44,6 +45,7 @@ export function TeachingLoadList({
   counts,
   activeCycle,
   search,
+  onSearch,
   onEdit,
   empty,
 }: {
@@ -51,6 +53,7 @@ export function TeachingLoadList({
   counts: Record<string, number>;
   activeCycle: string;
   search: string;
+  onSearch: (text: string) => void;
   onEdit: (row: Workload) => void;
   /** Shown when the school has no assignment at all. */
   empty: ReactNode;
@@ -98,6 +101,15 @@ export function TeachingLoadList({
   return (
     <div className="tl">
       <div className="tl-filters">
+        <label className="tl-field tl-search">
+          <span>Поиск</span>
+          <input
+            type="search"
+            placeholder="Группа, предмет, учитель, блок"
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+          />
+        </label>
         <label className="tl-field">
           <span>Класс</span>
           <select
@@ -182,8 +194,11 @@ export function TeachingLoadList({
         )}
       </div>
       <p className="tl-summary" aria-live="polite">
-        {sum.count} назначений · {sum.hours} часов в неделю · в сетке{" "}
-        {sum.placed} из {sum.hours}
+        {sum.count}{" "}
+        {wordForm(sum.count, "назначение", "назначения", "назначений")} ·{" "}
+        {sum.hours} {wordForm(sum.hours, "час", "часа", "часов")} в неделю · в
+        сетке {sum.placed} из {sum.hours}
+        {sum.extra > 0 && ` · лишних в сетке ${sum.extra}`}
       </p>
       <div className="table-card">
         {shown.length ? (
@@ -288,7 +303,10 @@ export function TeachingLoadList({
           </div>
         )}
         <div className="table-footer">
-          <span>{shown.length} записей</span>
+          <span>
+            {shown.length}{" "}
+            {wordForm(shown.length, "запись", "записи", "записей")}
+          </span>
           <div>
             <button
               className="icon-button"

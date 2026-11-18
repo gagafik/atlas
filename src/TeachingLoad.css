@@ -28,8 +28,10 @@
   font-weight: var(--weight-bold);
   color: var(--text-muted);
 }
-.tl-field select {
+.tl-field select,
+.tl-field input {
   width: 100%;
+  box-sizing: border-box;
   min-height: 34px;
   padding: 4px 8px;
   font-size: 13px;
@@ -170,7 +172,8 @@
   .tl-sortfield {
     display: grid;
   }
-  .tl-reset {
+  .tl-reset,
+  .tl-search {
     grid-column: 1 / -1;
   }
   .tl-table,
@@ -217,17 +220,22 @@
   }
   .tl-table .tl-subject {
     grid-area: subject;
+    width: auto;
+    justify-self: end;
   }
   .tl-table .tl-teacher {
     grid-area: teacher;
     width: auto;
   }
-  .tl-table .tl-hours {
+  .tl-table td.tl-hours {
     grid-area: hours;
+    width: auto;
     text-align: left;
   }
   .tl-table .tl-placed {
     grid-area: placed;
+    width: auto;
+    justify-self: end;
   }
   .tl-table .tl-block {
     display: none;

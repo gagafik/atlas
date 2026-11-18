@@ -13,6 +13,7 @@ import {
   pageRows,
   sortRows,
   totals,
+  wordForm,
   type LoadFilters,
   type LoadSchool,
   type SortSpec,
@@ -161,13 +162,19 @@ describe("filters", () => {
 
 describe("totals", () => {
   it("counts the hours of the active cycle and the placed lessons of the shown rows", () => {
-    expect(totals(rows)).toEqual({ count: 6, hours: 15, placed: 8 });
+    expect(totals(rows)).toMatchObject({ count: 6, hours: 15, placed: 8 });
     const shown = filterRows(rows, { ...NO_FILTERS, classId: "c5b" }, "");
-    expect(totals(shown)).toEqual({ count: 3, hours: 6, placed: 5 });
+    expect(totals(shown)).toMatchObject({ count: 3, hours: 6, placed: 5 });
     // An over-placed row (w4: 5 of 4) does not cover an under-placed one (w2: 1 of 2).
     const two = shown.filter((r) => r.id !== "w6");
     expect(totals(two).placed).toBeLessThan(totals(two).hours);
-    expect(totals([])).toEqual({ count: 0, hours: 0, placed: 0 });
+    expect(totals([])).toEqual({ count: 0, hours: 0, placed: 0, extra: 0 });
+  });
+
+  it("reports lessons placed beyond a row's hours apart, so one over-placed row never reads as complete", () => {
+    const over = rows.filter((r) => r.id === "w4");
+    expect(totals(over)).toEqual({ count: 1, hours: 4, placed: 4, extra: 1 });
+    expect(totals(rows.filter((r) => r.id === "w1")).extra).toBe(0);
   });
 
   it("takes the hours of the cycle chosen, not the weekly ones", () => {
@@ -177,6 +184,17 @@ describe("totals", () => {
     };
     expect(totals(buildRows(cycled, {}, "odd")).hours).toBe(1);
     expect(totals(buildRows(cycled, {}, "weekly")).hours).toBe(3);
+  });
+});
+
+describe("word forms", () => {
+  it("follows the number, the teens included", () => {
+    const form = (n: number) => wordForm(n, "one", "few", "many");
+    expect([1, 21, 101].map(form)).toEqual(["one", "one", "one"]);
+    expect([2, 3, 4, 22, 104].map(form)).toEqual(Array(5).fill("few"));
+    expect([0, 5, 11, 12, 14, 20, 111, 112].map(form)).toEqual(
+      Array(8).fill("many"),
+    );
   });
 });
 
