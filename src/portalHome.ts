@@ -57,7 +57,11 @@ export function lessonLine(r: HomeRow, current: boolean): LessonLine {
     title,
     details,
     state,
-    tone: cancelled ? "cancelled" : state === PLANNED ? "planned" : "changed",
+    tone: cancelled
+      ? "cancelled"
+      : state === PLANNED || r.activity === "duty" || r.activity === "booking"
+        ? "planned"
+        : "changed",
     cancelled,
     current,
     full: `${time}, ${title}, ${details}, ${state}`,

@@ -49,6 +49,13 @@ describe("lessonLine", () => {
     const l = lessonLine(row({ status: "changed" }), true);
     expect([l.tone, l.state, l.current]).toEqual(["changed", "Изменено", true]);
   });
+  it("keeps a regular duty and a booking quiet, not as a timetable change", () => {
+    for (const activity of ["duty", "booking"]) {
+      const l = lessonLine(row({ activity }), false);
+      expect(l.tone).toBe("planned");
+      expect(l.state).not.toBe("По расписанию");
+    }
+  });
   it("puts everything into the tooltip text", () => {
     expect(lessonLine(row(), false).full).toContain("Иванова А.");
   });

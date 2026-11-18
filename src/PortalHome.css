@@ -3,8 +3,8 @@
   container-type: inline-size;
   container-name: th-home;
 }
-.th-home > .today-lessons,
-.th-home > .start-feed {
+.th-columns > .today-lessons,
+.th-columns > .start-feed {
   min-width: 0;
 }
 .th-home .start-feed {
@@ -58,9 +58,11 @@
 }
 .th-text b {
   flex: 0 1 auto;
+  max-width: 65%;
 }
 .th-details {
-  flex: 1 1 0;
+  flex: 1 1 auto;
+  min-width: 6em;
   color: var(--text-muted);
 }
 .th-state {
@@ -101,15 +103,14 @@
   box-shadow: inset 3px 0 0 var(--accent);
 }
 @container th-home (min-width: 1000px) {
-  .th-home {
+  .th-columns {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
     gap: 24px;
     align-items: start;
   }
-  .th-home > .today-lessons,
-  .th-home > .start-feed {
-    grid-column: auto;
+  .th-columns > .today-lessons,
+  .th-columns > .start-feed {
     margin-top: 0;
   }
 }
@@ -129,7 +130,5 @@
   }
   .th-text {
     grid-area: text;
-    flex-direction: column;
-    gap: 0;
   }
 }

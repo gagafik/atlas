@@ -464,17 +464,19 @@ export default function Portal({
               )}
               {workspace ? (
                 <div className="th-home">
-                  <TodayLessons
-                    key={workspace}
-                    workspace={workspace}
-                    space={space}
-                    named={["parent", "viewer"].includes(session.user!.role)}
-                    child={child}
-                  />
-                  <section className="start-feed">
-                    <h2>Уведомления</h2>
-                    <MessageFeed key={workspace} workspace={workspace} />
-                  </section>
+                  <div className="th-columns">
+                    <TodayLessons
+                      key={workspace}
+                      workspace={workspace}
+                      space={space}
+                      named={["parent", "viewer"].includes(session.user!.role)}
+                      child={child}
+                    />
+                    <section className="start-feed">
+                      <h2>Уведомления</h2>
+                      <MessageFeed key={workspace} workspace={workspace} />
+                    </section>
+                  </div>
                 </div>
               ) : (
                 !loading && (
