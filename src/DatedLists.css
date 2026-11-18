@@ -1,0 +1,259 @@
+/* «Замены»: absences, all changes and monthly totals as tables. Frame and buttons come from DatedDay.css
+   (.dd, .dd-controls, .dd-btn, .dd-acts, .dd-badge); the table cells carry .dl-cell so these rules beat
+   the shared .data-table ones, and the phone rules below beat these. */
+.dl {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.dl > * {
+  min-width: 0;
+}
+.dl-table.data-table .dl-cell {
+  padding: 0 12px;
+  height: 40px;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.dl-table.data-table th.dl-cell {
+  height: 34px;
+  font-size: 11px;
+}
+.dl-table.data-table td.dl-act,
+.dl-table.data-table th.dl-act {
+  width: 1%;
+  padding: 0 8px;
+}
+/* Text cells take what the other columns leave; a long text is cut and shown whole in the title. */
+.dl-table.data-table td.dl-text {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.dl-table.data-table td.dl-muted {
+  color: var(--text-muted);
+}
+.dl-table.data-table td.dl-fit,
+.dl-table.data-table th.dl-fit {
+  width: 1%;
+  font-variant-numeric: tabular-nums;
+}
+.dl-name {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+.dl-acts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.dd .dl-acts .dd-btn {
+  min-height: 28px;
+}
+
+/* All changes: search, type, paging. */
+.dd-controls .field.dl-search {
+  flex: 2 1 240px;
+}
+.dd-controls .field.dl-type {
+  flex: 1 1 200px;
+}
+.dl-footer {
+  font-size: 12px;
+}
+.dl-none {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px 16px;
+  color: var(--text-muted);
+}
+.dl-none h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
+}
+
+/* Monthly totals: figures right-aligned, the row opens to its breakdowns, the totals row closes the table. */
+.dl-scroll {
+  overflow-x: auto;
+}
+.dl-table.data-table th.dl-num,
+.dl-table.data-table td.dl-num {
+  width: 1%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dl-table.data-table td.dl-num {
+  color: var(--text);
+}
+.dl-table th abbr {
+  text-decoration: none;
+  cursor: help;
+}
+.dl-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  text-align: left;
+}
+.dl-toggle > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-toggle svg {
+  flex: none;
+  color: var(--text-muted);
+}
+.dl-table.data-table tr.dl-more td.dl-cell {
+  height: auto;
+  padding: 6px 12px 8px 34px;
+  white-space: normal;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.dl-more span {
+  display: inline-block;
+  margin-right: 14px;
+}
+.dl-table.data-table tfoot td.dl-cell,
+.dl-table.data-table tfoot th.dl-cell {
+  height: 40px;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--surface-alt);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  font-size: 12px;
+}
+.dl-table.data-table tfoot th.dl-cell {
+  text-align: left;
+}
+.dl-weights {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.dl-weights > summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  color: var(--accent-strong);
+}
+.dl-weights > .dated-form {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+
+/* A phone: a record is a block, the main text first, the rest muted under it, buttons 40 px high. */
+@container dd (max-width: 600px) {
+  .dl-blocks,
+  .dl-blocks tbody {
+    display: block;
+  }
+  .dl-blocks thead {
+    display: none;
+  }
+  .dl-blocks tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dl-blocks tr:last-child {
+    border-bottom: 0;
+  }
+  .dl-table.dl-blocks.data-table td.dl-cell {
+    display: block;
+    width: auto;
+    max-width: none;
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .dl-table.dl-blocks.data-table td.dl-cell.dl-main {
+    order: -1;
+    font-size: 13px;
+    font-weight: var(--weight-semibold);
+    color: var(--text);
+  }
+  .dl-table.dl-blocks.data-table td.dl-cell.dl-act {
+    margin-top: 4px;
+  }
+  .dl-table.dl-blocks.data-table td.dl-cell.dl-act .dl-acts {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+  .dd .dl-acts .dd-btn {
+    flex: 1 1 auto;
+    min-height: 40px;
+  }
+  .dl-name {
+    display: block;
+    margin: 2px 0 0;
+  }
+  .dd-controls .field.dl-search {
+    flex: 1 1 100%;
+  }
+  .dl-footer {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* The totals keep their columns and scroll inside their own card, the teacher stays in sight. */
+  .dl-totals {
+    width: max-content;
+    min-width: 100%;
+  }
+  .dl-table.dl-totals.data-table .dl-cell {
+    padding: 0 8px;
+  }
+  .dl-table.dl-totals.data-table td.dl-text,
+  .dl-table.dl-totals.data-table thead th.dl-text,
+  .dl-table.dl-totals.data-table tfoot th.dl-cell {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    max-width: 9em;
+    background: var(--surface);
+    box-shadow: 1px 0 0 var(--line);
+  }
+  .dl-table.dl-totals.data-table thead th.dl-text,
+  .dl-table.dl-totals.data-table tfoot th.dl-cell {
+    background: var(--surface-alt);
+  }
+  /* The breakdown wraps inside the width of the figures and adds nothing to the table's own width. */
+  .dl-table.dl-totals.data-table tr.dl-more td.dl-cell {
+    position: static;
+    padding-left: 12px;
+    contain: inline-size;
+  }
+  .dl-table.dl-totals.data-table tr.dl-more span {
+    display: block;
+    margin-right: 0;
+  }
+}

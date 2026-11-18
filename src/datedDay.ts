@@ -141,6 +141,15 @@ const WEEKDAYS = [
 ];
 
 // «2026-11-18» -> «среда, 18.11.2026»; anything that is not a real date is returned as it came.
+/** The reasons of a change as one text; a reason that only repeats the state («Замена» beside the badge «Замена») is left out. */
+export function reasonText(reasons: string[], state: string): string {
+  const same = state.trim().toLocaleLowerCase("ru");
+  return reasons
+    .map((x) => x.trim())
+    .filter((x) => x && x.toLocaleLowerCase("ru") !== same)
+    .join("; ");
+}
+
 export function dateInWords(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
   if (!m) return iso;

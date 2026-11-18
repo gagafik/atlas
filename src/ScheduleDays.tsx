@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { uid, named } from "./utils";
 import type { State, ScheduleDay } from "./types";
 import { DateField, Multi } from "./DatedFields";
+import { dateShort } from "./datedLists";
 
 // A date that runs the timetable of another weekday (and week), for the whole school or chosen classes.
 export default function ScheduleDays({
@@ -25,7 +26,7 @@ export default function ScheduleDays({
   const bounds = { min: s.settings.yearStart, max: s.settings.yearEnd };
   const describe = (d: ScheduleDay) =>
     [
-      d.onDate,
+      dateShort(d.onDate),
       `работает как «${s.settings.days[d.day] ?? d.day}»`,
       ...(d.cycleId ? [named(patterns, d.cycleId)] : []),
       d.classIds.length
