@@ -199,16 +199,16 @@
   text-overflow: ellipsis;
 }
 .dd-table.data-table th.dd-lesson {
-  width: 34%;
+  width: 31%;
 }
 .dd-table.data-table th.dd-teacher {
   width: 22%;
 }
 .dd-table.data-table th.dd-room {
-  width: 12%;
+  width: 23%;
 }
 .dd-table.data-table th.dd-state {
-  width: 30%;
+  width: 24%;
 }
 .dd-note-away,
 .dd-reason {
