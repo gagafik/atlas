@@ -1,0 +1,149 @@
+/* The start page of a family, a pupil, a teacher and an observer: today's lessons beside the notifications. */
+.th-home {
+  container-type: inline-size;
+  container-name: th-home;
+}
+.th-columns > .today-lessons,
+.th-columns > .start-feed {
+  min-width: 0;
+}
+.th-home .start-feed {
+  overflow-wrap: anywhere;
+}
+.th-home .start-feed button {
+  white-space: normal;
+  max-width: 100%;
+}
+.th-date {
+  margin-left: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.th-lessons {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: var(--line-width) solid var(--line);
+  border-radius: var(--radius);
+}
+.th-lesson {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-bottom: var(--line-width) solid var(--line);
+}
+.th-lesson:last-child {
+  border-bottom: 0;
+}
+.th-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.th-text {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.th-text b,
+.th-details {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-text b {
+  flex: 0 1 auto;
+  max-width: 65%;
+}
+.th-details {
+  flex: 1 1 auto;
+  min-width: 6em;
+  color: var(--text-muted);
+}
+.th-state {
+  justify-self: end;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+/* A lesson that goes by the timetable carries no label: only a change or a cancellation is marked. */
+.th-planned .th-state {
+  display: none;
+}
+.th-changed .th-state,
+.th-cancelled .th-state {
+  padding: 1px 8px;
+  font-weight: 600;
+  border: var(--line-width) solid;
+  border-radius: var(--radius);
+}
+.th-changed .th-state {
+  color: var(--warning);
+  background: var(--warning-tint);
+  border-color: var(--warning-line);
+}
+.th-cancelled .th-state {
+  color: var(--danger);
+  background: var(--danger-tint);
+  border-color: var(--danger-line);
+}
+.th-cancelled .th-time,
+.th-cancelled .th-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.th-lesson.th-current {
+  background: var(--accent-tint-strong);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+@container th-home (min-width: 1000px) {
+  .th-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 24px;
+    align-items: start;
+  }
+  .th-columns > .today-lessons,
+  .th-columns > .start-feed {
+    margin-top: 0;
+  }
+  /* The shared .start-feed rule spans every column of the administrator's start grid; here the feed is the second column. */
+  .th-columns > .start-feed {
+    grid-column: auto;
+  }
+}
+@container th-home (max-width: 600px) {
+  .th-lesson {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "time state" "text text";
+    gap: 2px 12px;
+    min-height: 58px;
+    padding: 6px 12px;
+  }
+  .th-time {
+    grid-area: time;
+  }
+  .th-state {
+    grid-area: state;
+  }
+  .th-text {
+    grid-area: text;
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+  /* On a phone the teacher and the room are not cut: they always stand under the subject, so every lesson reads the same. */
+  .th-text b {
+    max-width: 100%;
+  }
+  .th-details {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+}
