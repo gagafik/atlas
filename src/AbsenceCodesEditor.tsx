@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { type AbsenceCode, codeSetError } from "./absenceForm";
 
@@ -31,9 +31,12 @@ const changes = (before: AbsenceCode[], after: AbsenceCode[]) =>
 export default function AbsenceCodesEditor({
   workspace,
   onSaved,
+  bare = false,
 }: {
   workspace: string;
   onSaved: () => void;
+  // Without its own section: the host shows it (a tab) and the list loads when it is first shown.
+  bare?: boolean;
 }) {
   const [version, setVersion] = useState(0),
     [saved, setSaved] = useState<AbsenceCode[]>([]),
@@ -100,15 +103,53 @@ export default function AbsenceCodesEditor({
     setNotice("Типы отсутствия сохранены.");
     onSaved();
   };
-  return (
-    <details
-      className="absence-card"
-      onToggle={(e) => {
-        if (e.currentTarget.open && !loaded) void load();
-      }}
-    >
-      <summary>Типы отсутствия</summary>
-      <p>
+  const started = useRef(false);
+  useEffect(() => {
+    if (!bare || started.current) return;
+    started.current = true;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bare]);
+  // One type: in a bare editor a row of a shared grid, so that the columns line up; otherwise a card as before.
+  const rows = items.map((c) => (
+    <div className={bare ? "absence-notes-code" : "absence-card"} key={c.id}>
+      <label className="field">
+        <span>Название типа</span>
+        <input
+          value={c.name}
+          maxLength={80}
+          onChange={(e) => change(c.id, { name: e.target.value })}
+        />
+      </label>
+      <label className="absence-file">
+        <input
+          type="checkbox"
+          checked={c.parents}
+          onChange={(e) => change(c.id, { parents: e.target.checked })}
+        />
+        Можно выбирать родителям
+      </label>
+      <label className="absence-file">
+        <input
+          type="checkbox"
+          checked={c.active}
+          onChange={(e) => change(c.id, { active: e.target.checked })}
+        />
+        Действует
+      </label>
+      {!saved.some((s) => s.id === c.id) && (
+        <button
+          type="button"
+          onClick={() => edit(items.filter((x) => x.id !== c.id))}
+        >
+          Убрать новый тип
+        </button>
+      )}
+    </div>
+  ));
+  const body = (
+    <>
+      <p className={bare ? "muted absence-notes-small" : undefined}>
         Тип выбирают при внесении записки. Тип нельзя удалить: выключите его, и
         прежние записки сохранят название. Переименование меняет название и в
         старых записках и отчётах; история хранит прежнее.
@@ -120,42 +161,7 @@ export default function AbsenceCodesEditor({
       )}
       {notice && <p role="status">{notice}</p>}
       <fieldset disabled={busy} className="access-fields">
-        {items.map((c) => (
-          <div className="absence-card" key={c.id}>
-            <label className="field">
-              <span>Название типа</span>
-              <input
-                value={c.name}
-                maxLength={80}
-                onChange={(e) => change(c.id, { name: e.target.value })}
-              />
-            </label>
-            <label className="absence-file">
-              <input
-                type="checkbox"
-                checked={c.parents}
-                onChange={(e) => change(c.id, { parents: e.target.checked })}
-              />
-              Можно выбирать родителям
-            </label>
-            <label className="absence-file">
-              <input
-                type="checkbox"
-                checked={c.active}
-                onChange={(e) => change(c.id, { active: e.target.checked })}
-              />
-              Действует
-            </label>
-            {!saved.some((s) => s.id === c.id) && (
-              <button
-                type="button"
-                onClick={() => edit(items.filter((x) => x.id !== c.id))}
-              >
-                Убрать новый тип
-              </button>
-            )}
-          </div>
-        ))}
+        {bare ? <div className="absence-notes-codes">{rows}</div> : rows}
         <button
           type="button"
           disabled={items.length >= 30}
@@ -176,13 +182,14 @@ export default function AbsenceCodesEditor({
         <label className="field">
           <span>Причина изменения (от 3 знаков, попадёт в историю)</span>
           <textarea
+            rows={bare ? 2 : undefined}
             maxLength={500}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
         </label>
         {dirty && problem && <p className="info-line">{problem}</p>}
-        <div className="dated-toolbar">
+        <div className={bare ? "absence-notes-buttons" : "dated-toolbar"}>
           <button
             className="primary"
             disabled={!dirty || !!problem || reason.trim().length < 3}
@@ -216,10 +223,27 @@ export default function AbsenceCodesEditor({
         </div>
       ))}
       {next !== null && (
-        <button disabled={busy} onClick={() => void run(() => page(next))}>
+        <button
+          className="absence-notes-more"
+          disabled={busy}
+          onClick={() => void run(() => page(next))}
+        >
           Предыдущие изменения
         </button>
       )}
+    </>
+  );
+  if (bare)
+    return <div className="absence-notes-form absence-notes-types">{body}</div>;
+  return (
+    <details
+      className="absence-card"
+      onToggle={(e) => {
+        if (e.currentTarget.open && !loaded) void load();
+      }}
+    >
+      <summary>Типы отсутствия</summary>
+      {body}
     </details>
   );
 }

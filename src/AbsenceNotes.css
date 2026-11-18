@@ -1,0 +1,751 @@
+/* The absence notes screen: one view at a time, the notes as a dense table. The shared .absence-panel rules stay as they are. */
+.absence-notes {
+  container: absence-notes / inline-size;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 10px;
+}
+.absence-notes > *,
+.absence-notes-note,
+.absence-notes-bulk {
+  min-width: 0;
+}
+.absence-notes [hidden] {
+  display: none !important;
+}
+.absence-notes > p,
+.absence-notes-help p {
+  line-height: 1.5;
+}
+.absence-notes-help summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: var(--weight-semibold);
+  font-size: 14px;
+}
+.absence-notes-help p {
+  margin: 8px 0 0;
+}
+.absence-notes .muted {
+  color: var(--text-muted);
+}
+
+/* Tabs: the shared segmented control, smaller than its default. */
+.absence-notes .absence-notes-tabs {
+  justify-self: start;
+}
+.absence-notes .absence-notes-tabs button {
+  min-height: 32px;
+  font-size: 13px;
+}
+.absence-notes .absence-notes-tabs button span {
+  font-size: 11px;
+}
+/* Inside the journal panel a general rule for pressed buttons would repaint the chosen tab. */
+.absence-notes .absence-notes-tabs button.selected {
+  background: var(--primary);
+  color: var(--text-on-primary);
+}
+
+/* The compact buttons of the screen itself; the buttons of the forms inside keep their own look. */
+.absence-notes .absence-notes-actions button,
+.absence-notes .absence-notes-bulk button,
+.absence-notes .absence-notes-buttons button,
+.absence-notes .absence-notes-back {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.absence-notes .absence-notes-back {
+  justify-self: start;
+}
+.absence-notes-actions,
+.absence-notes-filters,
+.absence-notes-bulk-bar,
+.absence-notes-bulk-more,
+.absence-notes-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.absence-notes-actions,
+.absence-notes-buttons {
+  align-items: center;
+}
+.absence-notes .absence-notes-bulk {
+  display: grid;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.absence-notes-count {
+  padding-bottom: 6px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.absence-notes .absence-notes-bulk-bar .absence-notes-field {
+  flex: 0 1 250px;
+}
+.absence-notes .absence-notes-bulk-more .absence-notes-field {
+  flex: 1 1 320px;
+}
+
+/* Fields of the filter and bulk rows: the label above, the control as low as a table row. */
+.absence-notes .absence-notes-field {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  flex: 0 1 170px;
+}
+.absence-notes .absence-notes-field > span {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: var(--weight-bold);
+  color: var(--text-muted);
+}
+.absence-notes .absence-notes-field select,
+.absence-notes .absence-notes-field input,
+.absence-notes .absence-notes-field textarea {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-field textarea {
+  resize: vertical;
+}
+
+/* An opened note in place of the list. */
+.absence-notes-note {
+  display: grid;
+  gap: 8px;
+}
+.absence-notes-note-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.absence-notes-note > fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+/* A button that is a grid child of the note keeps its own width. */
+.absence-notes-note > button {
+  justify-self: start;
+}
+.absence-notes-all-text {
+  display: none;
+}
+.absence-notes-note h3,
+.absence-notes .absence-notes-title {
+  margin: 0;
+  font-size: 18px;
+}
+.absence-notes-note h3:focus,
+.absence-notes .absence-notes-title:focus {
+  outline: 0;
+}
+.absence-notes-facts {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.absence-notes-note .info-line,
+.absence-notes-note .family-history p {
+  margin: 0;
+}
+
+/* The tables: the wrapper scrolls, so a wide table never widens the page. position: a visually hidden header label inside must stay in this scroll box. */
+.absence-notes-table {
+  position: relative;
+  overflow-x: auto;
+}
+.absence-notes-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes-table th,
+.absence-notes-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  overflow-wrap: normal;
+}
+.absence-notes-table thead th {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  vertical-align: bottom;
+}
+.absence-notes-table tbody th {
+  font-weight: var(--weight-semibold);
+}
+.absence-notes-table tbody tr:hover > * {
+  background: var(--accent-tint);
+}
+.absence-notes-table input[type="checkbox"] {
+  display: block;
+  margin: 0;
+}
+.absence-notes-c-pick {
+  width: 1%;
+  padding-right: 0;
+}
+.absence-notes-c-actions {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+.absence-notes-c-reason,
+.absence-notes-c-files {
+  overflow-wrap: anywhere;
+}
+.absence-notes-c-files a {
+  display: block;
+}
+.absence-notes-c-changed {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+/* Specific enough to beat the general button rule: a row stays one line high. */
+.absence-notes .absence-notes-table .absence-notes-row-btn {
+  min-height: 28px;
+  padding: 2px 10px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+/* A name and a period keep to one line where there is room; the headings wrap instead. */
+@container absence-notes (min-width: 620px) {
+  .absence-notes-c-name,
+  .absence-notes-c-period {
+    white-space: nowrap;
+  }
+}
+
+.absence-notes-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  vertical-align: middle;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.absence-notes-badge[data-tone="neutral"] {
+  border-color: var(--info-line);
+  background: var(--info-tint);
+  color: var(--info);
+}
+.absence-notes-badge[data-tone="positive"] {
+  border-color: var(--success-line);
+  background: var(--success-tint);
+  color: var(--success);
+}
+.absence-notes-badge[data-tone="danger"] {
+  border-color: var(--danger-line);
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+/* Under 620 px of its own width a row becomes a block; every value is labelled or says what it is by itself. */
+@container absence-notes (max-width: 619px) {
+  .absence-notes-table table,
+  .absence-notes-table tbody {
+    display: block;
+  }
+  .absence-notes-table thead tr {
+    display: block;
+  }
+  /* Only the «select all» checkbox of the header stays, with its words shown. */
+  .absence-notes-table thead th {
+    display: none;
+  }
+  .absence-notes-table thead th.absence-notes-c-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: auto;
+    padding: 8px;
+    background: var(--surface-sunken);
+  }
+  .absence-notes-all {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+  }
+  .absence-notes-all-text {
+    display: inline;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .absence-notes-table tr.absence-notes-row {
+    display: grid;
+    padding: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .absence-notes-table tbody > tr:last-child {
+    border-bottom: 0;
+  }
+  .absence-notes-table tr.absence-notes-row > th,
+  .absence-notes-table tr.absence-notes-row > td {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .absence-notes-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+  }
+  /* A note is a block of four lines: name and status, period, type and subject, who filed it with the button. */
+  .absence-notes-t-notes tr.absence-notes-row {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 12px;
+  }
+  /* The checkbox stands in a left margin kept for it, so every line of the block starts under the name. */
+  .absence-notes-pickable tr.absence-notes-row {
+    padding-left: 42px;
+  }
+  .absence-notes-t-notes td.absence-notes-c-pick {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    width: auto;
+    padding: 0;
+  }
+  /* The status follows the name on the first line, whatever the order of the columns. */
+  .absence-notes-t-notes .absence-notes-c-name {
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .absence-notes-t-notes .absence-notes-c-status {
+    order: 2;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+  .absence-notes-t-notes .absence-notes-c-period {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .absence-notes-t-notes .absence-notes-c-type,
+  .absence-notes-t-notes .absence-notes-c-subject {
+    order: 4;
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .absence-notes-t-notes .absence-notes-c-by {
+    order: 5;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* width: the wide table gives this cell 1 %, which would squeeze the button out of the block. */
+  .absence-notes-t-notes .absence-notes-c-actions {
+    order: 6;
+    flex: 0 0 auto;
+    width: auto;
+    margin-left: auto;
+  }
+  /* A class: the name with the switch state, the teacher beside the one button. */
+  .absence-notes-t-classes tr.absence-notes-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 10px;
+    grid-template-areas:
+      "name enabled"
+      "teacher actions"
+      "changed actions";
+    align-items: center;
+  }
+  .absence-notes-t-classes .absence-notes-c-name {
+    grid-area: name;
+  }
+  .absence-notes-t-classes .absence-notes-c-enabled {
+    grid-area: enabled;
+    justify-self: end;
+  }
+  .absence-notes-t-classes .absence-notes-c-teacher {
+    grid-area: teacher;
+  }
+  .absence-notes-t-classes .absence-notes-c-changed {
+    grid-area: changed;
+  }
+  .absence-notes-t-classes .absence-notes-c-actions {
+    grid-area: actions;
+    align-self: end;
+  }
+  .absence-notes-c-changed:empty,
+  .absence-notes-c-actions:empty,
+  .absence-notes-c-pick:empty {
+    display: none;
+  }
+  /* Touch size: buttons 40 px high, checkboxes 24 px, the controls of the filters take the whole width. */
+  .absence-notes .absence-notes-table .absence-notes-row-btn,
+  .absence-notes .absence-notes-actions button,
+  .absence-notes .absence-notes-bulk button,
+  .absence-notes .absence-notes-buttons button,
+  .absence-notes .absence-notes-back,
+  .absence-notes .absence-notes-more,
+  .absence-notes .absence-notes-tabs button,
+  .absence-notes .absence-notes-field select,
+  .absence-notes .absence-notes-field input,
+  .absence-notes .absence-notes-field textarea {
+    min-height: 40px;
+  }
+  /* min-width: the general rule of the panel (min-width: 0) would let the grid column of the checkbox collapse. */
+  .absence-notes .absence-notes-table input[type="checkbox"] {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+  }
+  /* Two filters in a line: the table stays near the top of a phone screen. */
+  .absence-notes .absence-notes-field {
+    flex: 1 1 130px;
+  }
+  .absence-notes .absence-notes-bulk-more .absence-notes-field {
+    flex: 1 1 100%;
+  }
+  .absence-notes .absence-notes-tabs button {
+    padding-inline: 8px;
+  }
+  .absence-notes .absence-notes-bulk button,
+  .absence-notes .absence-notes-actions button {
+    flex: 1 1 140px;
+  }
+}
+
+/* The forms (school note, the parent's note, the types editor): compact fields, the layout follows the width of the container. */
+.absence-notes-view {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.absence-notes .absence-notes-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+.absence-notes .absence-notes-compose {
+  padding: 0;
+}
+.absence-notes-form fieldset {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.absence-notes-form > button,
+.absence-notes-form fieldset > button {
+  justify-self: start;
+}
+.absence-notes-form h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.absence-notes-form h3:focus {
+  outline: 0;
+}
+.absence-notes-form p {
+  margin: 0;
+  line-height: 1.5;
+}
+.absence-notes .absence-notes-small {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.absence-notes .absence-notes-form .field {
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+}
+.absence-notes .absence-notes-form .field > span {
+  font-size: 12px;
+  line-height: 16px;
+}
+.absence-notes .absence-notes-form .field > small {
+  font-size: 12px;
+  line-height: 16px;
+}
+.absence-notes .absence-notes-form .field input:not([type="checkbox"]),
+.absence-notes .absence-notes-form .field select,
+.absence-notes .absence-notes-form .field textarea {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-form .field textarea {
+  resize: vertical;
+}
+.absence-notes .absence-notes-form button {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.absence-notes .absence-notes-form .absence-file {
+  gap: 4px 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-form .absence-card {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+}
+.absence-notes .absence-notes-form .absence-preview {
+  display: grid;
+  gap: 8px;
+}
+
+/* Two columns of the school form: the pupils on the left, the note on the right. */
+.absence-notes-cols,
+.absence-notes-col {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  align-content: start;
+}
+.absence-notes-cols {
+  grid-template-columns: minmax(0, 1fr);
+}
+.absence-notes-pupil-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.absence-notes-pupil-head .field {
+  flex: 1 1 150px;
+}
+.absence-notes .absence-notes-pupils {
+  max-height: 300px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  align-content: start;
+  gap: 2px 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.absence-notes-pupils .absence-file {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  padding: 2px 0;
+  overflow-wrap: anywhere;
+}
+.absence-notes-pupils .absence-file input {
+  margin-top: 2px;
+}
+.absence-notes-pupils > p {
+  grid-column: 1 / -1;
+}
+.absence-notes .absence-notes-picked {
+  font-size: 14px;
+  line-height: 20px;
+}
+.absence-notes .absence-notes-chips {
+  gap: 4px 6px;
+  max-height: 96px;
+  overflow: auto;
+}
+.absence-notes .absence-notes-chips button {
+  min-height: 28px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: var(--weight-regular);
+}
+
+/* The date and time fields, the type with the subject, the file row. */
+.absence-notes-dates {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px;
+}
+.absence-notes-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px;
+}
+.absence-notes-filerow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 12px;
+}
+.absence-notes-filerow > fieldset {
+  flex: 1 1 280px;
+}
+.absence-notes-filerow > fieldset:last-child {
+  flex: 0 0 auto;
+}
+.absence-notes-filerow input[type="file"] {
+  padding: 3px 8px;
+}
+
+/* The lessons of the preview: one dense table, small buttons side by side. */
+.absence-notes-entries {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+.absence-notes-entry {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.absence-notes-entry:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.absence-notes-t-lessons .absence-notes-c-actions button + button {
+  margin-left: 6px;
+}
+
+/* The types editor: one row per type, the columns line up across the rows. */
+.absence-notes-types {
+  position: relative;
+}
+.absence-notes-codes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.absence-notes-code {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.absence-notes-code .absence-file {
+  min-height: 32px;
+  align-items: center;
+}
+
+/* A phone (about 310 px of panel) still shows a day and its time side by side. */
+@container absence-notes (min-width: 290px) {
+  .absence-notes-dates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container absence-notes (min-width: 620px) {
+  .absence-notes-dates {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .absence-notes-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .absence-notes-codes {
+    grid-template-columns:
+      minmax(120px, 1fr)
+      max-content max-content max-content;
+    align-items: end;
+    gap: 6px 16px;
+  }
+  /* The rows share the grid of the list; only the first row shows the caption of the name column. */
+  .absence-notes-code {
+    display: contents;
+  }
+  .absence-notes-code > :first-child {
+    grid-column: 1;
+  }
+  .absence-notes-code:not(:first-child) > .field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+@container absence-notes (min-width: 900px) {
+  .absence-notes-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .absence-notes-school .absence-notes-dates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* A narrow container: one field per line, buttons 40 px, long names wrap. */
+@container absence-notes (max-width: 619px) {
+  .absence-notes .absence-notes-form button {
+    min-height: 40px;
+    white-space: normal;
+  }
+  .absence-notes .absence-notes-form .field input:not([type="checkbox"]),
+  .absence-notes .absence-notes-form .field select,
+  .absence-notes .absence-notes-form .field textarea {
+    min-height: 40px;
+  }
+  .absence-notes .absence-notes-form .absence-file {
+    min-height: 40px;
+  }
+  .absence-notes .absence-notes-form input[type="checkbox"] {
+    width: 24px;
+    height: 24px;
+  }
+  .absence-notes-form .absence-notes-buttons button {
+    flex: 1 1 140px;
+  }
+  .absence-notes-pupil-head .field,
+  .absence-notes-filerow > fieldset,
+  .absence-notes-filerow > fieldset:last-child {
+    flex: 1 1 100%;
+  }
+  .absence-notes-filerow button {
+    width: 100%;
+  }
+  .absence-notes .absence-notes-chips button {
+    min-height: 40px;
+    text-align: left;
+  }
+  .absence-notes-table .absence-notes-c-actions {
+    text-align: left;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions button {
+    flex: 1 1 0;
+  }
+  .absence-notes-t-lessons .absence-notes-c-actions button + button {
+    margin-left: 0;
+  }
+  .absence-notes-code {
+    padding-bottom: 12px;
+  }
+}

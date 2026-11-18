@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
+import { LessonsTable } from "./AbsenceTables";
 import {
   type AbsenceCode,
   type PreviewLesson,
@@ -159,200 +160,224 @@ export default function AbsenceSchoolForm({
     touch();
   };
   return (
-    <section className="absence-card" aria-label="Записка от имени школы">
-      <h3>Внести записку от имени школы</h3>
-      <p>
-        Записка принимается сразу: отсутствие на полностью включённых в период
-        уроках станет уважительным. Семья получит уведомление и увидит тип,
-        период и предмет; причину и файлы видят только законные представители с
-        подтверждённой связью, школа и ответственные. Можно выбрать до {MAX}{" "}
-        учеников из разных классов, например команду олимпиады.
-      </p>
+    <section
+      className="absence-card absence-notes-form absence-notes-school"
+      aria-label="Записка от имени школы"
+    >
+      <h3 tabIndex={-1}>Внести записку от имени школы</h3>
+      <details className="absence-notes-help">
+        <summary>Как действует записка школы</summary>
+        <p>
+          Записка принимается сразу: отсутствие на полностью включённых в период
+          уроках станет уважительным. Семья получит уведомление и увидит тип,
+          период и предмет; причину и файлы видят только законные представители
+          с подтверждённой связью, школа и ответственные. Можно выбрать до {MAX}{" "}
+          учеников из разных классов, например команду олимпиады.
+        </p>
+      </details>
       {error && (
         <p className="error-banner" role="alert">
           {error}
         </p>
       )}
       <fieldset disabled={busy} className="access-fields">
-        <label className="field">
-          <span>Класс</span>
-          <select value={shown} onChange={(e) => setClassId(e.target.value)}>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="dated-toolbar">
-          <button
-            type="button"
-            disabled={!inClass.length}
-            onClick={() =>
-              choose([
-                ...picked,
-                ...inClass
-                  .map((p) => p.id)
-                  .filter((id) => !picked.includes(id)),
-              ])
-            }
-          >
-            Отметить весь класс
-          </button>
-          <button
-            type="button"
-            disabled={!picked.length}
-            onClick={() => choose([])}
-          >
-            Снять все отметки
-          </button>
-        </div>
-        <div className="absence-pupils">
-          {inClass.map((p) => (
-            <label className="absence-file" key={p.id}>
-              <input
-                type="checkbox"
-                checked={picked.includes(p.id)}
-                disabled={!picked.includes(p.id) && picked.length >= MAX}
-                onChange={(e) =>
-                  choose(
-                    e.target.checked
-                      ? [...picked, p.id]
-                      : picked.filter((id) => id !== p.id),
-                  )
-                }
-              />
-              {p.name}
-            </label>
-          ))}
-          {!inClass.length && <p>В этом классе нет действующих учеников.</p>}
-        </div>
-        <p>
-          Выбрано: {picked.length} из {MAX}.
-        </p>
-        <div className="absence-file">
-          {picked.map((id) => (
-            <button
-              type="button"
-              key={id}
-              aria-label={`Убрать из списка: ${name(id)}`}
-              onClick={() => choose(picked.filter((x) => x !== id))}
-            >
-              {name(id)} ×
-            </button>
-          ))}
-        </div>
-        <div className="dated-fields">
-          <label className="field">
-            <span>Первый день</span>
-            <input
-              type="date"
-              required
-              min={yearStart}
-              max={yearEnd}
-              value={start}
-              onChange={(e) => {
-                setStart(e.target.value);
-                touch();
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>С какого времени</span>
-            <input
-              type="time"
-              required
-              value={from}
-              onChange={(e) => {
-                setFrom(e.target.value);
-                touch();
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>Последний день</span>
-            <input
-              type="date"
-              required
-              min={start}
-              max={yearEnd}
-              value={end}
-              onChange={(e) => {
-                setEnd(e.target.value);
-                touch();
-              }}
-            />
-          </label>
-          <label className="field">
-            <span>До какого времени</span>
-            <input
-              type="time"
-              required
-              value={to}
-              onChange={(e) => {
-                setTo(e.target.value);
-                touch();
-              }}
-            />
-          </label>
-        </div>
-        <label className="field">
-          <span>Тип отсутствия</span>
-          <select
-            required
-            value={codeId}
-            onChange={(e) => {
-              setCodeId(e.target.value);
-              touch();
-            }}
-          >
-            <option value="">Выберите тип</option>
-            {codes
-              .filter((c) => c.active)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
+        <div className="absence-notes-cols">
+          <div className="absence-notes-col">
+            <div className="absence-notes-pupil-head">
+              <label className="field">
+                <span>Класс</span>
+                <select
+                  value={shown}
+                  onChange={(e) => setClassId(e.target.value)}
+                >
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="absence-notes-buttons">
+                <button
+                  type="button"
+                  disabled={!inClass.length}
+                  onClick={() =>
+                    choose([
+                      ...picked,
+                      ...inClass
+                        .map((p) => p.id)
+                        .filter((id) => !picked.includes(id)),
+                    ])
+                  }
+                >
+                  Отметить весь класс
+                </button>
+                <button
+                  type="button"
+                  disabled={!picked.length}
+                  onClick={() => choose([])}
+                >
+                  Снять все отметки
+                </button>
+              </div>
+            </div>
+            <div className="absence-pupils absence-notes-pupils">
+              {inClass.map((p) => (
+                <label className="absence-file" key={p.id}>
+                  <input
+                    type="checkbox"
+                    checked={picked.includes(p.id)}
+                    disabled={!picked.includes(p.id) && picked.length >= MAX}
+                    onChange={(e) =>
+                      choose(
+                        e.target.checked
+                          ? [...picked, p.id]
+                          : picked.filter((id) => id !== p.id),
+                      )
+                    }
+                  />
+                  {p.name}
+                </label>
               ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Предмет</span>
-          <select
-            value={subjectId}
-            onChange={(e) => {
-              setSubjectId(e.target.value);
-              touch();
-            }}
-          >
-            <option value="">Все предметы</option>
-            {subjects.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Причина</span>
-          <textarea
-            maxLength={4000}
-            value={reason}
-            onChange={(e) => {
-              setReason(e.target.value);
-              touch();
-            }}
-          />
-        </label>
-        <div className="dated-toolbar">
-          <button
-            disabled={
-              !picked.length || !codeId || !reason.trim() || !start || !end
-            }
-            onClick={() => void prepare()}
-          >
-            Подготовить предпросмотр
-          </button>
+              {!inClass.length && (
+                <p>В этом классе нет действующих учеников.</p>
+              )}
+            </div>
+            <p className="absence-notes-picked">
+              Выбрано: {picked.length} из {MAX}.
+            </p>
+            {picked.length > 0 && (
+              <div className="absence-file absence-notes-chips">
+                {picked.map((id) => (
+                  <button
+                    type="button"
+                    key={id}
+                    aria-label={`Убрать из списка: ${name(id)}`}
+                    onClick={() => choose(picked.filter((x) => x !== id))}
+                  >
+                    {name(id)} ×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="absence-notes-col">
+            <div className="absence-notes-dates">
+              <label className="field">
+                <span>Первый день</span>
+                <input
+                  type="date"
+                  required
+                  min={yearStart}
+                  max={yearEnd}
+                  value={start}
+                  onChange={(e) => {
+                    setStart(e.target.value);
+                    touch();
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>С какого времени</span>
+                <input
+                  type="time"
+                  required
+                  value={from}
+                  onChange={(e) => {
+                    setFrom(e.target.value);
+                    touch();
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>Последний день</span>
+                <input
+                  type="date"
+                  required
+                  min={start}
+                  max={yearEnd}
+                  value={end}
+                  onChange={(e) => {
+                    setEnd(e.target.value);
+                    touch();
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span>До какого времени</span>
+                <input
+                  type="time"
+                  required
+                  value={to}
+                  onChange={(e) => {
+                    setTo(e.target.value);
+                    touch();
+                  }}
+                />
+              </label>
+            </div>
+            <div className="absence-notes-pair">
+              <label className="field">
+                <span>Тип отсутствия</span>
+                <select
+                  required
+                  value={codeId}
+                  onChange={(e) => {
+                    setCodeId(e.target.value);
+                    touch();
+                  }}
+                >
+                  <option value="">Выберите тип</option>
+                  {codes
+                    .filter((c) => c.active)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Предмет</span>
+                <select
+                  value={subjectId}
+                  onChange={(e) => {
+                    setSubjectId(e.target.value);
+                    touch();
+                  }}
+                >
+                  <option value="">Все предметы</option>
+                  {subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="field">
+              <span>Причина</span>
+              <textarea
+                rows={3}
+                maxLength={4000}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  touch();
+                }}
+              />
+            </label>
+            <div className="absence-notes-buttons">
+              <button
+                disabled={
+                  !picked.length || !codeId || !reason.trim() || !start || !end
+                }
+                onClick={() => void prepare()}
+              >
+                Подготовить предпросмотр
+              </button>
+            </div>
+          </div>
         </div>
       </fieldset>
       {preview && (
@@ -364,37 +389,29 @@ export default function AbsenceSchoolForm({
               отмеченных учеников и подготовьте предпросмотр заново.
             </p>
           )}
-          <div className="absence-bulk-preview">
+          <div className="absence-notes-entries">
             {preview.items.map((item) => (
-              <article className="absence-card" key={item.studentId}>
+              <article className="absence-notes-entry" key={item.studentId}>
                 <strong>
                   {item.studentName} · {item.className} · уроков:{" "}
                   {item.lessonCount}
                 </strong>
                 {item.problem && <p className="info-line">{item.problem}</p>}
-                {item.lessons.map((l, i) => (
-                  <p className="absence-file" key={i}>
-                    {l.date} · {l.start}–{l.end} · {l.subject}
-                    <button type="button" onClick={() => edge(l, "start")}>
-                      С этого урока
-                    </button>
-                    <button type="button" onClick={() => edge(l, "end")}>
-                      По этот урок
-                    </button>
-                  </p>
-                ))}
+                <LessonsTable lessons={item.lessons} onEdge={edge} />
                 {item.lessonCount > item.lessons.length && (
                   <p>Показаны первые уроки: {item.lessons.length}.</p>
                 )}
                 {preview.status === "blocked" && item.problem && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      choose(picked.filter((id) => id !== item.studentId))
-                    }
-                  >
-                    Убрать из списка
-                  </button>
+                  <div className="absence-notes-buttons">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        choose(picked.filter((id) => id !== item.studentId))
+                      }
+                    >
+                      Убрать из списка
+                    </button>
+                  </div>
                 )}
               </article>
             ))}
@@ -410,13 +427,15 @@ export default function AbsenceSchoolForm({
                 внесена. После ошибки соединения можно повторить: записки не
                 продублируются.
               </p>
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() => void apply()}
-              >
-                {schoolSubmitLabel(preview.items.length)}
-              </button>
+              <div className="absence-notes-buttons">
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void apply()}
+                >
+                  {schoolSubmitLabel(preview.items.length)}
+                </button>
+              </div>
             </>
           )}
         </section>
