@@ -196,7 +196,9 @@ def test_kind_combines_with_the_period(client):
     period=dict(kind='teacher',start='2026-10-16',end='2026-10-16')
     assert [i['outcome'] for i in listed(client,**period)['items']]==['failed']
     assert [r[1] for r in exported(client,**period)]==['Неудачная попытка']
-    assert listed(client,kind='student',start='2026-10-16',end='2026-10-16')['items']==[]
+    earlier=dict(kind='teacher',start='2026-10-14',end='2026-10-14')
+    assert [i['outcome'] for i in listed(client,**earlier)['items']]==['success']
+    assert [r[1] for r in exported(client,**earlier)]==['Вход']
 
 
 @pytest.mark.parametrize('path',['/api/access/logins','/api/access/logins/export'])

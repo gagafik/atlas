@@ -58,6 +58,10 @@ body:has(dialog.lj-dialog[open]) {
   color: var(--text-muted);
   font-weight: var(--weight-semibold);
 }
+/* The strip scrolls, so a ring outside the button would lose its lower edge: draw it inside. */
+.sf-dialog.lj-dialog .lj-tabs button:focus-visible {
+  outline-offset: -3px;
+}
 .sf-dialog.lj-dialog .lj-tabs button[aria-selected="true"] {
   border-color: var(--line);
   background: var(--surface);
@@ -113,7 +117,6 @@ body:has(dialog.lj-dialog[open]) {
 }
 .lj-table {
   width: 100%;
-  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 14px;
@@ -143,20 +146,11 @@ body:has(dialog.lj-dialog[open]) {
 .lj-table tbody tr:last-child td {
   border-bottom: 0;
 }
-.lj-table .lj-time {
-  width: 150px;
-}
-.lj-table .lj-result {
-  width: 170px;
-}
-.lj-table .lj-role {
-  width: 140px;
-}
-.lj-table .lj-net {
-  width: 160px;
-}
-.lj-table .lj-browser {
-  width: 150px;
+/* Every column is as wide as its longest value (fonts differ between browsers, so no fixed widths);
+   the account takes the rest and is the only cell that is cut: the name stands first, a long login goes. */
+.lj-table .lj-account {
+  width: 100%;
+  max-width: 0;
 }
 .lj-time,
 .lj-net {
@@ -188,6 +182,11 @@ body:has(dialog.lj-dialog[open]) {
   font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
+.lj-foot button {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
 
 @media (max-width: 600px) {
   .sf-dialog.lj-dialog {
@@ -210,6 +209,9 @@ body:has(dialog.lj-dialog[open]) {
     justify-content: center;
     margin-left: 0;
   }
+}
+/* Below 1040 px six columns do not fit beside a readable name: a sign-in becomes a block of three lines. */
+@media (max-width: 1040px) {
   .lj-table,
   .lj-table tbody {
     display: block;
@@ -226,6 +228,7 @@ body:has(dialog.lj-dialog[open]) {
     border-bottom: 1px solid var(--line);
   }
   .lj-table td,
+  .lj-table .lj-account,
   .lj-table .lj-time,
   .lj-table .lj-result,
   .lj-table .lj-role,
@@ -233,6 +236,8 @@ body:has(dialog.lj-dialog[open]) {
   .lj-table .lj-browser {
     display: block;
     width: auto;
+    max-width: none;
+    min-width: 0;
     height: auto;
     padding: 0;
     border: 0;
