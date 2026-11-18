@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { TeachingLoadList } from "./TeachingLoadList";
 import StudentSchedule from "./StudentSchedule";
 import ConflictList from "./ConflictList";
 import Planner from "./Planner";
@@ -1439,16 +1440,19 @@ export default function App({
                                                     : page === "materials"
                                                       ? "Библиотека заготовок, общие материалы и версии для уроков."
                                                       : page === "journal"
-                                                        ? journalView === "finalGrades"
+                                                        ? journalView ===
+                                                          "finalGrades"
                                                           ? "Итоговые оценки и табели: классы, предметы, печать и публикация."
                                                           : "Посещаемость, оценки, темы и домашние задания по датам."
                                                         : page === "access"
                                                           ? "Учётные записи, приглашения, семьи, права по классам и журнал действий."
-                                                          : page === "school-year"
+                                                          : page ===
+                                                              "school-year"
                                                             ? "Даты и периоды, перевод классов и запуск следующего года."
-                                                            : page === "settings"
-                                                            ? "Параметры школы, звонки и резервные копии."
-                                                            : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
+                                                            : page ===
+                                                                "settings"
+                                                              ? "Параметры школы, звонки и резервные копии."
+                                                              : "Справочник вашей школы. Изменения доступны в редакторе расписания."}
                 </p>
               </div>
               <div className="heading-actions">
@@ -2262,11 +2266,7 @@ export default function App({
                       </button>
                     </div>
                   ) : (
-                    <span className="muted">
-                      {page === "workloads"
-                        ? `${s.workloads.length} назначений · ${report.required} часов в неделю`
-                        : ""}
-                    </span>
+                    <span className="muted"></span>
                   )}
                   <label className="search-field">
                     <Search size={17} />
@@ -2383,81 +2383,21 @@ export default function App({
                     ],
                     "subject",
                   )}
-                {page === "workloads" &&
-                  dataTable(
-                    s.workloads,
-                    [
-                      {
-                        label: "Класс / группа",
-                        render: (r) => (
-                          <>
-                            <strong>{maps.groups[r.groupId].name}</strong>
-                            <small className="cell-secondary">
-                              {maps.groups[r.groupId].classIds
-                                .map((id: string) => named(s.classes, id))
-                                .join(", ")}
-                            </small>
-                          </>
-                        ),
-                      },
-                      {
-                        label: "Предмет",
-                        render: (r) => (
-                          <Badge>{maps.subjects[r.subjectId].name}</Badge>
-                        ),
-                      },
-                      {
-                        label: "Учитель",
-                        render: (r) => (
-                          <span
-                            className={
-                              r.teacherRequired !== false &&
-                              !teacherIds(r).length
-                                ? "amber-text"
-                                : ""
-                            }
-                          >
-                            {teacherNames(s, r)}
-                          </span>
-                        ),
-                      },
-                      {
-                        label: "Часов / нед.",
-                        render: (r) => (
-                          <strong>
-                            {activeIn(r, activeCycle)
-                              ? cycleHours(r, activeCycle)
-                              : "Не ведётся"}
-                          </strong>
-                        ),
-                      },
-                      {
-                        label: "В сетке",
-                        render: (r) => (
-                          <Badge
-                            tone={
-                              (counts[r.id] || 0) ===
-                              (activeIn(r, activeCycle)
-                                ? cycleHours(r, activeCycle)
-                                : 0)
-                                ? "green"
-                                : "amber"
-                            }
-                          >
-                            {counts[r.id] || 0} /{" "}
-                            {activeIn(r, activeCycle)
-                              ? cycleHours(r, activeCycle)
-                              : 0}
-                          </Badge>
-                        ),
-                      },
-                      {
-                        label: "Синхронный блок",
-                        render: (r) => r.block || "—",
-                      },
-                    ],
-                    "workload",
-                  )}
+                {page === "workloads" && (
+                  <TeachingLoadList
+                    school={s}
+                    counts={counts}
+                    activeCycle={activeCycle}
+                    search={search}
+                    onEdit={(row) => open("workload", row)}
+                    empty={
+                      <Empty
+                        title="Здесь пока пусто"
+                        text="Добавьте первую запись, чтобы начать работу."
+                      />
+                    }
+                  />
+                )}
                 {page === "groups" &&
                   tab === "classes" &&
                   dataTable(
