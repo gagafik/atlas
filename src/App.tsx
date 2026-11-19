@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { schoolYearText, weekShape } from "./settingsSummary";
 import type { FormEvent, ReactNode } from "react";
 import { TeachingLoadList } from "./TeachingLoadList";
+import { DirectoryTable } from "./DirectoryList";
+import { byName, classOrder, groupOrder } from "./directoryTable";
+import { directoryFigures } from "./directoryFigures";
 import StudentSchedule from "./StudentSchedule";
 import ConflictList from "./ConflictList";
 import Planner from "./Planner";
@@ -614,6 +617,15 @@ export default function App({
     setGroupClasses(item?.classIds || []);
     setGroupStudents(item?.studentIds || []);
   }
+  // The directory figures are counted once per school state and week, not on every render or keystroke.
+  const directoryNumbers = useMemo(
+    () => (state ? directoryFigures(state, activeCycle) : null),
+    [state, activeCycle],
+  );
+  const groupsOrder = useMemo(
+    () => groupOrder(state?.classes ?? []),
+    [state?.classes],
+  );
   function toggle(value: string, values: string[], set: (v: string[]) => void) {
     set(
       values.includes(value)
@@ -1135,6 +1147,20 @@ export default function App({
   function loadLabel(w: Workload) {
     return `${maps.groups[w.groupId]?.name} · ${maps.subjects[w.subjectId]?.name}`;
   }
+  const directoryEmpty = (searching: boolean) => (
+    <Empty
+      title="Здесь пока пусто"
+      text={
+        searching
+          ? "По этому запросу ничего не найдено."
+          : "Добавьте первую запись, чтобы начать работу."
+      }
+    />
+  );
+  const figures = directoryNumbers!;
+  const sharedGroups = s.groups.filter((g) => g.kind !== "whole");
+  const groupClassNames = (ids: string[]) =>
+    ids.map((id) => named(s.classes, id)).join(", ");
   function dataTable(
     rows: any[],
     columns: { label: string; render: (r: any) => ReactNode }[],
@@ -2242,54 +2268,64 @@ export default function App({
               "school-year",
             ].includes(page) && (
               <>
-                {/* «Учебная нагрузка» keeps its search in its own filter row. */}
-                <div
-                  className="list-toolbar"
-                  style={page === "workloads" ? { display: "none" } : undefined}
-                >
-                  {page === "groups" ? (
-                    <div className="segmented">
-                      <button
-                        className={tab === "classes" ? "selected" : ""}
-                        onClick={() => setTab("classes")}
-                      >
-                        Классы <span>{s.classes.length}</span>
-                      </button>
-                      <button
-                        className={tab === "groups" ? "selected" : ""}
-                        onClick={() => setTab("groups")}
-                      >
-                        Группы{" "}
-                        <span>
-                          {s.groups.filter((g) => g.kind !== "whole").length}
-                        </span>
-                      </button>
-                      <button
-                        className={tab === "students" ? "selected" : ""}
-                        onClick={() => setTab("students")}
-                      >
-                        Ученики <span>{s.students.length}</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="muted"></span>
-                  )}
-                  <label className="search-field">
-                    <Search size={17} />
-                    <input
-                      placeholder="Поиск…"
-                      aria-label="Поиск в справочнике"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                  </label>
-                </div>
-                {page === "teachers" &&
-                  dataTable(
-                    s.teachers,
-                    [
+                {/* The lists below carry their own search; the groups page keeps the toolbar for its tabs. */}
+                {!["workloads", "teachers", "rooms", "subjects"].includes(
+                  page,
+                ) && (
+                  <div className="list-toolbar">
+                    {page === "groups" ? (
+                      <div className="segmented">
+                        <button
+                          className={tab === "classes" ? "selected" : ""}
+                          onClick={() => setTab("classes")}
+                        >
+                          Классы <span>{s.classes.length}</span>
+                        </button>
+                        <button
+                          className={tab === "groups" ? "selected" : ""}
+                          onClick={() => setTab("groups")}
+                        >
+                          Группы{" "}
+                          <span>
+                            {s.groups.filter((g) => g.kind !== "whole").length}
+                          </span>
+                        </button>
+                        <button
+                          className={tab === "students" ? "selected" : ""}
+                          onClick={() => setTab("students")}
+                        >
+                          Ученики <span>{s.students.length}</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="muted"></span>
+                    )}
+                    <label className="search-field">
+                      <Search size={17} />
+                      <input
+                        placeholder="Поиск…"
+                        aria-label="Поиск в справочнике"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                )}
+                {page === "teachers" && (
+                  <DirectoryTable
+                    label="Учителя"
+                    rows={s.teachers}
+                    order={byName}
+                    search={search}
+                    onSearch={setSearch}
+                    actions={(r) => rowActions("teacher", r)}
+                    empty={directoryEmpty}
+                    columns={[
                       {
+                        key: "name",
                         label: "Учитель",
+                        text: (r) => r.name,
+                        byOrder: true,
                         render: (r) => (
                           <div className="name-cell">
                             <span className="initials">
@@ -2300,14 +2336,21 @@ export default function App({
                         ),
                       },
                       {
+                        key: "hours",
                         label: "Часов в неделю",
-                        render: (r) =>
-                          currentWeek.workloads
-                            .filter((w) => teacherIds(w).includes(r.id))
-                            .reduce((n, w) => n + w.hours, 0),
+                        align: "right",
+                        text: (r) => String(figures.teacherHours[r.id] ?? 0),
+                        sort: (r) => (figures.teacherHours[r.id] ?? 0),
+                        render: (r) => (figures.teacherHours[r.id] ?? 0),
                       },
                       {
+                        key: "availability",
                         label: "Доступность",
+                        text: (r) =>
+                          r.unavailable.length
+                            ? `${r.unavailable.length} ограничений`
+                            : "Без ограничений",
+                        sort: (r) => r.unavailable.length,
                         render: (r) =>
                           r.unavailable.length ? (
                             <Badge tone="amber">
@@ -2317,9 +2360,9 @@ export default function App({
                             <Badge>Без ограничений</Badge>
                           ),
                       },
-                    ],
-                    "teacher",
-                  )}
+                    ]}
+                  />
+                )}
                 {page === "rooms" && (
                   <CampusEditor
                     state={s}
@@ -2327,41 +2370,68 @@ export default function App({
                     onState={receiveState}
                   />
                 )}
-                {page === "rooms" &&
-                  dataTable(
-                    s.rooms,
-                    [
+                {page === "rooms" && (
+                  <DirectoryTable
+                    label="Кабинеты"
+                    rows={s.rooms}
+                    order={byName}
+                    search={search}
+                    onSearch={setSearch}
+                    actions={(r) => rowActions("room", r)}
+                    empty={directoryEmpty}
+                    columns={[
                       {
+                        key: "name",
                         label: "Кабинет",
+                        text: (r) => r.name,
+                        byOrder: true,
                         render: (r) => <strong>{r.name}</strong>,
                       },
                       {
+                        key: "capacity",
                         label: "Вместимость",
+                        align: "right",
+                        text: (r) =>
+                          r.capacity == null
+                            ? "Не указана"
+                            : String(r.capacity),
+                        sort: (r) => r.capacity,
                         render: (r) => r.capacity ?? "Не указана",
                       },
                       {
+                        key: "building",
                         label: "Здание",
+                        text: (r) =>
+                          named(s.campus?.buildings || [], r.buildingId),
                         render: (r) =>
                           named(s.campus?.buildings || [], r.buildingId),
                       },
                       {
+                        key: "placed",
                         label: "Занятий в сетке",
-                        render: (r) =>
-                          currentWeek.placements.filter((p) =>
-                            roomIds(maps.workloads[p.workloadId], p).includes(
-                              r.id,
-                            ),
-                          ).length,
+                        align: "right",
+                        text: (r) => String(figures.roomPlacements[r.id] ?? 0),
+                        sort: (r) => (figures.roomPlacements[r.id] ?? 0),
+                        render: (r) => (figures.roomPlacements[r.id] ?? 0),
                       },
-                    ],
-                    "room",
-                  )}
-                {page === "subjects" &&
-                  dataTable(
-                    s.subjects,
-                    [
+                    ]}
+                  />
+                )}
+                {page === "subjects" && (
+                  <DirectoryTable
+                    label="Предметы"
+                    rows={s.subjects}
+                    order={byName}
+                    search={search}
+                    onSearch={setSearch}
+                    actions={(r) => rowActions("subject", r)}
+                    empty={directoryEmpty}
+                    columns={[
                       {
+                        key: "name",
                         label: "Предмет",
+                        text: (r) => r.name,
+                        byOrder: true,
                         render: (r) => (
                           <div className="name-cell">
                             <span
@@ -2373,22 +2443,24 @@ export default function App({
                         ),
                       },
                       {
+                        key: "count",
                         label: "Назначений",
-                        render: (r) =>
-                          currentWeek.workloads.filter(
-                            (w) => w.subjectId === r.id,
-                          ).length,
+                        align: "right",
+                        text: (r) => String(figures.subjectLoads[r.id] ?? 0),
+                        sort: (r) => (figures.subjectLoads[r.id] ?? 0),
+                        render: (r) => (figures.subjectLoads[r.id] ?? 0),
                       },
                       {
+                        key: "hours",
                         label: "Часов в неделю",
-                        render: (r) =>
-                          currentWeek.workloads
-                            .filter((w) => w.subjectId === r.id)
-                            .reduce((n, w) => n + w.hours, 0),
+                        align: "right",
+                        text: (r) => String(figures.subjectHours[r.id] ?? 0),
+                        sort: (r) => (figures.subjectHours[r.id] ?? 0),
+                        render: (r) => (figures.subjectHours[r.id] ?? 0),
                       },
-                    ],
-                    "subject",
-                  )}
+                    ]}
+                  />
+                )}
                 {page === "workloads" && (
                   <TeachingLoadList
                     school={s}
@@ -2405,52 +2477,67 @@ export default function App({
                     }
                   />
                 )}
-                {page === "groups" &&
-                  tab === "classes" &&
-                  dataTable(
-                    s.classes,
-                    [
+                {page === "groups" && tab === "classes" && (
+                  <DirectoryTable
+                    label="Классы"
+                    rows={s.classes}
+                    order={classOrder}
+                    search={search}
+                    actions={(r) => rowActions("class", r)}
+                    empty={directoryEmpty}
+                    columns={[
                       {
+                        key: "name",
                         label: "Класс",
+                        text: (r) => r.name,
+                        byOrder: true,
                         render: (r) => (
                           <strong className="class-name">{r.name}</strong>
                         ),
                       },
                       {
+                        key: "teacher",
                         label: "Классный руководитель",
+                        grow: true,
+                        text: (r) =>
+                          r.classTeacherId
+                            ? named(s.teachers, r.classTeacherId)
+                            : "—",
+                        sort: (r) =>
+                          r.classTeacherId
+                            ? named(s.teachers, r.classTeacherId)
+                            : null,
                         render: (r) =>
                           r.classTeacherId
                             ? named(s.teachers, r.classTeacherId)
                             : "—",
                       },
                       {
+                        key: "profile",
                         label: "Профиль звонков",
-                        render: (r) => maps.profiles[r.profileId].name,
+                        grow: true,
+                        text: (r) => maps.profiles[r.profileId]?.name ?? "",
+                        render: (r) => maps.profiles[r.profileId]?.name,
                       },
                       {
+                        key: "groups",
                         label: "Групп",
-                        render: (r) =>
-                          s.groups.filter(
-                            (g) =>
-                              g.kind !== "whole" && g.classIds.includes(r.id),
-                          ).length,
+                        align: "right",
+                        text: (r) => String(figures.classGroups[r.id] ?? 0),
+                        sort: (r) => (figures.classGroups[r.id] ?? 0),
+                        render: (r) => (figures.classGroups[r.id] ?? 0),
                       },
                       {
+                        key: "placed",
                         label: "Занятий в сетке",
-                        render: (r) =>
-                          currentWeek.placements.filter((p) =>
-                            placementMatches(
-                              s,
-                              maps.workloads[p.workloadId],
-                              p,
-                              "class",
-                              r.id,
-                            ),
-                          ).length,
+                        align: "right",
+                        text: (r) => String(figures.classPlacements[r.id] ?? 0),
+                        sort: (r) => (figures.classPlacements[r.id] ?? 0),
+                        render: (r) => (figures.classPlacements[r.id] ?? 0),
                       },
-                    ],
-                    "class",
-                  )}
+                    ]}
+                  />
+                )}
                 {page === "groups" && tab === "groups" && (
                   <>
                     <div className="info-line">
@@ -2484,29 +2571,42 @@ export default function App({
                           ))}
                       </details>
                     )}
-                    {dataTable(
-                      s.groups.filter((g) => g.kind !== "whole"),
-                      [
+                    <DirectoryTable
+                      label="Учебные группы"
+                      rows={sharedGroups}
+                      order={groupsOrder}
+                      search={search}
+                      actions={(r) => rowActions("group", r)}
+                      empty={directoryEmpty}
+                      columns={[
                         {
+                          key: "name",
                           label: "Учебная группа",
+                          text: (r) => r.name,
+                          byOrder: true,
                           render: (r) => <strong>{r.name}</strong>,
                         },
                         {
+                          key: "kind",
                           label: "Тип",
+                          text: (r) => KINDS[r.kind] ?? "",
                           render: (r) => <Badge>{KINDS[r.kind]}</Badge>,
                         },
                         {
+                          key: "classes",
                           label: "Классы",
-                          render: (r) => (
-                            <span className="wrap">
-                              {r.classIds
-                                .map((id: string) => named(s.classes, id))
-                                .join(", ")}
-                            </span>
-                          ),
+                          grow: true,
+                          text: (r) => groupClassNames(r.classIds),
+                          render: (r) => groupClassNames(r.classIds),
                         },
                         {
+                          key: "roster",
                           label: "Состав",
+                          text: (r) =>
+                            r.studentIds.length
+                              ? `${r.studentIds.length} учеников${!rosterComplete(r) ? " · уточнить" : ""}`
+                              : "Не указан",
+                          sort: (r) => r.studentIds.length || null,
                           render: (r) =>
                             r.studentIds.length ? (
                               <Badge
@@ -2520,17 +2620,18 @@ export default function App({
                             ),
                         },
                         {
+                          key: "source",
                           label: "Источник состава",
-                          render: (r) => (
-                            <span className="wrap">
-                              {r.rosterSources?.join("; ") ||
-                                "Вручную / не заполнен"}
-                            </span>
-                          ),
+                          grow: true,
+                          text: (r) =>
+                            r.rosterSources?.join("; ") ||
+                            "Вручную / не заполнен",
+                          render: (r) =>
+                            r.rosterSources?.join("; ") ||
+                            "Вручную / не заполнен",
                         },
-                      ],
-                      "group",
-                    )}
+                      ]}
+                    />
                   </>
                 )}
                 {page === "groups" && tab === "students" && (
