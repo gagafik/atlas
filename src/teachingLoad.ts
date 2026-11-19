@@ -69,13 +69,14 @@ const collator = new Intl.Collator("ru", {
   numeric: true,
   sensitivity: "base",
 });
-const byText = (a: string, b: string) => collator.compare(a, b);
+export const byText = (a: string, b: string) => collator.compare(a, b);
+/** School order of class names: grade, then name (1А, 2А, 10А). */
+export const byClassName = (a: { name: string }, b: { name: string }) =>
+  gradeOf(a.name) - gradeOf(b.name) || byText(a.name, b.name);
 
 /** Classes in school order: grade, then name. */
 export function sortedClasses(classes: LoadSchool["classes"]) {
-  return [...classes].sort(
-    (a, b) => gradeOf(a.name) - gradeOf(b.name) || byText(a.name, b.name),
-  );
+  return [...classes].sort(byClassName);
 }
 
 export function buildRows(

@@ -1,0 +1,221 @@
+/* The directory lists: one dense, sortable table. The shared .data-table rules stay as they are. */
+.dt {
+  container: dt / inline-size;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.dt > * {
+  min-width: 0;
+}
+
+/* The line above the table: the count at the left, the search at the right; the sort select exists on a phone only. */
+.dt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dt-bare,
+.dt-sortfield {
+  display: none;
+}
+.dt-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The table: one line per row, columns sized by their content; the name column takes the rest. */
+.dt-table.data-table th,
+.dt-table.data-table td {
+  padding: 0 12px;
+  height: 38px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.dt-table.data-table th {
+  height: 36px;
+  font-size: 11px;
+}
+.dt-table.data-table td.dt-act,
+.dt-table.data-table th.dt-act {
+  width: 1%;
+  padding: 0 8px;
+}
+.dt-table.data-table .dt-main,
+.dt-table.data-table .dt-grow {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dt-table.data-table .dt-main {
+  width: 45%;
+}
+.dt-table.data-table .dt-grow {
+  width: 25%;
+}
+.dt-table.data-table .dt-cell,
+.dt-table.data-table .dt-num {
+  width: 1%;
+}
+.dt-table.data-table th.dt-num,
+.dt-table.data-table td.dt-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.dt-table.data-table th.dt-num .dt-sort {
+  justify-content: flex-end;
+}
+.dt-table .name-cell {
+  gap: 8px;
+}
+.dt-table .name-cell strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dt-table .initials {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+.dt-table .subject-swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+.dt-sort {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  padding: 0;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.dt-sort-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dt-sort-mark {
+  flex: none;
+  display: inline-block;
+  min-width: 1em;
+  font-size: 9px;
+}
+.dt-sort:hover {
+  background: transparent;
+  color: var(--text);
+}
+.dt-act .icon-button {
+  width: 32px;
+  min-height: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+/* A phone: a row is a block. The name and the action button on the first line, the other values under it as label: value. */
+@container dt (max-width: 600px) {
+  .dt-bare {
+    display: flex;
+  }
+  .dt-head {
+    flex-wrap: wrap;
+  }
+  .dt-sortfield {
+    display: block;
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .dt-sortfield select,
+  .dt-search input {
+    min-height: 40px;
+    box-sizing: border-box;
+  }
+  .dt-sortfield select {
+    width: 100%;
+  }
+  .dt-search {
+    flex: 1 1 100%;
+    order: 2;
+  }
+  .dt-search input {
+    width: 100%;
+  }
+  .dt-footer .icon-button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .dt-table.data-table,
+  .dt-table.data-table tbody {
+    display: block;
+  }
+  .dt-table.data-table thead {
+    display: none;
+  }
+  .dt-table.data-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 14px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dt-table.data-table tr:last-child {
+    border-bottom: 0;
+  }
+  .dt-table.data-table td {
+    display: block;
+    height: auto;
+    width: auto;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    font-size: 12px;
+  }
+  .dt-table.data-table td.dt-main {
+    order: 0;
+    /* The name, the column gap and the 40 px button add up to one full line. */
+    flex: 1 1 calc(100% - 54px);
+    min-width: 0;
+    max-width: none;
+    width: auto;
+    font-size: 13px;
+  }
+  .dt-table.data-table td.dt-act {
+    order: 1;
+    flex: 0 0 40px;
+    width: 40px;
+    padding: 0;
+  }
+  .dt-table.data-table td.dt-cell,
+  .dt-table.data-table td.dt-grow,
+  .dt-table.data-table td.dt-num {
+    order: 2;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    width: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+  }
+  .dt-table.data-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-subtle);
+  }
+  .dt-table.data-table td.dt-act .icon-button {
+    width: 40px;
+    min-height: 40px;
+    height: 40px;
+  }
+}
